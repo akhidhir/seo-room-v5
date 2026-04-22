@@ -1473,6 +1473,202 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
   }
 });
 
+// ==================== TECHNICAL AUDIT ====================
+
+app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const wpUrl = project.wordpress_url;
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const siteUrl = wpUrl || (domain ? `https://${domain}` : '');
+
+    if (!siteUrl) return res.status(400).json({ error: 'No website URL configured. Set it in Project Settings.' });
+
+    // Clean up old findings
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='technical' AND status='new'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'technical', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+    const findings = [];
+    const baseUrl = siteUrl.replace(/\/$/, '');
+
+    console.log(`[tech-audit] Starting for ${baseUrl}`);
+
+    // 1. HTTPS & Security checks
+    try {
+      const resp = await fetch(baseUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+      const finalUrl = resp.url;
+      if (!finalUrl.startsWith('https://')) {
+        findings.push({ pillar: 'technical', category: 'security', title: 'Site not using HTTPS', description: `Final URL is ${finalUrl}. HTTPS is a ranking factor and required for user trust.`, recommendation: 'Install an SSL certificate and redirect all HTTP traffic to HTTPS.', severity: 'Critical', current_value: 'HTTP', recommended_value: 'HTTPS' });
+      }
+
+      // Check for mixed content hints in HTML
+      const html = await resp.text();
+      const httpRefs = (html.match(/src=["']http:\/\//gi) || []).length;
+      if (httpRefs > 0) {
+        findings.push({ pillar: 'technical', category: 'security', title: `${httpRefs} mixed content references found`, description: 'HTTP resources loaded on HTTPS pages cause browser warnings and reduce trust signals.', recommendation: 'Update all resource URLs to use HTTPS or protocol-relative URLs.', severity: 'Medium', current_value: `${httpRefs} HTTP refs`, recommended_value: '0 HTTP refs' });
+      }
+
+      // Check security headers
+      const headers = resp.headers;
+      if (!headers.get('strict-transport-security')) {
+        findings.push({ pillar: 'technical', category: 'security', title: 'Missing HSTS header', description: 'Strict-Transport-Security header not set. Browsers may still attempt HTTP connections.', recommendation: 'Add Strict-Transport-Security header with max-age of at least 31536000.', severity: 'Low', current_value: 'Not set', recommended_value: 'max-age=31536000' });
+      }
+
+      // 2. Robots.txt
+      try {
+        const robotsResp = await fetch(`${baseUrl}/robots.txt`, { signal: AbortSignal.timeout(10000) });
+        if (!robotsResp.ok) {
+          findings.push({ pillar: 'technical', category: 'crawl', title: 'robots.txt not found', description: `Server returned ${robotsResp.status} for /robots.txt. Search engines need this file for crawl directives.`, recommendation: 'Create a robots.txt file at your domain root. Include Sitemap directive.', severity: 'Medium', current_value: `${robotsResp.status}`, recommended_value: '200 OK' });
+        } else {
+          const robotsTxt = await robotsResp.text();
+          if (!robotsTxt.toLowerCase().includes('sitemap:')) {
+            findings.push({ pillar: 'technical', category: 'sitemap', title: 'No Sitemap directive in robots.txt', description: 'robots.txt exists but doesn\'t reference a sitemap. This helps search engines discover your sitemap faster.', recommendation: 'Add Sitemap: https://yourdomain.com/sitemap.xml to robots.txt', severity: 'Low', current_value: 'No sitemap reference', recommended_value: 'Sitemap directive present' });
+          }
+          // Check for overly restrictive rules
+          if (robotsTxt.includes('Disallow: /') && !robotsTxt.includes('Disallow: / \n') && robotsTxt.match(/Disallow:\s*\/\s*$/m)) {
+            findings.push({ pillar: 'technical', category: 'crawl', title: 'robots.txt blocks entire site', description: 'A "Disallow: /" rule prevents search engines from crawling your entire site.', recommendation: 'Remove the blanket Disallow rule and only block specific paths you don\'t want indexed.', severity: 'Critical', current_value: 'Disallow: /', recommended_value: 'Selective blocking only' });
+          }
+        }
+      } catch (e) { console.log('[tech-audit] robots.txt fetch failed:', e.message); }
+
+      // 3. Sitemap
+      let sitemapUrls = [];
+      try {
+        const sitemapResp = await fetch(`${baseUrl}/sitemap_index.xml`, { signal: AbortSignal.timeout(10000) });
+        if (!sitemapResp.ok) {
+          const altResp = await fetch(`${baseUrl}/sitemap.xml`, { signal: AbortSignal.timeout(10000) });
+          if (!altResp.ok) {
+            findings.push({ pillar: 'technical', category: 'sitemap', title: 'XML sitemap not found', description: 'Neither /sitemap_index.xml nor /sitemap.xml returned a valid response. Sitemaps help search engines discover pages.', recommendation: 'Generate and submit an XML sitemap. Most SEO plugins (Yoast, RankMath) create these automatically.', severity: 'Critical', current_value: 'Not found', recommended_value: 'Valid sitemap' });
+          } else {
+            const sitemapXml = await altResp.text();
+            sitemapUrls = (sitemapXml.match(/<loc>(.*?)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
+          }
+        } else {
+          const indexXml = await sitemapResp.text();
+          const subSitemaps = (indexXml.match(/<loc>(.*?)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
+          // Fetch first sub-sitemap to count URLs
+          if (subSitemaps.length > 0) {
+            try {
+              const subResp = await fetch(subSitemaps[0], { signal: AbortSignal.timeout(10000) });
+              if (subResp.ok) {
+                const subXml = await subResp.text();
+                sitemapUrls = (subXml.match(/<loc>(.*?)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
+              }
+            } catch (e) {}
+          }
+          console.log(`[tech-audit] Sitemap index has ${subSitemaps.length} sitemaps, first has ${sitemapUrls.length} URLs`);
+        }
+      } catch (e) { console.log('[tech-audit] sitemap fetch failed:', e.message); }
+
+      // 4. Check sample pages for broken links, schema, mobile viewport
+      const pagesToCheck = sitemapUrls.length > 0 ? sitemapUrls.slice(0, 10) : [baseUrl, `${baseUrl}/contact`, `${baseUrl}/about`];
+      let brokenLinks = 0;
+      let pagesWithoutSchema = 0;
+      let pagesWithoutViewport = 0;
+      let totalInternalLinks = 0;
+      let orphanPages = 0;
+      let checkedPages = 0;
+
+      for (const pageUrl of pagesToCheck) {
+        try {
+          const pageResp = await fetch(pageUrl, { signal: AbortSignal.timeout(10000) });
+          if (!pageResp.ok) { brokenLinks++; continue; }
+          const pageHtml = await pageResp.text();
+          checkedPages++;
+
+          // Schema check
+          if (!pageHtml.includes('application/ld+json') && !pageHtml.includes('itemtype=')) {
+            pagesWithoutSchema++;
+          }
+
+          // Mobile viewport
+          if (!pageHtml.includes('viewport')) {
+            pagesWithoutViewport++;
+          }
+
+          // Count internal links
+          const linkMatches = pageHtml.match(/href=["']([^"']+)["']/gi) || [];
+          const internalCount = linkMatches.filter(l => {
+            const href = l.replace(/href=["']/i, '').replace(/["']$/, '');
+            return href.includes(domain) || (href.startsWith('/') && !href.startsWith('//'));
+          }).length;
+          totalInternalLinks += internalCount;
+          if (internalCount < 3) orphanPages++;
+        } catch (e) { /* timeout or error — skip */ }
+      }
+
+      if (brokenLinks > 0) {
+        findings.push({ pillar: 'technical', category: 'links', title: `${brokenLinks} broken pages found`, description: `${brokenLinks} out of ${pagesToCheck.length} sampled URLs returned errors. Broken pages waste crawl budget and hurt user experience.`, recommendation: 'Fix or redirect all broken URLs. Check server logs for 404/500 errors.', severity: brokenLinks > 3 ? 'Critical' : 'Medium', current_value: `${brokenLinks} broken`, recommended_value: '0 broken pages' });
+      }
+
+      if (pagesWithoutSchema > 0 && checkedPages > 0) {
+        findings.push({ pillar: 'technical', category: 'schema', title: `${pagesWithoutSchema}/${checkedPages} pages missing structured data`, description: 'Pages without schema markup miss rich snippet opportunities in search results.', recommendation: 'Add LocalBusiness, Service, and BreadcrumbList schema to all pages. Use JSON-LD format.', severity: pagesWithoutSchema > checkedPages / 2 ? 'Medium' : 'Low', current_value: `${pagesWithoutSchema} without schema`, recommended_value: 'Schema on all pages' });
+      }
+
+      if (pagesWithoutViewport > 0 && checkedPages > 0) {
+        findings.push({ pillar: 'technical', category: 'mobile', title: `${pagesWithoutViewport} pages missing mobile viewport`, description: 'Pages without a viewport meta tag won\'t render properly on mobile devices. Mobile-first indexing requires proper mobile support.', recommendation: 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> to all pages.', severity: 'Critical', current_value: `${pagesWithoutViewport} missing`, recommended_value: 'All pages have viewport' });
+      }
+
+      if (orphanPages > 0 && checkedPages > 0) {
+        findings.push({ pillar: 'technical', category: 'structure', title: `${orphanPages}/${checkedPages} pages have weak internal linking`, description: 'Pages with fewer than 3 internal links are poorly connected and harder for search engines to discover.', recommendation: 'Add contextual internal links between related service pages, suburb pages, and blog posts.', severity: orphanPages > 3 ? 'Medium' : 'Low', current_value: `${orphanPages} under-linked`, recommended_value: '3+ internal links per page' });
+      }
+
+      if (checkedPages > 0) {
+        const avgLinks = Math.round(totalInternalLinks / checkedPages);
+        if (avgLinks < 5) {
+          findings.push({ pillar: 'technical', category: 'structure', title: `Low average internal links (${avgLinks} per page)`, description: 'Strong internal linking helps distribute page authority and improves crawlability.', recommendation: 'Aim for 5-10 contextual internal links per page. Link service pages to suburb pages and vice versa.', severity: 'Medium', current_value: `${avgLinks} avg links`, recommended_value: '5-10 per page' });
+        }
+      }
+
+      // 5. Page speed (basic — check if site loads within threshold)
+      const startTime = Date.now();
+      try {
+        await fetch(baseUrl, { signal: AbortSignal.timeout(10000) });
+        const loadTime = Date.now() - startTime;
+        if (loadTime > 3000) {
+          findings.push({ pillar: 'technical', category: 'speed', title: `Homepage loads in ${(loadTime / 1000).toFixed(1)}s (server-side)`, description: 'Server response time exceeds 3 seconds. This impacts Core Web Vitals and user experience.', recommendation: 'Enable caching, optimize server configuration, use a CDN, and compress images.', severity: loadTime > 5000 ? 'Critical' : 'Medium', current_value: `${(loadTime / 1000).toFixed(1)}s`, recommended_value: '< 1.5s' });
+        }
+      } catch (e) {
+        findings.push({ pillar: 'technical', category: 'speed', title: 'Homepage timed out (>10s)', description: 'The homepage took more than 10 seconds to respond from the server.', recommendation: 'Investigate server performance. Check hosting, database queries, and plugin load.', severity: 'Critical', current_value: '>10s', recommended_value: '< 1.5s' });
+      }
+
+    } catch (fetchErr) {
+      findings.push({ pillar: 'technical', category: 'crawl', title: 'Could not reach site', description: `Failed to fetch ${baseUrl}: ${fetchErr.message}`, recommendation: 'Check that the website URL is correct and the server is running.', severity: 'Critical', current_value: 'Unreachable', recommended_value: 'Accessible' });
+    }
+
+    // If no issues found, add a positive finding
+    if (findings.length === 0) {
+      findings.push({ pillar: 'technical', category: 'general', title: 'No critical technical issues detected', description: 'Basic technical SEO checks passed. Consider running a deeper audit with tools like Google PageSpeed Insights or Screaming Frog.', recommendation: 'Run PageSpeed Insights for Core Web Vitals data and Screaming Frog for a full crawl audit.', severity: 'Low', current_value: 'Passed', recommended_value: 'N/A' });
+    }
+
+    // Save findings
+    for (const f of findings) {
+      await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+    }
+
+    // Mark audit complete
+    await pool.query(`UPDATE audits SET status='completed', completed_at=NOW() WHERE id=$1`, [auditId]);
+
+    console.log(`[tech-audit] Done. ${findings.length} findings.`);
+    const savedFindings = await pool.query('SELECT * FROM audit_findings WHERE audit_id=$1 ORDER BY severity', [auditId]);
+    res.json({ findings: savedFindings.rows });
+  } catch (e) {
+    console.error('[tech-audit] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== 11. USER-LEVEL OAUTH (GSC & GBP) ====================
 
 // Helper: get GSC access token by userId (user-level, shared across all projects)
