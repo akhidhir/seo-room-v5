@@ -27,6 +27,7 @@ const GSC_SCOPES = 'https://www.googleapis.com/auth/webmasters.readonly';
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN;
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
 const LOCAL_FALCON_KEY = process.env.LOCAL_FALCON_KEY;
+const SERPAPI_KEY = process.env.SERPAPI_KEY;
 
 // Managed Agents (Claude API)
 const AGENT_IDS = {
@@ -45,6 +46,7 @@ if (!DATABASE_URL) {
 if (!GOOGLE_CLIENT_ID) console.warn('[boot] GOOGLE_CLIENT_ID not set — GSC OAuth disabled');
 if (!DATAFORSEO_LOGIN) console.warn('[boot] DATAFORSEO_LOGIN not set — SERP rank tracking disabled');
 if (!LOCAL_FALCON_KEY) console.warn('[boot] LOCAL_FALCON_KEY not set — Maps rank tracking disabled');
+if (!SERPAPI_KEY) console.warn('[boot] SERPAPI_KEY not set — SERPapi Maps sync disabled');
 if (!ANTHROPIC_API_KEY) console.warn('[boot] ANTHROPIC_API_KEY not set — AI audits disabled');
 
 // Database pool
@@ -595,143 +597,9 @@ app.post('/api/action-items/:id/execute', async (req, res) => {
   }
 });
 
-// ==================== 8. MAPS RANKINGS ====================
 
-// Get Maps keywords for a project
-app.get('/api/projects/:id/maps/keywords', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT * FROM rank_keywords
-       WHERE project_id=$1 AND location IS NOT NULL AND location != ''
-       ORDER BY added_at DESC`,
-      [req.params.id]
-    );
-    res.json({ keywords: result.rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+// ==================== DATAFORSEO HELPER ====================
 
-// Add Maps keywords
-app.post('/api/projects/:id/maps/keywords', async (req, res) => {
-  const { keywords, location, location_code } = req.body;
-  if (!Array.isArray(keywords) || !location) {
-    return res.status(400).json({ error: 'keywords array and location required' });
-  }
-  try {
-    let added = 0;
-    for (const kw of keywords) {
-      if (!kw || typeof kw !== 'string') continue;
-      await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, location, location_code)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (project_id, keyword, location) DO NOTHING`,
-        [req.params.id, kw.trim(), location, location_code || 2036]
-      );
-      added++;
-    }
-    res.json({ ok: true, added });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Delete a Maps keyword
-app.delete('/api/maps/keywords/:id', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM rank_keywords WHERE id=$1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Sync Maps keywords with Local Falcon
-app.post('/api/projects/:id/maps/sync-localfalcon', async (req, res) => {
-  if (!LOCAL_FALCON_KEY) {
-    return res.status(503).json({ error: 'LOCAL_FALCON_KEY not configured' });
-  }
-  const { id: projectId } = req.params;
-  try {
-    // Get project details
-    const projResult = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
-    if (projResult.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    const project = projResult.rows[0];
-
-    // Fetch reports from Local Falcon
-    const lfResp = await fetch(`https://api.localfalcon.com/v1/reports?api_key=${LOCAL_FALCON_KEY}`, {
-      headers: { 'Accept': 'application/json' }
-    });
-    const lfData = await lfResp.json();
-    if (!lfData.success) return res.status(400).json({ error: lfData.message || 'Local Falcon API error' });
-
-    const reports = lfData.data?.reports || [];
-    console.log(`[maps-localfalcon] Got ${reports.length} reports for project ${projectId}`);
-
-    // Sync each report into rank_keywords and rank_tracking
-    let synced = 0;
-    const baseTime = Date.now();
-    for (let i = 0; i < reports.length; i++) {
-      const report = reports[i];
-      const keyword = report.keyword || '';
-      if (!keyword) continue;
-
-      // Parse keyword + location from report
-      const parts = keyword.split(/\s+/);
-      const kwBase = parts[0];
-      const kwLocation = parts.slice(1).join(' ');
-
-      // Ensure keyword exists
-      await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, location)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (project_id, keyword, location) DO NOTHING`,
-        [projectId, kwBase, kwLocation]
-      );
-
-      // Insert tracking data (position, title, rating, etc. from report)
-      const position = report.position || null;
-      const title = report.location?.name || null;
-      const rating = report.location?.rating || null;
-      const reviews = report.location?.review_count || null;
-
-      await pool.query(
-        `INSERT INTO rank_tracking (project_id, keyword, location, maps_position, maps_title, maps_rating, maps_reviews, checked_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [projectId, kwBase, kwLocation, position, title, rating, reviews, new Date(baseTime + i).toISOString()]
-      );
-      synced++;
-    }
-
-    res.json({ ok: true, synced, total: reports.length });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Clean all Maps data (keywords with location + tracking)
-app.delete('/api/projects/:id/maps/clean', async (req, res) => {
-  try {
-    const trackDel = await pool.query(
-      `DELETE FROM rank_tracking
-       WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
-      [req.params.id]
-    );
-    const kwDel = await pool.query(
-      `DELETE FROM rank_keywords
-       WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
-      [req.params.id]
-    );
-    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking records`);
-    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ==================== 9. SERP RANKINGS ====================
-
-// DataForSEO API helper
 async function dataforseoRequest(endpoint, method, body) {
   if (!DATAFORSEO_LOGIN || !DATAFORSEO_PASSWORD) {
     throw new Error('DataForSEO credentials not configured');
@@ -748,185 +616,6 @@ async function dataforseoRequest(endpoint, method, body) {
   const r = await fetch(`https://api.dataforseo.com/v3${endpoint}`, opts);
   return r.json();
 }
-
-// Get SERP keywords for a project
-app.get('/api/projects/:id/serp/keywords', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT * FROM rank_keywords
-       WHERE project_id=$1 AND (location IS NULL OR location = '')
-       ORDER BY added_at DESC`,
-      [req.params.id]
-    );
-    res.json({ keywords: result.rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Add SERP keywords
-app.post('/api/projects/:id/serp/keywords', async (req, res) => {
-  const { keywords } = req.body;
-  if (!Array.isArray(keywords)) return res.status(400).json({ error: 'keywords must be array' });
-  try {
-    let added = 0;
-    for (const kw of keywords) {
-      if (!kw || typeof kw !== 'string') continue;
-      await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, location, location_code)
-         VALUES ($1, $2, '', 2036)
-         ON CONFLICT (project_id, keyword, location) DO NOTHING`,
-        [req.params.id, kw.trim()]
-      );
-      added++;
-    }
-    res.json({ ok: true, added });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Discover keywords via DataForSEO (what domain ranks for)
-app.post('/api/projects/:id/serp/discover', async (req, res) => {
-  if (!DATAFORSEO_LOGIN) return res.status(503).json({ error: 'DataForSEO not configured' });
-  const { id: projectId } = req.params;
-  try {
-    const projResult = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
-    if (projResult.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    const project = projResult.rows[0];
-    const domain = project.domain.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
-
-    // TODO: Call DataForSEO ranked_keywords endpoint
-    // Parse results and bulk insert into rank_keywords
-    res.json({ ok: true, message: 'Discovery queued' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Check SERP positions for keywords
-app.post('/api/projects/:id/serp/check', async (req, res) => {
-  // TODO: Implement SERP checking with DataForSEO or SERPapi
-  // For each keyword, fetch top 10, extract our domain position, competitors
-  // Store in rank_tracking table
-  res.json({ ok: true, message: 'SERP check queued' });
-});
-
-// Import discovered keywords with position + volume
-app.post('/api/projects/:id/serp/import', async (req, res) => {
-  const { keywords } = req.body; // [{keyword, volume, position, url, competition}]
-  if (!Array.isArray(keywords)) return res.status(400).json({ error: 'keywords must be array' });
-  try {
-    let added = 0;
-    const baseTime = Date.now();
-    for (let i = 0; i < keywords.length; i++) {
-      const k = keywords[i];
-      if (!k.keyword) continue;
-      const kw = k.keyword.trim();
-
-      // Upsert into rank_keywords
-      await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, search_volume, competition)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (project_id, keyword, location) DO UPDATE
-         SET search_volume=COALESCE(EXCLUDED.search_volume, rank_keywords.search_volume),
-             competition=COALESCE(EXCLUDED.competition, rank_keywords.competition)`,
-        [req.params.id, kw, k.volume || null, k.competition || null]
-      );
-
-      // Insert tracking record if position provided
-      if (k.position) {
-        const ts = new Date(baseTime + i).toISOString();
-        await pool.query(
-          `INSERT INTO rank_tracking (project_id, keyword, serp_position, serp_url, serp_title, checked_at)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (project_id, keyword, location, checked_at) DO NOTHING`,
-          [req.params.id, kw, k.position, k.url || null, k.title || null, ts]
-        );
-      }
-      added++;
-    }
-    res.json({ ok: true, added });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Get GSC keywords for a project
-app.get('/api/projects/:id/gsc/keywords', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC',
-      [req.params.id]
-    );
-    res.json({ keywords: result.rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Sync GSC keywords (from Google Search Console token)
-app.post('/api/projects/:id/gsc/sync', async (req, res) => {
-  // TODO: Implement GSC OAuth token refresh + API call to fetch top keywords
-  // Parse CSV or JSON response, upsert into gsc_keywords
-  res.json({ ok: true, message: 'GSC sync queued' });
-});
-
-// ==================== 10. REPORTS ====================
-
-// Get monthly reports for a project
-app.get('/api/projects/:id/reports', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM monthly_reports WHERE project_id=$1 ORDER BY month DESC',
-      [req.params.id]
-    );
-    res.json({ reports: result.rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Generate monthly report
-app.post('/api/projects/:id/reports/generate', async (req, res) => {
-  const { month } = req.body; // '2026-04'
-  if (!month) return res.status(400).json({ error: 'month required (YYYY-MM)' });
-  try {
-    // TODO: Aggregate metrics from rank_tracking, gsc_keywords, audit_findings
-    // Generate report data and store in monthly_reports
-    res.json({ ok: true, message: 'Report generation queued' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ==================== 11. GSC OAUTH ====================
-
-// Get OAuth URL for GSC
-app.get('/api/gsc/auth-url', (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
-  const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_REDIRECT_URI,
-    response_type: 'code',
-    scope: GSC_SCOPES,
-    access_type: 'offline'
-  });
-  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` });
-});
-
-// GSC OAuth callback
-app.get('/api/gsc/callback', async (req, res) => {
-  const { code, state } = req.query;
-  if (!code) return res.status(400).send('No auth code');
-  try {
-    // TODO: Exchange code for token, fetch user's GSC properties
-    // Store token in project_integrations, redirect to dashboard
-    res.redirect('/dashboard?gsc=connected');
-  } catch (e) {
-    res.status(500).send(`Error: ${e.message}`);
-  }
-});
 
 // ==================== 11b. SPEED AUDIT (via SEO Room Helper plugin) ====================
 
@@ -1076,6 +765,924 @@ app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
 
     res.json({ url, strategy, cwv, full: data });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== 11. GSC OAUTH & RANK TRACKING ====================
+
+// Helper: get GSC access token (with auto-refresh)
+async function getGscAccessToken(projectId) {
+  const r = await pool.query('SELECT config FROM project_integrations WHERE project_id=$1 AND kind=$2 AND status=$3', [projectId, 'gsc', 'connected']);
+  if (r.rows.length === 0) return null;
+  let config = r.rows[0].config;
+  if (typeof config === 'string') config = JSON.parse(config);
+
+  // Refresh if expired (with 60s buffer)
+  if (Date.now() > (config.expires_at - 60000)) {
+    if (!config.refresh_token) return null;
+    const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: config.refresh_token, client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET, grant_type: 'refresh_token'
+      })
+    });
+    const newTokens = await refreshRes.json();
+    if (newTokens.error) { console.error('[gsc] Token refresh failed:', newTokens.error); return null; }
+    config.access_token = newTokens.access_token;
+    config.expires_at = Date.now() + (newTokens.expires_in * 1000);
+    await pool.query('UPDATE project_integrations SET config=$1, updated_at=NOW() WHERE project_id=$2 AND kind=$3',
+      [JSON.stringify(config), projectId, 'gsc']);
+  }
+  return config.access_token;
+}
+
+// Helper: call DataForSEO API
+// ==================== GSC OAUTH ====================
+// Step 1: Start OAuth — redirect user to Google consent
+app.get('/api/gsc/connect/:projectId', (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
+  const state = Buffer.from(JSON.stringify({
+    projectId: req.params.projectId,
+    token: req.headers.authorization?.replace('Bearer ', '')
+  })).toString('base64url');
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GSC_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
+  res.json({ url });
+});
+
+// Step 2: Google callback — exchange code for tokens, store in DB
+app.get('/api/gsc/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+    const { projectId, token } = JSON.parse(Buffer.from(state, 'base64url').toString());
+
+    // Verify JWT
+    let userId;
+    try { userId = jwt.verify(token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
+
+    // Verify project ownership
+    const proj = await pool.query('SELECT id FROM projects WHERE id=$1 AND user_id=$2', [projectId, userId]);
+    if (proj.rows.length === 0) return res.status(403).send('Project not found');
+
+    // Exchange code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI, grant_type: 'authorization_code'
+      })
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
+
+    // Store in project_integrations
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status)
+       VALUES ($1, 'gsc', $2, 'connected')
+       ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [projectId, JSON.stringify({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000)
+      })]
+    );
+    console.log(`[gsc] OAuth tokens stored for project ${projectId}`);
+
+    // Redirect back to dashboard
+    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GSC connected! You can close this tab.</p></body></html>');
+  } catch (err) {
+    console.error('[gsc] OAuth callback error:', err.message);
+    res.status(500).send('OAuth failed: ' + err.message);
+  }
+});
+
+// Check GSC connection status
+app.get('/api/projects/:projectId/gsc/status', async (req, res) => {
+  const r = await pool.query('SELECT status, updated_at FROM project_integrations WHERE project_id=$1 AND kind=$2', [req.params.projectId, 'gsc']);
+  if (r.rows.length === 0) return res.json({ connected: false });
+  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
+});
+
+// Disconnect GSC
+app.post('/api/projects/:projectId/gsc/disconnect', async (req, res) => {
+  await pool.query('UPDATE project_integrations SET status=$1, config=$2, updated_at=NOW() WHERE project_id=$3 AND kind=$4',
+    ['disconnected', '{}', req.params.projectId, 'gsc']);
+  res.json({ ok: true });
+});
+
+// Sync GSC keywords — fetches real positions from Google and stores them
+app.post('/api/projects/:projectId/gsc/sync-keywords', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const accessToken = await getGscAccessToken(projectId);
+    if (!accessToken) return res.status(400).json({ error: 'GSC not connected' });
+
+    const proj = await pool.query('SELECT domain FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+
+    const domain = proj.rows[0].domain;
+    const gscDomain = `sc-domain:${domain.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/$/, '')}`;
+
+    // Find matching site
+    const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }).then(r => r.json());
+    const available = (sites.siteEntry || []).map(s => s.siteUrl);
+    let matchedSite = available.find(s => s.includes(domain.replace(/^www\./, '')));
+    if (!matchedSite && available.length > 0) matchedSite = available[0];
+    if (!matchedSite) return res.status(400).json({ error: 'Domain not found in GSC' });
+
+    // Fetch last 28 days for more accurate recent positions
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0];
+
+    const perfRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: 500 })
+    });
+    const perfData = await perfRes.json();
+    const rows = perfData.rows || [];
+
+    // Upsert into gsc_keywords (save current position as prev_position before overwriting)
+    let synced = 0;
+    for (const row of rows) {
+      const kw = row.keys[0];
+      await pool.query(
+        `INSERT INTO gsc_keywords (project_id, keyword, clicks, impressions, ctr, position, fetched_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (project_id, keyword)
+         DO UPDATE SET prev_position = gsc_keywords.position, clicks=$3, impressions=$4, ctr=$5, position=$6, fetched_at=NOW()`,
+        [projectId, kw, row.clicks || 0, row.impressions || 0, row.ctr || 0, row.position || 0]
+      );
+      synced++;
+    }
+
+    console.log(`[gsc] Synced ${synced} keywords for project ${projectId}, matchedSite=${matchedSite}, available=${JSON.stringify(available)}, rawRows=${rows.length}`);
+    res.json({ ok: true, synced, last_date: endDate, debug: { matched_site: matchedSite, available_sites: available, raw_rows: rows.length, domain_used: domain, gsc_domain_tried: gscDomain, perf_response_keys: Object.keys(perfData) } });
+  } catch (e) {
+    console.error('[gsc] Sync keywords error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get synced GSC keywords
+app.get('/api/projects/:projectId/gsc/keywords', async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT keyword, clicks, impressions, ctr, position, fetched_at FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC',
+      [req.params.projectId]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Upload GSC keywords from CSV (exported from Google Search Console)
+app.post('/api/projects/:projectId/gsc/upload-csv', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { rows } = req.body; // [{keyword, clicks, impressions, ctr, position}]
+    if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'No rows provided' });
+
+    let synced = 0;
+    for (const row of rows) {
+      const kw = (row.keyword || '').trim();
+      if (!kw) continue;
+      const clicks = parseInt(row.clicks) || 0;
+      const impressions = parseInt(row.impressions) || 0;
+      const ctr = parseFloat((row.ctr || '0').replace('%', '')) / 100 || 0;
+      const position = parseFloat(row.position) || 0;
+
+      await pool.query(
+        `INSERT INTO gsc_keywords (project_id, keyword, clicks, impressions, ctr, position, fetched_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (project_id, keyword)
+         DO UPDATE SET prev_position = gsc_keywords.position, clicks=$3, impressions=$4, ctr=$5, position=$6, fetched_at=NOW()`,
+        [projectId, kw, clicks, impressions, ctr, position]
+      );
+      synced++;
+    }
+
+    console.log(`[gsc] CSV upload: ${synced} keywords for project ${projectId}`);
+    res.json({ ok: true, synced });
+  } catch (e) {
+    console.error('[gsc] CSV upload error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== DATAFORSEO RANK TRACKING ====================
+
+// Import discovered keywords with volume + position data
+app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req, res) => {
+  const { projectId } = req.params;
+  const { keywords } = req.body; // [{keyword, volume, position, url, competition}]
+  if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+  try {
+    let added = 0;
+    const baseTime = Date.now();
+    for (let i = 0; i < keywords.length; i++) {
+      const k = keywords[i];
+      if (!k.keyword) continue;
+      const kw = k.keyword.trim();
+      // Insert into rank_keywords with volume
+      await pool.query(
+        `INSERT INTO rank_keywords (project_id, keyword, search_volume, competition) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (project_id, keyword, location) DO UPDATE SET search_volume=COALESCE(EXCLUDED.search_volume, rank_keywords.search_volume), competition=COALESCE(EXCLUDED.competition, rank_keywords.competition)`,
+        [projectId, kw, k.volume || null, k.competition || null]
+      );
+      // Insert into rank_tracking with SERP position + URL (unique timestamp per keyword)
+      if (k.position) {
+        const ts = new Date(baseTime + i).toISOString();
+        await pool.query(
+          `INSERT INTO rank_tracking (project_id, keyword, serp_position, serp_url, checked_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (project_id, keyword, location, checked_at) DO NOTHING`,
+          [projectId, kw, k.position, k.url || null, ts]
+        );
+      }
+      added++;
+    }
+    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
+    res.json({ ok: true, added, total: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add keywords to track
+app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
+  const { projectId } = req.params;
+  const { keywords, location_code, location } = req.body; // keywords: string[], location: string (suburb/city for Maps), location_code: number
+  if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+  try {
+    let added = 0;
+    for (const kw of keywords) {
+      if (!kw || typeof kw !== 'string') continue;
+      await pool.query(
+        `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
+        [projectId, kw.trim(), location || '', location_code || 2036]
+      );
+      added++;
+    }
+    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY added_at DESC', [projectId]);
+    res.json({ ok: true, added, total: rows.length, keywords: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Remove a tracked keyword
+app.delete('/api/projects/:projectId/rank-tracking/keywords/:keywordId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM rank_keywords WHERE id=$1 AND project_id=$2', [req.params.keywordId, req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete ALL tracked keywords for a project
+app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM rank_tracking WHERE project_id=$1', [req.params.projectId]);
+    await pool.query('DELETE FROM rank_keywords WHERE project_id=$1', [req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Clean ALL maps data (keywords with location + their tracking records)
+app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
+  try {
+    // Delete tracking records for maps keywords (those with a location)
+    const trackDel = await pool.query(
+      `DELETE FROM rank_tracking WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
+      [req.params.projectId]
+    );
+    // Delete the maps keywords themselves
+    const kwDel = await pool.query(
+      `DELETE FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
+      [req.params.projectId]
+    );
+    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking records for project ${req.params.projectId}`);
+    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// SERPapi-powered Maps/Local Pack sync
+app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const businessName = project.business_name || project.name || '';
+
+    // Get maps keywords (those with a location)
+    const kwRes = await pool.query(
+      `SELECT * FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != '' ORDER BY keyword`,
+      [projectId]
+    );
+    if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No maps keywords. Generate keywords first.' });
+
+    console.log(`[maps-serpapi] Starting sync for ${kwRes.rows.length} keywords, business="${businessName}"`);
+
+    // GPS coordinates for Perth suburbs — used for location-accurate local pack results
+    const suburbGPS = {
+      'leeming': { lat: -32.0728, lng: 115.8640 }, 'murdoch': { lat: -32.0660, lng: 115.8430 },
+      'cannington': { lat: -32.0170, lng: 115.9340 }, 'east cannington': { lat: -32.0100, lng: 115.9500 },
+      'ferndale': { lat: -32.0300, lng: 115.9500 }, 'lynwood': { lat: -32.0400, lng: 115.9300 },
+      'parkwood': { lat: -32.0450, lng: 115.9150 }, 'queens park': { lat: -32.0050, lng: 115.9400 },
+      'riverton': { lat: -32.0350, lng: 115.8940 }, 'rossmoyne': { lat: -32.0380, lng: 115.8700 },
+      'shelley': { lat: -32.0280, lng: 115.8800 }, 'willetton': { lat: -32.0530, lng: 115.8890 },
+      'wilson': { lat: -32.0230, lng: 115.9100 }, 'canning vale': { lat: -32.0580, lng: 115.9180 },
+      'bentley': { lat: -32.0000, lng: 115.9200 }, 'welshpool': { lat: -31.9930, lng: 115.9450 },
+      'atwell': { lat: -32.1440, lng: 115.8640 }, 'aubin grove': { lat: -32.1640, lng: 115.8660 },
+      'bibra lake': { lat: -32.0930, lng: 115.8200 }, 'cockburn': { lat: -32.1300, lng: 115.8500 },
+      'coogee': { lat: -32.1190, lng: 115.7650 }, 'coolbellup': { lat: -32.0830, lng: 115.8030 },
+      'hamilton hill': { lat: -32.0820, lng: 115.7770 }, 'jandakot': { lat: -32.1050, lng: 115.8700 },
+      'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
+      'banjup': { lat: -32.1290, lng: 115.8580 }, 'beeliar': { lat: -32.1350, lng: 115.8150 },
+      'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
+      'lake coogee': { lat: -32.1280, lng: 115.7800 }, 'munster': { lat: -32.1310, lng: 115.7870 },
+      'north coogee': { lat: -32.1100, lng: 115.7640 }, 'north lake': { lat: -32.0770, lng: 115.8330 },
+      'south lake': { lat: -32.0870, lng: 115.8350 }, 'treeby': { lat: -32.1500, lng: 115.8630 },
+      'wattleup': { lat: -32.1470, lng: 115.7990 }, 'yangebup': { lat: -32.1220, lng: 115.8140 }
+    };
+
+    // SERPapi helper — Google Search with GPS coordinates for accurate local pack
+    async function serpApiSearch(keyword, suburb) {
+      const query = suburb ? `${keyword} ${suburb}` : keyword;
+      const gps = suburb ? suburbGPS[suburb.toLowerCase()] : null;
+      const paramObj = {
+        api_key: SERPAPI_KEY,
+        engine: 'google',
+        q: query,
+        google_domain: 'google.com.au',
+        gl: 'au',
+        hl: 'en',
+        num: 20
+      };
+      if (gps) {
+        paramObj.lat = gps.lat;
+        paramObj.lon = gps.lng;
+      } else {
+        paramObj.location = 'Perth, Western Australia, Australia';
+      }
+      const params = new URLSearchParams(paramObj);
+      const resp = await fetch(`https://serpapi.com/search.json?${params}`);
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`SERPapi error ${resp.status}: ${text.substring(0, 200)}`);
+      }
+      return resp.json();
+    }
+
+    // Process keywords in parallel (5 at a time)
+    const results = [];
+    const baseTime = Date.now();
+    for (let i = 0; i < kwRes.rows.length; i += 5) {
+      const batch = kwRes.rows.slice(i, i + 5);
+      const promises = batch.map(async (kw, j) => {
+        const idx = i + j;
+        const query = `${kw.keyword} ${kw.location}`;
+        try {
+          const data = await serpApiSearch(kw.keyword, kw.location);
+          if (idx === 0) console.log(`[maps-serpapi] Raw response keys for "${query}":`, Object.keys(data), 'local_results.places count:', (data.local_results?.places || []).length);
+
+          // Extract local pack results — google engine returns local_results.places
+          const localResults = data.local_results?.places || data.local_results || [];
+          const localPack = Array.isArray(localResults) ? localResults : [];
+
+          // Find our position in local pack
+          let maps = { position: null, title: null, rating: null, reviews: null, address: null };
+          const localPackTop3 = [];
+          const nameLower = businessName.toLowerCase();
+          const nameNoSpaces = nameLower.replace(/\s+/g, '');
+          const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+
+          for (let p = 0; p < localPack.length; p++) {
+            const place = localPack[p];
+            const titleLower = (place.title || '').toLowerCase();
+            const titleNoSpaces = titleLower.replace(/\s+/g, '');
+            const pos = place.position || (p + 1);
+
+            // Match business
+            const nameMatch = nameLower && (
+              titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+              (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
+            );
+
+            if (nameMatch && !maps.position) {
+              maps = { position: pos, title: place.title, rating: place.rating, reviews: place.reviews, address: place.address };
+            }
+
+            if (pos <= 3) {
+              localPackTop3.push({ position: pos, title: place.title, rating: place.rating, reviews: place.reviews, source: 'local' });
+            }
+          }
+
+          // Extract organic SERP position
+          let serp = { position: null, url: null, title: null, snippet: null, type: null };
+          const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+          for (const item of (data.organic_results || [])) {
+            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+            if (domain && (itemDomain.includes(domain) || domain.includes(itemDomain.split('/')[0]))) {
+              serp = { position: item.position, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
+              break;
+            }
+          }
+
+          // Build competitors list (local pack top 3 minus our business)
+          const kwCompetitors = localPackTop3.filter(t => {
+            const tLower = (t.title || '').toLowerCase();
+            const tNoSpaces = tLower.replace(/\s+/g, '');
+            return !tLower.includes(nameLower) && !tNoSpaces.includes(nameNoSpaces);
+          });
+
+          // Save to DB
+          await pool.query(
+            `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            [projectId, kw.keyword, kw.location || '', kw.location_code, kw.language_code,
+             serp.position, serp.url, serp.title, serp.snippet, serp.type,
+             maps.position, maps.title, maps.rating, maps.reviews, maps.address,
+             JSON.stringify(kwCompetitors), new Date(baseTime + idx).toISOString()]
+          );
+
+          const result = { keyword: kw.keyword, location: kw.location, serp_position: serp.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title) };
+          results[idx] = result;
+          if (idx < 3) console.log(`[maps-serpapi] "${query}" → local_pack=${maps.position || '>20'}, top3: ${localPackTop3.map(t => t.title).join(', ')}`);
+        } catch (err) {
+          console.error(`[maps-serpapi] Error for "${query}":`, err.message);
+          results[idx] = { keyword: kw.keyword, location: kw.location, error: err.message };
+        }
+      });
+      await Promise.all(promises);
+    }
+
+    console.log(`[maps-serpapi] Done. Synced ${results.filter(r => r && !r.error).length}/${kwRes.rows.length} keywords.`);
+    res.json({ ok: true, synced: results.filter(r => r && !r.error).length, total: kwRes.rows.length, results: results.filter(Boolean) });
+  } catch (e) {
+    console.error('[maps-serpapi] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Local Falcon sync — pulls scan reports into Maps tab
+app.post('/api/projects/:projectId/maps/sync-localfalcon', async (req, res) => {
+  if (!LOCAL_FALCON_KEY) return res.status(503).json({ error: 'LOCAL_FALCON_KEY not configured. Add it to Railway env vars.' });
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const businessName = project.business_name || project.name || '';
+
+    // Fetch all reports from Local Falcon
+    const lfResp = await fetch(`https://api.localfalcon.com/v1/reports?api_key=${LOCAL_FALCON_KEY}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    const lfData = await lfResp.json();
+    if (!lfData.success) return res.status(400).json({ error: lfData.message || 'Local Falcon API error' });
+
+    const reports = lfData.data?.reports || [];
+    console.log(`[maps-localfalcon] Got ${reports.length} reports from Local Falcon`);
+
+    // Filter reports for this business (match by place_id or name)
+    const placeName = businessName.toLowerCase();
+    const relevantReports = reports.filter(r => {
+      const locName = (r.location?.name || '').toLowerCase();
+      return locName.includes(placeName) || placeName.includes(locName);
+    });
+
+    if (relevantReports.length === 0) {
+      // Try all reports if no name match (user might have only one location)
+      if (reports.length > 0) {
+        console.log(`[maps-localfalcon] No name match for "${businessName}", using all ${reports.length} reports`);
+      } else {
+        return res.status(400).json({ error: 'No scan reports found in Local Falcon. Run scans there first.' });
+      }
+    }
+
+    const reportsToUse = relevantReports.length > 0 ? relevantReports : reports;
+    const baseTime = Date.now();
+    let synced = 0;
+
+    for (let i = 0; i < reportsToUse.length; i++) {
+      const report = reportsToUse[i];
+      const keyword = report.keyword || '';
+      const location = ''; // Local Falcon handles location via geo-grid
+
+      // Extract keyword and location from keyword field (e.g. "plumber leeming" -> keyword="plumber", location="leeming")
+      const parts = keyword.split(/\s+/);
+      let kwBase = keyword;
+      let kwLocation = '';
+      if (parts.length >= 2) {
+        kwBase = parts[0];
+        kwLocation = parts.slice(1).join(' ');
+      }
+
+      // Ensure keyword exists in rank_keywords
+      await pool.query(
+        `INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
+        [projectId, kwBase, kwLocation]
+      );
+
+      // Map Local Falcon data to our DB schema
+      const arp = parseFloat(report.arp) || null;
+      const atrp = parseFloat(report.atrp) || null;
+      const solv = parseFloat(report.solv) || 0;
+      const foundIn = parseInt(report.found_in) || 0;
+      const dataPoints = parseInt(report.data_points) || 0;
+
+      // maps_position = ARP (average rank position) — most useful metric
+      const mapsPosition = arp && arp <= 20 ? Math.round(arp) : null;
+
+      // Store competitors as metadata with Local Falcon metrics
+      const lfMetrics = {
+        arp, atrp, solv, found_in: foundIn, data_points: dataPoints,
+        heatmap: report.heatmap || null,
+        report_key: report.report_key || null,
+        source: 'local_falcon'
+      };
+
+      await pool.query(
+        `INSERT INTO rank_tracking (project_id, keyword, location, serp_position, maps_position, maps_title, competitors, checked_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, kwBase, kwLocation, null, mapsPosition, businessName,
+         JSON.stringify([lfMetrics]), new Date(baseTime + i).toISOString()]
+      );
+
+      synced++;
+    }
+
+    // Reload keywords
+    const { rows: allKw } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
+
+    console.log(`[maps-localfalcon] Done. Synced ${synced} reports.`);
+    res.json({ ok: true, synced, total: reportsToUse.length, keywords: allKw });
+  } catch (e) {
+    console.error('[maps-localfalcon] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get tracked keywords
+app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [req.params.projectId]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Sync ranks — calls DataForSEO for all tracked keywords
+app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
+  if (!DATAFORSEO_LOGIN) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to env.' });
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+    const businessName = project.business_name || project.name || domain;
+
+    const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
+    if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
+
+    console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}"`);
+
+    // Build DataForSEO tasks — organic SERP (all keywords)
+    const serpTasks = kwRes.rows.map(kw => ({
+      keyword: kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword,
+      location_code: kw.location_code || 2036,
+      language_code: kw.language_code || 'en',
+      device: 'desktop',
+      os: 'windows',
+      depth: 30
+    }));
+
+    // GPS coordinates for Perth suburbs — used for hyper-local Maps searches
+    const suburbCoords = {
+      'leeming': '-32.0728,115.8640', 'cannington': '-32.0170,115.9340', 'east cannington': '-32.0100,115.9500',
+      'ferndale': '-32.0300,115.9500', 'lynwood': '-32.0400,115.9300', 'parkwood': '-32.0450,115.9150',
+      'queens park': '-32.0050,115.9400', 'riverton': '-32.0350,115.8940', 'rossmoyne': '-32.0380,115.8700',
+      'shelley': '-32.0280,115.8800', 'willetton': '-32.0530,115.8890', 'wilson': '-32.0230,115.9100',
+      'canning vale': '-32.0580,115.9180', 'bentley': '-32.0000,115.9200', 'welshpool': '-31.9930,115.9450',
+      'atwell': '-32.1440,115.8640', 'aubin grove': '-32.1640,115.8660', 'banjup': '-32.1290,115.8580',
+      'beeliar': '-32.1350,115.8150', 'bibra lake': '-32.0930,115.8200', 'cockburn': '-32.1300,115.8500',
+      'coogee': '-32.1190,115.7650', 'coolbellup': '-32.0830,115.8030', 'hamilton hill': '-32.0820,115.7770',
+      'hammond park': '-32.1620,115.8470', 'henderson': '-32.1490,115.7730', 'jandakot': '-32.1050,115.8700',
+      'lake coogee': '-32.1280,115.7800', 'munster': '-32.1310,115.7870', 'north coogee': '-32.1100,115.7640',
+      'north lake': '-32.0770,115.8330', 'south lake': '-32.0870,115.8350', 'spearwood': '-32.1050,115.7830',
+      'success': '-32.1440,115.8490', 'treeby': '-32.1500,115.8630', 'wattleup': '-32.1470,115.7990',
+      'yangebup': '-32.1220,115.8140'
+    };
+
+    // Maps/local pack positions are extracted from SERP results (no separate Maps API call)
+
+    // Parallel batch helper — runs N requests concurrently
+    async function batchRequests(tasks, endpoint, label, concurrency = 5) {
+      const responses = new Array(tasks.length).fill(null);
+      for (let i = 0; i < tasks.length; i += concurrency) {
+        const batch = tasks.slice(i, i + concurrency);
+        const promises = batch.map((task, j) =>
+          dataforseoRequest(endpoint, 'POST', [task])
+            .then(resp => { responses[i + j] = resp?.tasks?.[0] || null; })
+            .catch(e => { console.error(`[rank-sync] ${label} error for "${task.keyword}":`, e.message); responses[i + j] = null; })
+        );
+        await Promise.all(promises);
+      }
+      return responses;
+    }
+
+    // Call SERP API — 5 concurrent requests (each with 1 task)
+    console.log(`[rank-sync] Fetching SERP for ${serpTasks.length} keywords (5 parallel)...`);
+    const serpResponses = await batchRequests(serpTasks, '/serp/google/organic/live/advanced', 'SERP');
+
+    // Maps positions now extracted from SERP local pack — no separate Maps API call needed
+
+    const results = [];
+    const competitors = project.competitors || [];
+    const competitorDomains = competitors.map(c => (c.domain || c).replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase());
+
+    // Build maps index: maps results are only for keywords with location
+    // Maps positions extracted from SERP local pack (no separate Maps API)
+
+    const baseTime = Date.now();
+    // Process SERP results
+    for (let i = 0; i < kwRes.rows.length; i++) {
+      const kw = kwRes.rows[i];
+      const serpTask = serpResponses[i];
+      // Local pack data extracted from SERP results below
+
+      let serp = { position: null, url: null, title: null, snippet: null, type: null };
+      let maps = { position: null, title: null, rating: null, reviews: null, address: null };
+      let kwCompetitors = [];
+      const localPackTop3 = [];
+
+      // Parse SERP
+      if (serpTask?.result?.[0]?.items) {
+        const items = serpTask.result[0].items;
+        const types = [...new Set(items.map(it => it.type))];
+        if (i === 0) console.log(`[rank-sync] First keyword "${kw.keyword}" has ${items.length} items. Types: ${types.join(', ')}. Matching domain="${domain}"`);
+
+        let lpPos = 0; // track local pack position across items
+        for (const item of items) {
+          const itemDomain = (item.domain || '').replace(/^www\./, '').toLowerCase();
+          const pos = item.rank_group || item.rank_absolute;
+
+          if (item.type === 'organic') {
+            // Check if this is our site
+            if (domain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain))) {
+              if (!serp.position) {
+                serp = { position: pos, url: item.url, title: item.title, snippet: item.description, type: 'organic' };
+              }
+            } else {
+              // Track top 3 organic results as competitors (always)
+              if (kwCompetitors.filter(c => c.source === 'serp').length < 3) {
+                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.url, title: item.title, source: 'serp' });
+              }
+            }
+            // Also add named competitors if not already added
+            for (const cd of competitorDomains) {
+              if ((itemDomain.includes(cd) || cd.includes(itemDomain)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
+                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.url, title: item.title, source: 'serp' });
+              }
+            }
+          }
+
+          // Local pack — DataForSEO returns each as a top-level item with type 'local_pack'
+          if (item.type === 'local_pack') {
+            lpPos++;
+            const titleLower = (item.title || '').toLowerCase();
+            const titleNoSpaces = titleLower.replace(/\s+/g, '');
+            const nameLower = businessName.toLowerCase();
+            const nameNoSpaces = nameLower.replace(/\s+/g, '');
+            const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+            const nameMatch = titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+              (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)));
+            const domainMatch = domain && itemDomain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain));
+
+            if (domainMatch || nameMatch) {
+              if (!maps.position) {
+                maps = { position: lpPos, title: item.title, rating: item.rating?.value, reviews: item.rating?.votes_count, address: item.address };
+              }
+            }
+
+            // Always capture top 3 local pack results
+            if (lpPos <= 3) {
+              localPackTop3.push({ position: lpPos, title: item.title, domain: itemDomain, rating: item.rating?.value, reviews: item.rating?.votes_count, source: 'local' });
+            }
+          }
+
+          // Some SERP results have nested items (local_pack container)
+          if (item.items && Array.isArray(item.items)) {
+            for (const sub of item.items) {
+              lpPos++;
+              const subDomain = (sub.domain || '').replace(/^www\./, '').toLowerCase();
+              const subTitleLower = (sub.title || '').toLowerCase();
+              const subTitleNoSpaces = subTitleLower.replace(/\s+/g, '');
+              const nameLower = businessName.toLowerCase();
+              const nameNoSpaces = nameLower.replace(/\s+/g, '');
+              const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+              const nameMatch = subTitleLower.includes(nameLower) || subTitleNoSpaces.includes(nameNoSpaces) ||
+                (nameWords.length >= 2 && nameWords.every(w => subTitleLower.includes(w)));
+              const domainMatch = domain && subDomain && (subDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(subDomain));
+
+              if (domainMatch || nameMatch) {
+                if (!maps.position) {
+                  maps = { position: lpPos, title: sub.title, rating: sub.rating?.value, reviews: sub.rating?.votes_count, address: sub.address };
+                }
+              }
+
+              if (lpPos <= 3) {
+                localPackTop3.push({ position: lpPos, title: sub.title, domain: subDomain, rating: sub.rating?.value, reviews: sub.rating?.votes_count, source: 'local' });
+              }
+            }
+          }
+        }
+        if (i === 0) console.log(`[rank-sync] First keyword result: serp_pos=${serp.position}, maps_pos=${maps.position}`);
+      } else {
+        if (i === 0) console.log(`[rank-sync] First keyword "${kw.keyword}" SERP task:`, String(JSON.stringify(serpTask?.result?.[0] || serpTask || 'no data')).substring(0, 500));
+      }
+
+      // Add local pack top 3 as competitors (excluding our own business)
+      if (localPackTop3.length > 0) {
+        const nameLower = businessName.toLowerCase();
+        const nameNoSpaces = nameLower.replace(/\s+/g, '');
+        const filtered = localPackTop3.filter(t => {
+          const tLower = (t.title || '').toLowerCase();
+          const tNoSpaces = tLower.replace(/\s+/g, '');
+          return !tLower.includes(nameLower) && !tNoSpaces.includes(nameNoSpaces);
+        });
+        kwCompetitors = [...filtered, ...kwCompetitors];
+        if (!maps.position && i < 3) console.log(`[rank-sync] NO local pack match for "${kw.keyword}" in ${kw.location}. businessName="${businessName}". Top 3:`, localPackTop3.map(t => t.title));
+      }
+
+      // Save to DB
+      await pool.query(
+        `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [projectId, kw.keyword, kw.location || '', kw.location_code, kw.language_code,
+         serp.position, serp.url, serp.title, serp.snippet, serp.type,
+         maps.position, maps.title, maps.rating, maps.reviews, maps.address,
+         JSON.stringify(kwCompetitors), new Date(baseTime + i).toISOString()]
+      );
+
+      results.push({ keyword: kw.keyword, location: kw.location, serp_position: serp.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title), competitors: kwCompetitors.length });
+    }
+
+    // Fetch search volume — batch all keywords in one task (up to 700 per task)
+    console.log(`[rank-sync] Fetching search volume for ${kwRes.rows.length} keywords...`);
+    try {
+      const allKeywords = kwRes.rows.map(kw => kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword);
+      const volTask = [{
+        keywords: allKeywords,
+        location_code: 2036,
+        language_code: 'en'
+      }];
+      const volResp = await dataforseoRequest('/keywords_data/google_ads/search_volume/live', 'POST', volTask);
+      console.log(`[rank-sync] Volume API status:`, volResp?.status_code, 'results:', volResp?.tasks?.[0]?.result?.length || 0);
+
+      const volResults = volResp?.tasks?.[0]?.result || [];
+      // Build lookup by keyword
+      const volMap = {};
+      for (const v of volResults) {
+        if (v.keyword) volMap[v.keyword.toLowerCase()] = v;
+      }
+
+      let volSaved = 0;
+      for (const kw of kwRes.rows) {
+        const kwString = (kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword).toLowerCase();
+        const v = volMap[kwString];
+        if (v) {
+          try {
+            await pool.query(
+              `UPDATE rank_keywords SET search_volume=$1, cpc=$2, competition=$3 WHERE id=$4`,
+              [v.search_volume || 0, v.cpc || 0, String(v.competition || ''), kw.id]
+            );
+            volSaved++;
+          } catch(saveErr) {
+            if (volSaved === 0) console.log(`[rank-sync] Volume save error:`, saveErr.message);
+          }
+        }
+      }
+      console.log(`[rank-sync] Volume saved for ${volSaved}/${kwRes.rows.length} keywords`);
+    } catch (volErr) {
+      console.log('[rank-sync] Volume fetch failed (non-critical):', volErr.message);
+    }
+
+    console.log(`[rank-sync] Done. Synced ${results.length} keywords.`);
+    res.json({ ok: true, synced: results.length, results });
+  } catch (e) {
+    console.error('[rank-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest rankings for a project
+app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.maps_rating, rt.maps_reviews, rt.competitors, rt.checked_at,
+             g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
+      FROM rank_tracking rt
+      LEFT JOIN gsc_keywords g ON g.project_id = rt.project_id AND LOWER(g.keyword) = LOWER(rt.keyword)
+      WHERE rt.project_id=$1
+      ORDER BY rt.keyword, rt.location, rt.checked_at DESC
+    `, [req.params.projectId]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get rank history for a keyword (for charts)
+app.get('/api/projects/:projectId/rank-tracking/history', async (req, res) => {
+  const { keyword, days } = req.query;
+  try {
+    const { rows } = await pool.query(`
+      SELECT keyword, serp_position, maps_position, competitors, checked_at
+      FROM rank_tracking WHERE project_id=$1 ${keyword ? 'AND keyword=$2' : ''}
+      AND checked_at > NOW() - INTERVAL '${parseInt(days) || 30} days'
+      ORDER BY checked_at ASC
+    `, keyword ? [req.params.projectId, keyword] : [req.params.projectId]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Import keywords from GSC into rank tracking
+app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
+  const { projectId } = req.params;
+  const { limit: maxKw } = req.body;
+  try {
+    let keywords = new Set();
+
+    // Import from GSC
+    try {
+      const gscRes = await pool.query(
+        `SELECT keyword FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT $2`,
+        [projectId, maxKw || 50]
+      );
+      gscRes.rows.forEach(r => keywords.add(r.keyword.toLowerCase()));
+    } catch (e) { console.log('gsc_keywords table error, skipping:', e.message); }
+
+    if (keywords.size === 0) {
+      return res.json({ error: 'No keywords found. Connect Google Search Console first to import keywords.' });
+    }
+
+    let added = 0;
+    for (const kw of keywords) {
+      const r = await pool.query(
+        `INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3) ON CONFLICT (project_id, keyword, location) DO NOTHING RETURNING id`,
+        [projectId, kw, '']
+      );
+      if (r.rows.length > 0) added++;
+    }
+
+    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
+    res.json({ ok: true, imported: added, total: rows.length, keywords: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Discover keywords a domain ranks for via DataForSEO
+app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => {
+  if (!DATAFORSEO_LOGIN) return res.status(503).json({ error: 'DataForSEO not configured' });
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+
+    const taskData = [{
+      target: domain,
+      location_code: 2036,
+      language_code: 'en',
+      limit: 200,
+      order_by: ['keyword_data.keyword_info.search_volume,desc'],
+      filters: ['keyword_data.keyword_info.search_volume', '>', 0]
+    }];
+
+    console.log(`[discover] Fetching ranked keywords for ${domain}`);
+    const resp = await dataforseoRequest('/dataforseo_labs/google/ranked_keywords/live', 'POST', taskData);
+
+    if (resp.status_code !== 20000) {
+      console.error('[discover] API error:', JSON.stringify(resp).substring(0, 500));
+      return res.status(400).json({ error: `DataForSEO error: ${resp.status_message || 'Unknown'}` });
+    }
+
+    const items = resp.tasks?.[0]?.result?.[0]?.items || [];
+    const keywords = items.map(item => ({
+      keyword: item.keyword_data?.keyword,
+      volume: item.keyword_data?.keyword_info?.search_volume || 0,
+      position: item.ranked_serp_element?.serp_item?.rank_group || null,
+      url: item.ranked_serp_element?.serp_item?.url || null,
+      competition: item.keyword_data?.keyword_info?.competition || null,
+    })).filter(k => k.keyword);
+
+    console.log(`[discover] Found ${keywords.length} keywords for ${domain}`);
+    res.json({ ok: true, keywords, total: keywords.length });
+  } catch (e) {
+    console.error('[discover] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

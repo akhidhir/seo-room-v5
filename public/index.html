@@ -2385,394 +2385,843 @@
       );
     }
 
-    // ============ MAPS RANKINGS PAGE ============
-    function MapsRankingsPage() {
+    // ============ RANK TRACKING HELPERS ============
+    const posColor = pos => !pos ? 'var(--text3)' : pos <= 3 ? '#22c55e' : pos <= 10 ? '#3b82f6' : pos <= 20 ? '#f59e0b' : '#ef4444';
+    const posLabel = pos => pos ? `#${pos}` : '—';
+
+    function useRankData(project) {
       const [keywords, setKeywords] = useState([]);
-      const [loading, setLoading] = useState(false);
-      const [checkingRankings, setCheckingRankings] = useState(false);
-      const [error, setError] = useState('');
-      const [showModal, setShowModal] = useState(false);
-      const [serviceArea, setServiceArea] = useState('plumber');
-      const [distanceKm, setDistanceKm] = useState(20);
-      const [selectedCombos, setSelectedCombos] = useState(new Set());
-      const [allCombos, setAllCombos] = useState([]);
-      const [expandedRows, setExpandedRows] = useState(new Set());
-      const [sortConfig, setSortConfig] = useState({ key: 'service', direction: 'asc' });
+      const [rankings, setRankings] = useState([]);
+      const [syncing, setSyncing] = useState(false);
+      const [importing, setImporting] = useState(false);
 
-      useEffect(() => {
-        loadKeywords();
-      }, []);
-
-      const loadKeywords = async () => {
-        setLoading(true);
-        setError('');
-        try {
-          const data = await api('/maps/keywords');
-          setKeywords(data.keywords || []);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
-        }
+      const loadData = async () => {
+        const [kwRes, rankRes] = await Promise.all([
+          api(`/api/projects/${project.id}/rank-tracking/keywords`),
+          api(`/api/projects/${project.id}/rank-tracking/latest`)
+        ]);
+        if (Array.isArray(kwRes)) setKeywords(kwRes);
+        if (Array.isArray(rankRes)) setRankings(rankRes);
       };
 
-      const generateCombos = async () => {
-        try {
-          const data = await api('/maps/generate-keywords', {
-            method: 'POST',
-            body: { serviceArea, distanceKm },
-          });
-          setAllCombos(data.combos || []);
-          setSelectedCombos(new Set(data.combos.map((c) => c.id)));
-        } catch (err) {
-          setError(err.message);
-        }
+      useEffect(() => { if (project) loadData(); }, [project?.id]);
+
+      const addKeyword = async (kw, location) => {
+        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
+        loadData();
       };
-
-      const handleAddKeywords = async () => {
-        try {
-          const combosArray = Array.from(selectedCombos);
-          await api('/maps/keywords', {
-            method: 'POST',
-            body: { combos: combosArray },
-          });
-          setShowModal(false);
-          setAllCombos([]);
-          setSelectedCombos(new Set());
-          await loadKeywords();
-        } catch (err) {
-          setError(err.message);
-        }
+      const removeKeyword = async (id) => {
+        await api(`/api/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
+        loadData();
       };
-
-      const handleCheckRankings = async () => {
-        setCheckingRankings(true);
-        setError('');
-        try {
-          await api('/maps/check-rankings', { method: 'POST' });
-          await loadKeywords();
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setCheckingRankings(false);
-        }
+      const deleteAllKeywords = async () => {
+        if (!confirm('Delete ALL tracked keywords and ranking data? This cannot be undone.')) return;
+        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'DELETE' });
+        loadData();
       };
-
-      const handleDeleteAllKeywords = async () => {
-        if (!window.confirm('Delete all maps keywords? This cannot be undone.')) return;
-        try {
-          await api('/maps/keywords', { method: 'DELETE' });
-          setKeywords([]);
-        } catch (err) {
-          setError(err.message);
-        }
+      const importKeywords = async () => {
+        setImporting(true);
+        const r = await api(`/api/projects/${project.id}/rank-tracking/import`, { method: 'POST', body: { limit: 50 } });
+        if (r.ok) loadData(); else if (r.error) alert(r.error);
+        setImporting(false);
       };
+      const importCSV = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.csv,.txt';
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          const firstLine = lines[0].toLowerCase();
 
-      const handleSort = (key) => {
-        setSortConfig((prev) => ({
-          key,
-          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
-        }));
-      };
+          // Detect GSC export format: "Top queries,Clicks,Impressions,CTR,Position"
+          const isGsc = firstLine.includes('top queries') || (firstLine.includes('queries') && firstLine.includes('clicks') && firstLine.includes('impressions'));
 
-      const sortedKeywords = useMemo(() => {
-        const sorted = [...keywords].sort((a, b) => {
-          const aVal = a[sortConfig.key];
-          const bVal = b[sortConfig.key];
-          if (typeof aVal === 'string') {
-            return sortConfig.direction === 'asc'
-              ? aVal.localeCompare(bVal)
-              : bVal.localeCompare(aVal);
-          }
-          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-        });
-        return sorted;
-      }, [keywords, sortConfig]);
-
-      const stats = useMemo(() => {
-        const dominant = keywords.filter((k) => k.visibility >= 80).length;
-        const partial = keywords.filter((k) => k.visibility >= 30 && k.visibility < 80).length;
-        const notVisible = keywords.filter((k) => k.visibility < 30).length;
-        const avgVis = keywords.length > 0 ? (keywords.reduce((sum, k) => sum + (k.visibility || 0), 0) / keywords.length).toFixed(1) : 0;
-        return { dominant, partial, notVisible, avgVis };
-      }, [keywords]);
-
-      const toggleCombo = (id) => {
-        setSelectedCombos((prev) => {
-          const newSet = new Set(prev);
-          if (newSet.has(id)) {
-            newSet.delete(id);
+          setImporting(true);
+          if (isGsc) {
+            // Parse GSC CSV — upload to gsc_keywords AND rank_keywords
+            const gscRows = [];
+            const kws = [];
+            for (let i = 1; i < lines.length; i++) {
+              const cols = lines[i].split(',').map(c => c.replace(/^["']|["']$/g, '').trim());
+              if (!cols[0]) continue;
+              kws.push(cols[0]);
+              gscRows.push({ keyword: cols[0], clicks: cols[1] || '0', impressions: cols[2] || '0', ctr: cols[3] || '0', position: cols[4] || '0' });
+            }
+            if (gscRows.length === 0) { alert('No keywords found in CSV'); setImporting(false); return; }
+            // Upload GSC data (positions, clicks, impressions)
+            const gscR = await api(`/api/projects/${project.id}/gsc/upload-csv`, { method: 'POST', body: { rows: gscRows } });
+            // Also add to rank tracking keywords
+            const kwR = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            alert(`Uploaded ${gscR.synced || gscRows.length} GSC keywords with positions + added ${kwR.added || kws.length} to rank tracking`);
+            loadData();
           } else {
-            newSet.add(id);
+            // Plain keyword list — first column only
+            const startIdx = (firstLine === 'keyword' || firstLine === 'keywords' || firstLine.includes('keyword')) ? 1 : 0;
+            const kws = [];
+            for (let i = startIdx; i < lines.length; i++) {
+              const kw = lines[i].split(',')[0].replace(/^["']|["']$/g, '').trim();
+              if (kw && kw.length > 0) kws.push(kw);
+            }
+            if (kws.length === 0) { alert('No keywords found in file'); setImporting(false); return; }
+            const r = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            if (r.ok) alert(`Imported ${r.added} keywords (${r.total} total)`);
+            else if (r.error) alert(r.error);
+            loadData();
           }
-          return newSet;
-        });
+          setImporting(false);
+        };
+        input.click();
+      };
+      const syncRanks = async () => {
+        setSyncing(true);
+        const r = await api(`/api/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
+        if (r.ok) loadData(); else if (r.error) alert(r.error);
+        setSyncing(false);
       };
 
-      const toggleSelectAll = () => {
-        if (selectedCombos.size === allCombos.length) {
-          setSelectedCombos(new Set());
+      const merged = keywords.map(kw => {
+        const rank = rankings.find(r => r.keyword.toLowerCase() === kw.keyword.toLowerCase() && (r.location || '') === (kw.location || ''));
+        return { ...kw, ...rank };
+      });
+
+      return { keywords, rankings, merged, syncing, importing, addKeyword, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData };
+    }
+
+    // ============ SERP RANKINGS PAGE ============
+    function SERPRankingsPage({ project }) {
+      const { keywords, rankings, merged, syncing, importing, addKeyword, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData } = useRankData(project);
+      const [newKw, setNewKw] = useState('');
+      const [history, setHistory] = useState([]);
+      const [selectedKw, setSelectedKw] = useState(null);
+      const [expandedKw, setExpandedKw] = useState(null);
+      const [sortCol, setSortCol] = useState(null);
+      const [sortDir, setSortDir] = useState('asc');
+      const [discovering, setDiscovering] = useState(false);
+      const [discovered, setDiscovered] = useState(null);
+      const [selectedDiscovered, setSelectedDiscovered] = useState(new Set());
+
+      const toggleSort = (col) => {
+        if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setSortCol(col); setSortDir('asc'); }
+      };
+      const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+      const sorted = useMemo(() => {
+        if (!sortCol) return merged;
+        return [...merged].sort((a, b) => {
+          let va, vb;
+          if (sortCol === 'keyword') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
+          else if (sortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
+          else if (sortCol === 'position') { va = a.serp_position ?? 999; vb = b.serp_position ?? 999; }
+          else if (sortCol === 'gsc') { va = a.gsc_position ?? 999; vb = b.gsc_position ?? 999; }
+          else if (sortCol === 'competitors') { va = (a.competitors || []).filter(c => c.source === 'serp').length; vb = (b.competitors || []).filter(c => c.source === 'serp').length; }
+          else if (sortCol === 'checked') { va = a.checked_at || ''; vb = b.checked_at || ''; }
+          else return 0;
+          if (va < vb) return sortDir === 'asc' ? -1 : 1;
+          if (va > vb) return sortDir === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }, [merged, sortCol, sortDir]);
+
+      const discoverKeywords = async () => {
+        setDiscovering(true);
+        const r = await api(`/api/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
+        if (r.ok && r.keywords) {
+          // Filter out keywords already tracked
+          const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
+          const fresh = r.keywords.filter(k => !tracked.has(k.keyword.toLowerCase()));
+          setDiscovered(fresh);
+          setSelectedDiscovered(new Set(fresh.map(k => k.keyword)));
         } else {
-          setSelectedCombos(new Set(allCombos.map((c) => c.id)));
+          alert(r.error || 'Failed to discover keywords');
         }
+        setDiscovering(false);
       };
-
-      const toggleRowExpand = (id) => {
-        setExpandedRows((prev) => {
-          const newSet = new Set(prev);
-          if (newSet.has(id)) {
-            newSet.delete(id);
-          } else {
-            newSet.add(id);
-          }
-          return newSet;
+      const addDiscoveredKeywords = async () => {
+        if (selectedDiscovered.size === 0) return;
+        // Send full data (volume, position, url, competition)
+        const kws = discovered.filter(k => selectedDiscovered.has(k.keyword));
+        const r = await api(`/api/projects/${project.id}/rank-tracking/import-discovered`, { method: 'POST', body: { keywords: kws } });
+        if (r.ok) alert(`Added ${r.added} keywords with positions & volume`);
+        else if (r.error) alert(r.error);
+        setDiscovered(null);
+        setSelectedDiscovered(new Set());
+        loadData();
+      };
+      const toggleDiscovered = (kw) => {
+        setSelectedDiscovered(prev => {
+          const next = new Set(prev);
+          if (next.has(kw)) next.delete(kw); else next.add(kw);
+          return next;
         });
       };
+
+      const downloadSampleCSV = () => {
+        const csv = `Keyword\nplumber perth\nblocked drain repair\nemergency plumber near me\nhot water system installation`;
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'sample-keywords.csv';
+        a.click();
+      };
+
+      async function loadHistory(kw) {
+        setSelectedKw(kw);
+        const r = await api(`/api/projects/${project.id}/rank-tracking/history?keyword=${encodeURIComponent(kw)}&days=90`);
+        if (Array.isArray(r)) setHistory(r);
+      }
 
       return (
-        <>
-          <div className="page-header">
-            <div className="page-title">
-              <i className="fas fa-map"></i> Maps Rankings
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 style={{ margin: 0 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 8, color: 'var(--accent)' }} />SERP Rankings</h2>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
+                <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete All
+              </button>}
+              <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 13 }}>
+                {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />Discover Keywords</>}
+              </button>
+              <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
+              </button>
+              <button onClick={downloadSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
+                Sample CSV
+              </button>
+              <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 13 }}>
+                {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Importing...</> : <><i className="fa-solid fa-download" style={{ marginRight: 4 }} />Import from GSC</>}
+              </button>
+              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
+                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
+              </button>
             </div>
-            <div className="page-subtitle">Local pack visibility and ranking tracking</div>
           </div>
 
-          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
-
-          {keywords.length > 0 && (
-            <div className="stats-grid">
-              <div className="stat-card">
-                <div className="stat-value" style={{ color: 'var(--success)' }}>{stats.dominant}</div>
-                <div className="stat-label">Dominant (80%+)</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.partial}</div>
-                <div className="stat-label">Partially Visible (30-80%)</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.notVisible}</div>
-                <div className="stat-label">Not Visible (&lt;30%)</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value">{stats.avgVis}%</div>
-                <div className="stat-label">Average Visibility</div>
-              </div>
+          {/* Summary cards */}
+          {rankings.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+              {[
+                { label: 'Tracked', value: keywords.length, color: 'var(--text)' },
+                { label: 'Top 3', value: rankings.filter(r => r.serp_position && r.serp_position <= 3).length, color: '#22c55e' },
+                { label: 'Top 10', value: rankings.filter(r => r.serp_position && r.serp_position <= 10).length, color: '#3b82f6' },
+                { label: 'Top 20', value: rankings.filter(r => r.serp_position && r.serp_position <= 20).length, color: '#f59e0b' },
+                { label: 'Not Ranking', value: rankings.filter(r => !r.serp_position).length, color: '#ef4444' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                </div>
+              ))}
             </div>
           )}
 
-          <div className="btn-group mb-24">
-            <button className="btn btn-primary" onClick={() => { setShowModal(true); setAllCombos([]); }}>
-              <i className="fas fa-plus"></i> Generate Keywords
-            </button>
-            <button className="btn btn-secondary" onClick={handleCheckRankings} disabled={checkingRankings || keywords.length === 0}>
-              {checkingRankings ? <span className="spinner"></span> : <i className="fas fa-refresh"></i>}
-              {checkingRankings ? 'Checking...' : 'Check Rankings'}
-            </button>
-            <button className="btn btn-danger" onClick={handleDeleteAllKeywords} disabled={keywords.length === 0}>
-              <i className="fas fa-trash"></i> Delete All
+          {/* Add keyword */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+            <input value={newKw} onChange={e => setNewKw(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKw.trim()) { addKeyword(newKw); setNewKw(''); } }}
+              placeholder="Add keyword to track..." style={{ flex: 1, padding: '10px 14px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
+            <button className="btn btn-primary" onClick={() => { if (newKw.trim()) { addKeyword(newKw); setNewKw(''); } }} disabled={!newKw.trim()} style={{ fontSize: 14, padding: '10px 20px' }}>
+              <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
             </button>
           </div>
 
-          {keywords.length > 0 && (
-            <div className="card">
-              <div className="maps-table-wrapper">
-                <table className="maps-table">
+          {keywords.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fa-solid fa-chart-line" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No keywords tracked yet</div>
+              <div style={{ fontSize: 13, marginBottom: 16 }}>Add keywords manually, import from CSV, or import from GSC.</div>
+              <button className="btn btn-primary" onClick={() => importKeywords()} disabled={importing}>
+                <i className="fa-solid fa-download" style={{ marginRight: 6 }} />Import from GSC
+              </button>
+            </div>
+          ) : (
+            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    {[
+                      { key: 'keyword', label: 'Keyword', align: 'left', w: null },
+                      { key: 'volume', label: 'Volume', align: 'center', w: 90 },
+                      { key: 'gsc', label: 'GSC Pos', align: 'center', w: 80 },
+                      { key: 'position', label: 'SERP Pos', align: 'center', w: 80 },
+                      { key: null, label: 'Ranking URL', align: 'left', w: 200 },
+                      { key: 'competitors', label: 'Competitors', align: 'center', w: 100 },
+                      { key: 'checked', label: 'Checked', align: 'center', w: 90 },
+                    ].map(h => (
+                      <th key={h.label} onClick={h.key ? () => toggleSort(h.key) : undefined} style={{ padding: '10px 14px', textAlign: h.align, fontWeight: 600, color: sortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                        {h.label}{h.key && sortIcon(h.key)}
+                      </th>
+                    ))}
+                    <th style={{ width: 40 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(kw => (
+                    <React.Fragment key={kw.id}>
+                      <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => loadHistory(kw.keyword)}>
+                        <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}{kw.location && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 9, marginRight: 2 }} />{kw.location}</span>}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)' }}>
+                          {kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                          {kw.gsc_position != null ? <span style={{ color: posColor(Math.round(kw.gsc_position)), fontWeight: 700, fontSize: 15 }}>{Math.round(kw.gsc_position * 10) / 10}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                          <span style={{ color: posColor(kw.serp_position), fontWeight: 700, fontSize: 16 }}>{posLabel(kw.serp_position)}</span>
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text2)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {kw.serp_url || '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                          {(kw.competitors || []).filter(c => c.source === 'serp').length > 0 ? (
+                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '3px 10px' }}>
+                              {(kw.competitors || []).filter(c => c.source === 'serp').length} <i className="fa-solid fa-chevron-down" style={{ fontSize: 9, marginLeft: 4 }} />
+                            </button>
+                          ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
+                          {kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : '—'}
+                        </td>
+                        <td style={{ padding: '6px' }}>
+                          <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
+                            <i className="fa-solid fa-trash" />
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedKw === kw.keyword && (kw.competitors || []).filter(c => c.source === 'serp').length > 0 && (
+                        <tr><td colSpan={8} style={{ padding: '0 14px 10px 30px', background: 'var(--bg)' }}>
+                          {(kw.competitors || []).filter(c => c.source === 'serp').map((c, j) => (
+                            <div key={j} style={{ display: 'flex', gap: 12, padding: '4px 0', fontSize: 12, color: 'var(--text2)' }}>
+                              <span style={{ fontWeight: 600, color: posColor(c.position) }}>#{c.position}</span>
+                              <span>{c.domain}</span>
+                              <span style={{ color: 'var(--text3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
+                            </div>
+                          ))}
+                        </td></tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* History panel */}
+          {selectedKw && (
+            <div style={{ marginTop: 20, background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 16 }}><i className="fa-solid fa-history" style={{ marginRight: 8, color: 'var(--accent)' }} />SERP History: "{selectedKw}"</h3>
+                <button className="btn" onClick={() => setSelectedKw(null)} style={{ fontSize: 12 }}>Close</button>
+              </div>
+              {history.length === 0 ? (
+                <div style={{ color: 'var(--text3)', textAlign: 'center', padding: 20 }}>No history yet. Click "Check Rankings" to start.</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr>
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('service')}>
-                        Service {sortConfig.key === 'service' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('location')}>
-                        Location {sortConfig.key === 'location' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('avgRank')}>
-                        Avg Rank {sortConfig.key === 'avgRank' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('trueAvg')}>
-                        True Avg {sortConfig.key === 'trueAvg' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('visibility')}>
-                        Visibility {sortConfig.key === 'visibility' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th>Coverage</th>
-                      <th>Status</th>
-                      <th style={{ width: '40px' }}>Actions</th>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text3)' }}>Date</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text3)' }}>Position</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text3)' }}>Change</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text3)' }}>Top Competitors</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedKeywords.map((kw) => (
-                      <React.Fragment key={kw.id}>
-                        <tr>
-                          <td>{kw.service}</td>
-                          <td>{kw.location}</td>
-                          <td>{kw.avgRank || '—'}</td>
-                          <td>{kw.trueAvg || '—'}</td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <div className="visibility-bar">
-                                <div className="visibility-fill" style={{ width: `${kw.visibility || 0}%` }}></div>
-                              </div>
-                              <span>{kw.visibility || 0}%</span>
-                            </div>
+                    {history.map((h, i) => {
+                      const prev = i > 0 ? history[i-1].serp_position : null;
+                      const change = prev && h.serp_position ? prev - h.serp_position : null;
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '8px 12px' }}>{new Date(h.checked_at).toLocaleDateString()}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <span style={{ color: posColor(h.serp_position), fontWeight: 700, fontSize: 15 }}>{posLabel(h.serp_position)}</span>
                           </td>
-                          <td>{kw.coverage || '—'}</td>
-                          <td>
-                            <span className="badge badge-pending">{kw.status || 'Pending'}</span>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            {change != null && change !== 0 ? (
+                              <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontWeight: 600 }}>{change > 0 ? '↑' : '↓'}{Math.abs(change)}</span>
+                            ) : <span style={{ color: 'var(--text3)' }}>—</span>}
                           </td>
-                          <td>
-                            <button
-                              className="expand-icon"
-                              onClick={() => toggleRowExpand(kw.id)}
-                              title="Show action panel"
-                            >
-                              <i className="fas fa-chevron-down"></i>
-                            </button>
+                          <td style={{ padding: '8px 12px', fontSize: 12 }}>
+                            {(h.competitors || []).filter(c => c.source === 'serp').slice(0, 3).map((c, j) => (
+                              <span key={j} style={{ marginRight: 10, color: 'var(--text2)' }}><span style={{ color: posColor(c.position) }}>#{c.position}</span> {c.domain}</span>
+                            ))}
                           </td>
                         </tr>
-                        {expandedRows.has(kw.id) && (
-                          <tr>
-                            <td colSpan="8">
-                              <div className="action-panel">
-                                <div className="action-panel-title">Quick Actions</div>
-                                <div className="action-panel-content">
-                                  <p style={{ fontSize: '12px', color: 'var(--text2)' }}>
-                                    This keyword shows up in the local pack for <strong>{kw.location}</strong> when searching "{kw.service}".
-                                  </p>
-                                  <div className="btn-group">
-                                    <button className="btn btn-secondary btn-small">
-                                      <i className="fas fa-share"></i> View Local Results
-                                    </button>
-                                    <button className="btn btn-secondary btn-small">
-                                      <i className="fas fa-edit"></i> Update Info
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
+              )}
+            </div>
+          )}
+          {/* Discover Keywords Modal */}
+          {discovered && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setDiscovered(null)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 700, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 8, color: 'var(--accent)' }} />Discovered Keywords</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{discovered.length} new keywords found (already tracked excluded)</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn" onClick={() => {
+                      if (selectedDiscovered.size === discovered.length) setSelectedDiscovered(new Set());
+                      else setSelectedDiscovered(new Set(discovered.map(k => k.keyword)));
+                    }} style={{ fontSize: 12 }}>
+                      {selectedDiscovered.size === discovered.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                    <button className="btn btn-primary" onClick={addDiscoveredKeywords} disabled={selectedDiscovered.size === 0} style={{ fontSize: 12 }}>
+                      <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {selectedDiscovered.size} Keywords
+                    </button>
+                    <button onClick={() => setDiscovered(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
+                  </div>
+                </div>
+                <div style={{ overflow: 'auto', flex: 1 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0 }}>
+                        <th style={{ padding: '8px 12px', width: 30 }}></th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Keyword</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Volume</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Position</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {discovered.map(k => (
+                        <tr key={k.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={(e) => { if (e.target.type !== 'checkbox') toggleDiscovered(k.keyword); }}>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <input type="checkbox" checked={selectedDiscovered.has(k.keyword)} onChange={() => toggleDiscovered(k.keyword)} />
+                          </td>
+                          <td style={{ padding: '8px 12px', fontWeight: 500 }}>{k.keyword}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <span style={{ color: posColor(k.position), fontWeight: 700 }}>{k.position ? `#${k.position}` : '—'}</span>
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {k.url || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
+        </div>
+      );
+    }
 
-          {!loading && keywords.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-state-icon">
-                <i className="fas fa-map-marker-alt"></i>
-              </div>
-              <div className="empty-state-title">No keywords tracked yet</div>
-              <div>Generate keywords to start tracking your local pack rankings</div>
+    // ============ MAPS RANKINGS PAGE ============
+    function MapsRankingsPage({ project }) {
+      const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
+      const [syncing, setSyncing] = useState(false);
+      const [mapsChecked, setMapsChecked] = useState(false);
+      const [expandedMapRow, setExpandedMapRow] = useState(null);
+
+      const handleCheckRankings = async () => {
+        setSyncing(true);
+        const r = await api(`/api/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
+        if (r.ok) { await loadData(); } else if (r.error) alert(r.error);
+        setSyncing(false);
+        setMapsChecked(true);
+
+      const cleanMapsData = async () => {
+        if (!confirm('Clean all old Maps data? This removes stale rankings so you start fresh.')) return;
+        await api(`/api/projects/${project.id}/maps/clean`, { method: 'DELETE' });
+        setMapsChecked(false);
+        loadData();
+      };
+
+      const deleteAllMapKeywords = async () => {
+        const mapKws = keywords.filter(k => k.location);
+        if (mapKws.length === 0) return;
+        if (!confirm(`Delete all ${mapKws.length} Maps keywords? This cannot be undone.`)) return;
+        for (const kw of mapKws) {
+          await api(`/api/projects/${project.id}/rank-tracking/keywords/${kw.id}`, { method: 'DELETE' });
+        }
+        setMapsChecked(false);
+        loadData();
+      };
+      const [service, setService] = useState('');
+      const [location, setLocation] = useState('');
+      const [expandedKw, setExpandedKw] = useState(null);
+      const [mSortCol, setMSortCol] = useState(null);
+      const [mSortDir, setMSortDir] = useState('asc');
+      const [showGenerator, setShowGenerator] = useState(false);
+      const [genAreas, setGenAreas] = useState([]);
+      const [genSelected, setGenSelected] = useState(new Set());
+      const [genCombos, setGenCombos] = useState([]);
+      const [maxDistance, setMaxDistance] = useState(20);
+
+      const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
+
+      const openGenerator = async () => {
+        const areas = await api(`/api/projects/${project.id}/service-areas`);
+        if (!Array.isArray(areas) || areas.length === 0) {
+          alert('No service areas found. Add them in Settings & Integrations first.');
+          return;
+        }
+        setGenAreas(areas);
+        // Auto-generate: "plumber" + each suburb within distance
+        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
+        const filtered = areas.filter(a => (a.distance_km || 0) <= 20 && !cityNames.has(a.name.toLowerCase()));
+        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
+          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
+          .sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        setGenCombos(combos);
+        setGenSelected(new Set(combos.map((_, i) => i)));
+        setShowGenerator(true);
+      };
+
+      const regenerateCombos = (dist) => {
+        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
+        const filtered = genAreas.filter(a => (a.distance_km || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
+        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
+          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
+          .sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        setGenCombos(combos);
+        setGenSelected(new Set(combos.map((_, i) => i)));
+      };
+
+      const addGeneratedKeywords = async () => {
+        const toAdd = genCombos.filter((_, i) => genSelected.has(i));
+        if (toAdd.length === 0) return;
+        for (const c of toAdd) {
+          await api(`/api/projects/${project.id}/rank-tracking/keywords`, {
+            method: 'POST',
+            body: { keywords: [c.service], location: c.location }
+          });
+        }
+        alert(`Added ${toAdd.length} Maps keywords`);
+        setShowGenerator(false);
+        loadData();
+      };
+
+      const toggleGenItem = (idx) => {
+        setGenSelected(prev => {
+          const next = new Set(prev);
+          if (next.has(idx)) next.delete(idx); else next.add(idx);
+          return next;
+        });
+      };
+
+      const mToggleSort = (col) => {
+        if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setMSortCol(col); setMSortDir('asc'); }
+      };
+      const mSortIcon = (col) => mSortCol === col ? (mSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+      // Only show keywords that have a location (service + location combos)
+      const mapsKeywordsRaw = merged.filter(kw => kw.location);
+      const mapsKeywords = useMemo(() => {
+        if (!mSortCol) return mapsKeywordsRaw;
+        return [...mapsKeywordsRaw].sort((a, b) => {
+          let va, vb;
+          if (mSortCol === 'service') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
+          else if (mSortCol === 'location') { va = (a.location || '').toLowerCase(); vb = (b.location || '').toLowerCase(); }
+          else if (mSortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
+          else if (mSortCol === 'maps') {
+            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
+            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
+            va = lfA.arp ?? 999; vb = lfB.arp ?? 999;
+          }
+          else if (mSortCol === 'atrp') {
+            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
+            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
+            va = lfA.atrp ?? 999; vb = lfB.atrp ?? 999;
+          }
+          else if (mSortCol === 'solv') {
+            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
+            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
+            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
+          }
+          else if (mSortCol === 'coverage') {
+            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
+            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
+            va = (lfA.found_in ?? 0) / (lfA.data_points || 1); vb = (lfB.found_in ?? 0) / (lfB.data_points || 1);
+          }
+          else if (mSortCol === 'status') {
+            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
+            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
+            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
+          }
+          else return 0;
+          if (va < vb) return mSortDir === 'asc' ? -1 : 1;
+          if (va > vb) return mSortDir === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }, [mapsKeywordsRaw, mSortCol, mSortDir]);
+
+      const handleAdd = () => {
+        if (!service.trim() || !location.trim()) return;
+        addKeyword(service.trim(), location.trim());
+        setService('');
+        setLocation('');
+      };
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 style={{ margin: 0 }}><i className="fa-solid fa-map-location-dot" style={{ marginRight: 8, color: '#22c55e' }} />Google Maps Rankings</h2>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={cleanMapsData} style={{ fontSize: 13, color: '#f59e0b', borderColor: '#f59e0b' }}>
+                <i className="fa-solid fa-broom" style={{ marginRight: 4 }} />Clean Old Data
+              </button>}
+              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={deleteAllMapKeywords} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
+                <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete All
+              </button>}
+              <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
+              </button>
+              <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
+                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
+              </button>
             </div>
-          )}
-
-          <div className="metric-footer">
-            <div className="metric-footer-title">Metric Explanations</div>
-            <dl className="metric-footer">
-              <dt>Avg Rank</dt>
-              <dd>Average ranking position across all checks</dd>
-              <dt>True Avg</dt>
-              <dd>Adjusted average accounting for visibility</dd>
-              <dt>Visibility</dt>
-              <dd>% of checks where keyword appears in local pack</dd>
-              <dt>Coverage</dt>
-              <dd>Number of locations tracking this keyword</dd>
-            </dl>
           </div>
 
-          {showModal && (
-            <div className="modal active">
-              <div className="modal-content">
-                <div className="modal-header">
-                  <div className="modal-title">Generate Maps Keywords</div>
-                  <button className="modal-close" onClick={() => setShowModal(false)}>
-                    <i className="fas fa-times"></i>
-                  </button>
+          {/* Maps summary */}
+          {mapsKeywords.some(k => k.checked_at) && (() => {
+            const getLF = (kw) => { const comps = kw.competitors || []; return comps.find(c => c.source === 'local_falcon') || {}; };
+            const withData = mapsKeywords.filter(r => r.checked_at);
+            const withSolv = withData.filter(r => getLF(r).solv !== undefined);
+            const avgSolv = withSolv.length ? (withSolv.reduce((s,r) => s + (getLF(r).solv || 0), 0) / withSolv.length).toFixed(1) : '—';
+            const dominant = withSolv.filter(r => (getLF(r).solv || 0) >= 50).length;
+            const visible = withSolv.filter(r => (getLF(r).solv || 0) > 0 && (getLF(r).solv || 0) < 50).length;
+            const invisible = withData.filter(r => !getLF(r).solv && !r.maps_position).length;
+            const ranked = mapsKeywords.filter(r => r.maps_position);
+            const avgPos = ranked.length ? (ranked.reduce((s,r) => s + r.maps_position, 0) / ranked.length).toFixed(1) : '—';
+            return (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+              {[
+                { label: 'Dominant (50%+ visibility)', value: dominant, color: '#22c55e' },
+                { label: 'Partially Visible', value: visible, color: '#3b82f6' },
+                { label: 'Not Visible', value: invisible, color: '#ef4444' },
+                { label: 'Avg Visibility %', value: avgSolv !== '—' ? `${avgSolv}%` : '—', color: '#f59e0b' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
                 </div>
+              ))}
+            </div>
+            );
+          })()}
 
-                <div className="form-group">
-                  <label className="form-label">Service Type</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={serviceArea}
-                    onChange={(e) => setServiceArea(e.target.value)}
-                    placeholder="e.g., plumber"
-                  />
-                </div>
 
-                <div className="form-group">
-                  <label className="form-label">Distance Radius (km)</label>
-                  <input
-                    type="number"
-                    className="form-input"
-                    value={distanceKm}
-                    onChange={(e) => setDistanceKm(Math.max(1, parseInt(e.target.value) || 20))}
-                    min="1"
-                    max="100"
-                  />
-                </div>
+          {/* Add service + location */}
+          <div style={{ background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', marginBottom: 10 }}>
+              <i className="fa-solid fa-plus-circle" style={{ marginRight: 6, color: 'var(--accent)' }} />Add Service + Location
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={service} onChange={e => setService(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                placeholder="Service (e.g. plumber, dentist, SEO agency)" style={{ flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
+              <input value={location} onChange={e => setLocation(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                placeholder="Location (e.g. Melbourne, Sydney CBD)" style={{ flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
+              <button className="btn btn-primary" onClick={handleAdd} disabled={!service.trim() || !location.trim()} style={{ fontSize: 14, padding: '10px 20px', whiteSpace: 'nowrap' }}>
+                <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
+              </button>
+            </div>
+          </div>
 
-                {allCombos.length === 0 ? (
-                  <button className="btn btn-primary" onClick={generateCombos} style={{ width: '100%' }}>
-                    <i className="fas fa-cog"></i> Generate Combinations
-                  </button>
-                ) : (
-                  <>
-                    <div style={{ marginBottom: '16px' }}>
-                      <label className="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={selectedCombos.size === allCombos.length}
-                          onChange={toggleSelectAll}
-                        />
-                        <span>Select All ({selectedCombos.size} / {allCombos.length})</span>
-                      </label>
-                    </div>
-
-                    <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
-                      {allCombos.map((combo) => (
-                        <label key={combo.id} className="checkbox" style={{ padding: '8px 0' }}>
-                          <input
-                            type="checkbox"
-                            checked={selectedCombos.has(combo.id)}
-                            onChange={() => toggleCombo(combo.id)}
-                          />
-                          <span>{combo.service} + {combo.location}</span>
-                        </label>
-                      ))}
-                    </div>
-
-                    <div className="btn-group">
-                      <button
-                        className="btn btn-primary"
-                        onClick={handleAddKeywords}
-                        disabled={selectedCombos.size === 0}
-                        style={{ flex: 1 }}
-                      >
-                        <i className="fas fa-plus"></i> Add {selectedCombos.size} Keywords
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        onClick={() => {
-                          setAllCombos([]);
-                          setSelectedCombos(new Set());
-                        }}
-                        style={{ flex: 1 }}
-                      >
-                        <i className="fas fa-redo"></i> Regenerate
-                      </button>
-                    </div>
-                  </>
-                )}
+          {/* Maps rankings table */}
+          {mapsKeywords.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fa-solid fa-map-location-dot" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No maps keywords yet</div>
+              <div style={{ fontSize: 13 }}>Add a service + location above to track your Google Maps positions.</div>
+            </div>
+          ) : (
+            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    {[
+                      { key: 'service', label: 'Service', align: 'left', w: null },
+                      { key: 'location', label: 'Location', align: 'left', w: 140 },
+                      { key: 'maps', label: 'Avg Rank', align: 'center', w: 90 },
+                      { key: 'atrp', label: 'True Avg', align: 'center', w: 90 },
+                      { key: 'solv', label: 'Visibility %', align: 'center', w: 100 },
+                      { key: 'coverage', label: 'Coverage', align: 'center', w: 90 },
+                      { key: 'status', label: 'Status', align: 'center', w: 130 },
+                    ].map(h => (
+                      <th key={h.label} onClick={h.key ? () => mToggleSort(h.key) : undefined} style={{ padding: '10px 14px', textAlign: h.align, fontWeight: 600, color: mSortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                        {h.label}{h.key && mSortIcon(h.key)}
+                      </th>
+                    ))}
+                    <th style={{ width: 40 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mapsKeywords.map(kw => {
+                    const showData = mapsChecked && kw.checked_at;
+                    const lf = showData ? (kw.competitors || []).find(c => c.source === 'local_falcon') || {} : {};
+                    const hasLFData = lf.solv !== undefined || lf.arp !== undefined;
+                    const arp = lf.arp;
+                    const atrp = lf.atrp;
+                    const solv = lf.solv;
+                    const foundIn = lf.found_in;
+                    const dataPoints = lf.data_points;
+                    const statusLabel = !showData || !hasLFData ? (showData ? 'No Scan' : null) : solv >= 80 ? 'Dominant' : solv >= 50 ? 'Strong' : solv >= 20 ? 'Competitive' : solv > 0 ? 'Needs Work' : foundIn > 0 ? 'Weak' : 'Not Visible';
+                    const statusColor = !showData || !hasLFData ? '#6b7280' : solv >= 80 ? '#22c55e' : solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : foundIn > 0 ? '#f59e0b' : '#ef4444';
+                    const statusIcon = !showData || !hasLFData ? 'fa-circle-question' : solv >= 50 ? 'fa-circle-check' : solv >= 20 ? 'fa-circle-minus' : solv > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+                    const isExpanded = expandedMapRow === kw.id;
+                    const actionAdvice = {
+                      'Dominant': { color: '#22c55e', icon: 'fa-trophy', title: 'You dominate this area', actions: ['Maintain review velocity — keep asking for reviews', 'Monitor competitors entering this area', 'Focus efforts on weaker suburbs instead'] },
+                      'Strong': { color: '#22c55e', icon: 'fa-thumbs-up', title: 'Strong presence — keep it up', actions: ['Continue collecting reviews mentioning this suburb', 'Keep GBP posts active and updated', 'Monitor for any ranking drops'] },
+                      'Competitive': { color: '#3b82f6', icon: 'fa-chart-line', title: 'Good visibility — room to grow', actions: ['Increase review count — aim for reviews mentioning this suburb', 'Add a dedicated service page for this area on your website', 'Build local citations in directories for this suburb', 'Post GBP updates targeting this location'] },
+                      'Needs Work': { color: '#f59e0b', icon: 'fa-wrench', title: 'Showing up in a few spots — needs improvement', actions: ['Create a dedicated landing page: "plumber in ' + (kw.location || 'suburb') + '"', 'Ask happy customers in this area to leave reviews mentioning the suburb', 'Add this suburb to your GBP service area if not already listed', 'Build backlinks from local directories and community sites', 'Post GBP updates about jobs completed in this area'] },
+                      'Weak': { color: '#f59e0b', icon: 'fa-exclamation-circle', title: 'Found but never in top 3', actions: ['Your GBP is detected but ranks too low to appear in the local pack', 'Focus on reviews — volume and recency are key ranking factors', 'Create location-specific content on your website for this suburb', 'Ensure NAP (Name, Address, Phone) is consistent across all directories', 'Check that your GBP categories match your services'] },
+                      'Not Visible': { color: '#ef4444', icon: 'fa-eye-slash', title: 'Not found in this area', actions: ['Verify your GBP service area includes this suburb', 'This area may be too far from your business address', 'Create a dedicated service page targeting this suburb', 'Build citations in local directories for this area', 'Consider if this suburb is worth targeting based on distance'] },
+                      'No Scan': { color: '#6b7280', icon: 'fa-circle-question', title: 'No Local Falcon scan data', actions: ['Add this keyword to Local Falcon to start tracking', 'Or delete this keyword and re-run Check Rankings'] },
+                    };
+                    const advice = actionAdvice[statusLabel] || null;
+                    return (
+                    <React.Fragment key={kw.id}>
+                    <tr onClick={() => statusLabel ? setExpandedMapRow(isExpanded ? null : kw.id) : null} style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: statusLabel ? 'pointer' : 'default', background: isExpanded ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
+                      <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}</td>
+                      <td style={{ padding: '10px 14px', color: 'var(--text2)' }}>
+                        <i className="fa-solid fa-location-dot" style={{ marginRight: 4, fontSize: 10, color: '#22c55e' }} />{kw.location}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {showData && hasLFData && arp ? (
+                          <span style={{ color: arp <= 3 ? '#22c55e' : arp <= 10 ? '#3b82f6' : arp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
+                            {arp.toFixed(1)}
+                          </span>
+                        ) : showData && hasLFData ? <span style={{ color: '#ef4444', fontWeight: 700 }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {showData && hasLFData && atrp ? (
+                          <span style={{ color: atrp <= 3 ? '#22c55e' : atrp <= 10 ? '#3b82f6' : atrp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 600, fontSize: 14 }}>
+                            {atrp.toFixed(1)}
+                          </span>
+                        ) : showData && hasLFData ? <span style={{ color: '#ef4444' }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {showData && hasLFData && solv !== undefined ? (
+                          <span style={{ color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
+                            {solv.toFixed(0)}%
+                          </span>
+                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {showData && hasLFData && foundIn !== undefined ? (
+                          <span style={{ color: 'var(--text2)', fontSize: 13 }}>
+                            {foundIn}/{dataPoints || '?'}
+                          </span>
+                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {statusLabel ? (
+                          <span style={{ color: statusColor, fontWeight: 600, fontSize: 12 }}>
+                            <i className={`fa-solid ${statusIcon}`} style={{ marginRight: 4 }} />{statusLabel}
+                            {statusLabel !== 'Dominant' && <i className="fa-solid fa-chevron-down" style={{ marginLeft: 6, fontSize: 9, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
+                          </span>
+                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px' }}>
+                        <button onClick={(e) => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
+                          <i className="fa-solid fa-trash" />
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && advice && (
+                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td colSpan={8} style={{ padding: 0 }}>
+                          <div style={{ padding: '14px 20px 16px 40px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: advice.color, marginBottom: 10 }}>
+                              <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {advice.actions.map((action, i) => (
+                                <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                  <i className="fa-solid fa-arrow-right" style={{ fontSize: 9, marginTop: 4, color: advice.color, flexShrink: 0 }} />
+                                  <span>{action}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {/* Metric explanations */}
+              <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)', lineHeight: 1.8 }}>
+                <strong style={{ color: 'var(--text2)' }}>Avg Rank</strong> — Average position where your business was found (lower is better).{' '}
+                <strong style={{ color: 'var(--text2)' }}>True Avg</strong> — Same but counts unfound spots as #21, giving the full picture.{' '}
+                <strong style={{ color: 'var(--text2)' }}>Visibility %</strong> — Percentage of scan points where you appear in the top 3. This is the most important metric.{' '}
+                <strong style={{ color: 'var(--text2)' }}>Coverage</strong> — How many scan points found your business out of total scanned.
               </div>
             </div>
           )}
-        </>
+          {/* Generate Maps Keywords Modal */}
+          {showGenerator && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setShowGenerator(false)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 600, maxHeight: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 8, color: 'var(--accent)' }} />Generate Keywords</div>
+                  <button onClick={() => setShowGenerator(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}>×</button>
+                </div>
+                <div style={{ overflow: 'auto', flex: 1, padding: '20px' }}>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Service: <strong>plumber</strong> (hardcoded)</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 12 }}>Distance from headquarters</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
+                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
+                    </div>
+                  </div>
+                  {genCombos.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)' }}>No areas available at this distance</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ padding: '8px 12px', width: 24 }}></th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Suburb</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'center', width: 80 }}>Distance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {genCombos.map((c, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }} onClick={() => toggleGenItem(i)}>
+                            <td style={{ padding: '8px 12px', textAlign: 'center', cursor: 'pointer' }}>
+                              <input type="checkbox" checked={genSelected.has(i)} onChange={() => toggleGenItem(i)} />
+                            </td>
+                            <td style={{ padding: '8px 12px', cursor: 'pointer' }}>{c.location}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text3)', cursor: 'pointer' }}>{c.distance ? `${c.distance.toFixed(1)}km` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
+                  <button className="btn" onClick={() => {
+                    if (genSelected.size === genCombos.length) setGenSelected(new Set());
+                    else setGenSelected(new Set(genCombos.map((_, i) => i)));
+                  }} style={{ flex: 1 }}>
+                    {genSelected.size === genCombos.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                  <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={genSelected.size === 0} style={{ flex: 1 }}>
+                    <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {genSelected.size} Keywords
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -4012,9 +4461,9 @@
           case 'published-content':
             return <CopywriterPage stage="published" />;
           case 'maps-rankings':
-            return <MapsRankingsPage />;
+            return <MapsRankingsPage project={project} />;
           case 'serp-rankings':
-            return <SERPRankingsPage />;
+            return <SERPRankingsPage project={project} />;
           case 'monthly-reports':
             return <MonthlyReportsPage />;
           case 'project-settings':
