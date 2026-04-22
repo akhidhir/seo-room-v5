@@ -1443,6 +1443,8 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
           }).then(r => r.json());
 
           const locations = locRes.locations || [];
+          console.log(`[gbp-audit] Account ${acct.name}: ${locations.length} locations, raw response keys: ${Object.keys(locRes).join(',')}`);
+          if (locations.length === 0) console.log(`[gbp-audit] Full locRes:`, JSON.stringify(locRes).substring(0, 500));
           // Find matching location by domain or business name
           const match = locations.find(l =>
             (l.websiteUri && l.websiteUri.includes(domain)) ||
