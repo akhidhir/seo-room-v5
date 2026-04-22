@@ -261,6 +261,15 @@ async function initDb() {
       )
     `);
 
+    // On-page audit cache
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS onpage_audit_cache (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        results JSONB,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // Add columns for existing databases
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wordpress_url TEXT`);
@@ -1050,11 +1059,31 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     results.sort((a, b) => (scoreOrder[a.yoastScore] || 2) - (scoreOrder[b.yoastScore] || 2));
 
     console.log(`[onpage-audit] Analyzed ${results.length} pages. Red: ${results.filter(r => r.yoastScore === 'red').length}, Orange: ${results.filter(r => r.yoastScore === 'orange').length}, Green: ${results.filter(r => r.yoastScore === 'green').length}`);
+
+    // Cache results in DB for persistence
+    try {
+      await pool.query(
+        `INSERT INTO onpage_audit_cache (project_id, results, updated_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (project_id) DO UPDATE SET results = $2, updated_at = NOW()`,
+        [projectId, JSON.stringify(results)]
+      );
+    } catch (cacheErr) { console.log('[onpage-audit] Cache save failed:', cacheErr.message); }
+
     res.json({ pages: results });
   } catch (e) {
     console.error('[onpage-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Get cached on-page audit results
+app.get('/api/projects/:projectId/onpage-audit/results', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT results, updated_at FROM onpage_audit_cache WHERE project_id=$1', [req.params.projectId]);
+    if (r.rows.length === 0) return res.json({ pages: [] });
+    const results = typeof r.rows[0].results === 'string' ? JSON.parse(r.rows[0].results) : r.rows[0].results;
+    res.json({ pages: results, cached_at: r.rows[0].updated_at });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== GSC AUDIT ====================
