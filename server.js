@@ -228,6 +228,7 @@ async function initDb() {
         impressions INTEGER DEFAULT 0,
         ctr DOUBLE PRECISION DEFAULT 0,
         position DOUBLE PRECISION DEFAULT 0,
+        prev_position DOUBLE PRECISION,
         fetched_at TIMESTAMPTZ,
         UNIQUE(project_id, keyword)
       )
@@ -248,6 +249,7 @@ async function initDb() {
     // Add columns for existing databases
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wordpress_url TEXT`);
+    await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
     console.log('[boot] Database schema initialized');
   } catch (e) {
@@ -957,6 +959,457 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     res.json({ pages: results });
   } catch (e) {
     console.error('[onpage-audit] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== GSC AUDIT ====================
+
+app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const domain = project.domain;
+
+    // Try to get fresh GSC data first, fall back to stored data
+    let gscRows = [];
+    let pageRows = [];
+    const accessToken = await getGscAccessToken(projectId);
+
+    if (accessToken) {
+      // Find matching GSC site
+      const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }).then(r => r.json());
+      const available = (sites.siteEntry || []).map(s => s.siteUrl);
+      let matchedSite = available.find(s => s.includes(domain.replace(/^www\./, '')));
+      if (!matchedSite && available.length > 0) matchedSite = available[0];
+
+      if (matchedSite) {
+        const endDate = new Date().toISOString().split('T')[0];
+        const startDate = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0];
+
+        // Fetch keyword-level data
+        const kwRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: 1000 })
+        }).then(r => r.json());
+        gscRows = (kwRes.rows || []).map(r => ({ keyword: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+
+        // Fetch page-level data
+        const pgRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate, dimensions: ['page'], rowLimit: 500 })
+        }).then(r => r.json());
+        pageRows = (pgRes.rows || []).map(r => ({ page: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+
+        // Fetch page+query combos for cannibalization check
+        const pqRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate, dimensions: ['query', 'page'], rowLimit: 2000 })
+        }).then(r => r.json());
+        var pageQueryRows = (pqRes.rows || []).map(r => ({ keyword: r.keys[0], page: r.keys[1], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+      }
+    }
+
+    // Fall back to stored GSC data if no live data
+    if (gscRows.length === 0) {
+      const stored = await pool.query('SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC', [projectId]);
+      gscRows = stored.rows;
+    }
+
+    if (gscRows.length === 0) {
+      return res.json({ findings: [], message: 'No GSC data available. Connect GSC and sync keywords first.' });
+    }
+
+    // Create audit record
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gsc', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    const findings = [];
+
+    // 1. QUICK WINS: Keywords ranking 4-20 with high impressions (close to page 1)
+    const quickWins = gscRows
+      .filter(r => r.position >= 4 && r.position <= 20 && r.impressions >= 10)
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 20);
+
+    for (const kw of quickWins) {
+      const severity = kw.position <= 10 ? 'Critical' : kw.position <= 15 ? 'Medium' : 'Low';
+      findings.push({
+        pillar: 'gsc', category: 'Quick Win',
+        title: `"${kw.keyword}" ranking #${Math.round(kw.position)} — push to page 1`,
+        description: `This keyword has ${kw.impressions} impressions/month but ranks at position ${kw.position.toFixed(1)}. With targeted optimization it could reach page 1.`,
+        recommendation: kw.position <= 10
+          ? 'Optimize the ranking page: improve title tag, add internal links, expand content around this topic.'
+          : 'Create or improve a dedicated page targeting this keyword. Add it to your content plan.',
+        severity,
+        current_value: `Position ${kw.position.toFixed(1)} | ${kw.impressions} imp | ${kw.clicks} clicks`,
+        recommended_value: 'Position 1-3'
+      });
+    }
+
+    // 2. LOW CTR: Keywords with high impressions but low CTR (needs better titles/descriptions)
+    const lowCtr = gscRows
+      .filter(r => r.impressions >= 50 && r.ctr < 0.02 && r.position <= 20)
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 15);
+
+    for (const kw of lowCtr) {
+      findings.push({
+        pillar: 'gsc', category: 'Low CTR',
+        title: `"${kw.keyword}" has ${kw.impressions} impressions but only ${(kw.ctr * 100).toFixed(1)}% CTR`,
+        description: `This keyword gets good visibility but users aren't clicking. The title tag or meta description may not be compelling enough.`,
+        recommendation: 'Rewrite the meta title and description to include the keyword and a clear call-to-action. Make it stand out in search results.',
+        severity: kw.impressions >= 200 ? 'Critical' : 'Medium',
+        current_value: `CTR: ${(kw.ctr * 100).toFixed(1)}% | ${kw.clicks} clicks / ${kw.impressions} impressions`,
+        recommended_value: 'CTR > 3%'
+      });
+    }
+
+    // 3. HIGH IMPRESSION ZERO CLICK: Wasted visibility
+    const zeroClick = gscRows
+      .filter(r => r.impressions >= 30 && r.clicks === 0)
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 10);
+
+    for (const kw of zeroClick) {
+      findings.push({
+        pillar: 'gsc', category: 'Zero Clicks',
+        title: `"${kw.keyword}" — ${kw.impressions} impressions, 0 clicks`,
+        description: `This keyword is showing in search results but getting zero clicks. The listing may be unappealing or the keyword may trigger featured snippets.`,
+        recommendation: 'Review the SERP for this keyword. If a featured snippet exists, restructure your content to win it. Otherwise, rewrite title/description.',
+        severity: kw.impressions >= 100 ? 'Medium' : 'Low',
+        current_value: `${kw.impressions} impressions, 0 clicks, Position ${kw.position.toFixed(1)}`,
+        recommended_value: 'At least 1-2% CTR'
+      });
+    }
+
+    // 4. CANNIBALIZATION: Multiple pages ranking for the same keyword
+    if (pageQueryRows && pageQueryRows.length > 0) {
+      const kwPages = {};
+      for (const row of pageQueryRows) {
+        if (!kwPages[row.keyword]) kwPages[row.keyword] = [];
+        kwPages[row.keyword].push(row);
+      }
+
+      const cannibalized = Object.entries(kwPages)
+        .filter(([kw, pages]) => pages.length >= 2 && pages.some(p => p.impressions >= 10))
+        .sort((a, b) => {
+          const aImp = a[1].reduce((s, p) => s + p.impressions, 0);
+          const bImp = b[1].reduce((s, p) => s + p.impressions, 0);
+          return bImp - aImp;
+        })
+        .slice(0, 10);
+
+      for (const [kw, pages] of cannibalized) {
+        const totalImp = pages.reduce((s, p) => s + p.impressions, 0);
+        const urls = pages.map(p => {
+          try { return new URL(p.page).pathname; } catch { return p.page; }
+        }).join(', ');
+        findings.push({
+          pillar: 'gsc', category: 'Cannibalization',
+          title: `"${kw}" ranking on ${pages.length} different pages`,
+          description: `Multiple pages compete for the same keyword, splitting authority. Pages: ${urls}`,
+          recommendation: 'Consolidate content into one authoritative page. Redirect or noindex the weaker pages, or differentiate their target keywords.',
+          severity: totalImp >= 100 ? 'Critical' : 'Medium',
+          current_value: `${pages.length} pages | ${totalImp} total impressions`,
+          recommended_value: '1 page per keyword'
+        });
+      }
+    }
+
+    // 5. DECLINING PAGES: Pages with high impressions but poor performance
+    const poorPages = (pageRows || [])
+      .filter(r => r.impressions >= 50 && r.ctr < 0.015)
+      .sort((a, b) => b.impressions - a.impressions)
+      .slice(0, 10);
+
+    for (const pg of poorPages) {
+      let path;
+      try { path = new URL(pg.page).pathname; } catch { path = pg.page; }
+      findings.push({
+        pillar: 'gsc', category: 'Underperforming Page',
+        title: `${path} — ${pg.impressions} impressions, ${(pg.ctr * 100).toFixed(1)}% CTR`,
+        description: `This page appears in search results frequently but converts poorly to clicks.`,
+        recommendation: 'Audit the page title, meta description, and structured data. Consider adding FAQ schema or improving the content quality.',
+        severity: pg.impressions >= 200 ? 'Critical' : 'Medium',
+        current_value: `${pg.clicks} clicks / ${pg.impressions} imp | CTR ${(pg.ctr * 100).toFixed(1)}%`,
+        recommended_value: 'CTR > 3%'
+      });
+    }
+
+    // 6. BRANDED vs NON-BRANDED split
+    const brandTerms = (project.name || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (brandTerms.length > 0) {
+      const branded = gscRows.filter(r => brandTerms.some(t => r.keyword.toLowerCase().includes(t)));
+      const nonBranded = gscRows.filter(r => !brandTerms.some(t => r.keyword.toLowerCase().includes(t)));
+      const brandedClicks = branded.reduce((s, r) => s + r.clicks, 0);
+      const totalClicks = gscRows.reduce((s, r) => s + r.clicks, 0);
+      const brandPct = totalClicks > 0 ? (brandedClicks / totalClicks * 100) : 0;
+
+      if (brandPct > 70) {
+        findings.push({
+          pillar: 'gsc', category: 'Brand Dependency',
+          title: `${brandPct.toFixed(0)}% of clicks come from branded searches`,
+          description: `Your traffic is heavily dependent on brand searches. If people don't know your brand, they won't find you.`,
+          recommendation: 'Invest in non-branded content targeting service + location keywords. Build topical authority with blog posts and service pages.',
+          severity: 'Critical',
+          current_value: `Branded: ${brandPct.toFixed(0)}% (${brandedClicks}/${totalClicks} clicks)`,
+          recommended_value: 'Below 50% branded'
+        });
+      }
+    }
+
+    // Save findings to DB
+    for (const f of findings) {
+      const r = await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+      f.id = r.rows[0].id;
+      f.status = 'new';
+    }
+
+    // Mark audit complete
+    await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+      ['completed', JSON.stringify({ totalKeywords: gscRows.length, totalPages: (pageRows || []).length, findingsCount: findings.length }), auditId]);
+
+    console.log(`[gsc-audit] Project ${projectId}: ${findings.length} findings from ${gscRows.length} keywords`);
+    res.json({ findings, summary: { keywords: gscRows.length, pages: (pageRows || []).length, findings: findings.length } });
+  } catch (e) {
+    console.error('[gsc-audit] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== GBP AUDIT ====================
+
+app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Create audit record
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gbp', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    const findings = [];
+    const config = project.config && typeof project.config === 'string' ? JSON.parse(project.config) : (project.config || {});
+
+    // Check GBP integration status
+    const gbpInt = await pool.query('SELECT * FROM project_integrations WHERE project_id=$1 AND kind=$2', [projectId, 'gbp']);
+    const gbpConnected = gbpInt.rows.length > 0 && gbpInt.rows[0].status === 'connected';
+
+    // Use project metadata + what we know about the business
+    const name = project.name || '';
+    const domain = project.domain || '';
+    const category = config.category || '';
+    const phone = config.phone || '';
+    const email = config.email || '';
+    const address = config.address || '';
+    const suburb = config.suburb || '';
+    const description = config.description || '';
+    const serviceAreas = project.service_areas || [];
+
+    // 1. GBP CONNECTION STATUS
+    if (!gbpConnected) {
+      findings.push({
+        pillar: 'gbp', category: 'Setup',
+        title: 'Google Business Profile not connected',
+        description: 'GBP integration is not set up. Cannot pull live data for analysis.',
+        recommendation: 'Connect your Google Business Profile in Project Settings → Integrations to enable full GBP auditing.',
+        severity: 'Critical',
+        current_value: 'Not connected',
+        recommended_value: 'Connected'
+      });
+    }
+
+    // 2. BUSINESS INFO COMPLETENESS
+    if (!phone) {
+      findings.push({
+        pillar: 'gbp', category: 'Business Info',
+        title: 'Phone number missing from project settings',
+        description: 'No phone number is configured. GBP listings without a phone number rank lower in local search.',
+        recommendation: 'Add your business phone number in Project Settings. Ensure it matches your GBP listing exactly.',
+        severity: 'Critical',
+        current_value: 'No phone number',
+        recommended_value: 'Phone number set'
+      });
+    }
+
+    if (!address) {
+      findings.push({
+        pillar: 'gbp', category: 'Business Info',
+        title: 'Street address missing',
+        description: 'No street address configured. Google uses this for local ranking signals.',
+        recommendation: 'Add your full street address in Project Settings.',
+        severity: 'Medium',
+        current_value: 'No address',
+        recommended_value: 'Full address set'
+      });
+    }
+
+    if (!category) {
+      findings.push({
+        pillar: 'gbp', category: 'Business Info',
+        title: 'Business category not set',
+        description: 'Primary category is crucial for GBP ranking. Without it, Google may misclassify your business.',
+        recommendation: 'Set your primary GBP category in Project Settings (e.g., "Plumber", "Electrician").',
+        severity: 'Critical',
+        current_value: 'No category',
+        recommended_value: 'Primary category set'
+      });
+    }
+
+    if (!description || description.length < 100) {
+      findings.push({
+        pillar: 'gbp', category: 'Content',
+        title: description ? 'GBP description too short' : 'GBP description missing',
+        description: description
+          ? `Current description is only ${description.length} characters. Google allows up to 750 characters.`
+          : 'No business description set. This is a missed opportunity for keyword-rich content.',
+        recommendation: 'Write a 500-750 character description that naturally includes your main services and service areas. Don\'t keyword stuff.',
+        severity: 'Medium',
+        current_value: description ? `${description.length} characters` : 'Empty',
+        recommended_value: '500-750 characters'
+      });
+    }
+
+    if (serviceAreas.length === 0) {
+      findings.push({
+        pillar: 'gbp', category: 'Service Areas',
+        title: 'No service areas configured',
+        description: 'Service areas help Google understand where you operate. Without them, you may miss local pack results.',
+        recommendation: 'Add your service areas in Project Settings. Include suburbs and regions you actually serve.',
+        severity: 'Medium',
+        current_value: '0 service areas',
+        recommended_value: '5+ service areas'
+      });
+    }
+
+    // 3. Check maps ranking data if available
+    const mapsData = await pool.query(
+      `SELECT keyword, location, maps_position, maps_title, maps_rating, maps_reviews, checked_at
+       FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL
+       ORDER BY checked_at DESC LIMIT 100`,
+      [projectId]
+    );
+
+    if (mapsData.rows.length > 0) {
+      // Check for keywords not ranking in maps top 3
+      const notTop3 = mapsData.rows.filter(r => r.maps_position > 3);
+      const avgMapsPos = mapsData.rows.reduce((s, r) => s + r.maps_position, 0) / mapsData.rows.length;
+
+      if (notTop3.length > 0) {
+        const examples = notTop3.slice(0, 3).map(r => `"${r.keyword}" in ${r.location || 'default'} (#${r.maps_position})`).join(', ');
+        findings.push({
+          pillar: 'gbp', category: 'Maps Ranking',
+          title: `${notTop3.length} keywords not in Maps top 3`,
+          description: `Average maps position is ${avgMapsPos.toFixed(1)}. Examples: ${examples}`,
+          recommendation: 'Improve GBP signals: get more reviews, add GBP posts weekly, ensure NAP consistency across all directories.',
+          severity: notTop3.length > 5 ? 'Critical' : 'Medium',
+          current_value: `Avg position: ${avgMapsPos.toFixed(1)} | ${notTop3.length} outside top 3`,
+          recommended_value: 'Top 3 for all target keywords'
+        });
+      }
+
+      // Check review count
+      const latestReview = mapsData.rows.find(r => r.maps_reviews != null);
+      if (latestReview && latestReview.maps_reviews < 20) {
+        findings.push({
+          pillar: 'gbp', category: 'Reviews',
+          title: `Only ${latestReview.maps_reviews} Google reviews`,
+          description: 'Businesses with more reviews rank higher in local pack results. Most top-ranking businesses have 30+ reviews.',
+          recommendation: 'Implement a review generation strategy: ask happy customers, send follow-up emails/SMS with direct review links.',
+          severity: latestReview.maps_reviews < 10 ? 'Critical' : 'Medium',
+          current_value: `${latestReview.maps_reviews} reviews`,
+          recommended_value: '30+ reviews'
+        });
+      }
+
+      // Check rating
+      if (latestReview && latestReview.maps_rating && latestReview.maps_rating < 4.5) {
+        findings.push({
+          pillar: 'gbp', category: 'Reviews',
+          title: `Google rating is ${latestReview.maps_rating.toFixed(1)} stars`,
+          description: 'A rating below 4.5 can hurt click-through rates from the local pack.',
+          recommendation: 'Focus on service quality and respond to all negative reviews professionally. Ask satisfied customers to leave reviews.',
+          severity: latestReview.maps_rating < 4.0 ? 'Critical' : 'Low',
+          current_value: `${latestReview.maps_rating.toFixed(1)} stars`,
+          recommended_value: '4.5+ stars'
+        });
+      }
+    } else {
+      findings.push({
+        pillar: 'gbp', category: 'Maps Ranking',
+        title: 'No Maps ranking data available',
+        description: 'Track your local pack positions in the Maps Rankings tab to monitor your GBP performance.',
+        recommendation: 'Go to Check → Maps Rankings, add your target keywords, and run a sync to start tracking.',
+        severity: 'Low',
+        current_value: 'No data',
+        recommended_value: 'Active tracking'
+      });
+    }
+
+    // 4. NAP CONSISTENCY - check if website has matching info (basic check)
+    // We check what's stored in the project vs what on-page audit might have found
+    if (domain && name) {
+      findings.push({
+        pillar: 'gbp', category: 'NAP Consistency',
+        title: 'Verify NAP consistency across directories',
+        description: `Ensure your business name "${name}", address, and phone number are identical across Google, Yelp, Yellow Pages, True Local, and your website.`,
+        recommendation: 'Use the Directories tab to check and submit consistent NAP data across all Australian business directories.',
+        severity: 'Medium',
+        current_value: 'Not verified',
+        recommended_value: 'Consistent across all directories'
+      });
+    }
+
+    // 5. GBP POSTING
+    findings.push({
+      pillar: 'gbp', category: 'GBP Posts',
+      title: 'Regular GBP posts recommended',
+      description: 'Google favors active business profiles. Posting weekly keeps your listing fresh and can improve rankings.',
+      recommendation: 'Post at least once per week on your GBP: special offers, tips, project photos, or service updates.',
+      severity: 'Low',
+      current_value: 'Not tracked',
+      recommended_value: '1+ posts per week'
+    });
+
+    // Save findings to DB
+    for (const f of findings) {
+      const r = await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+      f.id = r.rows[0].id;
+      f.status = 'new';
+    }
+
+    // Mark audit complete
+    await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+      ['completed', JSON.stringify({ findingsCount: findings.length }), auditId]);
+
+    console.log(`[gbp-audit] Project ${projectId}: ${findings.length} findings`);
+    res.json({ findings });
+  } catch (e) {
+    console.error('[gbp-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

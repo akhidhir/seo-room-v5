@@ -1128,57 +1128,89 @@
     }
 
     // ============ FINDINGS CARD COMPONENT ============
-    function FindingCard({ finding, onApprove, onReject, isApproved }) {
-      const severityClass = finding.severity.toLowerCase();
+    function FindingCard({ finding, onApprove, onReject, isApproved, expanded, onToggle }) {
+      const severityClass = finding.severity ? finding.severity.toLowerCase() : 'medium';
+      const currentVal = finding.current_value || finding.current;
+      const recommendedVal = finding.recommended_value || finding.recommended;
+      const isExpanded = expanded;
       return (
-        <div className={`finding-card ${severityClass}`}>
-          <div className="finding-card-header">
-            <div className="finding-card-title">{finding.title}</div>
-            <span className={`badge badge-${severityClass}`}>{finding.severity}</span>
+        <div className={`finding-card ${severityClass}`} style={{ marginBottom: 8 }}>
+          <div className="finding-card-header" style={{ cursor: 'pointer' }} onClick={onToggle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+              {finding.category && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: 'rgba(138,180,248,0.15)', color: '#8ab4f8', fontWeight: 600 }}>{finding.category}</span>}
+              <div className="finding-card-title" style={{ flex: 1 }}>{finding.title}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className={`badge badge-${severityClass}`}>{finding.severity}</span>
+              <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />
+            </div>
           </div>
-          <div className="finding-card-description">{finding.description}</div>
-          {finding.current && finding.recommended && (
-            <div className="finding-values">
-              <div className="finding-value">
-                <div className="finding-value-label">Current</div>
-                <div className="finding-value-content">{finding.current}</div>
-              </div>
-              <div className="finding-value">
-                <div className="finding-value-label">Recommended</div>
-                <div className="finding-value-content">{finding.recommended}</div>
+          {isExpanded && (
+            <div style={{ padding: '12px 0 0' }}>
+              <div className="finding-card-description">{finding.description}</div>
+              {finding.recommendation && (
+                <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, fontSize: 12, color: 'var(--text2)' }}>
+                  <i className="fas fa-lightbulb" style={{ color: '#f59e0b', marginRight: 6 }} />
+                  <strong>Recommendation:</strong> {finding.recommendation}
+                </div>
+              )}
+              {currentVal && recommendedVal && (
+                <div className="finding-values" style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: 6, fontSize: 12 }}>
+                    <div style={{ color: 'var(--text3)', fontSize: 10, marginBottom: 2 }}>Current</div>
+                    <div style={{ color: '#ef4444' }}>{currentVal}</div>
+                  </div>
+                  <div style={{ padding: '8px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, fontSize: 12 }}>
+                    <div style={{ color: 'var(--text3)', fontSize: 10, marginBottom: 2 }}>Target</div>
+                    <div style={{ color: '#22c55e' }}>{recommendedVal}</div>
+                  </div>
+                </div>
+              )}
+              <div className="finding-actions" style={{ marginTop: 10 }}>
+                {!isApproved && finding.status !== 'approved' ? (
+                  <>
+                    <button className="btn btn-success btn-small" onClick={(e) => { e.stopPropagation(); onApprove(finding); }}>
+                      <i className="fas fa-check"></i> Approve
+                    </button>
+                    <button className="btn btn-danger btn-small" onClick={(e) => { e.stopPropagation(); onReject(finding); }}>
+                      <i className="fas fa-times"></i> Dismiss
+                    </button>
+                  </>
+                ) : (
+                  <span className="badge badge-approved" style={{ padding: '4px 12px' }}>
+                    <i className="fas fa-check-circle" style={{ marginRight: 4 }} /> Sent to Action Plan
+                  </span>
+                )}
               </div>
             </div>
           )}
-          <div className="finding-actions">
-            {!isApproved ? (
-              <>
-                <button className="btn btn-success btn-small" onClick={() => onApprove(finding)}>
-                  <i className="fas fa-check"></i> Approve
-                </button>
-                <button className="btn btn-danger btn-small" onClick={() => onReject(finding)}>
-                  <i className="fas fa-times"></i> Reject
-                </button>
-              </>
-            ) : (
-              <span className="badge badge-approved">Sent to Action Plan</span>
-            )}
-          </div>
         </div>
       );
     }
 
     // ============ GBP AUDIT PAGE ============
-    function GBPAuditPage() {
+    function GBPAuditPage({ project }) {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
+      const [expandedId, setExpandedId] = useState(null);
+
+      // Load previous findings on mount
+      useEffect(() => {
+        if (project) loadExisting();
+      }, [project?.id]);
+
+      const loadExisting = async () => {
+        const data = await api(`/projects/${project.id}/audit-findings`);
+        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gbp'));
+      };
 
       const runAudit = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api('/audits/gbp/run', { method: 'POST' });
+          const data = await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
           setFindings(data.findings || []);
         } catch (err) {
           setError(err.message);
@@ -1189,7 +1221,7 @@
 
       const handleApprove = async (finding) => {
         try {
-          await api(`/audits/gbp/${finding.id}/approve`, { method: 'POST' });
+          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
           setApprovedIds((prev) => new Set([...prev, finding.id]));
         } catch (err) {
           setError(err.message);
@@ -1198,7 +1230,7 @@
 
       const handleReject = async (finding) => {
         try {
-          await api(`/audits/gbp/${finding.id}/reject`, { method: 'POST' });
+          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
           setFindings((prev) => prev.filter((f) => f.id !== finding.id));
         } catch (err) {
           setError(err.message);
@@ -1265,6 +1297,8 @@
                         onApprove={handleApprove}
                         onReject={handleReject}
                         isApproved={approvedIds.has(finding.id)}
+                        expanded={expandedId === finding.id}
+                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
                   </div>
@@ -1287,18 +1321,32 @@
     }
 
     // ============ GSC AUDIT PAGE ============
-    function GSCAuditPage() {
+    function GSCAuditPage({ project }) {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
+      const [expandedId, setExpandedId] = useState(null);
+      const [summary, setSummary] = useState(null);
+
+      // Load previous findings on mount
+      useEffect(() => {
+        if (project) loadExisting();
+      }, [project?.id]);
+
+      const loadExisting = async () => {
+        const data = await api(`/projects/${project.id}/audit-findings`);
+        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gsc'));
+      };
 
       const runAudit = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api('/audits/gsc/run', { method: 'POST' });
+          const data = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST' });
           setFindings(data.findings || []);
+          if (data.summary) setSummary(data.summary);
+          if (data.message && (!data.findings || data.findings.length === 0)) setError(data.message);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -1308,7 +1356,7 @@
 
       const handleApprove = async (finding) => {
         try {
-          await api(`/audits/gsc/${finding.id}/approve`, { method: 'POST' });
+          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
           setApprovedIds((prev) => new Set([...prev, finding.id]));
         } catch (err) {
           setError(err.message);
@@ -1317,7 +1365,7 @@
 
       const handleReject = async (finding) => {
         try {
-          await api(`/audits/gsc/${finding.id}/reject`, { method: 'POST' });
+          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
           setFindings((prev) => prev.filter((f) => f.id !== finding.id));
         } catch (err) {
           setError(err.message);
@@ -1337,13 +1385,22 @@
             <div className="page-title">
               <i className="fas fa-chart-line"></i> GSC Audit
             </div>
-            <div className="page-subtitle">Google Search Console optimization recommendations</div>
+            <div className="page-subtitle">Google Search Console optimization — find quick wins, low CTR pages, and keyword cannibalization</div>
           </div>
 
-          <button className="btn btn-primary mb-24" onClick={runAudit} disabled={loading}>
-            {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
-            {loading ? 'Running Audit...' : 'Run GSC Audit'}
-          </button>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+            <button className="btn btn-primary" onClick={runAudit} disabled={loading}>
+              {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
+              {loading ? ' Analyzing GSC Data...' : ' Run GSC Audit'}
+            </button>
+            {summary && (
+              <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span><i className="fas fa-key" style={{ marginRight: 4 }} />{summary.keywords} keywords</span>
+                <span><i className="fas fa-file" style={{ marginRight: 4 }} />{summary.pages} pages</span>
+                <span><i className="fas fa-flag" style={{ marginRight: 4 }} />{summary.findings} findings</span>
+              </div>
+            )}
+          </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
@@ -1352,20 +1409,16 @@
               <div className="stats-grid">
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.critical}</div>
-                  <div className="stat-label">Critical Issues</div>
+                  <div className="stat-label">Critical</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.medium}</div>
-                  <div className="stat-label">Medium Issues</div>
+                  <div className="stat-label">Medium</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--info)' }}>{stats.low}</div>
-                  <div className="stat-label">Low Issues</div>
+                  <div className="stat-label">Low</div>
                 </div>
-              </div>
-
-              <div className="card">
-                <div className="card-title">Findings</div>
               </div>
 
               {['Critical', 'Medium', 'Low'].map((severity) => {
@@ -1384,6 +1437,8 @@
                         onApprove={handleApprove}
                         onReject={handleReject}
                         isApproved={approvedIds.has(finding.id)}
+                        expanded={expandedId === finding.id}
+                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
                   </div>
@@ -1395,10 +1450,10 @@
           {!loading && findings.length === 0 && (
             <div className="empty-state">
               <div className="empty-state-icon">
-                <i className="fas fa-search"></i>
+                <i className="fas fa-chart-line"></i>
               </div>
-              <div className="empty-state-title">No audit run yet</div>
-              <div>Click "Run GSC Audit" to discover optimization opportunities</div>
+              <div className="empty-state-title">No GSC audit data</div>
+              <div>Connect Google Search Console and click "Run GSC Audit" to find optimization opportunities</div>
             </div>
           )}
         </>
@@ -2012,7 +2067,7 @@
     }
 
     // ============ ACTION PLAN PAGES ============
-    function ActionPlanPage({ type, title, icon }) {
+    function ActionPlanPage({ type, title, icon, project }) {
       const [actions, setActions] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -2020,15 +2075,17 @@
       const [severityFilter, setSeverityFilter] = useState('all');
 
       useEffect(() => {
-        loadActions();
-      }, [type]);
+        if (project) loadActions();
+      }, [type, project?.id]);
 
       const loadActions = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/actions/${type}`);
-          setActions(data.actions || []);
+          // Load approved audit findings as action items for this pillar
+          const data = await api(`/projects/${project.id}/action-items`);
+          const items = (data.action_items || []).filter(a => !type || a.pillar === type);
+          setActions(items);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -2038,7 +2095,7 @@
 
       const handleApproveExecute = async (actionId) => {
         try {
-          await api(`/actions/${actionId}/approve-execute`, { method: 'POST' });
+          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: 'in-progress' } });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: 'in-progress' } : a))
           );
@@ -2049,7 +2106,7 @@
 
       const handleMarkManual = async (actionId) => {
         try {
-          await api(`/actions/${actionId}/mark-manual`, { method: 'POST' });
+          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: 'pending' } });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: 'pending' } : a))
           );
@@ -2060,10 +2117,7 @@
 
       const handleStatusChange = async (actionId, newStatus) => {
         try {
-          await api(`/actions/${actionId}`, {
-            method: 'PATCH',
-            body: { status: newStatus },
-          });
+          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: newStatus } : a))
           );
@@ -4226,21 +4280,21 @@
       const renderPage = () => {
         switch (activeTab) {
           case 'gbp-audit':
-            return <GBPAuditPage />;
+            return <GBPAuditPage project={project} />;
           case 'gsc-audit':
-            return <GSCAuditPage />;
+            return <GSCAuditPage project={project} />;
           case 'technical-audit':
             return <TechnicalAuditPage project={project} />;
           case 'onpage-audit':
             return <OnPageAuditPage project={project} />;
           case 'gbp-actions':
-            return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" />;
+            return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" project={project} />;
           case 'gsc-actions':
-            return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" />;
+            return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" project={project} />;
           case 'technical-actions':
-            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" />;
+            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" project={project} />;
           case 'onpage-actions':
-            return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" />;
+            return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" project={project} />;
           case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
