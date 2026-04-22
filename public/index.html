@@ -1,0 +1,3832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEO Room v5</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e4e4e7;
+      --text2: #a1a1aa;
+      --text3: #52525b;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --info: #3b82f6;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    html, body, #root {
+      height: 100%;
+      width: 100%;
+    }
+
+    .app-wrapper {
+      display: flex;
+      height: 100vh;
+    }
+
+    .sidebar {
+      width: 280px;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      z-index: 100;
+    }
+
+    .sidebar-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .sidebar-header i {
+      font-size: 24px;
+    }
+
+    .sidebar-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+
+    .sidebar-section {
+      padding: 0;
+    }
+
+    .sidebar-section-title {
+      padding: 16px 20px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text3);
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar-item {
+      padding: 12px 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text2);
+      font-size: 13px;
+    }
+
+    .sidebar-item:hover {
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--accent);
+    }
+
+    .sidebar-item.active {
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent);
+      border-left: 3px solid var(--accent);
+      padding-left: 17px;
+      font-weight: 600;
+    }
+
+    .sidebar-item i {
+      width: 16px;
+      text-align: center;
+    }
+
+    .sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .project-selector {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text2);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .project-selector:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+
+    .topbar {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--card);
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .topbar-title {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .topbar-domain {
+      color: var(--text2);
+      font-size: 13px;
+    }
+
+    .topbar-user {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .page-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    .page-header {
+      margin-bottom: 24px;
+    }
+
+    .page-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .page-subtitle {
+      color: var(--text2);
+      font-size: 14px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: white;
+      border-color: var(--success);
+    }
+
+    .btn-success:hover:not(:disabled) {
+      background: #16a34a;
+    }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--error);
+      border-color: var(--error);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text2);
+      border-color: var(--border);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-critical {
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+    }
+
+    .badge-medium {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fed7aa;
+    }
+
+    .badge-low {
+      background: rgba(59, 130, 246, 0.2);
+      color: #bfdbfe;
+    }
+
+    .badge-pending {
+      background: rgba(107, 114, 128, 0.2);
+      color: #d1d5db;
+    }
+
+    .badge-approved {
+      background: rgba(59, 130, 246, 0.2);
+      color: #bfdbfe;
+    }
+
+    .badge-in-progress {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fed7aa;
+    }
+
+    .badge-done {
+      background: rgba(34, 197, 94, 0.2);
+      color: #86efac;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .form-input, .form-select, .form-textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+    .form-textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .table th {
+      background: var(--bg);
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: var(--text2);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .table th:hover {
+      color: var(--text);
+    }
+
+    .table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .table tr:hover {
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      color: var(--text2);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 600px;
+      max-height: 80vh;
+      overflow-y: auto;
+      width: 90%;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text2);
+      cursor: pointer;
+      font-size: 20px;
+    }
+
+    .modal-close:hover {
+      color: var(--text);
+    }
+
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .alert-error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+
+    .alert-success {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      color: #86efac;
+    }
+
+    .alert-info {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #bfdbfe;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(99, 102, 241, 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text2);
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .empty-state-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    .gap-8 {
+      gap: 8px;
+    }
+
+    .gap-16 {
+      gap: 16px;
+    }
+
+    .flex {
+      display: flex;
+    }
+
+    .flex-between {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .flex-col {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .mt-16 {
+      margin-top: 16px;
+    }
+
+    .mt-24 {
+      margin-top: 24px;
+    }
+
+    .mb-16 {
+      margin-bottom: 16px;
+    }
+
+    .mb-24 {
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 0;
+        position: absolute;
+        height: 100%;
+        transition: width 0.3s;
+      }
+
+      .sidebar.mobile-open {
+        width: 280px;
+      }
+
+      .main-content {
+        width: 100%;
+      }
+
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .modal-content {
+        max-width: 95%;
+      }
+    }
+
+    .login-page {
+      display: flex;
+      height: 100vh;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+    }
+
+    .login-form {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .login-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .login-subtitle {
+      color: var(--text2);
+      font-size: 14px;
+    }
+
+    .toggle-auth {
+      text-align: center;
+      color: var(--text2);
+      font-size: 13px;
+      margin-top: 16px;
+    }
+
+    .toggle-auth button {
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .toggle-auth button:hover {
+      text-decoration: underline;
+    }
+
+    .finding-card {
+      background: var(--bg);
+      border-left: 4px solid;
+      padding: 16px;
+      margin-bottom: 12px;
+      border-radius: 4px;
+    }
+
+    .finding-card.critical {
+      border-left-color: var(--error);
+    }
+
+    .finding-card.medium {
+      border-left-color: var(--warning);
+    }
+
+    .finding-card.low {
+      border-left-color: var(--info);
+    }
+
+    .finding-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+
+    .finding-card-title {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .finding-card-description {
+      color: var(--text2);
+      font-size: 13px;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+
+    .finding-values {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: rgba(99, 102, 241, 0.05);
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .finding-value {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .finding-value-label {
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-size: 11px;
+    }
+
+    .finding-value-content {
+      color: var(--text);
+      font-weight: 500;
+      word-break: break-word;
+    }
+
+    .finding-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .kanban-board {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .kanban-column {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .kanban-column-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .kanban-column-count {
+      background: var(--card);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text2);
+    }
+
+    .kanban-items {
+      padding: 12px;
+      flex: 1;
+    }
+
+    .kanban-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+      cursor: move;
+    }
+
+    .kanban-card-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .kanban-card-meta {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .kanban-card-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .filter-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .checkbox input {
+      cursor: pointer;
+    }
+
+    .integration-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .integration-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .integration-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .integration-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-dot.connected {
+      background: var(--success);
+    }
+
+    .status-dot.disconnected {
+      background: var(--text3);
+    }
+
+    .integration-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .project-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .project-info {
+      flex: 1;
+    }
+
+    .project-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .project-domain {
+      color: var(--text2);
+      font-size: 13px;
+    }
+
+    .maps-table-wrapper {
+      overflow-x: auto;
+    }
+
+    .maps-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .maps-table th {
+      background: var(--bg);
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: var(--text2);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .maps-table th:hover {
+      color: var(--text);
+    }
+
+    .maps-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .maps-table tr:hover {
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .visibility-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--bg);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .visibility-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--success), var(--warning), var(--error));
+      transition: width 0.3s;
+    }
+
+    .expand-icon {
+      cursor: pointer;
+      color: var(--text2);
+    }
+
+    .expand-icon:hover {
+      color: var(--text);
+    }
+
+    .action-panel {
+      background: rgba(99, 102, 241, 0.05);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+
+    .action-panel-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+
+    .action-panel-content {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .metric-footer {
+      background: rgba(99, 102, 241, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 24px;
+      font-size: 12px;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+
+    .metric-footer-title {
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .metric-footer dl {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .metric-footer dt {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .metric-footer dd {
+      color: var(--text2);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo } = React;
+
+    const API_BASE = 'http://localhost:3000/api';
+
+    const api = async (path, opts = {}) => {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+          ...opts.headers,
+        },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        window.location.reload();
+        throw new Error('Session expired');
+      }
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    };
+
+    // ============ LOGIN PAGE ============
+    function LoginPage({ onLogin }) {
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [isRegister, setIsRegister] = useState(false);
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+          const endpoint = isRegister ? '/auth/register' : '/auth/login';
+          const data = await api(endpoint, {
+            method: 'POST',
+            body: { email, password },
+          });
+
+          localStorage.setItem('token', data.token);
+          setEmail('');
+          setPassword('');
+          onLogin(data.user);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="login-page">
+          <div className="login-form">
+            <div className="login-header">
+              <div className="login-title">
+                <i className="fas fa-rocket"></i> SEO Room
+              </div>
+              <div className="login-subtitle">SEO Automation for Agencies</div>
+            </div>
+
+            {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+            <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input
+                  type="email"
+                  className="form-input"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
+                  disabled={loading}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  disabled={loading}
+                />
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
+                {loading ? <span className="spinner"></span> : null}
+                {isRegister ? 'Create Account' : 'Sign In'}
+              </button>
+            </form>
+
+            <div className="toggle-auth">
+              {isRegister ? 'Already have an account? ' : "Don't have an account? "}
+              <button onClick={() => setIsRegister(!isRegister)} disabled={loading}>
+                {isRegister ? 'Sign In' : 'Sign Up'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============ FINDINGS CARD COMPONENT ============
+    function FindingCard({ finding, onApprove, onReject, isApproved }) {
+      const severityClass = finding.severity.toLowerCase();
+      return (
+        <div className={`finding-card ${severityClass}`}>
+          <div className="finding-card-header">
+            <div className="finding-card-title">{finding.title}</div>
+            <span className={`badge badge-${severityClass}`}>{finding.severity}</span>
+          </div>
+          <div className="finding-card-description">{finding.description}</div>
+          {finding.current && finding.recommended && (
+            <div className="finding-values">
+              <div className="finding-value">
+                <div className="finding-value-label">Current</div>
+                <div className="finding-value-content">{finding.current}</div>
+              </div>
+              <div className="finding-value">
+                <div className="finding-value-label">Recommended</div>
+                <div className="finding-value-content">{finding.recommended}</div>
+              </div>
+            </div>
+          )}
+          <div className="finding-actions">
+            {!isApproved ? (
+              <>
+                <button className="btn btn-success btn-small" onClick={() => onApprove(finding)}>
+                  <i className="fas fa-check"></i> Approve
+                </button>
+                <button className="btn btn-danger btn-small" onClick={() => onReject(finding)}>
+                  <i className="fas fa-times"></i> Reject
+                </button>
+              </>
+            ) : (
+              <span className="badge badge-approved">Sent to Action Plan</span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ============ GBP AUDIT PAGE ============
+    function GBPAuditPage() {
+      const [findings, setFindings] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [approvedIds, setApprovedIds] = useState(new Set());
+
+      const runAudit = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/audits/gbp/run', { method: 'POST' });
+          setFindings(data.findings || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleApprove = async (finding) => {
+        try {
+          await api(`/audits/gbp/${finding.id}/approve`, { method: 'POST' });
+          setApprovedIds((prev) => new Set([...prev, finding.id]));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleReject = async (finding) => {
+        try {
+          await api(`/audits/gbp/${finding.id}/reject`, { method: 'POST' });
+          setFindings((prev) => prev.filter((f) => f.id !== finding.id));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const stats = useMemo(() => {
+        const critical = findings.filter((f) => f.severity === 'Critical').length;
+        const medium = findings.filter((f) => f.severity === 'Medium').length;
+        const low = findings.filter((f) => f.severity === 'Low').length;
+        return { critical, medium, low };
+      }, [findings]);
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-map-marker-alt"></i> GBP Audit
+            </div>
+            <div className="page-subtitle">Analyze your Google Business Profile for optimization opportunities</div>
+          </div>
+
+          <button className="btn btn-primary mb-24" onClick={runAudit} disabled={loading}>
+            {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
+            {loading ? 'Running Audit...' : 'Run GBP Audit'}
+          </button>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          {findings.length > 0 && (
+            <>
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.critical}</div>
+                  <div className="stat-label">Critical Issues</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.medium}</div>
+                  <div className="stat-label">Medium Issues</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--info)' }}>{stats.low}</div>
+                  <div className="stat-label">Low Issues</div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-title">Findings</div>
+              </div>
+
+              {['Critical', 'Medium', 'Low'].map((severity) => {
+                const severityFindings = findings.filter((f) => f.severity === severity);
+                if (severityFindings.length === 0) return null;
+
+                return (
+                  <div key={severity}>
+                    <div style={{ fontSize: '15px', fontWeight: '600', margin: '16px 0 12px' }}>
+                      {severity} Issues ({severityFindings.length})
+                    </div>
+                    {severityFindings.map((finding) => (
+                      <FindingCard
+                        key={finding.id}
+                        finding={finding}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        isApproved={approvedIds.has(finding.id)}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {!loading && findings.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-search"></i>
+              </div>
+              <div className="empty-state-title">No audit run yet</div>
+              <div>Click "Run GBP Audit" to discover optimization opportunities</div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ GSC AUDIT PAGE ============
+    function GSCAuditPage() {
+      const [findings, setFindings] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [approvedIds, setApprovedIds] = useState(new Set());
+
+      const runAudit = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/audits/gsc/run', { method: 'POST' });
+          setFindings(data.findings || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleApprove = async (finding) => {
+        try {
+          await api(`/audits/gsc/${finding.id}/approve`, { method: 'POST' });
+          setApprovedIds((prev) => new Set([...prev, finding.id]));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleReject = async (finding) => {
+        try {
+          await api(`/audits/gsc/${finding.id}/reject`, { method: 'POST' });
+          setFindings((prev) => prev.filter((f) => f.id !== finding.id));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const stats = useMemo(() => {
+        const critical = findings.filter((f) => f.severity === 'Critical').length;
+        const medium = findings.filter((f) => f.severity === 'Medium').length;
+        const low = findings.filter((f) => f.severity === 'Low').length;
+        return { critical, medium, low };
+      }, [findings]);
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-chart-line"></i> GSC Audit
+            </div>
+            <div className="page-subtitle">Google Search Console optimization recommendations</div>
+          </div>
+
+          <button className="btn btn-primary mb-24" onClick={runAudit} disabled={loading}>
+            {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
+            {loading ? 'Running Audit...' : 'Run GSC Audit'}
+          </button>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          {findings.length > 0 && (
+            <>
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.critical}</div>
+                  <div className="stat-label">Critical Issues</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.medium}</div>
+                  <div className="stat-label">Medium Issues</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value" style={{ color: 'var(--info)' }}>{stats.low}</div>
+                  <div className="stat-label">Low Issues</div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-title">Findings</div>
+              </div>
+
+              {['Critical', 'Medium', 'Low'].map((severity) => {
+                const severityFindings = findings.filter((f) => f.severity === severity);
+                if (severityFindings.length === 0) return null;
+
+                return (
+                  <div key={severity}>
+                    <div style={{ fontSize: '15px', fontWeight: '600', margin: '16px 0 12px' }}>
+                      {severity} Issues ({severityFindings.length})
+                    </div>
+                    {severityFindings.map((finding) => (
+                      <FindingCard
+                        key={finding.id}
+                        finding={finding}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        isApproved={approvedIds.has(finding.id)}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {!loading && findings.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-search"></i>
+              </div>
+              <div className="empty-state-title">No audit run yet</div>
+              <div>Click "Run GSC Audit" to discover optimization opportunities</div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ WEBSITE AUDIT PAGE ============
+    // ============ TECHNICAL AUDIT PAGE ============
+    function TechnicalAuditPage() {
+      const [findings, setFindings] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [approvedIds, setApprovedIds] = useState(new Set());
+
+      const categories = [
+        { key: 'speed', label: 'Page Speed & Core Web Vitals', icon: 'fas fa-tachometer-alt', color: '#ef4444' },
+        { key: 'crawl', label: 'Crawlability & Indexing', icon: 'fas fa-spider', color: '#f59e0b' },
+        { key: 'links', label: 'Broken Links & Redirects', icon: 'fas fa-unlink', color: '#ef4444' },
+        { key: 'security', label: 'HTTPS & Security', icon: 'fas fa-lock', color: '#22c55e' },
+        { key: 'mobile', label: 'Mobile Usability', icon: 'fas fa-mobile-alt', color: '#3b82f6' },
+        { key: 'schema', label: 'Schema Markup', icon: 'fas fa-code', color: '#8b5cf6' },
+        { key: 'sitemap', label: 'Sitemap & Robots.txt', icon: 'fas fa-sitemap', color: '#6366f1' },
+        { key: 'structure', label: 'Internal Link Structure', icon: 'fas fa-project-diagram', color: '#14b8a6' },
+      ];
+
+      const sampleFindings = [
+        { id: 1, category: 'speed', severity: 'Critical', title: 'LCP exceeds 4.0s on mobile', description: 'Largest Contentful Paint is 4.2s on /plumber-perth. Google threshold is 2.5s.', current: '4.2s', recommended: '< 2.5s' },
+        { id: 2, category: 'speed', severity: 'Medium', title: 'CLS shift on homepage', description: 'Cumulative Layout Shift of 0.18 caused by late-loading images without dimensions.', current: '0.18', recommended: '< 0.1' },
+        { id: 3, category: 'links', severity: 'Critical', title: '12 broken internal links found', description: 'Links pointing to pages that return 404 errors.', current: '12 broken links', recommended: 'Fix or redirect all' },
+        { id: 4, category: 'crawl', severity: 'Medium', title: '3 pages blocked by robots.txt', description: 'Service pages accidentally blocked from crawling.', current: '3 pages blocked', recommended: 'Remove from robots.txt' },
+        { id: 5, category: 'schema', severity: 'Low', title: 'Missing LocalBusiness schema on suburb pages', description: 'Suburb landing pages lack structured data for local SEO.', current: 'No schema', recommended: 'Add LocalBusiness + Service schema' },
+        { id: 6, category: 'mobile', severity: 'Medium', title: 'Tap targets too close on /contact', description: 'Buttons and links are less than 48px apart on mobile.', current: '32px spacing', recommended: '48px minimum' },
+        { id: 7, category: 'security', severity: 'Low', title: 'Mixed content on 2 pages', description: 'HTTP images loaded on HTTPS pages.', current: '2 pages', recommended: 'Update all to HTTPS' },
+        { id: 8, category: 'structure', severity: 'Medium', title: '5 orphan pages with no internal links', description: 'Pages that are not linked from any other page on the site.', current: '5 orphan pages', recommended: 'Add internal links' },
+        { id: 9, category: 'sitemap', severity: 'Low', title: 'Sitemap contains 404 URLs', description: '3 URLs in sitemap return 404.', current: '3 dead URLs', recommended: 'Remove from sitemap' },
+      ];
+
+      const runAudit = async () => {
+        setLoading(true); setError('');
+        try {
+          // const data = await api('/audits/technical/run', { method: 'POST' });
+          // setFindings(data.findings || []);
+          await new Promise(r => setTimeout(r, 1500));
+          setFindings(sampleFindings);
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+      };
+
+      const handleApprove = (finding) => setApprovedIds(prev => new Set([...prev, finding.id]));
+      const handleReject = (finding) => setFindings(prev => prev.filter(f => f.id !== finding.id));
+
+      const stats = useMemo(() => ({
+        critical: findings.filter(f => f.severity === 'Critical').length,
+        medium: findings.filter(f => f.severity === 'Medium').length,
+        low: findings.filter(f => f.severity === 'Low').length,
+      }), [findings]);
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-cogs" style={{ marginRight: 10, color: 'var(--accent)' }} />Technical Audit
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Site speed, crawlability, broken links, schema, security, mobile usability</p>
+            </div>
+            <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
+              {loading ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Technical Audit</>}
+            </button>
+          </div>
+
+          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {findings.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { label: 'Critical', value: stats.critical, color: '#ef4444' },
+                { label: 'Medium', value: stats.medium, color: '#f59e0b' },
+                { label: 'Low', value: stats.low, color: '#3b82f6' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {findings.length > 0 && categories.map(cat => {
+            const catFindings = findings.filter(f => f.category === cat.key);
+            if (catFindings.length === 0) return null;
+            return (
+              <div key={cat.key} style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: cat.color, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className={cat.icon} />{cat.label} ({catFindings.length})
+                </div>
+                {catFindings.map(f => (
+                  <div key={f.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase',
+                            background: f.severity === 'Critical' ? 'rgba(239,68,68,0.15)' : f.severity === 'Medium' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
+                            color: f.severity === 'Critical' ? '#ef4444' : f.severity === 'Medium' ? '#f59e0b' : '#3b82f6',
+                          }}>{f.severity}</span>
+                          {approvedIds.has(f.id) && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>✓ Sent to Action Plan</span>}
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{f.title}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{f.description}</div>
+                        <div style={{ display: 'flex', gap: 16, fontSize: 11 }}>
+                          <span style={{ color: '#ef4444' }}><strong>Current:</strong> {f.current}</span>
+                          <span style={{ color: '#22c55e' }}><strong>Recommended:</strong> {f.recommended}</span>
+                        </div>
+                      </div>
+                      {!approvedIds.has(f.id) && (
+                        <div style={{ display: 'flex', gap: 6, marginLeft: 12 }}>
+                          <button className="btn btn-success" onClick={() => handleApprove(f)} style={{ fontSize: 11, padding: '4px 10px' }}>Approve</button>
+                          <button className="btn btn-danger" onClick={() => handleReject(f)} style={{ fontSize: 11, padding: '4px 10px' }}>Reject</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+
+          {!loading && findings.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-cogs" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No technical audit run yet</div>
+              <div style={{ fontSize: 13 }}>Click "Run Technical Audit" to scan for speed, crawl, link, and security issues.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
+    function OnPageAuditPage() {
+      const [pages, setPages] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [expandedPage, setExpandedPage] = useState(null);
+
+      const samplePages = [
+        { id: 1, url: '/plumber-perth', title: 'Plumber Perth | House Works Plumbing', yoastScore: 'green', yoastReadability: 'green', focusKeyword: 'plumber perth', wordCount: 1250, metaTitle: 'Plumber Perth - 24/7 Emergency Plumbing | House Works', metaTitleLen: 52, metaDesc: 'Professional plumber in Perth. Emergency plumbing, hot water repairs, gas fitting. Call House Works Plumbing for fast, reliable service.', metaDescLen: 138, h1: 'Perth Plumber You Can Trust', internalLinks: 12, externalLinks: 3, images: 8, imagesWithAlt: 6, issues: [
+          { type: 'warning', text: 'Focus keyword not in first paragraph' },
+          { type: 'warning', text: '2 images missing alt text' },
+          { type: 'good', text: 'Meta description contains focus keyword' },
+          { type: 'good', text: 'Title tag contains focus keyword' },
+          { type: 'good', text: 'Content length is good (1250 words)' },
+        ]},
+        { id: 2, url: '/hot-water-systems', title: 'Hot Water Systems Perth', yoastScore: 'orange', yoastReadability: 'orange', focusKeyword: 'hot water systems perth', wordCount: 480, metaTitle: 'Hot Water Systems', metaTitleLen: 17, metaDesc: '', metaDescLen: 0, h1: 'Hot Water', internalLinks: 3, externalLinks: 0, images: 2, imagesWithAlt: 2, issues: [
+          { type: 'problem', text: 'Meta description is empty' },
+          { type: 'problem', text: 'Title tag too short (17 chars) — should be 50-60' },
+          { type: 'problem', text: 'H1 doesn\'t contain focus keyword' },
+          { type: 'warning', text: 'Content is thin (480 words) — aim for 800+' },
+          { type: 'warning', text: 'No external links' },
+          { type: 'good', text: 'All images have alt text' },
+        ]},
+        { id: 3, url: '/plumber-rossmoyne', title: 'Plumber Rossmoyne', yoastScore: 'green', yoastReadability: 'green', focusKeyword: 'plumber rossmoyne', wordCount: 920, metaTitle: 'Plumber Rossmoyne | Local Plumbing Services | House Works', metaTitleLen: 56, metaDesc: 'Looking for a plumber in Rossmoyne? House Works provides fast, reliable plumbing services. Emergency callouts, hot water, gas fitting.', metaDescLen: 132, h1: 'Your Local Plumber in Rossmoyne', internalLinks: 8, externalLinks: 1, images: 5, imagesWithAlt: 5, issues: [
+          { type: 'good', text: 'Focus keyword in title, H1, and meta description' },
+          { type: 'good', text: 'Good content length (920 words)' },
+          { type: 'good', text: 'All images have alt text' },
+          { type: 'good', text: 'Good internal linking (8 links)' },
+        ]},
+        { id: 4, url: '/gas-fitting', title: 'Gas Fitting Perth', yoastScore: 'red', yoastReadability: 'orange', focusKeyword: '', wordCount: 210, metaTitle: 'Gas Fitting', metaTitleLen: 11, metaDesc: 'Gas fitting services.', metaDescLen: 21, h1: 'Gas Fitting', internalLinks: 1, externalLinks: 0, images: 1, imagesWithAlt: 0, issues: [
+          { type: 'problem', text: 'No focus keyword set' },
+          { type: 'problem', text: 'Content is very thin (210 words)' },
+          { type: 'problem', text: 'Meta description too short (21 chars)' },
+          { type: 'problem', text: 'Title tag too short (11 chars)' },
+          { type: 'problem', text: 'Only 1 internal link — page is nearly orphaned' },
+          { type: 'warning', text: '1 image missing alt text' },
+        ]},
+        { id: 5, url: '/plumber-shelley', title: 'Plumber Shelley', yoastScore: 'orange', yoastReadability: 'green', focusKeyword: 'plumber shelley', wordCount: 650, metaTitle: 'Plumber in Shelley | Emergency Plumbing | House Works', metaTitleLen: 53, metaDesc: 'Need a plumber in Shelley? House Works Plumbing offers 24/7 emergency service, hot water repairs, and gas fitting in Shelley and nearby suburbs.', metaDescLen: 144, h1: 'Shelley Plumbing Services', internalLinks: 5, externalLinks: 1, images: 3, imagesWithAlt: 3, issues: [
+          { type: 'warning', text: 'Focus keyword not in H1' },
+          { type: 'warning', text: 'Content could be longer (650 words) — aim for 800+' },
+          { type: 'good', text: 'Meta title and description are good' },
+          { type: 'good', text: 'All images have alt text' },
+        ]},
+      ];
+
+      const runAudit = async () => {
+        setLoading(true); setError('');
+        try {
+          await new Promise(r => setTimeout(r, 1500));
+          setPages(samplePages);
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+      };
+
+      const yoastDot = (score) => ({
+        green: { color: '#22c55e', icon: 'fas fa-circle' },
+        orange: { color: '#f59e0b', icon: 'fas fa-circle' },
+        red: { color: '#ef4444', icon: 'fas fa-circle' },
+      }[score] || { color: '#6b7280', icon: 'fas fa-circle' });
+
+      const issueIcon = (type) => ({
+        problem: { color: '#ef4444', icon: 'fas fa-times-circle' },
+        warning: { color: '#f59e0b', icon: 'fas fa-exclamation-circle' },
+        good: { color: '#22c55e', icon: 'fas fa-check-circle' },
+      }[type] || { color: '#6b7280', icon: 'fas fa-circle' });
+
+      const overallStats = useMemo(() => {
+        if (!pages.length) return null;
+        return {
+          green: pages.filter(p => p.yoastScore === 'green').length,
+          orange: pages.filter(p => p.yoastScore === 'orange').length,
+          red: pages.filter(p => p.yoastScore === 'red').length,
+          avgWords: Math.round(pages.reduce((s, p) => s + p.wordCount, 0) / pages.length),
+          missingMeta: pages.filter(p => !p.metaDesc || p.metaDescLen < 50).length,
+          noFocus: pages.filter(p => !p.focusKeyword).length,
+        };
+      }, [pages]);
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-file-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />On-Page Audit
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Yoast SEO scores, meta tags, content quality, keyword optimization per page</p>
+            </div>
+            <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
+              {loading ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run On-Page Audit</>}
+            </button>
+          </div>
+
+          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {overallStats && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { label: 'Yoast Green', value: overallStats.green, color: '#22c55e' },
+                { label: 'Yoast Orange', value: overallStats.orange, color: '#f59e0b' },
+                { label: 'Yoast Red', value: overallStats.red, color: '#ef4444' },
+                { label: 'Avg Words', value: overallStats.avgWords, color: 'var(--accent)' },
+                { label: 'Missing Meta', value: overallStats.missingMeta, color: overallStats.missingMeta > 0 ? '#ef4444' : '#22c55e' },
+                { label: 'No Focus KW', value: overallStats.noFocus, color: overallStats.noFocus > 0 ? '#ef4444' : '#22c55e' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {pages.length > 0 && (
+            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Page</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>SEO</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>Read.</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 160 }}>Focus Keyword</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>Words</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 60 }}>Links</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Issues</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pages.map(page => {
+                    const seo = yoastDot(page.yoastScore);
+                    const read = yoastDot(page.yoastReadability);
+                    const problems = page.issues.filter(i => i.type === 'problem').length;
+                    const warnings = page.issues.filter(i => i.type === 'warning').length;
+                    const isExpanded = expandedPage === page.id;
+                    return (
+                      <React.Fragment key={page.id}>
+                        <tr onClick={() => setExpandedPage(isExpanded ? null : page.id)} style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
+                          <td style={{ padding: '10px 14px' }}>
+                            <div style={{ fontWeight: 600 }}>{page.title}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>{page.url}</div>
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            <i className={seo.icon} style={{ color: seo.color, fontSize: 12 }} />
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            <i className={read.icon} style={{ color: read.color, fontSize: 12 }} />
+                          </td>
+                          <td style={{ padding: '10px 14px', fontSize: 12, color: page.focusKeyword ? 'var(--text2)' : '#ef4444' }}>
+                            {page.focusKeyword || 'Not set'}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center', color: page.wordCount < 500 ? '#ef4444' : page.wordCount < 800 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
+                            {page.wordCount}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center', color: 'var(--text2)' }}>
+                            {page.internalLinks}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            {problems > 0 && <span style={{ color: '#ef4444', fontWeight: 600, marginRight: 6 }}>{problems}<i className="fas fa-times-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
+                            {warnings > 0 && <span style={{ color: '#f59e0b', fontWeight: 600 }}>{warnings}<i className="fas fa-exclamation-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
+                            {problems === 0 && warnings === 0 && <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" /></span>}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td colSpan={7} style={{ padding: 0 }}>
+                              <div style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                                {/* Meta info */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, border: '1px solid var(--border)' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>Meta Title ({page.metaTitleLen} chars)</div>
+                                    <div style={{ fontSize: 13, color: page.metaTitleLen >= 50 && page.metaTitleLen <= 60 ? '#22c55e' : '#f59e0b' }}>{page.metaTitle || <span style={{ color: '#ef4444' }}>Empty</span>}</div>
+                                  </div>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, border: '1px solid var(--border)' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>Meta Description ({page.metaDescLen} chars)</div>
+                                    <div style={{ fontSize: 13, color: page.metaDescLen >= 120 && page.metaDescLen <= 155 ? '#22c55e' : page.metaDescLen === 0 ? '#ef4444' : '#f59e0b' }}>{page.metaDesc || <span style={{ color: '#ef4444' }}>Empty</span>}</div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>H1</div>
+                                    <div style={{ fontSize: 12, fontWeight: 600 }}>{page.h1}</div>
+                                  </div>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Internal Links</div>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: page.internalLinks < 3 ? '#ef4444' : '#22c55e' }}>{page.internalLinks}</div>
+                                  </div>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Images</div>
+                                    <div style={{ fontSize: 16, fontWeight: 700 }}>{page.imagesWithAlt}/{page.images}</div>
+                                  </div>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>External Links</div>
+                                    <div style={{ fontSize: 16, fontWeight: 700 }}>{page.externalLinks}</div>
+                                  </div>
+                                </div>
+                                {/* Yoast-style issue list */}
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>
+                                  <i className="fas fa-traffic-light" style={{ marginRight: 6 }} />Yoast Analysis
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {page.issues.map((issue, i) => {
+                                    const ic = issueIcon(issue.type);
+                                    return (
+                                      <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                                        <i className={ic.icon} style={{ color: ic.color, fontSize: 11, flexShrink: 0 }} />
+                                        <span>{issue.text}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                {/* Action buttons */}
+                                <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                                  <button className="btn btn-primary" style={{ fontSize: 11, padding: '6px 12px' }}>
+                                    <i className="fas fa-magic" style={{ marginRight: 4 }} />Auto-Optimize with AI
+                                  </button>
+                                  <button className="btn" style={{ fontSize: 11, padding: '6px 12px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+                                    <i className="fas fa-paper-plane" style={{ marginRight: 4 }} />Send to Copywriter
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!loading && pages.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-file-alt" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No on-page audit run yet</div>
+              <div style={{ fontSize: 13 }}>Click "Run On-Page Audit" to scan all pages for Yoast scores, meta tags, and content quality.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============ ACTION PLAN PAGES ============
+    function ActionPlanPage({ type, title, icon }) {
+      const [actions, setActions] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [statusFilter, setStatusFilter] = useState('all');
+      const [severityFilter, setSeverityFilter] = useState('all');
+
+      useEffect(() => {
+        loadActions();
+      }, [type]);
+
+      const loadActions = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api(`/actions/${type}`);
+          setActions(data.actions || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleApproveExecute = async (actionId) => {
+        try {
+          await api(`/actions/${actionId}/approve-execute`, { method: 'POST' });
+          setActions((prev) =>
+            prev.map((a) => (a.id === actionId ? { ...a, status: 'in-progress' } : a))
+          );
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleMarkManual = async (actionId) => {
+        try {
+          await api(`/actions/${actionId}/mark-manual`, { method: 'POST' });
+          setActions((prev) =>
+            prev.map((a) => (a.id === actionId ? { ...a, status: 'pending' } : a))
+          );
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleStatusChange = async (actionId, newStatus) => {
+        try {
+          await api(`/actions/${actionId}`, {
+            method: 'PATCH',
+            body: { status: newStatus },
+          });
+          setActions((prev) =>
+            prev.map((a) => (a.id === actionId ? { ...a, status: newStatus } : a))
+          );
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const statuses = ['pending', 'approved', 'in-progress', 'done'];
+
+      const filteredActions = useMemo(() => {
+        return actions.filter(
+          (a) =>
+            (statusFilter === 'all' || a.status === statusFilter) &&
+            (severityFilter === 'all' || a.severity === severityFilter)
+        );
+      }, [actions, statusFilter, severityFilter]);
+
+      const statusColumns = useMemo(() => {
+        return statuses.map((status) => ({
+          status,
+          actions: filteredActions.filter((a) => a.status === status),
+        }));
+      }, [filteredActions]);
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className={icon}></i> {title}
+            </div>
+            <div className="page-subtitle">Manage your action plan with Kanban board view</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <div className="filter-bar">
+            <div className="flex gap-16">
+              <label className="flex gap-8">
+                <span style={{ color: 'var(--text2)' }}>Status:</span>
+                <select
+                  className="form-select"
+                  style={{ width: '150px' }}
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  <option value="all">All Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="in-progress">In Progress</option>
+                  <option value="done">Done</option>
+                </select>
+              </label>
+
+              <label className="flex gap-8">
+                <span style={{ color: 'var(--text2)' }}>Severity:</span>
+                <select
+                  className="form-select"
+                  style={{ width: '150px' }}
+                  value={severityFilter}
+                  onChange={(e) => setSeverityFilter(e.target.value)}
+                >
+                  <option value="all">All Severity</option>
+                  <option value="Critical">Critical</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="kanban-board">
+            {statusColumns.map(({ status, actions: statusActions }) => (
+              <div key={status} className="kanban-column">
+                <div className="kanban-column-header">
+                  <div style={{ textTransform: 'capitalize' }}>
+                    {status === 'in-progress' ? 'In Progress' : status.charAt(0).toUpperCase() + status.slice(1)}
+                  </div>
+                  <div className="kanban-column-count">{statusActions.length}</div>
+                </div>
+                <div className="kanban-items">
+                  {statusActions.map((action) => (
+                    <div key={action.id} className="kanban-card">
+                      <div className="kanban-card-title">{action.title}</div>
+                      <div className="kanban-card-meta">
+                        <span className={`badge badge-${action.severity.toLowerCase()}`}>
+                          {action.severity}
+                        </span>
+                        <span className={`badge badge-${status.replace('-', '')}`}>
+                          {status === 'in-progress' ? 'In Progress' : status}
+                        </span>
+                      </div>
+                      {action.current && action.recommended && (
+                        <div style={{ fontSize: '12px', color: 'var(--text2)', marginBottom: '8px' }}>
+                          <strong>{action.current}</strong> → <strong>{action.recommended}</strong>
+                        </div>
+                      )}
+                      <div className="kanban-card-actions">
+                        {status === 'pending' && (
+                          <>
+                            <button
+                              className="btn btn-success btn-small"
+                              onClick={() => handleApproveExecute(action.id)}
+                            >
+                              Approve & Execute
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-small"
+                              onClick={() => handleMarkManual(action.id)}
+                            >
+                              Mark Manual
+                            </button>
+                          </>
+                        )}
+                        {status !== 'done' && status !== 'pending' && (
+                          <select
+                            className="form-select"
+                            style={{ fontSize: '12px', padding: '4px 8px' }}
+                            value={status}
+                            onChange={(e) => handleStatusChange(action.id, e.target.value)}
+                          >
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="done">Done</option>
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+
+    // ============ COPYWRITER PAGE ============
+    function CopywriterPage({ stage }) {
+      const stageConfig = {
+        queue: {
+          title: 'Content Queue',
+          icon: 'fas fa-inbox',
+          description: 'Content requests from Action Plan waiting to be drafted',
+          emptyText: 'No content requests yet. Approve items in Action Plan to queue them here.',
+          emptyIcon: 'fas fa-inbox',
+          items: [
+            { id: 1, type: 'Suburb Page', target: 'plumber in leeming', keyword: 'plumber leeming', source: 'Website Audit', severity: 'critical', created: '2 hours ago' },
+            { id: 2, type: 'Meta Description', target: '/plumber-perth', keyword: 'plumber perth', source: 'GSC Audit', severity: 'medium', created: '3 hours ago' },
+            { id: 3, type: 'GBP Post', target: 'Weekly update', keyword: 'plumber near me', source: 'GBP Audit', severity: 'low', created: '1 day ago' },
+            { id: 4, type: 'Suburb Page', target: 'plumber in murdoch', keyword: 'plumber murdoch', source: 'Website Audit', severity: 'critical', created: '1 day ago' },
+            { id: 5, type: 'Service Page', target: 'Gas Fitting', keyword: 'gas fitter perth', source: 'Website Audit', severity: 'medium', created: '2 days ago' },
+          ]
+        },
+        drafts: {
+          title: 'Drafts',
+          icon: 'fas fa-pen',
+          description: 'AI-generated content ready for review and editing',
+          emptyText: 'No drafts yet. Generate drafts from Content Queue.',
+          emptyIcon: 'fas fa-pen',
+          items: [
+            { id: 10, type: 'Suburb Page', target: 'plumber in rossmoyne', keyword: 'plumber rossmoyne', status: 'ready', wordCount: 850, designSafe: true, created: '1 hour ago' },
+            { id: 11, type: 'Meta Description', target: '/hot-water-systems', keyword: 'hot water repair perth', status: 'rewrite_requested', wordCount: 155, designSafe: true, created: '4 hours ago' },
+          ]
+        },
+        approved: {
+          title: 'Approved',
+          icon: 'fas fa-check-circle',
+          description: 'Content approved and ready to publish',
+          emptyText: 'No approved content. Review and approve drafts first.',
+          emptyIcon: 'fas fa-check-circle',
+          items: [
+            { id: 20, type: 'Suburb Page', target: 'plumber in shelley', keyword: 'plumber shelley', destination: 'WordPress', designSafe: true, approvedBy: 'Ayad', approvedAt: '30 min ago' },
+          ]
+        },
+        published: {
+          title: 'Published',
+          icon: 'fas fa-paper-plane',
+          description: 'Live content with rollback capability',
+          emptyText: 'No published content yet.',
+          emptyIcon: 'fas fa-paper-plane',
+          items: [
+            { id: 30, type: 'Suburb Page', target: 'plumber in queens park', url: '/plumber-queens-park', publishedAt: 'Apr 20, 2026', status: 'live', hasScreenshots: true },
+          ]
+        }
+      };
+
+      const config = stageConfig[stage];
+      const items = config.items;
+
+      const severityStyle = (sev) => ({
+        critical: { background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
+        medium: { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' },
+        low: { background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' },
+      }[sev] || {});
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className={config.icon} style={{ marginRight: 10, color: 'var(--accent)' }} />
+                {config.title}
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>{config.description}</p>
+            </div>
+            {stage === 'queue' && (
+              <button className="btn btn-primary" style={{ fontSize: 13 }}>
+                <i className="fas fa-magic" style={{ marginRight: 6 }} />Generate All Drafts
+              </button>
+            )}
+          </div>
+
+          {/* Pipeline progress bar */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' }}>
+            {[
+              { key: 'queue', label: 'Queue', count: stageConfig.queue.items.length, icon: 'fas fa-inbox' },
+              { key: 'drafts', label: 'Drafts', count: stageConfig.drafts.items.length, icon: 'fas fa-pen' },
+              { key: 'approved', label: 'Approved', count: stageConfig.approved.items.length, icon: 'fas fa-check-circle' },
+              { key: 'published', label: 'Published', count: stageConfig.published.items.length, icon: 'fas fa-paper-plane' },
+            ].map(s => (
+              <div key={s.key} style={{
+                padding: '12px 16px', textAlign: 'center',
+                background: stage === s.key ? 'var(--accent)' : 'var(--card)',
+                color: stage === s.key ? 'white' : 'var(--text2)',
+                cursor: 'pointer', transition: 'all 0.2s'
+              }}>
+                <i className={s.icon} style={{ marginRight: 6, fontSize: 11 }} />
+                <span style={{ fontWeight: 600, fontSize: 12 }}>{s.label}</span>
+                <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>({s.count})</span>
+              </div>
+            ))}
+          </div>
+
+          {items.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className={config.emptyIcon} style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div>{config.emptyText}</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {items.map(item => (
+                <div key={item.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', ...severityStyle(item.severity || 'low') }}>
+                          {item.type}
+                        </span>
+                        {item.designSafe !== undefined && (
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600,
+                            background: item.designSafe ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: item.designSafe ? '#22c55e' : '#ef4444',
+                            border: item.designSafe ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(239,68,68,0.3)'
+                          }}>
+                            <i className={item.designSafe ? 'fas fa-shield-alt' : 'fas fa-exclamation-triangle'} style={{ marginRight: 4 }} />
+                            {item.designSafe ? 'Design Safe' : 'Design Warning'}
+                          </span>
+                        )}
+                        {item.status === 'rewrite_requested' && (
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>
+                            <i className="fas fa-redo" style={{ marginRight: 4 }} />Rewrite Requested
+                          </span>
+                        )}
+                        {item.status === 'live' && (
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+                            <i className="fas fa-circle" style={{ marginRight: 4, fontSize: 6 }} />Live
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{item.target}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                        {item.keyword && <span><i className="fas fa-key" style={{ marginRight: 4 }} />{item.keyword}</span>}
+                        {item.source && <span><i className="fas fa-clipboard" style={{ marginRight: 4 }} />From: {item.source}</span>}
+                        {item.wordCount && <span><i className="fas fa-file-word" style={{ marginRight: 4 }} />{item.wordCount} words</span>}
+                        {item.destination && <span><i className="fas fa-upload" style={{ marginRight: 4 }} />→ {item.destination}</span>}
+                        {item.url && <span><i className="fas fa-link" style={{ marginRight: 4 }} />{item.url}</span>}
+                        {item.approvedBy && <span><i className="fas fa-user-check" style={{ marginRight: 4 }} />By {item.approvedBy}</span>}
+                        <span><i className="fas fa-clock" style={{ marginRight: 4 }} />{item.created || item.approvedAt || item.publishedAt}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginLeft: 16 }}>
+                      {stage === 'queue' && (
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 12px' }}>
+                          <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate Draft
+                        </button>
+                      )}
+                      {stage === 'drafts' && <>
+                        <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+                          <i className="fas fa-eye" style={{ marginRight: 4 }} />Preview
+                        </button>
+                        <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--warning)', borderColor: 'var(--warning)' }}>
+                          <i className="fas fa-edit" style={{ marginRight: 4 }} />Edit
+                        </button>
+                        <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }}>
+                          <i className="fas fa-check" style={{ marginRight: 4 }} />Approve
+                        </button>
+                      </>}
+                      {stage === 'approved' && (
+                        <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }}>
+                          <i className="fas fa-paper-plane" style={{ marginRight: 4 }} />Publish
+                        </button>
+                      )}
+                      {stage === 'published' && <>
+                        {item.hasScreenshots && (
+                          <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--info)', borderColor: 'var(--info)' }}>
+                            <i className="fas fa-images" style={{ marginRight: 4 }} />Before/After
+                          </button>
+                        )}
+                        <button className="btn btn-danger" style={{ fontSize: 12, padding: '6px 12px' }}>
+                          <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback
+                        </button>
+                      </>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Design Protection notice */}
+          <div style={{ marginTop: 24, padding: '14px 20px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 10, fontSize: 12, color: 'var(--text2)' }}>
+            <i className="fas fa-shield-alt" style={{ color: '#22c55e', marginRight: 8 }} />
+            <strong style={{ color: '#22c55e' }}>Design Protection Active</strong> — All content is scanned before publishing. No styles, scripts, or layout changes allowed. Only clean semantic HTML that inherits your site's theme.
+          </div>
+        </div>
+      );
+    }
+
+    // ============ MAPS RANKINGS PAGE ============
+    function MapsRankingsPage() {
+      const [keywords, setKeywords] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [checkingRankings, setCheckingRankings] = useState(false);
+      const [error, setError] = useState('');
+      const [showModal, setShowModal] = useState(false);
+      const [serviceArea, setServiceArea] = useState('plumber');
+      const [distanceKm, setDistanceKm] = useState(20);
+      const [selectedCombos, setSelectedCombos] = useState(new Set());
+      const [allCombos, setAllCombos] = useState([]);
+      const [expandedRows, setExpandedRows] = useState(new Set());
+      const [sortConfig, setSortConfig] = useState({ key: 'service', direction: 'asc' });
+
+      useEffect(() => {
+        loadKeywords();
+      }, []);
+
+      const loadKeywords = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/maps/keywords');
+          setKeywords(data.keywords || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const generateCombos = async () => {
+        try {
+          const data = await api('/maps/generate-keywords', {
+            method: 'POST',
+            body: { serviceArea, distanceKm },
+          });
+          setAllCombos(data.combos || []);
+          setSelectedCombos(new Set(data.combos.map((c) => c.id)));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleAddKeywords = async () => {
+        try {
+          const combosArray = Array.from(selectedCombos);
+          await api('/maps/keywords', {
+            method: 'POST',
+            body: { combos: combosArray },
+          });
+          setShowModal(false);
+          setAllCombos([]);
+          setSelectedCombos(new Set());
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleCheckRankings = async () => {
+        setCheckingRankings(true);
+        setError('');
+        try {
+          await api('/maps/check-rankings', { method: 'POST' });
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setCheckingRankings(false);
+        }
+      };
+
+      const handleDeleteAllKeywords = async () => {
+        if (!window.confirm('Delete all maps keywords? This cannot be undone.')) return;
+        try {
+          await api('/maps/keywords', { method: 'DELETE' });
+          setKeywords([]);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleSort = (key) => {
+        setSortConfig((prev) => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+        }));
+      };
+
+      const sortedKeywords = useMemo(() => {
+        const sorted = [...keywords].sort((a, b) => {
+          const aVal = a[sortConfig.key];
+          const bVal = b[sortConfig.key];
+          if (typeof aVal === 'string') {
+            return sortConfig.direction === 'asc'
+              ? aVal.localeCompare(bVal)
+              : bVal.localeCompare(aVal);
+          }
+          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+        return sorted;
+      }, [keywords, sortConfig]);
+
+      const stats = useMemo(() => {
+        const dominant = keywords.filter((k) => k.visibility >= 80).length;
+        const partial = keywords.filter((k) => k.visibility >= 30 && k.visibility < 80).length;
+        const notVisible = keywords.filter((k) => k.visibility < 30).length;
+        const avgVis = keywords.length > 0 ? (keywords.reduce((sum, k) => sum + (k.visibility || 0), 0) / keywords.length).toFixed(1) : 0;
+        return { dominant, partial, notVisible, avgVis };
+      }, [keywords]);
+
+      const toggleCombo = (id) => {
+        setSelectedCombos((prev) => {
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
+          }
+          return newSet;
+        });
+      };
+
+      const toggleSelectAll = () => {
+        if (selectedCombos.size === allCombos.length) {
+          setSelectedCombos(new Set());
+        } else {
+          setSelectedCombos(new Set(allCombos.map((c) => c.id)));
+        }
+      };
+
+      const toggleRowExpand = (id) => {
+        setExpandedRows((prev) => {
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
+          }
+          return newSet;
+        });
+      };
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-map"></i> Maps Rankings
+            </div>
+            <div className="page-subtitle">Local pack visibility and ranking tracking</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          {keywords.length > 0 && (
+            <div className="stats-grid">
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--success)' }}>{stats.dominant}</div>
+                <div className="stat-label">Dominant (80%+)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.partial}</div>
+                <div className="stat-label">Partially Visible (30-80%)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.notVisible}</div>
+                <div className="stat-label">Not Visible (&lt;30%)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{stats.avgVis}%</div>
+                <div className="stat-label">Average Visibility</div>
+              </div>
+            </div>
+          )}
+
+          <div className="btn-group mb-24">
+            <button className="btn btn-primary" onClick={() => { setShowModal(true); setAllCombos([]); }}>
+              <i className="fas fa-plus"></i> Generate Keywords
+            </button>
+            <button className="btn btn-secondary" onClick={handleCheckRankings} disabled={checkingRankings || keywords.length === 0}>
+              {checkingRankings ? <span className="spinner"></span> : <i className="fas fa-refresh"></i>}
+              {checkingRankings ? 'Checking...' : 'Check Rankings'}
+            </button>
+            <button className="btn btn-danger" onClick={handleDeleteAllKeywords} disabled={keywords.length === 0}>
+              <i className="fas fa-trash"></i> Delete All
+            </button>
+          </div>
+
+          {keywords.length > 0 && (
+            <div className="card">
+              <div className="maps-table-wrapper">
+                <table className="maps-table">
+                  <thead>
+                    <tr>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('service')}>
+                        Service {sortConfig.key === 'service' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('location')}>
+                        Location {sortConfig.key === 'location' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('avgRank')}>
+                        Avg Rank {sortConfig.key === 'avgRank' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('trueAvg')}>
+                        True Avg {sortConfig.key === 'trueAvg' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('visibility')}>
+                        Visibility {sortConfig.key === 'visibility' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th>Coverage</th>
+                      <th>Status</th>
+                      <th style={{ width: '40px' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedKeywords.map((kw) => (
+                      <React.Fragment key={kw.id}>
+                        <tr>
+                          <td>{kw.service}</td>
+                          <td>{kw.location}</td>
+                          <td>{kw.avgRank || '—'}</td>
+                          <td>{kw.trueAvg || '—'}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div className="visibility-bar">
+                                <div className="visibility-fill" style={{ width: `${kw.visibility || 0}%` }}></div>
+                              </div>
+                              <span>{kw.visibility || 0}%</span>
+                            </div>
+                          </td>
+                          <td>{kw.coverage || '—'}</td>
+                          <td>
+                            <span className="badge badge-pending">{kw.status || 'Pending'}</span>
+                          </td>
+                          <td>
+                            <button
+                              className="expand-icon"
+                              onClick={() => toggleRowExpand(kw.id)}
+                              title="Show action panel"
+                            >
+                              <i className="fas fa-chevron-down"></i>
+                            </button>
+                          </td>
+                        </tr>
+                        {expandedRows.has(kw.id) && (
+                          <tr>
+                            <td colSpan="8">
+                              <div className="action-panel">
+                                <div className="action-panel-title">Quick Actions</div>
+                                <div className="action-panel-content">
+                                  <p style={{ fontSize: '12px', color: 'var(--text2)' }}>
+                                    This keyword shows up in the local pack for <strong>{kw.location}</strong> when searching "{kw.service}".
+                                  </p>
+                                  <div className="btn-group">
+                                    <button className="btn btn-secondary btn-small">
+                                      <i className="fas fa-share"></i> View Local Results
+                                    </button>
+                                    <button className="btn btn-secondary btn-small">
+                                      <i className="fas fa-edit"></i> Update Info
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!loading && keywords.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-map-marker-alt"></i>
+              </div>
+              <div className="empty-state-title">No keywords tracked yet</div>
+              <div>Generate keywords to start tracking your local pack rankings</div>
+            </div>
+          )}
+
+          <div className="metric-footer">
+            <div className="metric-footer-title">Metric Explanations</div>
+            <dl className="metric-footer">
+              <dt>Avg Rank</dt>
+              <dd>Average ranking position across all checks</dd>
+              <dt>True Avg</dt>
+              <dd>Adjusted average accounting for visibility</dd>
+              <dt>Visibility</dt>
+              <dd>% of checks where keyword appears in local pack</dd>
+              <dt>Coverage</dt>
+              <dd>Number of locations tracking this keyword</dd>
+            </dl>
+          </div>
+
+          {showModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Generate Maps Keywords</div>
+                  <button className="modal-close" onClick={() => setShowModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Service Type</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={serviceArea}
+                    onChange={(e) => setServiceArea(e.target.value)}
+                    placeholder="e.g., plumber"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Distance Radius (km)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={distanceKm}
+                    onChange={(e) => setDistanceKm(Math.max(1, parseInt(e.target.value) || 20))}
+                    min="1"
+                    max="100"
+                  />
+                </div>
+
+                {allCombos.length === 0 ? (
+                  <button className="btn btn-primary" onClick={generateCombos} style={{ width: '100%' }}>
+                    <i className="fas fa-cog"></i> Generate Combinations
+                  </button>
+                ) : (
+                  <>
+                    <div style={{ marginBottom: '16px' }}>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={selectedCombos.size === allCombos.length}
+                          onChange={toggleSelectAll}
+                        />
+                        <span>Select All ({selectedCombos.size} / {allCombos.length})</span>
+                      </label>
+                    </div>
+
+                    <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
+                      {allCombos.map((combo) => (
+                        <label key={combo.id} className="checkbox" style={{ padding: '8px 0' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedCombos.has(combo.id)}
+                            onChange={() => toggleCombo(combo.id)}
+                          />
+                          <span>{combo.service} + {combo.location}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="btn-group">
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleAddKeywords}
+                        disabled={selectedCombos.size === 0}
+                        style={{ flex: 1 }}
+                      >
+                        <i className="fas fa-plus"></i> Add {selectedCombos.size} Keywords
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          setAllCombos([]);
+                          setSelectedCombos(new Set());
+                        }}
+                        style={{ flex: 1 }}
+                      >
+                        <i className="fas fa-redo"></i> Regenerate
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ SERP RANKINGS PAGE ============
+    function SERPRankingsPage() {
+      const [keywords, setKeywords] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [showAddModal, setShowAddModal] = useState(false);
+      const [showDiscoverModal, setShowDiscoverModal] = useState(false);
+      const [showImportModal, setShowImportModal] = useState(false);
+      const [newKeyword, setNewKeyword] = useState('');
+      const [sortConfig, setSortConfig] = useState({ key: 'position', direction: 'asc' });
+
+      useEffect(() => {
+        loadKeywords();
+      }, []);
+
+      const loadKeywords = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/rank/keywords');
+          setKeywords(data.keywords || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleAddKeyword = async () => {
+        if (!newKeyword.trim()) return;
+        try {
+          await api('/rank/keywords', {
+            method: 'POST',
+            body: { keyword: newKeyword },
+          });
+          setNewKeyword('');
+          setShowAddModal(false);
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDiscoverKeywords = async () => {
+        setLoading(true);
+        try {
+          const data = await api('/rank/discover', { method: 'POST' });
+          setKeywords(data.keywords || []);
+          setShowDiscoverModal(false);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleImportCSV = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+          const token = localStorage.getItem('token');
+          const res = await fetch(`${API_BASE}/rank/import-csv`, {
+            method: 'POST',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body: formData,
+          });
+
+          if (res.status === 401) {
+            localStorage.removeItem('token');
+            window.location.reload();
+          }
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Import failed');
+
+          setShowImportModal(false);
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDeleteAll = async () => {
+        if (!window.confirm('Delete all rank keywords? This cannot be undone.')) return;
+        try {
+          await api('/rank/keywords', { method: 'DELETE' });
+          setKeywords([]);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleSort = (key) => {
+        setSortConfig((prev) => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+        }));
+      };
+
+      const sortedKeywords = useMemo(() => {
+        const sorted = [...keywords].sort((a, b) => {
+          const aVal = a[sortConfig.key];
+          const bVal = b[sortConfig.key];
+          if (typeof aVal === 'string') {
+            return sortConfig.direction === 'asc'
+              ? aVal.localeCompare(bVal)
+              : bVal.localeCompare(aVal);
+          }
+          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+        return sorted;
+      }, [keywords, sortConfig]);
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-chart-line"></i> SERP Rankings
+            </div>
+            <div className="page-subtitle">Track keyword rankings in Google Search</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <div className="btn-group mb-24">
+            <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+              <i className="fas fa-plus"></i> Add Keyword
+            </button>
+            <button className="btn btn-secondary" onClick={() => setShowDiscoverModal(true)}>
+              <i className="fas fa-search"></i> Discover Keywords
+            </button>
+            <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
+              <i className="fas fa-upload"></i> Import CSV (GSC)
+            </button>
+            <button className="btn btn-danger" onClick={handleDeleteAll} disabled={keywords.length === 0}>
+              <i className="fas fa-trash"></i> Delete All
+            </button>
+          </div>
+
+          {keywords.length > 0 && (
+            <div className="card">
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('keyword')}>
+                        Keyword {sortConfig.key === 'keyword' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('position')}>
+                        Position {sortConfig.key === 'position' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('volume')}>
+                        Volume {sortConfig.key === 'volume' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('url')}>
+                        URL {sortConfig.key === 'url' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th>GSC Position</th>
+                      <th>Last Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedKeywords.map((kw) => (
+                      <tr key={kw.id}>
+                        <td>{kw.keyword}</td>
+                        <td style={{ fontWeight: 600 }}>{kw.position || '—'}</td>
+                        <td>{kw.volume?.toLocaleString() || '—'}</td>
+                        <td style={{ color: 'var(--text2)', fontSize: '12px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {kw.url || '—'}
+                        </td>
+                        <td>{kw.gscPosition || '—'}</td>
+                        <td style={{ color: 'var(--text2)', fontSize: '12px' }}>
+                          {kw.lastUpdated ? new Date(kw.lastUpdated).toLocaleDateString() : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!loading && keywords.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-chart-line"></i>
+              </div>
+              <div className="empty-state-title">No keywords tracked yet</div>
+              <div>Add keywords to start tracking their SERP rankings</div>
+            </div>
+          )}
+
+          {showAddModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Add Keyword</div>
+                  <button className="modal-close" onClick={() => setShowAddModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Keyword</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newKeyword}
+                    onChange={(e) => setNewKeyword(e.target.value)}
+                    placeholder="e.g., plumbing services"
+                    onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
+                  />
+                </div>
+                <button className="btn btn-primary" onClick={handleAddKeyword} style={{ width: '100%' }}>
+                  <i className="fas fa-plus"></i> Add Keyword
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showDiscoverModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Discover Keywords</div>
+                  <button className="modal-close" onClick={() => setShowDiscoverModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <p style={{ color: 'var(--text2)', marginBottom: '16px' }}>
+                  Discover keywords your domain already ranks for using DataForSEO API.
+                </p>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleDiscoverKeywords}
+                  style={{ width: '100%' }}
+                  disabled={loading}
+                >
+                  {loading ? <span className="spinner"></span> : <i className="fas fa-search"></i>}
+                  {loading ? 'Discovering...' : 'Discover Keywords'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showImportModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Import GSC Keywords</div>
+                  <button className="modal-close" onClick={() => setShowImportModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <p style={{ color: 'var(--text2)', marginBottom: '16px' }}>
+                  Upload a CSV exported from Google Search Console. Auto-detects GSC format with "Top queries" header.
+                </p>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleImportCSV}
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)', cursor: 'pointer' }}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ MONTHLY REPORTS PAGE ============
+    function MonthlyReportsPage() {
+      const [reports, setReports] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [generating, setGenerating] = useState(false);
+
+      useEffect(() => {
+        loadReports();
+      }, []);
+
+      const loadReports = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/reports');
+          setReports(data.reports || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleGenerateReport = async () => {
+        setGenerating(true);
+        setError('');
+        try {
+          const data = await api('/reports/generate', { method: 'POST' });
+          setReports([data.report, ...reports]);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setGenerating(false);
+        }
+      };
+
+      const handleExportPDF = (reportId) => {
+        window.open(`${API_BASE}/reports/${reportId}/export-pdf`, '_blank');
+      };
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-file-pdf"></i> Monthly Reports
+            </div>
+            <div className="page-subtitle">Generated performance reports and recommendations</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <button className="btn btn-primary mb-24" onClick={handleGenerateReport} disabled={generating}>
+            {generating ? <span className="spinner"></span> : <i className="fas fa-plus"></i>}
+            {generating ? 'Generating Report...' : 'Generate New Report'}
+          </button>
+
+          {reports.length > 0 && (
+            <div>
+              {reports.map((report) => (
+                <div key={report.id} className="card">
+                  <div className="card-header">
+                    <div>
+                      <div className="card-title">{report.month}</div>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginTop: '4px' }}>
+                        Generated {new Date(report.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <button className="btn btn-secondary btn-small" onClick={() => handleExportPDF(report.id)}>
+                      <i className="fas fa-download"></i> Export PDF
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginTop: '16px' }}>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>Rankings Summary</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.rankingsSummary?.avgPosition?.toFixed(1) || '—'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>GBP Performance</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.gbpPerformance?.views?.toLocaleString() || '—'} views
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>GSC Trends</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.gscTrends?.ctr?.toFixed(2) || '—'}% CTR
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>Actions Completed</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--success)' }}>
+                        {report.actionsCompleted || 0}
+                      </div>
+                    </div>
+                  </div>
+
+                  {report.recommendations && report.recommendations.length > 0 && (
+                    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Recommendations</div>
+                      <ul style={{ color: 'var(--text2)', fontSize: '13px', lineHeight: 1.6 }}>
+                        {report.recommendations.map((rec, i) => (
+                          <li key={i} style={{ marginBottom: '4px' }}>• {rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && reports.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-file-pdf"></i>
+              </div>
+              <div className="empty-state-title">No reports generated yet</div>
+              <div>Click "Generate New Report" to create your first monthly report</div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ PROJECT SETTINGS PAGE ============
+    function ProjectSettingsPage() {
+      const [project, setProject] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState('');
+      const [formData, setFormData] = useState({
+        name: '',
+        domain: '',
+        businessName: '',
+        industry: '',
+        location: '',
+        serviceAreas: [],
+        competitors: [],
+      });
+      const [newSuburb, setNewSuburb] = useState('');
+      const [newDistance, setNewDistance] = useState(20);
+      const [newCompetitor, setNewCompetitor] = useState('');
+
+      useEffect(() => {
+        loadProject();
+      }, []);
+
+      const loadProject = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/projects/current');
+          setProject(data.project);
+          setFormData({
+            name: data.project.name,
+            domain: data.project.domain,
+            businessName: data.project.businessName || '',
+            industry: data.project.industry || '',
+            location: data.project.location || '',
+            serviceAreas: data.project.serviceAreas || [],
+            competitors: data.project.competitors || [],
+          });
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleSave = async () => {
+        setSaving(true);
+        setError('');
+        try {
+          await api(`/projects/${project.id}`, {
+            method: 'PATCH',
+            body: formData,
+          });
+          setError('');
+          // Brief success indicator
+          setTimeout(() => setError(''), 3000);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      const handleAddSuburb = () => {
+        if (!newSuburb.trim()) return;
+        setFormData((prev) => ({
+          ...prev,
+          serviceAreas: [...prev.serviceAreas, { name: newSuburb, distance: newDistance }],
+        }));
+        setNewSuburb('');
+        setNewDistance(20);
+      };
+
+      const handleRemoveSuburb = (index) => {
+        setFormData((prev) => ({
+          ...prev,
+          serviceAreas: prev.serviceAreas.filter((_, i) => i !== index),
+        }));
+      };
+
+      const handleAddCompetitor = () => {
+        if (!newCompetitor.trim()) return;
+        setFormData((prev) => ({
+          ...prev,
+          competitors: [...prev.competitors, newCompetitor],
+        }));
+        setNewCompetitor('');
+      };
+
+      const handleRemoveCompetitor = (index) => {
+        setFormData((prev) => ({
+          ...prev,
+          competitors: prev.competitors.filter((_, i) => i !== index),
+        }));
+      };
+
+      if (loading) {
+        return <div className="empty-state"><span className="spinner"></span> Loading...</div>;
+      }
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-cog"></i> Project Settings
+            </div>
+            <div className="page-subtitle">Configure your current project</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>Basic Information</div>
+
+            <div className="form-group">
+              <label className="form-label">Project Name</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.name}
+                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="My Client Project"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Domain</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.domain}
+                onChange={(e) => setFormData((prev) => ({ ...prev, domain: e.target.value }))}
+                placeholder="example.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Business Name</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.businessName}
+                onChange={(e) => setFormData((prev) => ({ ...prev, businessName: e.target.value }))}
+                placeholder="My Business Inc."
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Industry</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.industry}
+                onChange={(e) => setFormData((prev) => ({ ...prev, industry: e.target.value }))}
+                placeholder="e.g., Plumbing"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Location</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.location}
+                onChange={(e) => setFormData((prev) => ({ ...prev, location: e.target.value }))}
+                placeholder="e.g., Perth, Australia"
+              />
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>Service Areas</div>
+
+            {formData.serviceAreas.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                {formData.serviceAreas.map((area, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      background: 'var(--bg)',
+                      borderRadius: '8px',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    <div>
+                      <strong>{area.name}</strong> <span style={{ color: 'var(--text2)', fontSize: '12px' }}>({area.distance}km)</span>
+                    </div>
+                    <button
+                      className="btn btn-danger btn-small"
+                      onClick={() => handleRemoveSuburb(idx)}
+                    >
+                      <i className="fas fa-trash"></i>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px auto', gap: '8px' }}>
+              <input
+                type="text"
+                className="form-input"
+                value={newSuburb}
+                onChange={(e) => setNewSuburb(e.target.value)}
+                placeholder="Suburb name"
+                onKeyPress={(e) => e.key === 'Enter' && handleAddSuburb()}
+              />
+              <input
+                type="number"
+                className="form-input"
+                value={newDistance}
+                onChange={(e) => setNewDistance(Math.max(1, parseInt(e.target.value) || 20))}
+                min="1"
+                max="100"
+                style={{ textAlign: 'center' }}
+              />
+              <button className="btn btn-secondary btn-small" onClick={handleAddSuburb}>
+                <i className="fas fa-plus"></i> Add
+              </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>Competitors</div>
+
+            {formData.competitors.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                {formData.competitors.map((competitor, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      background: 'var(--bg)',
+                      borderRadius: '8px',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    <strong>{competitor}</strong>
+                    <button
+                      className="btn btn-danger btn-small"
+                      onClick={() => handleRemoveCompetitor(idx)}
+                    >
+                      <i className="fas fa-trash"></i>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
+              <input
+                type="text"
+                className="form-input"
+                value={newCompetitor}
+                onChange={(e) => setNewCompetitor(e.target.value)}
+                placeholder="Competitor domain"
+                onKeyPress={(e) => e.key === 'Enter' && handleAddCompetitor()}
+              />
+              <button className="btn btn-secondary btn-small" onClick={handleAddCompetitor}>
+                <i className="fas fa-plus"></i> Add
+              </button>
+            </div>
+          </div>
+
+          <button className="btn btn-primary mt-24" onClick={handleSave} disabled={saving}>
+            {saving ? <span className="spinner"></span> : <i className="fas fa-save"></i>}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </>
+      );
+    }
+
+    // ============ INTEGRATIONS PAGE ============
+    function IntegrationsPage() {
+      const [integrations, setIntegrations] = useState({
+        gbp: { connected: false },
+        gsc: { connected: false },
+        dataforseo: { connected: false },
+        localfalcon: { connected: false },
+        wordpress: { connected: false },
+        ahrefs: { active: false },
+      });
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [testLoading, setTestLoading] = useState({});
+      const [dfCredentials, setDfCredentials] = useState({ username: '', password: '' });
+      const [lfCredentials, setLfCredentials] = useState({ apiKey: '' });
+      const [wpCredentials, setWpCredentials] = useState({ url: '', username: '', appPassword: '' });
+
+      useEffect(() => {
+        loadIntegrations();
+      }, []);
+
+      const loadIntegrations = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/integrations');
+          setIntegrations(data.integrations || {});
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleConnectOAuth = (type) => {
+        // Stub OAuth flow
+        window.open(`http://localhost:3000/oauth/${type}`, 'oauth', 'width=600,height=700');
+      };
+
+      const handleTestConnection = async (type) => {
+        setTestLoading((prev) => ({ ...prev, [type]: true }));
+        try {
+          await api(`/integrations/${type}/test`, { method: 'POST' });
+          alert('Connection successful!');
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setTestLoading((prev) => ({ ...prev, [type]: false }));
+        }
+      };
+
+      const handleSaveCredentials = async (type, credentials) => {
+        try {
+          await api(`/integrations/${type}`, {
+            method: 'POST',
+            body: credentials,
+          });
+          await loadIntegrations();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-plug"></i> Integrations
+            </div>
+            <div className="page-subtitle">Connect your SEO tools and services</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          {/* Google Business Profile */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-map-marker-alt" style={{ marginRight: '8px', color: '#EA4335' }}></i>
+                Google Business Profile
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.gbp?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.gbp?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            {integrations.gbp?.connected && (
+              <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '12px' }}>
+                {integrations.gbp?.businessName || 'Your Business'}
+              </div>
+            )}
+            <button className="btn btn-primary" onClick={() => handleConnectOAuth('gbp')}>
+              <i className="fas fa-link"></i> {integrations.gbp?.connected ? 'Reconnect' : 'Connect'}
+            </button>
+          </div>
+
+          {/* Google Search Console */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-chart-line" style={{ marginRight: '8px', color: '#4285F4' }}></i>
+                Google Search Console
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.gsc?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.gsc?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            {integrations.gsc?.connected && (
+              <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '12px' }}>
+                {integrations.gsc?.property || 'Your Property'}
+              </div>
+            )}
+            <button className="btn btn-primary" onClick={() => handleConnectOAuth('gsc')}>
+              <i className="fas fa-link"></i> {integrations.gsc?.connected ? 'Reconnect' : 'Connect'}
+            </button>
+          </div>
+
+          {/* DataForSEO */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-search" style={{ marginRight: '8px', color: '#FF6B35' }}></i>
+                DataForSEO
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.dataforseo?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.dataforseo?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            <div className="integration-fields">
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Username"
+                value={dfCredentials.username}
+                onChange={(e) => setDfCredentials((prev) => ({ ...prev, username: e.target.value }))}
+              />
+              <input
+                type="password"
+                className="form-input"
+                placeholder="Password"
+                value={dfCredentials.password}
+                onChange={(e) => setDfCredentials((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <div className="btn-group">
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleSaveCredentials('dataforseo', dfCredentials)}
+                  style={{ flex: 1 }}
+                >
+                  <i className="fas fa-save"></i> Save
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleTestConnection('dataforseo')}
+                  disabled={testLoading.dataforseo}
+                  style={{ flex: 1 }}
+                >
+                  {testLoading.dataforseo ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
+                  Test
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Local Falcon */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-map" style={{ marginRight: '8px', color: '#7C3AED' }}></i>
+                Local Falcon
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.localfalcon?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.localfalcon?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            <div className="integration-fields">
+              <input
+                type="password"
+                className="form-input"
+                placeholder="API Key"
+                value={lfCredentials.apiKey}
+                onChange={(e) => setLfCredentials((prev) => ({ ...prev, apiKey: e.target.value }))}
+              />
+              <div className="btn-group">
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleSaveCredentials('localfalcon', lfCredentials)}
+                  style={{ flex: 1 }}
+                >
+                  <i className="fas fa-save"></i> Save
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleTestConnection('localfalcon')}
+                  disabled={testLoading.localfalcon}
+                  style={{ flex: 1 }}
+                >
+                  {testLoading.localfalcon ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
+                  Test
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* WordPress */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-wordpress" style={{ marginRight: '8px', color: '#0073AA' }}></i>
+                WordPress
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.wordpress?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.wordpress?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            <div className="integration-fields">
+              <input
+                type="url"
+                className="form-input"
+                placeholder="WordPress URL (e.g., https://example.com)"
+                value={wpCredentials.url}
+                onChange={(e) => setWpCredentials((prev) => ({ ...prev, url: e.target.value }))}
+              />
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Username"
+                value={wpCredentials.username}
+                onChange={(e) => setWpCredentials((prev) => ({ ...prev, username: e.target.value }))}
+              />
+              <input
+                type="password"
+                className="form-input"
+                placeholder="App Password"
+                value={wpCredentials.appPassword}
+                onChange={(e) => setWpCredentials((prev) => ({ ...prev, appPassword: e.target.value }))}
+              />
+              <div className="btn-group">
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleSaveCredentials('wordpress', wpCredentials)}
+                  style={{ flex: 1 }}
+                >
+                  <i className="fas fa-save"></i> Save
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleTestConnection('wordpress')}
+                  disabled={testLoading.wordpress}
+                  style={{ flex: 1 }}
+                >
+                  {testLoading.wordpress ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
+                  Test
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Ahrefs Extension */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fas fa-rocket" style={{ marginRight: '8px', color: '#FF4655' }}></i>
+                Ahrefs (Chrome Extension)
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.ahrefs?.active ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.ahrefs?.active ? 'Active' : 'Not Detected'}</span>
+              </div>
+            </div>
+            <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.6 }}>
+              Install the SEO Room Chrome extension to sync Ahrefs data directly to your dashboard.
+            </div>
+          </div>
+        </>
+      );
+    }
+
+    // ============ PROJECTS PAGE ============
+    function ProjectsPage({ onProjectSwitch }) {
+      const [projects, setProjects] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [showNewModal, setShowNewModal] = useState(false);
+      const [newProjectName, setNewProjectName] = useState('');
+      const [newProjectDomain, setNewProjectDomain] = useState('');
+
+      useEffect(() => {
+        loadProjects();
+      }, []);
+
+      const loadProjects = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/projects');
+          setProjects(data.projects || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleCreateProject = async () => {
+        if (!newProjectName.trim() || !newProjectDomain.trim()) return;
+        try {
+          const data = await api('/projects', {
+            method: 'POST',
+            body: { name: newProjectName, domain: newProjectDomain },
+          });
+          setProjects([...projects, data.project]);
+          setNewProjectName('');
+          setNewProjectDomain('');
+          setShowNewModal(false);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDeleteProject = async (projectId) => {
+        if (!window.confirm('Delete this project? This cannot be undone.')) return;
+        try {
+          await api(`/projects/${projectId}`, { method: 'DELETE' });
+          setProjects((prev) => prev.filter((p) => p.id !== projectId));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleSwitchProject = (project) => {
+        localStorage.setItem('currentProject', project.id);
+        onProjectSwitch(project);
+      };
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-folder"></i> Projects
+            </div>
+            <div className="page-subtitle">Manage your SEO projects</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <button className="btn btn-primary mb-24" onClick={() => setShowNewModal(true)}>
+            <i className="fas fa-plus"></i> New Project
+          </button>
+
+          {projects.length > 0 && (
+            <div>
+              {projects.map((proj) => (
+                <div key={proj.id} className="project-item">
+                  <div className="project-info">
+                    <div className="project-name">{proj.name}</div>
+                    <div className="project-domain">{proj.domain}</div>
+                  </div>
+                  <div className="btn-group">
+                    <button className="btn btn-secondary btn-small" onClick={() => handleSwitchProject(proj)}>
+                      <i className="fas fa-arrow-right"></i> Switch
+                    </button>
+                    <button className="btn btn-danger btn-small" onClick={() => handleDeleteProject(proj.id)}>
+                      <i className="fas fa-trash"></i> Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && projects.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-folder-open"></i>
+              </div>
+              <div className="empty-state-title">No projects yet</div>
+              <div>Create your first project to get started</div>
+            </div>
+          )}
+
+          {showNewModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Create New Project</div>
+                  <button className="modal-close" onClick={() => setShowNewModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Project Name</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    placeholder="My Client Project"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Domain</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newProjectDomain}
+                    onChange={(e) => setNewProjectDomain(e.target.value)}
+                    placeholder="example.com"
+                  />
+                </div>
+
+                <button className="btn btn-primary" onClick={handleCreateProject} style={{ width: '100%' }}>
+                  <i className="fas fa-plus"></i> Create Project
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    // ============ MAIN APP ============
+    function App() {
+      const [user, setUser] = useState({ id: 1, email: 'preview@seoroom.com', name: 'Preview Mode' });
+
+      const [project, setProject] = useState({ id: 1, name: 'House Works Plumbing', domain: 'houseworksplumbing.com.au' });
+
+      const [activeTab, setActiveTab] = useState('gbp-audit');
+      const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+      const handleLogout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('currentProject');
+        setUser(null);
+      };
+
+      const handleProjectSwitch = (newProject) => {
+        setProject(newProject);
+        localStorage.setItem('currentProject', newProject.id);
+      };
+
+      if (!user) {
+        return <LoginPage onLogin={setUser} />;
+      }
+
+      const renderPage = () => {
+        switch (activeTab) {
+          case 'gbp-audit':
+            return <GBPAuditPage />;
+          case 'gsc-audit':
+            return <GSCAuditPage />;
+          case 'technical-audit':
+            return <TechnicalAuditPage />;
+          case 'onpage-audit':
+            return <OnPageAuditPage />;
+          case 'gbp-actions':
+            return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" />;
+          case 'gsc-actions':
+            return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" />;
+          case 'technical-actions':
+            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" />;
+          case 'onpage-actions':
+            return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" />;
+          case 'content-queue':
+            return <CopywriterPage stage="queue" />;
+          case 'drafts':
+            return <CopywriterPage stage="drafts" />;
+          case 'approved-content':
+            return <CopywriterPage stage="approved" />;
+          case 'published-content':
+            return <CopywriterPage stage="published" />;
+          case 'maps-rankings':
+            return <MapsRankingsPage />;
+          case 'serp-rankings':
+            return <SERPRankingsPage />;
+          case 'monthly-reports':
+            return <MonthlyReportsPage />;
+          case 'project-settings':
+            return <ProjectSettingsPage />;
+          case 'integrations':
+            return <IntegrationsPage />;
+          case 'projects':
+            return <ProjectsPage onProjectSwitch={handleProjectSwitch} />;
+          default:
+            return <GBPAuditPage />;
+        }
+      };
+
+      const navItems = [
+        { section: 'AUDIT', items: [
+          { id: 'gbp-audit', label: 'GBP Audit', icon: 'fas fa-map-marker-alt' },
+          { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line' },
+          { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
+          { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
+        ]},
+        { section: 'ACTION PLAN', items: [
+          { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt' },
+          { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
+          { id: 'technical-actions', label: 'Technical Actions', icon: 'fas fa-cogs' },
+          { id: 'onpage-actions', label: 'On-Page Actions', icon: 'fas fa-file-alt' },
+        ]},
+        { section: 'COPYWRITER', items: [
+          { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
+          { id: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
+          { id: 'approved-content', label: 'Approved', icon: 'fas fa-check-circle' },
+          { id: 'published-content', label: 'Published', icon: 'fas fa-paper-plane' },
+        ]},
+        { section: 'REPORTS', items: [
+          { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map' },
+          { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
+          { id: 'monthly-reports', label: 'Monthly Reports', icon: 'fas fa-file-pdf' },
+        ]},
+        { section: 'SETTINGS', items: [
+          { id: 'project-settings', label: 'Project Settings', icon: 'fas fa-cog' },
+          { id: 'integrations', label: 'Integrations', icon: 'fas fa-plug' },
+          { id: 'projects', label: 'Projects', icon: 'fas fa-folder' },
+        ]},
+      ];
+
+      return (
+        <div className="app-wrapper">
+          <div className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+            <div className="sidebar-header">
+              <i className="fas fa-rocket"></i>
+              <span>SEO Room</span>
+            </div>
+
+            <div className="sidebar-content">
+              {navItems.map((group) => (
+                <div key={group.section} className="sidebar-section">
+                  <div className="sidebar-section-title">{group.section}</div>
+                  {group.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`sidebar-item ${activeTab === item.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setMobileMenuOpen(false);
+                      }}
+                    >
+                      <i className={item.icon}></i>
+                      <span>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div className="sidebar-footer">
+              <select className="project-selector" onChange={(e) => handleProjectSwitch({ id: e.target.value, name: 'Project', domain: 'example.com' })}>
+                <option value="1">Current Project</option>
+                <option value="2">Project 2</option>
+              </select>
+              <button className="btn btn-danger" style={{ width: '100%' }} onClick={handleLogout}>
+                <i className="fas fa-sign-out-alt"></i> Sign out
+              </button>
+            </div>
+          </div>
+
+          <div className="main-content">
+            <div className="topbar">
+              <div className="topbar-left">
+                <button
+                  className="btn btn-secondary"
+                  style={{ display: 'none', '@media (max-width: 768px)': { display: 'block' } }}
+                  onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                >
+                  <i className="fas fa-bars"></i>
+                </button>
+                <div>
+                  <div className="topbar-title">{project?.name || 'SEO Room'}</div>
+                  <div className="topbar-domain">{project?.domain || 'No project selected'}</div>
+                </div>
+              </div>
+              <div className="topbar-user">
+                <span style={{ fontSize: '13px', color: 'var(--text2)' }}>{user.email}</span>
+              </div>
+            </div>
+
+            <div className="page-content">
+              {renderPage()}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
