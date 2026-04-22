@@ -722,7 +722,7 @@ async function serpApiSearch(params) {
   return resp.json();
 }
 
-// ==================== 11b. SPEED AUDIT (via SEO Room Helper plugin) ====================
+// ==================== 11b. SPEED AUDIT (via Google PageSpeed Insights API) ====================
 
 // Helper: get WordPress URL for a project
 async function getProjectWpUrl(projectId, userId) {
@@ -739,64 +739,159 @@ async function wpFetch(wpUrl, endpoint) {
   return resp.json();
 }
 
-// Get all published pages from WP
-app.get('/api/speed-audit/:projectId/pages', async (req, res) => {
-  try {
-    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
-    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured. Set it in Project Settings.' });
-
-    // Fetch all published pages
-    const pages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=100&status=publish&_fields=id,title,slug,link');
-    res.json({ pages: pages.map(p => ({ id: p.id, title: p.title.rendered, slug: p.slug, url: p.link })) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+// Helper: run Google PageSpeed Insights on a URL and extract image issues
+async function runPageSpeedAudit(url, strategy = 'mobile') {
+  const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
+  const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
+  const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
+  const resp = await fetch(apiUrl);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`PageSpeed API error ${resp.status}: ${text.substring(0, 200)}`);
   }
-});
+  return resp.json();
+}
 
-// Run speed audit on a single page
-app.get('/api/speed-audit/:projectId/page/:pageId', async (req, res) => {
-  try {
-    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
-    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured' });
+// Helper: extract image data from Lighthouse results
+function extractImageIssues(lighthouseData) {
+  const audits = lighthouseData?.lighthouseResult?.audits || {};
+  const images = [];
+  const seenSrcs = new Set();
 
-    const data = await wpFetch(wpUrl, `seoroom/v1/speed-audit/${req.params.pageId}`);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  const imageAudits = [
+    { key: 'uses-optimized-images', issue: 'too_large' },
+    { key: 'modern-image-formats', issue: 'no_webp' },
+    { key: 'unsized-images', issue: 'missing_width' },
+    { key: 'offscreen-images', issue: 'no_lazy_load' },
+    { key: 'uses-responsive-images', issue: 'oversized' },
+  ];
+
+  for (const { key, issue } of imageAudits) {
+    const audit = audits[key];
+    if (!audit?.details?.items) continue;
+    for (const item of audit.details.items) {
+      const src = item.url || item.node?.snippet || '';
+      if (!src || src.startsWith('data:')) continue;
+      const shortSrc = src.split('?')[0];
+      if (seenSrcs.has(shortSrc)) {
+        const existing = images.find(i => i.src.split('?')[0] === shortSrc);
+        if (existing && !existing.issues.includes(issue)) existing.issues.push(issue);
+      } else {
+        seenSrcs.add(shortSrc);
+        images.push({
+          src,
+          file_size_kb: item.totalBytes ? Math.round(item.totalBytes / 1024) : null,
+          width: item.node?.boundingRect?.width || null,
+          height: item.node?.boundingRect?.height || null,
+          has_webp: issue !== 'no_webp',
+          issues: [issue],
+          wastedBytes: item.wastedBytes || 0,
+        });
+      }
+    }
   }
-});
 
-// Run speed audit on ALL pages (batch)
+  // Check for missing alt text
+  const altAudit = audits['image-alt'];
+  if (altAudit?.details?.items) {
+    for (const item of altAudit.details.items) {
+      const src = item.node?.snippet?.match(/src="([^"]+)"/)?.[1] || '';
+      if (!src) continue;
+      const shortSrc = src.split('?')[0];
+      if (seenSrcs.has(shortSrc)) {
+        const existing = images.find(i => i.src.split('?')[0] === shortSrc);
+        if (existing && !existing.issues.includes('missing_alt')) existing.issues.push('missing_alt');
+      } else {
+        seenSrcs.add(shortSrc);
+        images.push({ src, file_size_kb: null, width: null, height: null, has_webp: true, issues: ['missing_alt'], wastedBytes: 0 });
+      }
+    }
+  }
+
+  return images;
+}
+
+// Helper: discover pages from sitemap or WP REST API
+async function discoverPages(projectUrl, wpUrl) {
+  const pages = [];
+  const baseUrl = projectUrl.replace(/\/$/, '');
+
+  // Try sitemap.xml first
+  try {
+    const sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+    if (sitemapResp.ok) {
+      const xml = await sitemapResp.text();
+      const urlMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
+      for (const match of urlMatches.slice(0, 10)) {
+        const url = match.replace(/<\/?loc>/g, '');
+        if (url.endsWith('.xml') || url.endsWith('.pdf') || url.match(/\.(jpg|png|gif|svg)$/i)) continue;
+        const slug = url.replace(baseUrl, '').replace(/^\/|\/$/g, '') || 'home';
+        pages.push({ page_id: slug, title: slug === 'home' ? 'Homepage' : slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), slug, url });
+      }
+    }
+  } catch (e) { /* sitemap not available */ }
+
+  // Try WP REST API if available and no sitemap pages
+  if (pages.length === 0 && wpUrl) {
+    try {
+      const wpPages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=10&status=publish&_fields=id,title,slug,link');
+      for (const p of wpPages) {
+        pages.push({ page_id: String(p.id), title: p.title.rendered, slug: p.slug, url: p.link });
+      }
+    } catch (e) { /* WP API not available */ }
+  }
+
+  // Fallback: just test the homepage
+  if (pages.length === 0) {
+    pages.push({ page_id: 'home', title: 'Homepage', slug: '', url: baseUrl });
+  }
+
+  return pages;
+}
+
+// Run speed audit on ALL pages (via Google PageSpeed Insights)
 app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   try {
-    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
-    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured. Set it in Project Settings.' });
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const siteUrl = project.wordpress_url || (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : null);
+    if (!siteUrl) return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' });
 
-    // Get all pages
-    const pages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=100&status=publish&_fields=id,title,slug,link');
+    const pages = await discoverPages(siteUrl, project.wordpress_url);
 
-    // Run speed audit on each page
     const results = [];
     for (const page of pages) {
       try {
-        const audit = await wpFetch(wpUrl, `seoroom/v1/speed-audit/${page.id}`);
+        const psData = await runPageSpeedAudit(page.url, 'mobile');
+        const images = extractImageIssues(psData);
+        const totalIssues = images.reduce((sum, img) => sum + img.issues.length, 0);
+        const metrics = psData.lighthouseResult?.audits || {};
+        const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+
         results.push({
-          page_id: page.id,
-          title: page.title.rendered,
+          page_id: page.page_id,
+          title: page.title,
           slug: page.slug,
-          url: page.link,
-          ...audit,
+          url: page.url,
+          image_count: images.length,
+          images,
+          total_issues: totalIssues,
+          performance_score: score,
+          cwv: {
+            lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
+            fid: metrics['max-potential-fid']?.displayValue || 'N/A',
+            cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
+            fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
+            si: metrics['speed-index']?.displayValue || 'N/A',
+            tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
+            score,
+          },
         });
       } catch (err) {
         results.push({
-          page_id: page.id,
-          title: page.title.rendered,
-          slug: page.slug,
-          url: page.link,
-          error: err.message,
-          image_count: 0,
-          images: [],
-          total_issues: 0,
+          page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
+          error: err.message, image_count: 0, images: [], total_issues: 0,
         });
       }
     }
@@ -821,42 +916,13 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   }
 });
 
-// Optimize images on a page
-app.post('/api/speed-audit/:projectId/optimize/:pageId', async (req, res) => {
-  try {
-    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
-    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured' });
-
-    const { max_width = 1200, quality = 82, webp = true } = req.body;
-    const url = `${wpUrl.replace(/\/$/, '')}/wp-json/seoroom/v1/optimize-images/${req.params.pageId}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ max_width, quality, webp: webp ? 'true' : 'false' }),
-    });
-    if (!resp.ok) throw new Error(`WP API error: ${resp.status}`);
-    const data = await resp.json();
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// PageSpeed Insights via Google API
+// PageSpeed Insights for individual page (used by "Run PageSpeed" button per page)
 app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
-  const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
-  if (!PAGESPEED_KEY) return res.status(400).json({ error: 'PAGESPEED_API_KEY not configured' });
-
   const { url, strategy = 'mobile' } = req.query;
   if (!url) return res.status(400).json({ error: 'url parameter required' });
 
   try {
-    const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&key=${PAGESPEED_KEY}`;
-    const resp = await fetch(apiUrl);
-    if (!resp.ok) throw new Error(`PageSpeed API error: ${resp.status}`);
-    const data = await resp.json();
-
-    // Extract key metrics
+    const data = await runPageSpeedAudit(url, strategy);
     const metrics = data.lighthouseResult?.audits;
     const cwv = {
       lcp: metrics?.['largest-contentful-paint']?.displayValue || 'N/A',
@@ -865,10 +931,24 @@ app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
       fcp: metrics?.['first-contentful-paint']?.displayValue || 'N/A',
       si: metrics?.['speed-index']?.displayValue || 'N/A',
       tbt: metrics?.['total-blocking-time']?.displayValue || 'N/A',
-      score: data.lighthouseResult?.categories?.performance?.score * 100 || 0,
+      score: Math.round((data.lighthouseResult?.categories?.performance?.score || 0) * 100),
     };
+    res.json({ url, strategy, cwv });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    res.json({ url, strategy, cwv, full: data });
+// Get latest speed audit results (for persistence across navigation)
+app.get('/api/projects/:projectId/audits/speed/latest', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' ORDER BY completed_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ results: [] });
+    const data = typeof result.rows[0].audit_data === 'string' ? JSON.parse(result.rows[0].audit_data) : result.rows[0].audit_data;
+    res.json({ results: data.results || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

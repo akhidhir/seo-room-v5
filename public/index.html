@@ -1514,6 +1514,16 @@
       const loadExisting = async () => {
         const data = await api(`/projects/${project.id}/audit-findings`);
         if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'technical'));
+        // Load previous speed audit results
+        try {
+          const speedData = await api(`/projects/${project.id}/audits/speed/latest`);
+          if (speedData.results) {
+            setSpeedResults(speedData.results);
+            const cwvMap = {};
+            speedData.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+            setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+          }
+        } catch (e) { /* no previous speed audit */ }
       };
 
       const runAudit = async () => {
@@ -1529,8 +1539,12 @@
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
-          const data = await api('/speed-audit/${project?.id || 1}/run', { method: 'POST' });
+          const data = await api(`/speed-audit/${project?.id || 1}/run`, { method: 'POST' });
           setSpeedResults(data.results || []);
+          // Auto-populate CWV data from batch results
+          const cwvMap = {};
+          (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+          setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
         } catch (err) { setSpeedError(err.message); }
         finally { setSpeedLoading(false); }
       };
@@ -1823,7 +1837,7 @@
                 <i className="fas fa-tachometer-alt" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
                 <div style={{ fontSize: 16, marginBottom: 8 }}>No speed audit run yet</div>
                 <div style={{ fontSize: 13 }}>Click "Run Speed Audit" to scan all pages for image issues, missing WebP, lazy loading, and Core Web Vitals.</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Requires WordPress URL configured in Project Settings and seoroom-helper.php installed.</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Uses Google PageSpeed Insights API. Discovers pages via sitemap.xml or WordPress REST API.</div>
               </div>
             )}
           </>}
