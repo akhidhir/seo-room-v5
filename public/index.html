@@ -1031,9 +1031,8 @@
       });
 
       if (res.status === 401) {
-        localStorage.removeItem('token');
-        window.location.reload();
-        throw new Error('Session expired');
+        console.warn('[api] 401 on', path);
+        return { error: 'Not authenticated' };
       }
 
       const data = await res.json();
