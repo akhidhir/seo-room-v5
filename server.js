@@ -1315,94 +1315,24 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     const gbpInt = await pool.query('SELECT * FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth?.userId, 'gbp']);
     const gbpConnected = gbpInt.rows.length > 0 && gbpInt.rows[0].status === 'connected';
 
-    // Use project metadata + what we know about the business
     const name = project.name || '';
     const domain = project.domain || '';
-    const category = config.category || '';
-    const phone = config.phone || '';
-    const email = config.email || '';
-    const address = config.address || '';
-    const suburb = config.suburb || '';
-    const description = config.description || '';
-    const serviceAreas = project.service_areas || [];
+    const businessName = project.business_name || name;
 
     // 1. GBP CONNECTION STATUS
     if (!gbpConnected) {
       findings.push({
         pillar: 'gbp', category: 'Setup',
         title: 'Google Business Profile not connected',
-        description: 'GBP integration is not set up. Cannot pull live data for analysis.',
-        recommendation: 'Connect your Google Business Profile in Project Settings → Integrations to enable full GBP auditing.',
+        description: 'Connect your GBP to enable live listing audits — checking your actual business info, categories, hours, photos, and reviews directly from Google.',
+        recommendation: 'Go to Agency Integrations and connect Google Business Profile.',
         severity: 'Critical',
         current_value: 'Not connected',
         recommended_value: 'Connected'
       });
     }
 
-    // 2. BUSINESS INFO COMPLETENESS
-    if (!phone) {
-      findings.push({
-        pillar: 'gbp', category: 'Business Info',
-        title: 'Phone number missing from project settings',
-        description: 'No phone number is configured. GBP listings without a phone number rank lower in local search.',
-        recommendation: 'Add your business phone number in Project Settings. Ensure it matches your GBP listing exactly.',
-        severity: 'Critical',
-        current_value: 'No phone number',
-        recommended_value: 'Phone number set'
-      });
-    }
-
-    if (!address) {
-      findings.push({
-        pillar: 'gbp', category: 'Business Info',
-        title: 'Street address missing',
-        description: 'No street address configured. Google uses this for local ranking signals.',
-        recommendation: 'Add your full street address in Project Settings.',
-        severity: 'Medium',
-        current_value: 'No address',
-        recommended_value: 'Full address set'
-      });
-    }
-
-    if (!category) {
-      findings.push({
-        pillar: 'gbp', category: 'Business Info',
-        title: 'Business category not set',
-        description: 'Primary category is crucial for GBP ranking. Without it, Google may misclassify your business.',
-        recommendation: 'Set your primary GBP category in Project Settings (e.g., "Plumber", "Electrician").',
-        severity: 'Critical',
-        current_value: 'No category',
-        recommended_value: 'Primary category set'
-      });
-    }
-
-    if (!description || description.length < 100) {
-      findings.push({
-        pillar: 'gbp', category: 'Content',
-        title: description ? 'GBP description too short' : 'GBP description missing',
-        description: description
-          ? `Current description is only ${description.length} characters. Google allows up to 750 characters.`
-          : 'No business description set. This is a missed opportunity for keyword-rich content.',
-        recommendation: 'Write a 500-750 character description that naturally includes your main services and service areas. Don\'t keyword stuff.',
-        severity: 'Medium',
-        current_value: description ? `${description.length} characters` : 'Empty',
-        recommended_value: '500-750 characters'
-      });
-    }
-
-    if (serviceAreas.length === 0) {
-      findings.push({
-        pillar: 'gbp', category: 'Service Areas',
-        title: 'No service areas configured',
-        description: 'Service areas help Google understand where you operate. Without them, you may miss local pack results.',
-        recommendation: 'Add your service areas in Project Settings. Include suburbs and regions you actually serve.',
-        severity: 'Medium',
-        current_value: '0 service areas',
-        recommended_value: '5+ service areas'
-      });
-    }
-
-    // 3. Check maps ranking data if available
+    // 2. Check maps ranking data if available
     const mapsData = await pool.query(
       `SELECT keyword, location, maps_position, maps_title, maps_rating, maps_reviews, checked_at
        FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL

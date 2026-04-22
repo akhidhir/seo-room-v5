@@ -2909,6 +2909,7 @@
         if (r.ok) { await loadData(); } else if (r.error) alert(r.error);
         setSyncing(false);
         setMapsChecked(true);
+      };
 
       const cleanMapsData = async () => {
         if (!confirm('Clean all old Maps data? This removes stale rankings so you start fresh.')) return;
