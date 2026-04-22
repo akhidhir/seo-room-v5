@@ -373,10 +373,12 @@ app.post('/api/projects', async (req, res) => {
 // Get project
 app.get('/api/projects/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM projects WHERE id=$1 AND user_id=$2',
-      [req.params.id, req.auth.userId]
-    );
+    const userId = req.auth?.userId;
+    const query = userId
+      ? 'SELECT * FROM projects WHERE id=$1 AND user_id=$2'
+      : 'SELECT * FROM projects WHERE id=$1';
+    const params = userId ? [req.params.id, userId] : [req.params.id];
+    const result = await pool.query(query, params);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     res.json({ project: result.rows[0] });
   } catch (e) {
@@ -384,19 +386,34 @@ app.get('/api/projects/:id', async (req, res) => {
   }
 });
 
-// Update project
+// Update project (accepts both camelCase and snake_case)
 app.put('/api/projects/:id', async (req, res) => {
-  const { name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url } = req.body;
+  const b = req.body;
+  const name = b.name;
+  const domain = b.domain;
+  const business_name = b.business_name || b.businessName;
+  const industry = b.industry;
+  const location = b.location;
+  const competitors = b.competitors;
+  const service_areas = b.service_areas || b.serviceAreas;
+  const is_local_business = b.is_local_business ?? b.isLocalBusiness;
+  const is_elementor_site = b.is_elementor_site ?? b.isElementorSite;
+  const wordpress_url = b.wordpress_url || b.wordpressUrl;
   try {
     const result = await pool.query(
       `UPDATE projects
        SET name=COALESCE($2, name), domain=COALESCE($3, domain), business_name=COALESCE($4, business_name),
-           industry=COALESCE($5, industry), location=COALESCE($6, location), competitors=COALESCE($7, competitors),
+           industry=COALESCE($5, industry), location=COALESCE($6, location),
+           competitors=COALESCE($7::jsonb, competitors),
            is_local_business=COALESCE($8, is_local_business), is_elementor_site=COALESCE($9, is_elementor_site),
-           wordpress_url=COALESCE($10, wordpress_url)
-       WHERE id=$1 AND user_id=$11
+           wordpress_url=COALESCE($10, wordpress_url),
+           service_areas=COALESCE($11::jsonb, service_areas)
+       WHERE id=$1
        RETURNING *`,
-      [req.params.id, name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url, req.auth.userId]
+      [req.params.id, name, domain, business_name, industry, location,
+       competitors ? JSON.stringify(competitors) : null,
+       is_local_business, is_elementor_site, wordpress_url,
+       service_areas ? JSON.stringify(service_areas) : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     res.json({ project: result.rows[0] });
@@ -530,7 +547,7 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
   }
 });
 
-// Update finding status (approve/reject)
+// Update finding status (approve/reject) — auto-creates action item on approve
 app.put('/api/audit-findings/:id', async (req, res) => {
   const { status } = req.body;
   try {
@@ -539,7 +556,28 @@ app.put('/api/audit-findings/:id', async (req, res) => {
       [status, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Finding not found' });
-    res.json({ finding: result.rows[0] });
+    const finding = result.rows[0];
+
+    let actionItem = null;
+    if (status === 'approved') {
+      // Auto-create action item from this finding
+      const existing = await pool.query('SELECT id FROM action_items WHERE finding_id=$1', [finding.id]);
+      if (existing.rows.length === 0) {
+        const aiRes = await pool.query(
+          `INSERT INTO action_items (project_id, finding_id, pillar, type, title, description, current_value, new_value, severity, status, execution_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10) RETURNING *`,
+          [finding.project_id, finding.id, finding.pillar, finding.category || 'general',
+           finding.title, finding.recommendation || finding.description,
+           finding.current_value, finding.recommended_value, finding.severity,
+           // Auto-detect execution type based on category
+           ['Quick Win', 'Low CTR', 'Underperforming Page'].includes(finding.category) ? 'semi_auto' : 'manual']
+        );
+        actionItem = aiRes.rows[0];
+        console.log(`[action] Created action item #${actionItem.id} from finding #${finding.id} (${finding.pillar}/${finding.category})`);
+      }
+    }
+
+    res.json({ finding, actionItem });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2332,7 +2370,148 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
   }
 });
 
-// ==================== 12. SERVE ====================
+// ==================== 12. MONTHLY REPORTS ====================
+
+// List reports for a project
+app.get('/api/projects/:projectId/reports', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM monthly_reports WHERE project_id=$1 ORDER BY month DESC', [req.params.projectId]);
+    const reports = r.rows.map(row => {
+      const data = typeof row.report_data === 'string' ? JSON.parse(row.report_data) : (row.report_data || {});
+      return { id: row.id, month: row.month, createdAt: row.created_at, ...data };
+    });
+    res.json({ reports });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate monthly report
+app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const monthLabel = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long' });
+
+    // 1. Rankings summary — avg SERP position, top 3 count, keywords tracked
+    const rankRes = await pool.query(
+      `SELECT keyword, serp_position, maps_position FROM rank_tracking
+       WHERE project_id=$1 AND checked_at >= NOW() - INTERVAL '30 days'
+       ORDER BY checked_at DESC`,
+      [projectId]
+    );
+    const latestByKw = {};
+    for (const r of rankRes.rows) {
+      if (!latestByKw[r.keyword]) latestByKw[r.keyword] = r;
+    }
+    const rankEntries = Object.values(latestByKw);
+    const serpPositions = rankEntries.filter(r => r.serp_position).map(r => r.serp_position);
+    const mapsPositions = rankEntries.filter(r => r.maps_position).map(r => r.maps_position);
+    const avgSerp = serpPositions.length > 0 ? serpPositions.reduce((a, b) => a + b, 0) / serpPositions.length : null;
+    const avgMaps = mapsPositions.length > 0 ? mapsPositions.reduce((a, b) => a + b, 0) / mapsPositions.length : null;
+    const serpTop3 = serpPositions.filter(p => p <= 3).length;
+    const serpTop10 = serpPositions.filter(p => p <= 10).length;
+    const mapsTop3 = mapsPositions.filter(p => p <= 3).length;
+
+    const rankingsSummary = {
+      avgPosition: avgSerp,
+      avgMapsPosition: avgMaps,
+      keywordsTracked: rankEntries.length,
+      serpTop3,
+      serpTop10,
+      mapsTop3,
+      serpPositions: serpPositions.length,
+      mapsPositions: mapsPositions.length
+    };
+
+    // 2. GSC trends — total clicks, impressions, avg CTR, avg position
+    const gscRes = await pool.query(
+      'SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1',
+      [projectId]
+    );
+    const totalClicks = gscRes.rows.reduce((s, r) => s + (r.clicks || 0), 0);
+    const totalImpressions = gscRes.rows.reduce((s, r) => s + (r.impressions || 0), 0);
+    const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0;
+    const avgGscPos = gscRes.rows.length > 0 ? gscRes.rows.reduce((s, r) => s + (r.position || 0), 0) / gscRes.rows.length : null;
+
+    const gscTrends = {
+      clicks: totalClicks,
+      impressions: totalImpressions,
+      ctr: avgCtr,
+      avgPosition: avgGscPos,
+      keywordsWithClicks: gscRes.rows.filter(r => r.clicks > 0).length,
+      totalKeywords: gscRes.rows.length
+    };
+
+    // 3. Audit findings summary
+    const findingsRes = await pool.query(
+      `SELECT pillar, severity, status, COUNT(*) as cnt FROM audit_findings WHERE project_id=$1 GROUP BY pillar, severity, status`,
+      [projectId]
+    );
+    const findingsByPillar = {};
+    for (const r of findingsRes.rows) {
+      if (!findingsByPillar[r.pillar]) findingsByPillar[r.pillar] = { total: 0, critical: 0, approved: 0, new: 0 };
+      const cnt = parseInt(r.cnt);
+      findingsByPillar[r.pillar].total += cnt;
+      if (r.severity === 'Critical') findingsByPillar[r.pillar].critical += cnt;
+      if (r.status === 'approved') findingsByPillar[r.pillar].approved += cnt;
+      if (r.status === 'new') findingsByPillar[r.pillar].new += cnt;
+    }
+
+    // 4. Action items summary
+    const actionsRes = await pool.query(
+      `SELECT status, COUNT(*) as cnt FROM action_items WHERE project_id=$1 GROUP BY status`,
+      [projectId]
+    );
+    const actionsByStatus = {};
+    for (const r of actionsRes.rows) actionsByStatus[r.status] = parseInt(r.cnt);
+    const actionsCompleted = actionsByStatus['done'] || 0;
+    const actionsPending = actionsByStatus['pending'] || 0;
+    const actionsInProgress = actionsByStatus['in-progress'] || 0;
+
+    // 5. Generate recommendations
+    const recommendations = [];
+    if (avgSerp && avgSerp > 15) recommendations.push(`Average SERP position is ${avgSerp.toFixed(1)} — focus on optimizing pages ranking 10-20 to push them onto page 1.`);
+    if (serpTop3 === 0 && serpPositions.length > 0) recommendations.push('No keywords in top 3 yet. Prioritize content optimization and link building for your closest keywords.');
+    if (avgCtr < 2 && totalImpressions > 100) recommendations.push(`Average CTR is only ${avgCtr.toFixed(1)}%. Rewrite meta titles and descriptions to be more compelling.`);
+    if (findingsByPillar.gsc?.new > 5) recommendations.push(`${findingsByPillar.gsc.new} GSC audit findings still unactioned. Review and approve them in the Audit section.`);
+    if (findingsByPillar.gbp?.new > 3) recommendations.push(`${findingsByPillar.gbp.new} GBP audit findings need attention. GBP optimization directly impacts local pack rankings.`);
+    if (actionsPending > 5) recommendations.push(`${actionsPending} action items are pending. Schedule time to work through the Action Plan.`);
+    if (mapsTop3 < mapsPositions.length * 0.5 && mapsPositions.length > 0) recommendations.push('Less than half your keywords are in Maps top 3. Focus on reviews, GBP posts, and NAP consistency.');
+    if (recommendations.length === 0) recommendations.push('Keep monitoring rankings and running audits regularly. Consistency is key to SEO success.');
+
+    const reportData = {
+      monthLabel,
+      project: { name: project.name, domain: project.domain },
+      rankingsSummary,
+      gscTrends,
+      findingsByPillar,
+      actionsCompleted,
+      actionsPending,
+      actionsInProgress,
+      recommendations,
+      generatedAt: now.toISOString()
+    };
+
+    // Upsert report
+    const r = await pool.query(
+      `INSERT INTO monthly_reports (project_id, month, report_data) VALUES ($1, $2, $3)
+       ON CONFLICT (project_id, month) DO UPDATE SET report_data=$3, created_at=NOW() RETURNING *`,
+      [projectId, month, JSON.stringify(reportData)]
+    );
+
+    console.log(`[reports] Generated ${month} report for project ${projectId}`);
+    res.json({ report: { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, ...reportData } });
+  } catch (e) {
+    console.error('[reports] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== 13. SERVE ====================
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));

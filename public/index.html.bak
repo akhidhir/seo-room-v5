@@ -1016,7 +1016,7 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useMemo } = React;
 
-    const API_BASE = window.location.origin + '/api';
+    const API_BASE = 'http://localhost:3000/api';
 
     const api = async (path, opts = {}) => {
       const token = localStorage.getItem('token');
@@ -1031,8 +1031,9 @@
       });
 
       if (res.status === 401) {
-        console.warn('[api] 401 on', path);
-        return { error: 'Not authenticated' };
+        localStorage.removeItem('token');
+        window.location.reload();
+        throw new Error('Session expired');
       }
 
       const data = await res.json();
@@ -1128,89 +1129,57 @@
     }
 
     // ============ FINDINGS CARD COMPONENT ============
-    function FindingCard({ finding, onApprove, onReject, isApproved, expanded, onToggle }) {
-      const severityClass = finding.severity ? finding.severity.toLowerCase() : 'medium';
-      const currentVal = finding.current_value || finding.current;
-      const recommendedVal = finding.recommended_value || finding.recommended;
-      const isExpanded = expanded;
+    function FindingCard({ finding, onApprove, onReject, isApproved }) {
+      const severityClass = finding.severity.toLowerCase();
       return (
-        <div className={`finding-card ${severityClass}`} style={{ marginBottom: 8 }}>
-          <div className="finding-card-header" style={{ cursor: 'pointer' }} onClick={onToggle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-              {finding.category && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: 'rgba(138,180,248,0.15)', color: '#8ab4f8', fontWeight: 600 }}>{finding.category}</span>}
-              <div className="finding-card-title" style={{ flex: 1 }}>{finding.title}</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className={`badge badge-${severityClass}`}>{finding.severity}</span>
-              <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />
-            </div>
+        <div className={`finding-card ${severityClass}`}>
+          <div className="finding-card-header">
+            <div className="finding-card-title">{finding.title}</div>
+            <span className={`badge badge-${severityClass}`}>{finding.severity}</span>
           </div>
-          {isExpanded && (
-            <div style={{ padding: '12px 0 0' }}>
-              <div className="finding-card-description">{finding.description}</div>
-              {finding.recommendation && (
-                <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, fontSize: 12, color: 'var(--text2)' }}>
-                  <i className="fas fa-lightbulb" style={{ color: '#f59e0b', marginRight: 6 }} />
-                  <strong>Recommendation:</strong> {finding.recommendation}
-                </div>
-              )}
-              {currentVal && recommendedVal && (
-                <div className="finding-values" style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: 6, fontSize: 12 }}>
-                    <div style={{ color: 'var(--text3)', fontSize: 10, marginBottom: 2 }}>Current</div>
-                    <div style={{ color: '#ef4444' }}>{currentVal}</div>
-                  </div>
-                  <div style={{ padding: '8px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, fontSize: 12 }}>
-                    <div style={{ color: 'var(--text3)', fontSize: 10, marginBottom: 2 }}>Target</div>
-                    <div style={{ color: '#22c55e' }}>{recommendedVal}</div>
-                  </div>
-                </div>
-              )}
-              <div className="finding-actions" style={{ marginTop: 10 }}>
-                {!isApproved && finding.status !== 'approved' ? (
-                  <>
-                    <button className="btn btn-success btn-small" onClick={(e) => { e.stopPropagation(); onApprove(finding); }}>
-                      <i className="fas fa-check"></i> Approve
-                    </button>
-                    <button className="btn btn-danger btn-small" onClick={(e) => { e.stopPropagation(); onReject(finding); }}>
-                      <i className="fas fa-times"></i> Dismiss
-                    </button>
-                  </>
-                ) : (
-                  <span className="badge badge-approved" style={{ padding: '4px 12px' }}>
-                    <i className="fas fa-check-circle" style={{ marginRight: 4 }} /> Sent to Action Plan
-                  </span>
-                )}
+          <div className="finding-card-description">{finding.description}</div>
+          {finding.current && finding.recommended && (
+            <div className="finding-values">
+              <div className="finding-value">
+                <div className="finding-value-label">Current</div>
+                <div className="finding-value-content">{finding.current}</div>
+              </div>
+              <div className="finding-value">
+                <div className="finding-value-label">Recommended</div>
+                <div className="finding-value-content">{finding.recommended}</div>
               </div>
             </div>
           )}
+          <div className="finding-actions">
+            {!isApproved ? (
+              <>
+                <button className="btn btn-success btn-small" onClick={() => onApprove(finding)}>
+                  <i className="fas fa-check"></i> Approve
+                </button>
+                <button className="btn btn-danger btn-small" onClick={() => onReject(finding)}>
+                  <i className="fas fa-times"></i> Reject
+                </button>
+              </>
+            ) : (
+              <span className="badge badge-approved">Sent to Action Plan</span>
+            )}
+          </div>
         </div>
       );
     }
 
     // ============ GBP AUDIT PAGE ============
-    function GBPAuditPage({ project }) {
+    function GBPAuditPage() {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
-      const [expandedId, setExpandedId] = useState(null);
-
-      // Load previous findings on mount
-      useEffect(() => {
-        if (project) loadExisting();
-      }, [project?.id]);
-
-      const loadExisting = async () => {
-        const data = await api(`/projects/${project.id}/audit-findings`);
-        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gbp'));
-      };
 
       const runAudit = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
+          const data = await api('/audits/gbp/run', { method: 'POST' });
           setFindings(data.findings || []);
         } catch (err) {
           setError(err.message);
@@ -1221,7 +1190,7 @@
 
       const handleApprove = async (finding) => {
         try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
+          await api(`/audits/gbp/${finding.id}/approve`, { method: 'POST' });
           setApprovedIds((prev) => new Set([...prev, finding.id]));
         } catch (err) {
           setError(err.message);
@@ -1230,7 +1199,7 @@
 
       const handleReject = async (finding) => {
         try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
+          await api(`/audits/gbp/${finding.id}/reject`, { method: 'POST' });
           setFindings((prev) => prev.filter((f) => f.id !== finding.id));
         } catch (err) {
           setError(err.message);
@@ -1297,8 +1266,6 @@
                         onApprove={handleApprove}
                         onReject={handleReject}
                         isApproved={approvedIds.has(finding.id)}
-                        expanded={expandedId === finding.id}
-                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
                   </div>
@@ -1321,32 +1288,18 @@
     }
 
     // ============ GSC AUDIT PAGE ============
-    function GSCAuditPage({ project }) {
+    function GSCAuditPage() {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
-      const [expandedId, setExpandedId] = useState(null);
-      const [summary, setSummary] = useState(null);
-
-      // Load previous findings on mount
-      useEffect(() => {
-        if (project) loadExisting();
-      }, [project?.id]);
-
-      const loadExisting = async () => {
-        const data = await api(`/projects/${project.id}/audit-findings`);
-        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gsc'));
-      };
 
       const runAudit = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST' });
+          const data = await api('/audits/gsc/run', { method: 'POST' });
           setFindings(data.findings || []);
-          if (data.summary) setSummary(data.summary);
-          if (data.message && (!data.findings || data.findings.length === 0)) setError(data.message);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -1356,7 +1309,7 @@
 
       const handleApprove = async (finding) => {
         try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
+          await api(`/audits/gsc/${finding.id}/approve`, { method: 'POST' });
           setApprovedIds((prev) => new Set([...prev, finding.id]));
         } catch (err) {
           setError(err.message);
@@ -1365,7 +1318,7 @@
 
       const handleReject = async (finding) => {
         try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
+          await api(`/audits/gsc/${finding.id}/reject`, { method: 'POST' });
           setFindings((prev) => prev.filter((f) => f.id !== finding.id));
         } catch (err) {
           setError(err.message);
@@ -1385,22 +1338,13 @@
             <div className="page-title">
               <i className="fas fa-chart-line"></i> GSC Audit
             </div>
-            <div className="page-subtitle">Google Search Console optimization — find quick wins, low CTR pages, and keyword cannibalization</div>
+            <div className="page-subtitle">Google Search Console optimization recommendations</div>
           </div>
 
-          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-            <button className="btn btn-primary" onClick={runAudit} disabled={loading}>
-              {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
-              {loading ? ' Analyzing GSC Data...' : ' Run GSC Audit'}
-            </button>
-            {summary && (
-              <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span><i className="fas fa-key" style={{ marginRight: 4 }} />{summary.keywords} keywords</span>
-                <span><i className="fas fa-file" style={{ marginRight: 4 }} />{summary.pages} pages</span>
-                <span><i className="fas fa-flag" style={{ marginRight: 4 }} />{summary.findings} findings</span>
-              </div>
-            )}
-          </div>
+          <button className="btn btn-primary mb-24" onClick={runAudit} disabled={loading}>
+            {loading ? <span className="spinner"></span> : <i className="fas fa-play"></i>}
+            {loading ? 'Running Audit...' : 'Run GSC Audit'}
+          </button>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
@@ -1409,16 +1353,20 @@
               <div className="stats-grid">
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.critical}</div>
-                  <div className="stat-label">Critical</div>
+                  <div className="stat-label">Critical Issues</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.medium}</div>
-                  <div className="stat-label">Medium</div>
+                  <div className="stat-label">Medium Issues</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-value" style={{ color: 'var(--info)' }}>{stats.low}</div>
-                  <div className="stat-label">Low</div>
+                  <div className="stat-label">Low Issues</div>
                 </div>
+              </div>
+
+              <div className="card">
+                <div className="card-title">Findings</div>
               </div>
 
               {['Critical', 'Medium', 'Low'].map((severity) => {
@@ -1437,8 +1385,6 @@
                         onApprove={handleApprove}
                         onReject={handleReject}
                         isApproved={approvedIds.has(finding.id)}
-                        expanded={expandedId === finding.id}
-                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
                   </div>
@@ -1450,10 +1396,10 @@
           {!loading && findings.length === 0 && (
             <div className="empty-state">
               <div className="empty-state-icon">
-                <i className="fas fa-chart-line"></i>
+                <i className="fas fa-search"></i>
               </div>
-              <div className="empty-state-title">No GSC audit data</div>
-              <div>Connect Google Search Console and click "Run GSC Audit" to find optimization opportunities</div>
+              <div className="empty-state-title">No audit run yet</div>
+              <div>Click "Run GSC Audit" to discover optimization opportunities</div>
             </div>
           )}
         </>
@@ -1462,7 +1408,7 @@
 
     // ============ WEBSITE AUDIT PAGE ============
     // ============ TECHNICAL AUDIT PAGE ============
-    function TechnicalAuditPage({ project }) {
+    function TechnicalAuditPage() {
       const [tab, setTab] = useState('general');
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
@@ -1513,7 +1459,7 @@
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
-          const data = await api('/speed-audit/${project?.id || 1}/run', { method: 'POST' });
+          const data = await api('/speed-audit/1/run', { method: 'POST' });
           setSpeedResults(data.results || []);
         } catch (err) { setSpeedError(err.message); }
         finally { setSpeedLoading(false); }
@@ -1522,9 +1468,9 @@
       const optimizePage = async (pageId) => {
         setOptimizingPages(prev => new Set([...prev, pageId]));
         try {
-          await api(`/speed-audit/${project?.id || 1}/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
+          await api(`/speed-audit/1/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
           // Re-run audit for this page to show updated data
-          const updated = await api(`/speed-audit/${project?.id || 1}/page/${pageId}`);
+          const updated = await api(`/speed-audit/1/page/${pageId}`);
           setSpeedResults(prev => prev.map(r => r.page_id === pageId ? { ...r, ...updated } : r));
         } catch (err) { setSpeedError(err.message); }
         finally { setOptimizingPages(prev => { const s = new Set(prev); s.delete(pageId); return s; }); }
@@ -1533,7 +1479,7 @@
       const runPageSpeed = async (url, pageId) => {
         setPsLoading(pageId);
         try {
-          const data = await api(`/speed-audit/${project?.id || 1}/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
+          const data = await api(`/speed-audit/1/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
           setPageSpeedData(prev => ({ ...prev, [pageId]: data.cwv }));
         } catch (err) { setSpeedError(err.message); }
         finally { setPsLoading(null); }
@@ -1816,7 +1762,7 @@
     }
 
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
-    function OnPageAuditPage({ project }) {
+    function OnPageAuditPage() {
       const [pages, setPages] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -1863,19 +1809,9 @@
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
-          const data = await api(`/projects/${project?.id || 1}/onpage-audit/run`, { method: 'POST' });
-          if (data?.pages) {
-            setPages(data.pages);
-          } else if (data?.error) {
-            // If API fails (e.g. no WP URL), fall back to sample data
-            setPages(samplePages);
-          } else {
-            setPages(samplePages);
-          }
-        } catch (err) {
-          // Fallback to sample data on error
+          await new Promise(r => setTimeout(r, 1500));
           setPages(samplePages);
-        }
+        } catch (err) { setError(err.message); }
         finally { setLoading(false); }
       };
 
@@ -2067,7 +2003,7 @@
     }
 
     // ============ ACTION PLAN PAGES ============
-    function ActionPlanPage({ type, title, icon, project }) {
+    function ActionPlanPage({ type, title, icon }) {
       const [actions, setActions] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -2075,17 +2011,15 @@
       const [severityFilter, setSeverityFilter] = useState('all');
 
       useEffect(() => {
-        if (project) loadActions();
-      }, [type, project?.id]);
+        loadActions();
+      }, [type]);
 
       const loadActions = async () => {
         setLoading(true);
         setError('');
         try {
-          // Load approved audit findings as action items for this pillar
-          const data = await api(`/projects/${project.id}/action-items`);
-          const items = (data.action_items || []).filter(a => !type || a.pillar === type);
-          setActions(items);
+          const data = await api(`/actions/${type}`);
+          setActions(data.actions || []);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -2095,7 +2029,7 @@
 
       const handleApproveExecute = async (actionId) => {
         try {
-          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: 'in-progress' } });
+          await api(`/actions/${actionId}/approve-execute`, { method: 'POST' });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: 'in-progress' } : a))
           );
@@ -2106,7 +2040,7 @@
 
       const handleMarkManual = async (actionId) => {
         try {
-          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: 'pending' } });
+          await api(`/actions/${actionId}/mark-manual`, { method: 'POST' });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: 'pending' } : a))
           );
@@ -2117,7 +2051,10 @@
 
       const handleStatusChange = async (actionId, newStatus) => {
         try {
-          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
+          await api(`/actions/${actionId}`, {
+            method: 'PATCH',
+            body: { status: newStatus },
+          });
           setActions((prev) =>
             prev.map((a) => (a.id === actionId ? { ...a, status: newStatus } : a))
           );
@@ -2460,8 +2397,8 @@
 
       const loadData = async () => {
         const [kwRes, rankRes] = await Promise.all([
-          api(`/projects/${project.id}/rank-tracking/keywords`),
-          api(`/projects/${project.id}/rank-tracking/latest`)
+          api(`/api/projects/${project.id}/rank-tracking/keywords`),
+          api(`/api/projects/${project.id}/rank-tracking/latest`)
         ]);
         if (Array.isArray(kwRes)) setKeywords(kwRes);
         if (Array.isArray(rankRes)) setRankings(rankRes);
@@ -2470,21 +2407,21 @@
       useEffect(() => { if (project) loadData(); }, [project?.id]);
 
       const addKeyword = async (kw, location) => {
-        await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
+        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
         loadData();
       };
       const removeKeyword = async (id) => {
-        await api(`/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
+        await api(`/api/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
         loadData();
       };
       const deleteAllKeywords = async () => {
         if (!confirm('Delete ALL tracked keywords and ranking data? This cannot be undone.')) return;
-        await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'DELETE' });
+        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'DELETE' });
         loadData();
       };
       const importKeywords = async () => {
         setImporting(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/import`, { method: 'POST', body: { limit: 50 } });
+        const r = await api(`/api/projects/${project.id}/rank-tracking/import`, { method: 'POST', body: { limit: 50 } });
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setImporting(false);
       };
@@ -2515,9 +2452,9 @@
             }
             if (gscRows.length === 0) { alert('No keywords found in CSV'); setImporting(false); return; }
             // Upload GSC data (positions, clicks, impressions)
-            const gscR = await api(`/projects/${project.id}/gsc/upload-csv`, { method: 'POST', body: { rows: gscRows } });
+            const gscR = await api(`/api/projects/${project.id}/gsc/upload-csv`, { method: 'POST', body: { rows: gscRows } });
             // Also add to rank tracking keywords
-            const kwR = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            const kwR = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
             alert(`Uploaded ${gscR.synced || gscRows.length} GSC keywords with positions + added ${kwR.added || kws.length} to rank tracking`);
             loadData();
           } else {
@@ -2529,7 +2466,7 @@
               if (kw && kw.length > 0) kws.push(kw);
             }
             if (kws.length === 0) { alert('No keywords found in file'); setImporting(false); return; }
-            const r = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            const r = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
             if (r.ok) alert(`Imported ${r.added} keywords (${r.total} total)`);
             else if (r.error) alert(r.error);
             loadData();
@@ -2540,7 +2477,7 @@
       };
       const syncRanks = async () => {
         setSyncing(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
+        const r = await api(`/api/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setSyncing(false);
       };
@@ -2591,7 +2528,7 @@
 
       const discoverKeywords = async () => {
         setDiscovering(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
+        const r = await api(`/api/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
         if (r.ok && r.keywords) {
           // Filter out keywords already tracked
           const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
@@ -2607,7 +2544,7 @@
         if (selectedDiscovered.size === 0) return;
         // Send full data (volume, position, url, competition)
         const kws = discovered.filter(k => selectedDiscovered.has(k.keyword));
-        const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, { method: 'POST', body: { keywords: kws } });
+        const r = await api(`/api/projects/${project.id}/rank-tracking/import-discovered`, { method: 'POST', body: { keywords: kws } });
         if (r.ok) alert(`Added ${r.added} keywords with positions & volume`);
         else if (r.error) alert(r.error);
         setDiscovered(null);
@@ -2633,7 +2570,7 @@
 
       async function loadHistory(kw) {
         setSelectedKw(kw);
-        const r = await api(`/projects/${project.id}/rank-tracking/history?keyword=${encodeURIComponent(kw)}&days=90`);
+        const r = await api(`/api/projects/${project.id}/rank-tracking/history?keyword=${encodeURIComponent(kw)}&days=90`);
         if (Array.isArray(r)) setHistory(r);
       }
 
@@ -2888,424 +2825,627 @@
 
       const handleCheckRankings = async () => {
         setSyncing(true);
-        const r = await api(`/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
+        const r = await api(`/api/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
         if (r.ok) { await loadData(); } else if (r.error) alert(r.error);
         setSyncing(false);
         setMapsChecked(true);
-
-      const cleanMapsData = async () => {
-        if (!confirm('Clean all old Maps data? This removes stale rankings so you start fresh.')) return;
-        await api(`/projects/${project.id}/maps/clean`, { method: 'DELETE' });
-        setMapsChecked(false);
-        loadData();
-      };
-
-      const deleteAllMapKeywords = async () => {
-        const mapKws = keywords.filter(k => k.location);
-        if (mapKws.length === 0) return;
-        if (!confirm(`Delete all ${mapKws.length} Maps keywords? This cannot be undone.`)) return;
-        for (const kw of mapKws) {
-          await api(`/projects/${project.id}/rank-tracking/keywords/${kw.id}`, { method: 'DELETE' });
+        try {
+          await api('/maps/check-rankings', { method: 'POST' });
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setCheckingRankings(false);
         }
-        setMapsChecked(false);
-        loadData();
       };
-      const [service, setService] = useState('');
-      const [location, setLocation] = useState('');
-      const [expandedKw, setExpandedKw] = useState(null);
-      const [mSortCol, setMSortCol] = useState(null);
-      const [mSortDir, setMSortDir] = useState('asc');
-      const [showGenerator, setShowGenerator] = useState(false);
-      const [genAreas, setGenAreas] = useState([]);
-      const [genSelected, setGenSelected] = useState(new Set());
-      const [genCombos, setGenCombos] = useState([]);
-      const [maxDistance, setMaxDistance] = useState(20);
 
-      const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
-
-      const openGenerator = async () => {
-        const areas = await api(`/projects/${project.id}/service-areas`);
-        if (!Array.isArray(areas) || areas.length === 0) {
-          alert('No service areas found. Add them in Settings & Integrations first.');
-          return;
+      const handleDeleteAllKeywords = async () => {
+        if (!window.confirm('Delete all maps keywords? This cannot be undone.')) return;
+        try {
+          await api('/maps/keywords', { method: 'DELETE' });
+          setKeywords([]);
+        } catch (err) {
+          setError(err.message);
         }
-        setGenAreas(areas);
-        // Auto-generate: "plumber" + each suburb within distance
-        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
-        const filtered = areas.filter(a => (a.distance_km || 0) <= 20 && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
-          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
-          .sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        setGenCombos(combos);
-        setGenSelected(new Set(combos.map((_, i) => i)));
-        setShowGenerator(true);
       };
 
-      const regenerateCombos = (dist) => {
-        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
-        const filtered = genAreas.filter(a => (a.distance_km || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
-          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
-          .sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        setGenCombos(combos);
-        setGenSelected(new Set(combos.map((_, i) => i)));
+      const handleSort = (key) => {
+        setSortConfig((prev) => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+        }));
       };
 
-      const addGeneratedKeywords = async () => {
-        const toAdd = genCombos.filter((_, i) => genSelected.has(i));
-        if (toAdd.length === 0) return;
-        for (const c of toAdd) {
-          await api(`/projects/${project.id}/rank-tracking/keywords`, {
-            method: 'POST',
-            body: { keywords: [c.service], location: c.location }
-          });
-        }
-        alert(`Added ${toAdd.length} Maps keywords`);
-        setShowGenerator(false);
-        loadData();
-      };
+      const sortedKeywords = useMemo(() => {
+        const sorted = [...keywords].sort((a, b) => {
+          const aVal = a[sortConfig.key];
+          const bVal = b[sortConfig.key];
+          if (typeof aVal === 'string') {
+            return sortConfig.direction === 'asc'
+              ? aVal.localeCompare(bVal)
+              : bVal.localeCompare(aVal);
+          }
+          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+        return sorted;
+      }, [keywords, sortConfig]);
 
-      const toggleGenItem = (idx) => {
-        setGenSelected(prev => {
-          const next = new Set(prev);
-          if (next.has(idx)) next.delete(idx); else next.add(idx);
-          return next;
+      const stats = useMemo(() => {
+        const dominant = keywords.filter((k) => k.visibility >= 80).length;
+        const partial = keywords.filter((k) => k.visibility >= 30 && k.visibility < 80).length;
+        const notVisible = keywords.filter((k) => k.visibility < 30).length;
+        const avgVis = keywords.length > 0 ? (keywords.reduce((sum, k) => sum + (k.visibility || 0), 0) / keywords.length).toFixed(1) : 0;
+        return { dominant, partial, notVisible, avgVis };
+      }, [keywords]);
+
+      const toggleCombo = (id) => {
+        setSelectedCombos((prev) => {
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
+          }
+          return newSet;
         });
       };
 
-      const mToggleSort = (col) => {
-        if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
-        else { setMSortCol(col); setMSortDir('asc'); }
+      const toggleSelectAll = () => {
+        if (selectedCombos.size === allCombos.length) {
+          setSelectedCombos(new Set());
+        } else {
+          setSelectedCombos(new Set(allCombos.map((c) => c.id)));
+        }
       };
-      const mSortIcon = (col) => mSortCol === col ? (mSortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
-      // Only show keywords that have a location (service + location combos)
-      const mapsKeywordsRaw = merged.filter(kw => kw.location);
-      const mapsKeywords = useMemo(() => {
-        if (!mSortCol) return mapsKeywordsRaw;
-        return [...mapsKeywordsRaw].sort((a, b) => {
-          let va, vb;
-          if (mSortCol === 'service') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
-          else if (mSortCol === 'location') { va = (a.location || '').toLowerCase(); vb = (b.location || '').toLowerCase(); }
-          else if (mSortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
-          else if (mSortCol === 'maps') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.arp ?? 999; vb = lfB.arp ?? 999;
+      const toggleRowExpand = (id) => {
+        setExpandedRows((prev) => {
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
           }
-          else if (mSortCol === 'atrp') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.atrp ?? 999; vb = lfB.atrp ?? 999;
-          }
-          else if (mSortCol === 'solv') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
-          }
-          else if (mSortCol === 'coverage') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = (lfA.found_in ?? 0) / (lfA.data_points || 1); vb = (lfB.found_in ?? 0) / (lfB.data_points || 1);
-          }
-          else if (mSortCol === 'status') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
-          }
-          else return 0;
-          if (va < vb) return mSortDir === 'asc' ? -1 : 1;
-          if (va > vb) return mSortDir === 'asc' ? 1 : -1;
-          return 0;
+          return newSet;
         });
-      }, [mapsKeywordsRaw, mSortCol, mSortDir]);
-
-      const handleAdd = () => {
-        if (!service.trim() || !location.trim()) return;
-        addKeyword(service.trim(), location.trim());
-        setService('');
-        setLocation('');
       };
 
       return (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h2 style={{ margin: 0 }}><i className="fa-solid fa-map-location-dot" style={{ marginRight: 8, color: '#22c55e' }} />Google Maps Rankings</h2>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={cleanMapsData} style={{ fontSize: 13, color: '#f59e0b', borderColor: '#f59e0b' }}>
-                <i className="fa-solid fa-broom" style={{ marginRight: 4 }} />Clean Old Data
-              </button>}
-              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={deleteAllMapKeywords} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
-                <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete All
-              </button>}
-              <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
-                <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
-              </button>
-              <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
-                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
-              </button>
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-map"></i> Maps Rankings
             </div>
+            <div className="page-subtitle">Local pack visibility and ranking tracking</div>
           </div>
 
-          {/* Maps summary */}
-          {mapsKeywords.some(k => k.checked_at) && (() => {
-            const getLF = (kw) => { const comps = kw.competitors || []; return comps.find(c => c.source === 'local_falcon') || {}; };
-            const withData = mapsKeywords.filter(r => r.checked_at);
-            const withSolv = withData.filter(r => getLF(r).solv !== undefined);
-            const avgSolv = withSolv.length ? (withSolv.reduce((s,r) => s + (getLF(r).solv || 0), 0) / withSolv.length).toFixed(1) : '—';
-            const dominant = withSolv.filter(r => (getLF(r).solv || 0) >= 50).length;
-            const visible = withSolv.filter(r => (getLF(r).solv || 0) > 0 && (getLF(r).solv || 0) < 50).length;
-            const invisible = withData.filter(r => !getLF(r).solv && !r.maps_position).length;
-            const ranked = mapsKeywords.filter(r => r.maps_position);
-            const avgPos = ranked.length ? (ranked.reduce((s,r) => s + r.maps_position, 0) / ranked.length).toFixed(1) : '—';
-            return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-              {[
-                { label: 'Dominant (50%+ visibility)', value: dominant, color: '#22c55e' },
-                { label: 'Partially Visible', value: visible, color: '#3b82f6' },
-                { label: 'Not Visible', value: invisible, color: '#ef4444' },
-                { label: 'Avg Visibility %', value: avgSolv !== '—' ? `${avgSolv}%` : '—', color: '#f59e0b' },
-              ].map(s => (
-                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
-                </div>
-              ))}
-            </div>
-            );
-          })()}
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
+          {keywords.length > 0 && (
+            <div className="stats-grid">
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--success)' }}>{stats.dominant}</div>
+                <div className="stat-label">Dominant (80%+)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.partial}</div>
+                <div className="stat-label">Partially Visible (30-80%)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.notVisible}</div>
+                <div className="stat-label">Not Visible (&lt;30%)</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{stats.avgVis}%</div>
+                <div className="stat-label">Average Visibility</div>
+              </div>
+            </div>
+          )}
 
-          {/* Add service + location */}
-          <div style={{ background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', marginBottom: 10 }}>
-              <i className="fa-solid fa-plus-circle" style={{ marginRight: 6, color: 'var(--accent)' }} />Add Service + Location
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input value={service} onChange={e => setService(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                placeholder="Service (e.g. plumber, dentist, SEO agency)" style={{ flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-              <input value={location} onChange={e => setLocation(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                placeholder="Location (e.g. Melbourne, Sydney CBD)" style={{ flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-              <button className="btn btn-primary" onClick={handleAdd} disabled={!service.trim() || !location.trim()} style={{ fontSize: 14, padding: '10px 20px', whiteSpace: 'nowrap' }}>
-                <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
-              </button>
-            </div>
+          <div className="btn-group mb-24">
+            <button className="btn btn-primary" onClick={() => { setShowModal(true); setAllCombos([]); }}>
+              <i className="fas fa-plus"></i> Generate Keywords
+            </button>
+            <button className="btn btn-secondary" onClick={handleCheckRankings} disabled={checkingRankings || keywords.length === 0}>
+              {checkingRankings ? <span className="spinner"></span> : <i className="fas fa-refresh"></i>}
+              {checkingRankings ? 'Checking...' : 'Check Rankings'}
+            </button>
+            <button className="btn btn-danger" onClick={handleDeleteAllKeywords} disabled={keywords.length === 0}>
+              <i className="fas fa-trash"></i> Delete All
+            </button>
           </div>
 
-          {/* Maps rankings table */}
-          {mapsKeywords.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              <i className="fa-solid fa-map-location-dot" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div style={{ fontSize: 16, marginBottom: 8 }}>No maps keywords yet</div>
-              <div style={{ fontSize: 13 }}>Add a service + location above to track your Google Maps positions.</div>
-            </div>
-          ) : (
-            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                    {[
-                      { key: 'service', label: 'Service', align: 'left', w: null },
-                      { key: 'location', label: 'Location', align: 'left', w: 140 },
-                      { key: 'maps', label: 'Avg Rank', align: 'center', w: 90 },
-                      { key: 'atrp', label: 'True Avg', align: 'center', w: 90 },
-                      { key: 'solv', label: 'Visibility %', align: 'center', w: 100 },
-                      { key: 'coverage', label: 'Coverage', align: 'center', w: 90 },
-                      { key: 'status', label: 'Status', align: 'center', w: 130 },
-                    ].map(h => (
-                      <th key={h.label} onClick={h.key ? () => mToggleSort(h.key) : undefined} style={{ padding: '10px 14px', textAlign: h.align, fontWeight: 600, color: mSortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
-                        {h.label}{h.key && mSortIcon(h.key)}
+          {keywords.length > 0 && (
+            <div className="card">
+              <div className="maps-table-wrapper">
+                <table className="maps-table">
+                  <thead>
+                    <tr>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('service')}>
+                        Service {sortConfig.key === 'service' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                       </th>
-                    ))}
-                    <th style={{ width: 40 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mapsKeywords.map(kw => {
-                    const showData = mapsChecked && kw.checked_at;
-                    const lf = showData ? (kw.competitors || []).find(c => c.source === 'local_falcon') || {} : {};
-                    const hasLFData = lf.solv !== undefined || lf.arp !== undefined;
-                    const arp = lf.arp;
-                    const atrp = lf.atrp;
-                    const solv = lf.solv;
-                    const foundIn = lf.found_in;
-                    const dataPoints = lf.data_points;
-                    const statusLabel = !showData || !hasLFData ? (showData ? 'No Scan' : null) : solv >= 80 ? 'Dominant' : solv >= 50 ? 'Strong' : solv >= 20 ? 'Competitive' : solv > 0 ? 'Needs Work' : foundIn > 0 ? 'Weak' : 'Not Visible';
-                    const statusColor = !showData || !hasLFData ? '#6b7280' : solv >= 80 ? '#22c55e' : solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : foundIn > 0 ? '#f59e0b' : '#ef4444';
-                    const statusIcon = !showData || !hasLFData ? 'fa-circle-question' : solv >= 50 ? 'fa-circle-check' : solv >= 20 ? 'fa-circle-minus' : solv > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
-                    const isExpanded = expandedMapRow === kw.id;
-                    const actionAdvice = {
-                      'Dominant': { color: '#22c55e', icon: 'fa-trophy', title: 'You dominate this area', actions: ['Maintain review velocity — keep asking for reviews', 'Monitor competitors entering this area', 'Focus efforts on weaker suburbs instead'] },
-                      'Strong': { color: '#22c55e', icon: 'fa-thumbs-up', title: 'Strong presence — keep it up', actions: ['Continue collecting reviews mentioning this suburb', 'Keep GBP posts active and updated', 'Monitor for any ranking drops'] },
-                      'Competitive': { color: '#3b82f6', icon: 'fa-chart-line', title: 'Good visibility — room to grow', actions: ['Increase review count — aim for reviews mentioning this suburb', 'Add a dedicated service page for this area on your website', 'Build local citations in directories for this suburb', 'Post GBP updates targeting this location'] },
-                      'Needs Work': { color: '#f59e0b', icon: 'fa-wrench', title: 'Showing up in a few spots — needs improvement', actions: ['Create a dedicated landing page: "plumber in ' + (kw.location || 'suburb') + '"', 'Ask happy customers in this area to leave reviews mentioning the suburb', 'Add this suburb to your GBP service area if not already listed', 'Build backlinks from local directories and community sites', 'Post GBP updates about jobs completed in this area'] },
-                      'Weak': { color: '#f59e0b', icon: 'fa-exclamation-circle', title: 'Found but never in top 3', actions: ['Your GBP is detected but ranks too low to appear in the local pack', 'Focus on reviews — volume and recency are key ranking factors', 'Create location-specific content on your website for this suburb', 'Ensure NAP (Name, Address, Phone) is consistent across all directories', 'Check that your GBP categories match your services'] },
-                      'Not Visible': { color: '#ef4444', icon: 'fa-eye-slash', title: 'Not found in this area', actions: ['Verify your GBP service area includes this suburb', 'This area may be too far from your business address', 'Create a dedicated service page targeting this suburb', 'Build citations in local directories for this area', 'Consider if this suburb is worth targeting based on distance'] },
-                      'No Scan': { color: '#6b7280', icon: 'fa-circle-question', title: 'No Local Falcon scan data', actions: ['Add this keyword to Local Falcon to start tracking', 'Or delete this keyword and re-run Check Rankings'] },
-                    };
-                    const advice = actionAdvice[statusLabel] || null;
-                    return (
-                    <React.Fragment key={kw.id}>
-                    <tr onClick={() => statusLabel ? setExpandedMapRow(isExpanded ? null : kw.id) : null} style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: statusLabel ? 'pointer' : 'default', background: isExpanded ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
-                      <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}</td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text2)' }}>
-                        <i className="fa-solid fa-location-dot" style={{ marginRight: 4, fontSize: 10, color: '#22c55e' }} />{kw.location}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && arp ? (
-                          <span style={{ color: arp <= 3 ? '#22c55e' : arp <= 10 ? '#3b82f6' : arp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
-                            {arp.toFixed(1)}
-                          </span>
-                        ) : showData && hasLFData ? <span style={{ color: '#ef4444', fontWeight: 700 }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && atrp ? (
-                          <span style={{ color: atrp <= 3 ? '#22c55e' : atrp <= 10 ? '#3b82f6' : atrp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 600, fontSize: 14 }}>
-                            {atrp.toFixed(1)}
-                          </span>
-                        ) : showData && hasLFData ? <span style={{ color: '#ef4444' }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && solv !== undefined ? (
-                          <span style={{ color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
-                            {solv.toFixed(0)}%
-                          </span>
-                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && foundIn !== undefined ? (
-                          <span style={{ color: 'var(--text2)', fontSize: 13 }}>
-                            {foundIn}/{dataPoints || '?'}
-                          </span>
-                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {statusLabel ? (
-                          <span style={{ color: statusColor, fontWeight: 600, fontSize: 12 }}>
-                            <i className={`fa-solid ${statusIcon}`} style={{ marginRight: 4 }} />{statusLabel}
-                            {statusLabel !== 'Dominant' && <i className="fa-solid fa-chevron-down" style={{ marginLeft: 6, fontSize: 9, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
-                          </span>
-                        ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '6px' }}>
-                        <button onClick={(e) => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
-                          <i className="fa-solid fa-trash" />
-                        </button>
-                      </td>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('location')}>
+                        Location {sortConfig.key === 'location' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('avgRank')}>
+                        Avg Rank {sortConfig.key === 'avgRank' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('trueAvg')}>
+                        True Avg {sortConfig.key === 'trueAvg' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('visibility')}>
+                        Visibility {sortConfig.key === 'visibility' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th>Coverage</th>
+                      <th>Status</th>
+                      <th style={{ width: '40px' }}>Actions</th>
                     </tr>
-                    {isExpanded && advice && (
-                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td colSpan={8} style={{ padding: 0 }}>
-                          <div style={{ padding: '14px 20px 16px 40px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                            <div style={{ fontWeight: 700, fontSize: 13, color: advice.color, marginBottom: 10 }}>
-                              <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
+                  </thead>
+                  <tbody>
+                    {sortedKeywords.map((kw) => (
+                      <React.Fragment key={kw.id}>
+                        <tr>
+                          <td>{kw.service}</td>
+                          <td>{kw.location}</td>
+                          <td>{kw.avgRank || '—'}</td>
+                          <td>{kw.trueAvg || '—'}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div className="visibility-bar">
+                                <div className="visibility-fill" style={{ width: `${kw.visibility || 0}%` }}></div>
+                              </div>
+                              <span>{kw.visibility || 0}%</span>
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {advice.actions.map((action, i) => (
-                                <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                                  <i className="fa-solid fa-arrow-right" style={{ fontSize: 9, marginTop: 4, color: advice.color, flexShrink: 0 }} />
-                                  <span>{action}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                    </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {/* Metric explanations */}
-              <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)', lineHeight: 1.8 }}>
-                <strong style={{ color: 'var(--text2)' }}>Avg Rank</strong> — Average position where your business was found (lower is better).{' '}
-                <strong style={{ color: 'var(--text2)' }}>True Avg</strong> — Same but counts unfound spots as #21, giving the full picture.{' '}
-                <strong style={{ color: 'var(--text2)' }}>Visibility %</strong> — Percentage of scan points where you appear in the top 3. This is the most important metric.{' '}
-                <strong style={{ color: 'var(--text2)' }}>Coverage</strong> — How many scan points found your business out of total scanned.
-              </div>
-            </div>
-          )}
-          {/* Generate Maps Keywords Modal */}
-          {showGenerator && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              onClick={() => setShowGenerator(false)}>
-              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 600, maxHeight: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-                onClick={e => e.stopPropagation()}>
-                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 8, color: 'var(--accent)' }} />Generate Keywords</div>
-                  <button onClick={() => setShowGenerator(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}>×</button>
-                </div>
-                <div style={{ overflow: 'auto', flex: 1, padding: '20px' }}>
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Service: <strong>plumber</strong> (hardcoded)</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 12 }}>Distance from headquarters</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
-                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
-                    </div>
-                  </div>
-                  {genCombos.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)' }}>No areas available at this distance</div>
-                  ) : (
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                          <th style={{ padding: '8px 12px', width: 24 }}></th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Suburb</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'center', width: 80 }}>Distance</th>
+                          </td>
+                          <td>{kw.coverage || '—'}</td>
+                          <td>
+                            <span className="badge badge-pending">{kw.status || 'Pending'}</span>
+                          </td>
+                          <td>
+                            <button
+                              className="expand-icon"
+                              onClick={() => toggleRowExpand(kw.id)}
+                              title="Show action panel"
+                            >
+                              <i className="fas fa-chevron-down"></i>
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {genCombos.map((c, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }} onClick={() => toggleGenItem(i)}>
-                            <td style={{ padding: '8px 12px', textAlign: 'center', cursor: 'pointer' }}>
-                              <input type="checkbox" checked={genSelected.has(i)} onChange={() => toggleGenItem(i)} />
+                        {expandedRows.has(kw.id) && (
+                          <tr>
+                            <td colSpan="8">
+                              <div className="action-panel">
+                                <div className="action-panel-title">Quick Actions</div>
+                                <div className="action-panel-content">
+                                  <p style={{ fontSize: '12px', color: 'var(--text2)' }}>
+                                    This keyword shows up in the local pack for <strong>{kw.location}</strong> when searching "{kw.service}".
+                                  </p>
+                                  <div className="btn-group">
+                                    <button className="btn btn-secondary btn-small">
+                                      <i className="fas fa-share"></i> View Local Results
+                                    </button>
+                                    <button className="btn btn-secondary btn-small">
+                                      <i className="fas fa-edit"></i> Update Info
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
                             </td>
-                            <td style={{ padding: '8px 12px', cursor: 'pointer' }}>{c.location}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text3)', cursor: 'pointer' }}>{c.distance ? `${c.distance.toFixed(1)}km` : '—'}</td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-                <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
-                  <button className="btn" onClick={() => {
-                    if (genSelected.size === genCombos.length) setGenSelected(new Set());
-                    else setGenSelected(new Set(genCombos.map((_, i) => i)));
-                  }} style={{ flex: 1 }}>
-                    {genSelected.size === genCombos.length ? 'Deselect All' : 'Select All'}
-                  </button>
-                  <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={genSelected.size === 0} style={{ flex: 1 }}>
-                    <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {genSelected.size} Keywords
-                  </button>
-                </div>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
-        </div>
+
+          {!loading && keywords.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-map-marker-alt"></i>
+              </div>
+              <div className="empty-state-title">No keywords tracked yet</div>
+              <div>Generate keywords to start tracking your local pack rankings</div>
+            </div>
+          )}
+
+          <div className="metric-footer">
+            <div className="metric-footer-title">Metric Explanations</div>
+            <dl className="metric-footer">
+              <dt>Avg Rank</dt>
+              <dd>Average ranking position across all checks</dd>
+              <dt>True Avg</dt>
+              <dd>Adjusted average accounting for visibility</dd>
+              <dt>Visibility</dt>
+              <dd>% of checks where keyword appears in local pack</dd>
+              <dt>Coverage</dt>
+              <dd>Number of locations tracking this keyword</dd>
+            </dl>
+          </div>
+
+          {showModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Generate Maps Keywords</div>
+                  <button className="modal-close" onClick={() => setShowModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Service Type</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={serviceArea}
+                    onChange={(e) => setServiceArea(e.target.value)}
+                    placeholder="e.g., plumber"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Distance Radius (km)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={distanceKm}
+                    onChange={(e) => setDistanceKm(Math.max(1, parseInt(e.target.value) || 20))}
+                    min="1"
+                    max="100"
+                  />
+                </div>
+
+                {allCombos.length === 0 ? (
+                  <button className="btn btn-primary" onClick={generateCombos} style={{ width: '100%' }}>
+                    <i className="fas fa-cog"></i> Generate Combinations
+                  </button>
+                ) : (
+                  <>
+                    <div style={{ marginBottom: '16px' }}>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={selectedCombos.size === allCombos.length}
+                          onChange={toggleSelectAll}
+                        />
+                        <span>Select All ({selectedCombos.size} / {allCombos.length})</span>
+                      </label>
+                    </div>
+
+                    <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
+                      {allCombos.map((combo) => (
+                        <label key={combo.id} className="checkbox" style={{ padding: '8px 0' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedCombos.has(combo.id)}
+                            onChange={() => toggleCombo(combo.id)}
+                          />
+                          <span>{combo.service} + {combo.location}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="btn-group">
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleAddKeywords}
+                        disabled={selectedCombos.size === 0}
+                        style={{ flex: 1 }}
+                      >
+                        <i className="fas fa-plus"></i> Add {selectedCombos.size} Keywords
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          setAllCombos([]);
+                          setSelectedCombos(new Set());
+                        }}
+                        style={{ flex: 1 }}
+                      >
+                        <i className="fas fa-redo"></i> Regenerate
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </>
       );
     }
+
+    // ============ SERP RANKINGS PAGE ============
+    function SERPRankingsPage() {
+      const [keywords, setKeywords] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [showAddModal, setShowAddModal] = useState(false);
+      const [showDiscoverModal, setShowDiscoverModal] = useState(false);
+      const [showImportModal, setShowImportModal] = useState(false);
+      const [newKeyword, setNewKeyword] = useState('');
+      const [sortConfig, setSortConfig] = useState({ key: 'position', direction: 'asc' });
+
+      useEffect(() => {
+        loadKeywords();
+      }, []);
+
+      const loadKeywords = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api('/rank/keywords');
+          setKeywords(data.keywords || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleAddKeyword = async () => {
+        if (!newKeyword.trim()) return;
+        try {
+          await api('/rank/keywords', {
+            method: 'POST',
+            body: { keyword: newKeyword },
+          });
+          setNewKeyword('');
+          setShowAddModal(false);
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDiscoverKeywords = async () => {
+        setLoading(true);
+        try {
+          const data = await api('/rank/discover', { method: 'POST' });
+          setKeywords(data.keywords || []);
+          setShowDiscoverModal(false);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleImportCSV = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+          const token = localStorage.getItem('token');
+          const res = await fetch(`${API_BASE}/rank/import-csv`, {
+            method: 'POST',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body: formData,
+          });
+
+          if (res.status === 401) {
+            localStorage.removeItem('token');
+            window.location.reload();
+          }
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Import failed');
+
+          setShowImportModal(false);
+          await loadKeywords();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDeleteAll = async () => {
+        if (!window.confirm('Delete all rank keywords? This cannot be undone.')) return;
+        try {
+          await api('/rank/keywords', { method: 'DELETE' });
+          setKeywords([]);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleSort = (key) => {
+        setSortConfig((prev) => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+        }));
+      };
+
+      const sortedKeywords = useMemo(() => {
+        const sorted = [...keywords].sort((a, b) => {
+          const aVal = a[sortConfig.key];
+          const bVal = b[sortConfig.key];
+          if (typeof aVal === 'string') {
+            return sortConfig.direction === 'asc'
+              ? aVal.localeCompare(bVal)
+              : bVal.localeCompare(aVal);
+          }
+          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+        return sorted;
+      }, [keywords, sortConfig]);
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title">
+              <i className="fas fa-chart-line"></i> SERP Rankings
+            </div>
+            <div className="page-subtitle">Track keyword rankings in Google Search</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <div className="btn-group mb-24">
+            <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+              <i className="fas fa-plus"></i> Add Keyword
+            </button>
+            <button className="btn btn-secondary" onClick={() => setShowDiscoverModal(true)}>
+              <i className="fas fa-search"></i> Discover Keywords
+            </button>
+            <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
+              <i className="fas fa-upload"></i> Import CSV (GSC)
+            </button>
+            <button className="btn btn-danger" onClick={handleDeleteAll} disabled={keywords.length === 0}>
+              <i className="fas fa-trash"></i> Delete All
+            </button>
+          </div>
+
+          {keywords.length > 0 && (
+            <div className="card">
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('keyword')}>
+                        Keyword {sortConfig.key === 'keyword' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('position')}>
+                        Position {sortConfig.key === 'position' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('volume')}>
+                        Volume {sortConfig.key === 'volume' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th style={{ cursor: 'pointer' }} onClick={() => handleSort('url')}>
+                        URL {sortConfig.key === 'url' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th>GSC Position</th>
+                      <th>Last Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedKeywords.map((kw) => (
+                      <tr key={kw.id}>
+                        <td>{kw.keyword}</td>
+                        <td style={{ fontWeight: 600 }}>{kw.position || '—'}</td>
+                        <td>{kw.volume?.toLocaleString() || '—'}</td>
+                        <td style={{ color: 'var(--text2)', fontSize: '12px', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {kw.url || '—'}
+                        </td>
+                        <td>{kw.gscPosition || '—'}</td>
+                        <td style={{ color: 'var(--text2)', fontSize: '12px' }}>
+                          {kw.lastUpdated ? new Date(kw.lastUpdated).toLocaleDateString() : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!loading && keywords.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <i className="fas fa-chart-line"></i>
+              </div>
+              <div className="empty-state-title">No keywords tracked yet</div>
+              <div>Add keywords to start tracking their SERP rankings</div>
+            </div>
+          )}
+
+          {showAddModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Add Keyword</div>
+                  <button className="modal-close" onClick={() => setShowAddModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Keyword</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newKeyword}
+                    onChange={(e) => setNewKeyword(e.target.value)}
+                    placeholder="e.g., plumbing services"
+                    onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
+                  />
+                </div>
+                <button className="btn btn-primary" onClick={handleAddKeyword} style={{ width: '100%' }}>
+                  <i className="fas fa-plus"></i> Add Keyword
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showDiscoverModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Discover Keywords</div>
+                  <button className="modal-close" onClick={() => setShowDiscoverModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <p style={{ color: 'var(--text2)', marginBottom: '16px' }}>
+                  Discover keywords your domain already ranks for using DataForSEO API.
+                </p>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleDiscoverKeywords}
+                  style={{ width: '100%' }}
+                  disabled={loading}
+                >
+                  {loading ? <span className="spinner"></span> : <i className="fas fa-search"></i>}
+                  {loading ? 'Discovering...' : 'Discover Keywords'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showImportModal && (
+            <div className="modal active">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div className="modal-title">Import GSC Keywords</div>
+                  <button className="modal-close" onClick={() => setShowImportModal(false)}>
+                    <i className="fas fa-times"></i>
+                  </button>
+                </div>
+                <p style={{ color: 'var(--text2)', marginBottom: '16px' }}>
+                  Upload a CSV exported from Google Search Console. Auto-detects GSC format with "Top queries" header.
+                </p>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleImportCSV}
+                  style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)', cursor: 'pointer' }}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      );
     }
 
     // ============ MONTHLY REPORTS PAGE ============
-    function MonthlyReportsPage({ project }) {
+    function MonthlyReportsPage() {
       const [reports, setReports] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [generating, setGenerating] = useState(false);
-      const [expandedId, setExpandedId] = useState(null);
 
       useEffect(() => {
-        if (project) loadReports();
-      }, [project?.id]);
+        loadReports();
+      }, []);
 
       const loadReports = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/reports`);
+          const data = await api('/reports');
           setReports(data.reports || []);
         } catch (err) {
           setError(err.message);
@@ -3318,14 +3458,8 @@
         setGenerating(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/reports/generate`, { method: 'POST' });
-          if (data.report) {
-            setReports(prev => {
-              const filtered = prev.filter(r => r.month !== data.report.month);
-              return [data.report, ...filtered];
-            });
-            setExpandedId(data.report.id);
-          }
+          const data = await api('/reports/generate', { method: 'POST' });
+          setReports([data.report, ...reports]);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3333,149 +3467,91 @@
         }
       };
 
-      const StatBox = ({ label, value, sub, color }) => (
-        <div style={{ padding: '14px 16px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-          <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 4 }}>{label}</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: color || 'var(--text)' }}>{value}</div>
-          {sub && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2 }}>{sub}</div>}
-        </div>
-      );
+      const handleExportPDF = (reportId) => {
+        window.open(`${API_BASE}/reports/${reportId}/export-pdf`, '_blank');
+      };
 
       return (
         <>
           <div className="page-header">
             <div className="page-title">
-              <i className="fas fa-chart-bar"></i> Monthly Reports
+              <i className="fas fa-file-pdf"></i> Monthly Reports
             </div>
-            <div className="page-subtitle">Auto-generated performance reports from your SEO data</div>
+            <div className="page-subtitle">Generated performance reports and recommendations</div>
           </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
-          <button className="btn btn-primary" style={{ marginBottom: 20 }} onClick={handleGenerateReport} disabled={generating}>
-            {generating ? <span className="spinner"></span> : <i className="fas fa-sync-alt"></i>}
-            {generating ? ' Generating...' : ' Generate This Month\'s Report'}
+          <button className="btn btn-primary mb-24" onClick={handleGenerateReport} disabled={generating}>
+            {generating ? <span className="spinner"></span> : <i className="fas fa-plus"></i>}
+            {generating ? 'Generating Report...' : 'Generate New Report'}
           </button>
 
-          {reports.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {reports.map((report) => {
-                const isExpanded = expandedId === report.id;
-                const rs = report.rankingsSummary || {};
-                const gsc = report.gscTrends || {};
-                return (
-                  <div key={report.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-                    <div
-                      style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                      onClick={() => setExpandedId(isExpanded ? null : report.id)}
-                    >
-                      <div>
-                        <div style={{ fontSize: 16, fontWeight: 700 }}>{report.monthLabel || report.month}</div>
-                        <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 2 }}>
-                          Generated {new Date(report.createdAt || report.generatedAt).toLocaleDateString('en-AU')}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        {rs.avgPosition && <span style={{ fontSize: 12, color: 'var(--text2)' }}>Avg #{rs.avgPosition.toFixed(1)}</span>}
-                        {gsc.clicks > 0 && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{gsc.clicks} clicks</span>}
-                        <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)' }} />
+          {reports.length > 0 && (
+            <div>
+              {reports.map((report) => (
+                <div key={report.id} className="card">
+                  <div className="card-header">
+                    <div>
+                      <div className="card-title">{report.month}</div>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginTop: '4px' }}>
+                        Generated {new Date(report.createdAt).toLocaleDateString()}
                       </div>
                     </div>
-
-                    {isExpanded && (
-                      <div style={{ padding: '0 20px 20px', borderTop: '1px solid var(--border)' }}>
-                        {/* SERP Rankings */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-search" style={{ marginRight: 6 }} />SERP Rankings
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Avg Position" value={rs.avgPosition ? `#${rs.avgPosition.toFixed(1)}` : '—'} color={rs.avgPosition && rs.avgPosition <= 10 ? '#22c55e' : '#f59e0b'} />
-                          <StatBox label="Top 3" value={rs.serpTop3 || 0} sub={`of ${rs.serpPositions || 0} tracked`} color="#22c55e" />
-                          <StatBox label="Top 10" value={rs.serpTop10 || 0} color="#3b82f6" />
-                          <StatBox label="Keywords" value={rs.keywordsTracked || 0} />
-                        </div>
-
-                        {/* Maps Rankings */}
-                        {(rs.mapsPositions > 0) && (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                              <i className="fas fa-map-marker-alt" style={{ marginRight: 6 }} />Maps Rankings
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                              <StatBox label="Avg Maps Position" value={rs.avgMapsPosition ? `#${rs.avgMapsPosition.toFixed(1)}` : '—'} color={rs.avgMapsPosition && rs.avgMapsPosition <= 3 ? '#22c55e' : '#f59e0b'} />
-                              <StatBox label="Maps Top 3" value={rs.mapsTop3 || 0} sub={`of ${rs.mapsPositions} tracked`} color="#22c55e" />
-                            </div>
-                          </>
-                        )}
-
-                        {/* GSC */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-chart-line" style={{ marginRight: 6 }} />Google Search Console
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Total Clicks" value={gsc.clicks?.toLocaleString() || 0} color="#3b82f6" />
-                          <StatBox label="Impressions" value={gsc.impressions?.toLocaleString() || 0} />
-                          <StatBox label="Avg CTR" value={gsc.ctr ? `${gsc.ctr.toFixed(1)}%` : '—'} color={gsc.ctr >= 3 ? '#22c55e' : '#f59e0b'} />
-                          <StatBox label="Keywords w/ Clicks" value={gsc.keywordsWithClicks || 0} sub={`of ${gsc.totalKeywords || 0}`} />
-                        </div>
-
-                        {/* Action Items */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-tasks" style={{ marginRight: 6 }} />Action Items
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Completed" value={report.actionsCompleted || 0} color="#22c55e" />
-                          <StatBox label="In Progress" value={report.actionsInProgress || 0} color="#3b82f6" />
-                          <StatBox label="Pending" value={report.actionsPending || 0} color="#f59e0b" />
-                        </div>
-
-                        {/* Audit Findings */}
-                        {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 && (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                              <i className="fas fa-clipboard-check" style={{ marginRight: 6 }} />Audit Findings
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                              {Object.entries(report.findingsByPillar).map(([pillar, data]) => (
-                                <div key={pillar} style={{ padding: '12px 16px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                                  <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 6 }}>{pillar}</div>
-                                  <div style={{ fontSize: 13 }}>
-                                    <span style={{ color: '#ef4444' }}>{data.critical} critical</span> ·
-                                    <span> {data.total} total</span> ·
-                                    <span style={{ color: '#22c55e' }}> {data.approved} approved</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-
-                        {/* Recommendations */}
-                        {report.recommendations && report.recommendations.length > 0 && (
-                          <div style={{ marginTop: 16, padding: '14px 18px', background: 'rgba(138,180,248,0.08)', border: '1px solid rgba(138,180,248,0.2)', borderRadius: 8 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#8ab4f8' }}>
-                              <i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Recommendations
-                            </div>
-                            {report.recommendations.map((rec, i) => (
-                              <div key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6, paddingLeft: 12, borderLeft: '2px solid rgba(138,180,248,0.3)' }}>
-                                {rec}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <button className="btn btn-secondary btn-small" onClick={() => handleExportPDF(report.id)}>
+                      <i className="fas fa-download"></i> Export PDF
+                    </button>
                   </div>
-                );
-              })}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginTop: '16px' }}>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>Rankings Summary</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.rankingsSummary?.avgPosition?.toFixed(1) || '—'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>GBP Performance</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.gbpPerformance?.views?.toLocaleString() || '—'} views
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>GSC Trends</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                        {report.gscTrends?.ctr?.toFixed(2) || '—'}% CTR
+                      </div>
+                    </div>
+                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px' }}>
+                      <div style={{ color: 'var(--text2)', fontSize: '12px', marginBottom: '4px' }}>Actions Completed</div>
+                      <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--success)' }}>
+                        {report.actionsCompleted || 0}
+                      </div>
+                    </div>
+                  </div>
+
+                  {report.recommendations && report.recommendations.length > 0 && (
+                    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Recommendations</div>
+                      <ul style={{ color: 'var(--text2)', fontSize: '13px', lineHeight: 1.6 }}>
+                        {report.recommendations.map((rec, i) => (
+                          <li key={i} style={{ marginBottom: '4px' }}>• {rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-          ) : !loading && (
+          )}
+
+          {!loading && reports.length === 0 && (
             <div className="empty-state">
               <div className="empty-state-icon">
-                <i className="fas fa-chart-bar"></i>
+                <i className="fas fa-file-pdf"></i>
               </div>
-              <div className="empty-state-title">No reports yet</div>
-              <div>Click "Generate This Month's Report" to create your first performance report</div>
+              <div className="empty-state-title">No reports generated yet</div>
+              <div>Click "Generate New Report" to create your first monthly report</div>
             </div>
           )}
         </>
@@ -3483,7 +3559,7 @@
     }
 
     // ============ PROJECT SETTINGS PAGE ============
-    function ProjectSettingsPage({ project: currentProject }) {
+    function ProjectSettingsPage() {
       const [project, setProject] = useState(null);
       const [loading, setLoading] = useState(false);
       const [saving, setSaving] = useState(false);
@@ -3505,29 +3581,27 @@
       const [newCompetitor, setNewCompetitor] = useState('');
 
       useEffect(() => {
-        if (currentProject) loadProject();
-      }, [currentProject?.id]);
+        loadProject();
+      }, []);
 
       const loadProject = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${currentProject.id}`);
-          if (data?.project) {
-            setProject(data.project);
-            setFormData({
-              name: data.project.name || '',
-              domain: data.project.domain || '',
-              businessName: data.project.business_name || data.project.businessName || '',
-              industry: data.project.industry || '',
-              location: data.project.location || '',
-              serviceAreas: data.project.service_areas || data.project.serviceAreas || [],
-              competitors: data.project.competitors || [],
-              isLocalBusiness: data.project.is_local_business !== false,
-              isElementorSite: data.project.is_elementor_site !== false,
-              wordpressUrl: data.project.wordpress_url || '',
-            });
-          }
+          const data = await api('/projects/current');
+          setProject(data.project);
+          setFormData({
+            name: data.project.name,
+            domain: data.project.domain,
+            businessName: data.project.businessName || '',
+            industry: data.project.industry || '',
+            location: data.project.location || '',
+            serviceAreas: data.project.serviceAreas || [],
+            competitors: data.project.competitors || [],
+            isLocalBusiness: data.project.is_local_business !== false,
+            isElementorSite: data.project.is_elementor_site !== false,
+            wordpressUrl: data.project.wordpress_url || '',
+          });
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3539,10 +3613,8 @@
         setSaving(true);
         setError('');
         try {
-          const pid = project?.id || currentProject?.id;
-          if (!pid) { setError('No project selected'); setSaving(false); return; }
-          await api(`/projects/${pid}`, {
-            method: 'PUT',
+          await api(`/projects/${project.id}`, {
+            method: 'PATCH',
             body: formData,
           });
           setError('');
@@ -3879,7 +3951,7 @@
 
       const handleConnectOAuth = (type) => {
         // Stub OAuth flow
-        window.open(`/oauth/${type}`, 'oauth', 'width=600,height=700');
+        window.open(`http://localhost:3000/oauth/${type}`, 'oauth', 'width=600,height=700');
       };
 
       const handleTestConnection = async (type) => {
@@ -4272,63 +4344,17 @@
 
     // ============ MAIN APP ============
     function App() {
-      const [user, setUser] = useState(null);
-      const [project, setProject] = useState(null);
+      const [user, setUser] = useState({ id: 1, email: 'preview@seoroom.com', name: 'Preview Mode' });
+
+      const [project, setProject] = useState({ id: 1, name: 'House Works Plumbing', domain: 'houseworksplumbing.com.au', is_local_business: true, is_elementor_site: true });
+
       const [activeTab, setActiveTab] = useState('gbp-audit');
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-      const [appLoading, setAppLoading] = useState(true);
-
-      // On mount: check for existing token, load user + project
-      useEffect(() => {
-        const init = async () => {
-          const token = localStorage.getItem('token');
-          if (!token) { setAppLoading(false); return; }
-          try {
-            const meData = await api('/auth/me');
-            if (meData?.user) {
-              setUser(meData.user);
-              // Load projects
-              const projData = await api('/projects');
-              if (projData?.projects?.length > 0) {
-                const savedId = localStorage.getItem('currentProject');
-                const found = projData.projects.find(p => String(p.id) === savedId);
-                setProject(found || projData.projects[0]);
-              }
-            } else {
-              localStorage.removeItem('token');
-            }
-          } catch {
-            localStorage.removeItem('token');
-          }
-          setAppLoading(false);
-        };
-        init();
-      }, []);
-
-      const handleLogin = async (userData) => {
-        setUser(userData);
-        // Load projects after login
-        try {
-          const projData = await api('/projects');
-          if (projData?.projects?.length > 0) {
-            setProject(projData.projects[0]);
-            localStorage.setItem('currentProject', projData.projects[0].id);
-          } else {
-            // Create default project
-            const newProj = await api('/projects', { method: 'POST', body: { name: 'My First Project', domain: 'example.com' } });
-            if (newProj?.project) {
-              setProject(newProj.project);
-              localStorage.setItem('currentProject', newProj.project.id);
-            }
-          }
-        } catch (e) { console.warn('Failed to load projects:', e); }
-      };
 
       const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('currentProject');
         setUser(null);
-        setProject(null);
       };
 
       const handleProjectSwitch = (newProject) => {
@@ -4336,32 +4362,28 @@
         localStorage.setItem('currentProject', newProject.id);
       };
 
-      if (appLoading) {
-        return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span></div>;
-      }
-
       if (!user) {
-        return <LoginPage onLogin={handleLogin} />;
+        return <LoginPage onLogin={setUser} />;
       }
 
       const renderPage = () => {
         switch (activeTab) {
           case 'gbp-audit':
-            return <GBPAuditPage project={project} />;
+            return <GBPAuditPage />;
           case 'gsc-audit':
-            return <GSCAuditPage project={project} />;
+            return <GSCAuditPage />;
           case 'technical-audit':
-            return <TechnicalAuditPage project={project} />;
+            return <TechnicalAuditPage />;
           case 'onpage-audit':
-            return <OnPageAuditPage project={project} />;
+            return <OnPageAuditPage />;
           case 'gbp-actions':
-            return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" project={project} />;
+            return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" />;
           case 'gsc-actions':
-            return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" project={project} />;
+            return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" />;
           case 'technical-actions':
-            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" project={project} />;
+            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" />;
           case 'onpage-actions':
-            return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" project={project} />;
+            return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" />;
           case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
@@ -4371,13 +4393,13 @@
           case 'published-content':
             return <CopywriterPage stage="published" />;
           case 'maps-rankings':
-            return <MapsRankingsPage project={project} />;
+            return <MapsRankingsPage />;
           case 'serp-rankings':
-            return <SERPRankingsPage project={project} />;
+            return <SERPRankingsPage />;
           case 'monthly-reports':
-            return <MonthlyReportsPage project={project} />;
+            return <MonthlyReportsPage />;
           case 'project-settings':
-            return <ProjectSettingsPage project={project} />;
+            return <ProjectSettingsPage />;
           case 'integrations':
             return <IntegrationsPage />;
           case 'projects':
