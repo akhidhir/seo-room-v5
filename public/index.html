@@ -3845,7 +3845,7 @@
     }
 
     // ============ INTEGRATIONS PAGE ============
-    function IntegrationsPage() {
+    function IntegrationsPage({ project }) {
       const [integrations, setIntegrations] = useState({
         gbp: { connected: false },
         gsc: { connected: false },
@@ -3862,15 +3862,23 @@
       const [wpCredentials, setWpCredentials] = useState({ url: '', username: '', appPassword: '' });
 
       useEffect(() => {
-        loadIntegrations();
-      }, []);
+        if (project) loadIntegrations();
+      }, [project?.id]);
 
       const loadIntegrations = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api('/integrations');
-          setIntegrations(data.integrations || {});
+          const data = await api(`/projects/${project.id}/integrations`);
+          if (data && !data.error) {
+            const raw = data.integrations || data || {};
+            // Normalize: server returns {kind: {status, config}}, frontend expects {kind: {connected: bool, ...}}
+            const normalized = {};
+            for (const [key, val] of Object.entries(raw)) {
+              normalized[key] = { ...val, connected: val.status === 'connected' };
+            }
+            setIntegrations(prev => ({ ...prev, ...normalized }));
+          }
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3878,16 +3886,33 @@
         }
       };
 
-      const handleConnectOAuth = (type) => {
-        // Stub OAuth flow
-        window.open(`/oauth/${type}`, 'oauth', 'width=600,height=700');
+      const handleConnectOAuth = async (type) => {
+        try {
+          const token = localStorage.getItem('token');
+          const data = await fetch(`/api/${type}/connect/${project.id}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          }).then(r => r.json());
+          if (data.url) {
+            window.open(data.url, 'oauth', 'width=600,height=700');
+          } else {
+            setError(data.error || `${type.toUpperCase()} OAuth not configured`);
+          }
+        } catch (err) {
+          setError(err.message);
+        }
       };
 
       const handleTestConnection = async (type) => {
         setTestLoading((prev) => ({ ...prev, [type]: true }));
         try {
-          await api(`/integrations/${type}/test`, { method: 'POST' });
-          alert('Connection successful!');
+          if (type === 'gsc') {
+            const data = await api(`/projects/${project.id}/gsc/status`);
+            if (data.connected) alert('GSC connected!');
+            else alert('GSC not connected');
+          } else {
+            await api(`/projects/${project.id}/integrations/${type}/test`, { method: 'POST' });
+            alert('Connection successful!');
+          }
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3897,9 +3922,9 @@
 
       const handleSaveCredentials = async (type, credentials) => {
         try {
-          await api(`/integrations/${type}`, {
-            method: 'POST',
-            body: credentials,
+          await api(`/projects/${project.id}/integrations/${type}`, {
+            method: 'PUT',
+            body: { status: 'connected', config: credentials },
           });
           await loadIntegrations();
         } catch (err) {
@@ -4380,7 +4405,7 @@
           case 'project-settings':
             return <ProjectSettingsPage project={project} />;
           case 'integrations':
-            return <IntegrationsPage />;
+            return <IntegrationsPage project={project} />;
           case 'projects':
             return <ProjectsPage onProjectSwitch={handleProjectSwitch} />;
           default:
