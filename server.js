@@ -1611,8 +1611,8 @@ app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
           if (!robotsTxt.toLowerCase().includes('sitemap:')) {
             findings.push({ pillar: 'technical', category: 'sitemap', title: 'No Sitemap directive in robots.txt', description: 'robots.txt exists but doesn\'t reference a sitemap. This helps search engines discover your sitemap faster.', recommendation: 'Add Sitemap: https://yourdomain.com/sitemap.xml to robots.txt', severity: 'Low', current_value: 'No sitemap reference', recommended_value: 'Sitemap directive present' });
           }
-          // Check for overly restrictive rules
-          if (robotsTxt.includes('Disallow: /') && !robotsTxt.includes('Disallow: / \n') && robotsTxt.match(/Disallow:\s*\/\s*$/m)) {
+          // Check for overly restrictive rules — only match "Disallow: /" alone on a line (not /wp-admin/ etc)
+          if (robotsTxt.match(/^Disallow:\s*\/\s*$/m)) {
             findings.push({ pillar: 'technical', category: 'crawl', title: 'robots.txt blocks entire site', description: 'A "Disallow: /" rule prevents search engines from crawling your entire site.', recommendation: 'Remove the blanket Disallow rule and only block specific paths you don\'t want indexed.', severity: 'Critical', current_value: 'Disallow: /', recommended_value: 'Selective blocking only' });
           }
         }
