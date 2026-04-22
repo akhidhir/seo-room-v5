@@ -928,6 +928,158 @@ app.get('/api/gsc/callback', async (req, res) => {
   }
 });
 
+// ==================== 11b. SPEED AUDIT (via SEO Room Helper plugin) ====================
+
+// Helper: get WordPress URL for a project
+async function getProjectWpUrl(projectId, userId) {
+  const result = await pool.query('SELECT wordpress_url FROM projects WHERE id=$1 AND user_id=$2', [projectId, userId]);
+  if (result.rows.length === 0) return null;
+  return result.rows[0].wordpress_url;
+}
+
+// Helper: fetch from WP REST API
+async function wpFetch(wpUrl, endpoint) {
+  const url = `${wpUrl.replace(/\/$/, '')}/wp-json/${endpoint}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`WP API error: ${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+// Get all published pages from WP
+app.get('/api/speed-audit/:projectId/pages', async (req, res) => {
+  try {
+    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured. Set it in Project Settings.' });
+
+    // Fetch all published pages
+    const pages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=100&status=publish&_fields=id,title,slug,link');
+    res.json({ pages: pages.map(p => ({ id: p.id, title: p.title.rendered, slug: p.slug, url: p.link })) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Run speed audit on a single page
+app.get('/api/speed-audit/:projectId/page/:pageId', async (req, res) => {
+  try {
+    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured' });
+
+    const data = await wpFetch(wpUrl, `seoroom/v1/speed-audit/${req.params.pageId}`);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Run speed audit on ALL pages (batch)
+app.post('/api/speed-audit/:projectId/run', async (req, res) => {
+  try {
+    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured. Set it in Project Settings.' });
+
+    // Get all pages
+    const pages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=100&status=publish&_fields=id,title,slug,link');
+
+    // Run speed audit on each page
+    const results = [];
+    for (const page of pages) {
+      try {
+        const audit = await wpFetch(wpUrl, `seoroom/v1/speed-audit/${page.id}`);
+        results.push({
+          page_id: page.id,
+          title: page.title.rendered,
+          slug: page.slug,
+          url: page.link,
+          ...audit,
+        });
+      } catch (err) {
+        results.push({
+          page_id: page.id,
+          title: page.title.rendered,
+          slug: page.slug,
+          url: page.link,
+          error: err.message,
+          image_count: 0,
+          images: [],
+          total_issues: 0,
+        });
+      }
+    }
+
+    // Save audit to DB
+    const auditResult = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
+       VALUES ($1, 'speed', 'completed', $2, NOW(), NOW())
+       RETURNING id`,
+      [req.params.projectId, JSON.stringify({ results, ran_at: new Date().toISOString() })]
+    );
+
+    res.json({
+      audit_id: auditResult.rows[0].id,
+      total_pages: results.length,
+      total_images: results.reduce((sum, r) => sum + (r.image_count || 0), 0),
+      total_issues: results.reduce((sum, r) => sum + (r.total_issues || 0), 0),
+      results,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Optimize images on a page
+app.post('/api/speed-audit/:projectId/optimize/:pageId', async (req, res) => {
+  try {
+    const wpUrl = await getProjectWpUrl(req.params.projectId, req.auth.userId);
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured' });
+
+    const { max_width = 1200, quality = 82, webp = true } = req.body;
+    const url = `${wpUrl.replace(/\/$/, '')}/wp-json/seoroom/v1/optimize-images/${req.params.pageId}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_width, quality, webp: webp ? 'true' : 'false' }),
+    });
+    if (!resp.ok) throw new Error(`WP API error: ${resp.status}`);
+    const data = await resp.json();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PageSpeed Insights via Google API
+app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
+  const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
+  if (!PAGESPEED_KEY) return res.status(400).json({ error: 'PAGESPEED_API_KEY not configured' });
+
+  const { url, strategy = 'mobile' } = req.query;
+  if (!url) return res.status(400).json({ error: 'url parameter required' });
+
+  try {
+    const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&key=${PAGESPEED_KEY}`;
+    const resp = await fetch(apiUrl);
+    if (!resp.ok) throw new Error(`PageSpeed API error: ${resp.status}`);
+    const data = await resp.json();
+
+    // Extract key metrics
+    const metrics = data.lighthouseResult?.audits;
+    const cwv = {
+      lcp: metrics?.['largest-contentful-paint']?.displayValue || 'N/A',
+      fid: metrics?.['max-potential-fid']?.displayValue || 'N/A',
+      cls: metrics?.['cumulative-layout-shift']?.displayValue || 'N/A',
+      fcp: metrics?.['first-contentful-paint']?.displayValue || 'N/A',
+      si: metrics?.['speed-index']?.displayValue || 'N/A',
+      tbt: metrics?.['total-blocking-time']?.displayValue || 'N/A',
+      score: data.lighthouseResult?.categories?.performance?.score * 100 || 0,
+    };
+
+    res.json({ url, strategy, cwv, full: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== 12. SERVE ====================
 
 // Health check
