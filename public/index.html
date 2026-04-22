@@ -1407,7 +1407,7 @@
 
     // ============ WEBSITE AUDIT PAGE ============
     // ============ TECHNICAL AUDIT PAGE ============
-    function TechnicalAuditPage() {
+    function TechnicalAuditPage({ project }) {
       const [tab, setTab] = useState('general');
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
@@ -1458,7 +1458,7 @@
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
-          const data = await api('/speed-audit/1/run', { method: 'POST' });
+          const data = await api('/speed-audit/${project?.id || 1}/run', { method: 'POST' });
           setSpeedResults(data.results || []);
         } catch (err) { setSpeedError(err.message); }
         finally { setSpeedLoading(false); }
@@ -1467,9 +1467,9 @@
       const optimizePage = async (pageId) => {
         setOptimizingPages(prev => new Set([...prev, pageId]));
         try {
-          await api(`/speed-audit/1/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
+          await api(`/speed-audit/${project?.id || 1}/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
           // Re-run audit for this page to show updated data
-          const updated = await api(`/speed-audit/1/page/${pageId}`);
+          const updated = await api(`/speed-audit/${project?.id || 1}/page/${pageId}`);
           setSpeedResults(prev => prev.map(r => r.page_id === pageId ? { ...r, ...updated } : r));
         } catch (err) { setSpeedError(err.message); }
         finally { setOptimizingPages(prev => { const s = new Set(prev); s.delete(pageId); return s; }); }
@@ -1478,7 +1478,7 @@
       const runPageSpeed = async (url, pageId) => {
         setPsLoading(pageId);
         try {
-          const data = await api(`/speed-audit/1/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
+          const data = await api(`/speed-audit/${project?.id || 1}/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
           setPageSpeedData(prev => ({ ...prev, [pageId]: data.cwv }));
         } catch (err) { setSpeedError(err.message); }
         finally { setPsLoading(null); }
@@ -1761,7 +1761,7 @@
     }
 
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
-    function OnPageAuditPage() {
+    function OnPageAuditPage({ project }) {
       const [pages, setPages] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -1808,7 +1808,7 @@
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
-          const data = await api(`/projects/1/onpage-audit/run`, { method: 'POST' });
+          const data = await api(`/projects/${project?.id || 1}/onpage-audit/run`, { method: 'POST' });
           if (data?.pages) {
             setPages(data.pages);
           } else if (data?.error) {
@@ -4151,17 +4151,63 @@
 
     // ============ MAIN APP ============
     function App() {
-      const [user, setUser] = useState({ id: 1, email: 'preview@seoroom.com', name: 'Preview Mode' });
-
-      const [project, setProject] = useState({ id: 1, name: 'House Works Plumbing', domain: 'houseworksplumbing.com.au', is_local_business: true, is_elementor_site: true });
-
+      const [user, setUser] = useState(null);
+      const [project, setProject] = useState(null);
       const [activeTab, setActiveTab] = useState('gbp-audit');
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+      const [appLoading, setAppLoading] = useState(true);
+
+      // On mount: check for existing token, load user + project
+      useEffect(() => {
+        const init = async () => {
+          const token = localStorage.getItem('token');
+          if (!token) { setAppLoading(false); return; }
+          try {
+            const meData = await api('/auth/me');
+            if (meData?.user) {
+              setUser(meData.user);
+              // Load projects
+              const projData = await api('/projects');
+              if (projData?.projects?.length > 0) {
+                const savedId = localStorage.getItem('currentProject');
+                const found = projData.projects.find(p => String(p.id) === savedId);
+                setProject(found || projData.projects[0]);
+              }
+            } else {
+              localStorage.removeItem('token');
+            }
+          } catch {
+            localStorage.removeItem('token');
+          }
+          setAppLoading(false);
+        };
+        init();
+      }, []);
+
+      const handleLogin = async (userData) => {
+        setUser(userData);
+        // Load projects after login
+        try {
+          const projData = await api('/projects');
+          if (projData?.projects?.length > 0) {
+            setProject(projData.projects[0]);
+            localStorage.setItem('currentProject', projData.projects[0].id);
+          } else {
+            // Create default project
+            const newProj = await api('/projects', { method: 'POST', body: { name: 'My First Project', domain: 'example.com' } });
+            if (newProj?.project) {
+              setProject(newProj.project);
+              localStorage.setItem('currentProject', newProj.project.id);
+            }
+          }
+        } catch (e) { console.warn('Failed to load projects:', e); }
+      };
 
       const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('currentProject');
         setUser(null);
+        setProject(null);
       };
 
       const handleProjectSwitch = (newProject) => {
@@ -4169,8 +4215,12 @@
         localStorage.setItem('currentProject', newProject.id);
       };
 
+      if (appLoading) {
+        return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span></div>;
+      }
+
       if (!user) {
-        return <LoginPage onLogin={setUser} />;
+        return <LoginPage onLogin={handleLogin} />;
       }
 
       const renderPage = () => {
@@ -4180,9 +4230,9 @@
           case 'gsc-audit':
             return <GSCAuditPage />;
           case 'technical-audit':
-            return <TechnicalAuditPage />;
+            return <TechnicalAuditPage project={project} />;
           case 'onpage-audit':
-            return <OnPageAuditPage />;
+            return <OnPageAuditPage project={project} />;
           case 'gbp-actions':
             return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" />;
           case 'gsc-actions':
