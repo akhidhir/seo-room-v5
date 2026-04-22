@@ -4449,7 +4449,7 @@
           case 'projects':
             return <ProjectsPage onProjectSwitch={handleProjectSwitch} />;
           default:
-            return <GBPAuditPage />;
+            return <GBPAuditPage project={project} />;
         }
       };
 

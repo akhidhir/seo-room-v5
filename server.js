@@ -1026,6 +1026,9 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
     const project = proj.rows[0];
     const domain = project.domain;
 
+    // Clean up old unactioned findings from previous runs
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gsc' AND status='new'`, [projectId]);
+
     // Try to get fresh GSC data first, fall back to stored data
     let gscRows = [];
     let pageRows = [];
@@ -1253,6 +1256,9 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
+
+    // Clean up old unactioned findings from previous runs
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp' AND status='new'`, [projectId]);
 
     // Create audit record
     const auditRes = await pool.query(
