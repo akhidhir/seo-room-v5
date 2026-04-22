@@ -2968,6 +2968,9 @@
         location: '',
         serviceAreas: [],
         competitors: [],
+        isLocalBusiness: true,
+        isElementorSite: true,
+        wordpressUrl: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
@@ -2991,6 +2994,9 @@
             location: data.project.location || '',
             serviceAreas: data.project.serviceAreas || [],
             competitors: data.project.competitors || [],
+            isLocalBusiness: data.project.is_local_business !== false,
+            isElementorSite: data.project.is_elementor_site !== false,
+            wordpressUrl: data.project.wordpress_url || '',
           });
         } catch (err) {
           setError(err.message);
@@ -3125,6 +3131,78 @@
           </div>
 
           <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>Project Type</div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <strong>Local Business</strong>
+                <div style={{ color: 'var(--text2)', fontSize: '13px' }}>Enable GBP Audit, GBP Actions, Maps Rankings, and service area targeting</div>
+              </div>
+              <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '26px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={formData.isLocalBusiness}
+                  onChange={(e) => setFormData(prev => ({ ...prev, isLocalBusiness: e.target.checked }))}
+                  style={{ opacity: 0, width: 0, height: 0 }}
+                />
+                <span style={{
+                  position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                  background: formData.isLocalBusiness ? 'var(--primary)' : 'var(--bg)',
+                  borderRadius: '13px', transition: 'background 0.2s',
+                  border: '1px solid var(--border)'
+                }}>
+                  <span style={{
+                    position: 'absolute', top: '3px', left: formData.isLocalBusiness ? '24px' : '3px',
+                    width: '18px', height: '18px', borderRadius: '50%',
+                    background: '#fff', transition: 'left 0.2s'
+                  }}></span>
+                </span>
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <strong>Elementor Site</strong>
+                <div style={{ color: 'var(--text2)', fontSize: '13px' }}>Use SEO Room Helper plugin for design-safe Elementor content updates</div>
+              </div>
+              <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '26px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={formData.isElementorSite}
+                  onChange={(e) => setFormData(prev => ({ ...prev, isElementorSite: e.target.checked }))}
+                  style={{ opacity: 0, width: 0, height: 0 }}
+                />
+                <span style={{
+                  position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                  background: formData.isElementorSite ? 'var(--primary)' : 'var(--bg)',
+                  borderRadius: '13px', transition: 'background 0.2s',
+                  border: '1px solid var(--border)'
+                }}>
+                  <span style={{
+                    position: 'absolute', top: '3px', left: formData.isElementorSite ? '24px' : '3px',
+                    width: '18px', height: '18px', borderRadius: '50%',
+                    background: '#fff', transition: 'left 0.2s'
+                  }}></span>
+                </span>
+              </label>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '12px' }}>
+              <label className="form-label">WordPress URL</label>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.wordpressUrl}
+                onChange={(e) => setFormData(prev => ({ ...prev, wordpressUrl: e.target.value }))}
+                placeholder="https://yoursite.com"
+              />
+              <div style={{ color: 'var(--text2)', fontSize: '12px', marginTop: '4px' }}>
+                {formData.isElementorSite ? 'Requires seoroom-helper.php installed as mu-plugin' : 'Uses standard WP REST API for content updates'}
+              </div>
+            </div>
+          </div>
+
+          {formData.isLocalBusiness && <div className="card">
             <div className="card-title" style={{ marginBottom: '16px' }}>Service Areas</div>
 
             {formData.serviceAreas.length > 0 && (
@@ -3178,7 +3256,7 @@
                 <i className="fas fa-plus"></i> Add
               </button>
             </div>
-          </div>
+          </div>}
 
           <div className="card">
             <div className="card-title" style={{ marginBottom: '16px' }}>Competitors</div>
@@ -3664,7 +3742,7 @@
     function App() {
       const [user, setUser] = useState({ id: 1, email: 'preview@seoroom.com', name: 'Preview Mode' });
 
-      const [project, setProject] = useState({ id: 1, name: 'House Works Plumbing', domain: 'houseworksplumbing.com.au' });
+      const [project, setProject] = useState({ id: 1, name: 'House Works Plumbing', domain: 'houseworksplumbing.com.au', is_local_business: true, is_elementor_site: true });
 
       const [activeTab, setActiveTab] = useState('gbp-audit');
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -3727,15 +3805,17 @@
         }
       };
 
-      const navItems = [
+      const isLocal = project?.is_local_business !== false;
+
+      const allNavItems = [
         { section: 'AUDIT', items: [
-          { id: 'gbp-audit', label: 'GBP Audit', icon: 'fas fa-map-marker-alt' },
+          { id: 'gbp-audit', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line' },
           { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
           { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
         ]},
         { section: 'ACTION PLAN', items: [
-          { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt' },
+          { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
           { id: 'technical-actions', label: 'Technical Actions', icon: 'fas fa-cogs' },
           { id: 'onpage-actions', label: 'On-Page Actions', icon: 'fas fa-file-alt' },
@@ -3747,7 +3827,7 @@
           { id: 'published-content', label: 'Published', icon: 'fas fa-paper-plane' },
         ]},
         { section: 'REPORTS', items: [
-          { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map' },
+          { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'monthly-reports', label: 'Monthly Reports', icon: 'fas fa-file-pdf' },
         ]},
@@ -3757,6 +3837,12 @@
           { id: 'projects', label: 'Projects', icon: 'fas fa-folder' },
         ]},
       ];
+
+      // Filter out local-only items when project is not a local business
+      const navItems = allNavItems.map(group => ({
+        ...group,
+        items: group.items.filter(item => !item.localOnly || isLocal)
+      })).filter(group => group.items.length > 0);
 
       return (
         <div className="app-wrapper">

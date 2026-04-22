@@ -100,6 +100,8 @@ async function initDb() {
         competitors TEXT[],
         service_areas JSONB DEFAULT '[]',
         is_local_business BOOLEAN DEFAULT true,
+        is_elementor_site BOOLEAN DEFAULT true,
+        wordpress_url TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
@@ -241,6 +243,10 @@ async function initDb() {
       )
     `);
 
+    // Add columns for existing databases
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wordpress_url TEXT`);
+
     console.log('[boot] Database schema initialized');
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
@@ -345,14 +351,14 @@ app.get('/api/projects', async (req, res) => {
 
 // Create project
 app.post('/api/projects', async (req, res) => {
-  const { name, domain, business_name, industry, location, competitors, is_local_business } = req.body;
+  const { name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url } = req.body;
   if (!name || !domain) return res.status(400).json({ error: 'Name and domain required' });
   try {
     const result = await pool.query(
-      `INSERT INTO projects (user_id, name, domain, business_name, industry, location, competitors, is_local_business)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO projects (user_id, name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [req.auth.userId, name, domain, business_name || null, industry || null, location || null, competitors || [], is_local_business !== false]
+      [req.auth.userId, name, domain, business_name || null, industry || null, location || null, competitors || [], is_local_business !== false, is_elementor_site !== false, wordpress_url || null]
     );
     res.status(201).json({ project: result.rows[0] });
   } catch (e) {
@@ -376,16 +382,17 @@ app.get('/api/projects/:id', async (req, res) => {
 
 // Update project
 app.put('/api/projects/:id', async (req, res) => {
-  const { name, domain, business_name, industry, location, competitors, is_local_business } = req.body;
+  const { name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url } = req.body;
   try {
     const result = await pool.query(
       `UPDATE projects
        SET name=COALESCE($2, name), domain=COALESCE($3, domain), business_name=COALESCE($4, business_name),
            industry=COALESCE($5, industry), location=COALESCE($6, location), competitors=COALESCE($7, competitors),
-           is_local_business=COALESCE($8, is_local_business)
-       WHERE id=$1 AND user_id=$9
+           is_local_business=COALESCE($8, is_local_business), is_elementor_site=COALESCE($9, is_elementor_site),
+           wordpress_url=COALESCE($10, wordpress_url)
+       WHERE id=$1 AND user_id=$11
        RETURNING *`,
-      [req.params.id, name, domain, business_name, industry, location, competitors, is_local_business, req.auth.userId]
+      [req.params.id, name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url, req.auth.userId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     res.json({ project: result.rows[0] });
