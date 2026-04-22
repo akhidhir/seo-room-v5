@@ -273,6 +273,8 @@ function authMiddleware(req, res, next) {
 function optionalAuth(req, res, next) {
   const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/health', '/api/gsc/callback'];
   if (whitelistPaths.includes(req.path)) return next();
+  // Skip auth for non-API routes (static files, index.html)
+  if (!req.path.startsWith('/api/')) return next();
   authMiddleware(req, res, next);
 }
 
