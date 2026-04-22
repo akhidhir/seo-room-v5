@@ -872,6 +872,17 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      max-width: 480px;
+    }
+
+    .integration-fields .btn-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .integration-fields .btn-group .btn {
+      flex: none;
+      min-width: 100px;
     }
 
     .project-item {
@@ -3949,6 +3960,8 @@
         }
       };
 
+      const [savedType, setSavedType] = useState(null);
+
       const handleSaveCredentials = async (type, credentials) => {
         try {
           await api(`/projects/${project.id}/integrations/${type}`, {
@@ -3956,6 +3969,8 @@
             body: { status: 'connected', config: credentials },
           });
           await loadIntegrations();
+          setSavedType(type);
+          setTimeout(() => setSavedType(null), 2000);
         } catch (err) {
           setError(err.message);
         }
@@ -4056,17 +4071,15 @@
               />
               <div className="btn-group">
                 <button
-                  className="btn btn-primary"
+                  className={`btn ${savedType === 'dataforseo' ? 'btn-success' : 'btn-primary'}`}
                   onClick={() => handleSaveCredentials('dataforseo', dfCredentials)}
-                  style={{ flex: 1 }}
                 >
-                  <i className="fas fa-save"></i> Save
+                  <i className={`fas ${savedType === 'dataforseo' ? 'fa-check' : 'fa-save'}`}></i> {savedType === 'dataforseo' ? 'Saved' : 'Save'}
                 </button>
                 <button
                   className="btn btn-secondary"
                   onClick={() => handleTestConnection('dataforseo')}
                   disabled={testLoading.dataforseo}
-                  style={{ flex: 1 }}
                 >
                   {testLoading.dataforseo ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
                   Test
@@ -4097,17 +4110,15 @@
               />
               <div className="btn-group">
                 <button
-                  className="btn btn-primary"
+                  className={`btn ${savedType === 'localfalcon' ? 'btn-success' : 'btn-primary'}`}
                   onClick={() => handleSaveCredentials('localfalcon', lfCredentials)}
-                  style={{ flex: 1 }}
                 >
-                  <i className="fas fa-save"></i> Save
+                  <i className={`fas ${savedType === 'localfalcon' ? 'fa-check' : 'fa-save'}`}></i> {savedType === 'localfalcon' ? 'Saved' : 'Save'}
                 </button>
                 <button
                   className="btn btn-secondary"
                   onClick={() => handleTestConnection('localfalcon')}
                   disabled={testLoading.localfalcon}
-                  style={{ flex: 1 }}
                 >
                   {testLoading.localfalcon ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
                   Test
@@ -4152,17 +4163,15 @@
               />
               <div className="btn-group">
                 <button
-                  className="btn btn-primary"
+                  className={`btn ${savedType === 'wordpress' ? 'btn-success' : 'btn-primary'}`}
                   onClick={() => handleSaveCredentials('wordpress', wpCredentials)}
-                  style={{ flex: 1 }}
                 >
-                  <i className="fas fa-save"></i> Save
+                  <i className={`fas ${savedType === 'wordpress' ? 'fa-check' : 'fa-save'}`}></i> {savedType === 'wordpress' ? 'Saved' : 'Save'}
                 </button>
                 <button
                   className="btn btn-secondary"
                   onClick={() => handleTestConnection('wordpress')}
                   disabled={testLoading.wordpress}
-                  style={{ flex: 1 }}
                 >
                   {testLoading.wordpress ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
                   Test
