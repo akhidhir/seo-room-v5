@@ -404,14 +404,14 @@ app.put('/api/projects/:id', async (req, res) => {
       `UPDATE projects
        SET name=COALESCE($2, name), domain=COALESCE($3, domain), business_name=COALESCE($4, business_name),
            industry=COALESCE($5, industry), location=COALESCE($6, location),
-           competitors=COALESCE($7::jsonb, competitors),
+           competitors=COALESCE($7::text[], competitors),
            is_local_business=COALESCE($8, is_local_business), is_elementor_site=COALESCE($9, is_elementor_site),
            wordpress_url=COALESCE($10, wordpress_url),
            service_areas=COALESCE($11::jsonb, service_areas)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
-       competitors ? JSON.stringify(competitors) : null,
+       competitors && Array.isArray(competitors) ? competitors : null,
        is_local_business, is_elementor_site, wordpress_url,
        service_areas ? JSON.stringify(service_areas) : null]
     );

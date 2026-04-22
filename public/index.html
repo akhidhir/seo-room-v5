@@ -3487,6 +3487,7 @@
       const [project, setProject] = useState(null);
       const [loading, setLoading] = useState(false);
       const [saving, setSaving] = useState(false);
+      const [saved, setSaved] = useState(false);
       const [error, setError] = useState('');
       const [formData, setFormData] = useState({
         name: '',
@@ -3546,8 +3547,8 @@
             body: formData,
           });
           setError('');
-          // Brief success indicator
-          setTimeout(() => setError(''), 3000);
+          setSaved(true);
+          setTimeout(() => setSaved(false), 3000);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3835,9 +3836,9 @@
             </div>
           </div>
 
-          <button className="btn btn-primary mt-24" onClick={handleSave} disabled={saving}>
-            {saving ? <span className="spinner"></span> : <i className="fas fa-save"></i>}
-            {saving ? 'Saving...' : 'Save Changes'}
+          <button className={`btn ${saved ? 'btn-success' : 'btn-primary'} mt-24`} onClick={handleSave} disabled={saving}>
+            {saving ? <span className="spinner"></span> : saved ? <i className="fas fa-check"></i> : <i className="fas fa-save"></i>}
+            {saving ? ' Saving...' : saved ? ' Changes Saved' : ' Save Changes'}
           </button>
         </>
       );
