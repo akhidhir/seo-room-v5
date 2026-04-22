@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agency Interrogations</title>
+  <title>SEO Room v5</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -1082,7 +1082,7 @@
           <div className="login-form">
             <div className="login-header">
               <div className="login-title">
-                <i className="fas fa-rocket"></i> Agency Interrogations
+                <i className="fas fa-rocket"></i> SEO Room
               </div>
               <div className="login-subtitle">SEO Automation for Agencies</div>
             </div>
@@ -3965,9 +3965,9 @@
         <>
           <div className="page-header">
             <div className="page-title">
-              <i className="fas fa-plug"></i> Integrations
+              <i className="fas fa-plug"></i> Agency Integrations
             </div>
-            <div className="page-subtitle">Connect your SEO tools and services</div>
+            <div className="page-subtitle">Account-level connections shared across all projects</div>
           </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
@@ -4481,7 +4481,7 @@
         ]},
         { section: 'SETTINGS', items: [
           { id: 'project-settings', label: 'Project Settings', icon: 'fas fa-cog' },
-          { id: 'integrations', label: 'Integrations', icon: 'fas fa-plug' },
+          { id: 'integrations', label: 'Agency Integrations', icon: 'fas fa-plug' },
           { id: 'projects', label: 'Projects', icon: 'fas fa-folder' },
         ]},
       ];
@@ -4497,7 +4497,7 @@
           <div className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
             <div className="sidebar-header">
               <i className="fas fa-rocket"></i>
-              <span>Agency Interrogations</span>
+              <span>SEO Room</span>
             </div>
 
             <div className="sidebar-content">
@@ -4543,7 +4543,7 @@
                   <i className="fas fa-bars"></i>
                 </button>
                 <div>
-                  <div className="topbar-title">{project?.name || 'Agency Interrogations'}</div>
+                  <div className="topbar-title">{project?.name || 'SEO Room'}</div>
                   <div className="topbar-domain">{project?.domain || 'No project selected'}</div>
                 </div>
               </div>
