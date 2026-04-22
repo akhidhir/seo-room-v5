@@ -1669,12 +1669,15 @@ Return ONLY valid JSON: {"findings": [...]}`;
       } catch (aiErr) {
         console.error('[gbp-audit] AI analysis failed:', aiErr.message);
       }
+    } else {
+      console.log('[gbp-audit] Anthropic not configured, skipping AI analysis');
     }
 
-    // Fallback if AI fails
+    // Fallback: always produce findings if AI returned none
     if (findings.length === 0) {
+      console.log('[gbp-audit] No AI findings, using fallback. gbpConnected:', gbpData.connected);
       if (!gbpData.connected) {
-        findings.push({ pillar: 'gbp', category: 'Setup', title: 'Google Business Profile not connected', description: 'Connect GBP to enable live audits.', recommendation: 'Go to Agency Integrations and connect GBP.', severity: 'Critical', current_value: 'Not connected', recommended_value: 'Connected' });
+        findings.push({ pillar: 'gbp', category: 'Setup', title: 'Google Business Profile not connected', description: 'Connect your GBP to enable live listing audits — checking your actual business info, categories, hours, photos, and reviews directly from Google.', recommendation: 'Go to Agency Integrations and connect Google Business Profile.', severity: 'Critical', current_value: 'Not connected', recommended_value: 'Connected' });
       }
       if (gbpData.reviews && gbpData.reviews.total < 20) {
         findings.push({ pillar: 'gbp', category: 'Reviews', title: `Only ${gbpData.reviews.total} reviews`, description: 'Need more reviews for local SEO.', recommendation: 'Implement review generation strategy.', severity: 'Medium', current_value: `${gbpData.reviews.total}`, recommended_value: '30+' });
@@ -1683,7 +1686,11 @@ Return ONLY valid JSON: {"findings": [...]}`;
         findings.push({ pillar: 'gbp', category: 'Reviews', title: `${gbpData.reviews.unanswered} unanswered reviews`, description: 'All reviews should be replied to.', recommendation: 'Reply to all reviews within 24 hours.', severity: 'Medium', current_value: `${gbpData.reviews.unanswered} unanswered`, recommended_value: '0 unanswered' });
       }
       if (gbpData.photos && gbpData.photos.total < 10) {
-        findings.push({ pillar: 'gbp', category: 'Photos', title: `Only ${gbpData.photos.total} photos`, description: 'Profiles with 20+ photos get more engagement.', recommendation: 'Add exterior, interior, team, and work photos.', severity: 'Medium', current_value: `${gbpData.photos.total}`, recommended_value: '20+' });
+        findings.push({ pillar: 'gbp', category: 'Photos', title: `Only ${gbpData.photos?.total || 0} photos`, description: 'Profiles with 20+ photos get more engagement.', recommendation: 'Add exterior, interior, team, and work photos.', severity: 'Medium', current_value: `${gbpData.photos?.total || 0}`, recommended_value: '20+' });
+      }
+      // Always have at least one finding
+      if (findings.length === 0) {
+        findings.push({ pillar: 'gbp', category: 'Setup', title: 'GBP audit needs data', description: 'Connect your Google Business Profile and run Maps Rankings to get actionable GBP findings.', recommendation: 'Connect GBP in Agency Integrations, then add keywords in Maps Rankings.', severity: 'Medium', current_value: 'Limited data', recommended_value: 'Full GBP data' });
       }
     }
 
