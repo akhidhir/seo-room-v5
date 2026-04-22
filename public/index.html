@@ -1035,6 +1035,12 @@
         return { error: 'Not authenticated' };
       }
 
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.warn('[api] Non-JSON response on', path, contentType);
+        throw new Error('Server returned non-JSON response — deploy may be pending');
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Request failed');
       return data;
