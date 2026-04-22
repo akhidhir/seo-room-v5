@@ -1568,7 +1568,7 @@ app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
     if (!siteUrl) return res.status(400).json({ error: 'No website URL configured. Set it in Project Settings.' });
 
     // Clean up old findings
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='technical' AND status='new'`, [projectId]);
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='technical'`, [projectId]);
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'technical', 'running', NOW()) RETURNING id`,
