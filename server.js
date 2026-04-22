@@ -516,6 +516,54 @@ app.put('/api/projects/:id/integrations/:kind', async (req, res) => {
   }
 });
 
+// Test integration connection
+app.post('/api/projects/:id/integrations/:kind/test', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT config, status FROM project_integrations WHERE project_id=$1 AND kind=$2', [req.params.id, req.params.kind]);
+    if (r.rows.length === 0) return res.status(400).json({ error: 'Not configured — save credentials first' });
+    const { config, status } = r.rows[0];
+    const cfg = typeof config === 'string' ? JSON.parse(config) : (config || {});
+
+    if (req.params.kind === 'dataforseo') {
+      if (!cfg.username || !cfg.password) return res.status(400).json({ error: 'Username and password required' });
+      const authHeader = 'Basic ' + Buffer.from(`${cfg.username}:${cfg.password}`).toString('base64');
+      const resp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
+        method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ keyword: 'test', location_code: 2036, language_code: 'en' }])
+      });
+      const data = await resp.json();
+      if (data.status_code === 20000) return res.json({ ok: true, message: 'DataForSEO connected successfully' });
+      return res.status(400).json({ error: data.status_message || 'Invalid credentials' });
+    }
+
+    if (req.params.kind === 'localfalcon') {
+      if (!cfg.apiKey) return res.status(400).json({ error: 'API key required' });
+      const resp = await fetch(`https://api.localfalcon.com/v1/reports?api_key=${cfg.apiKey}`);
+      const data = await resp.json();
+      if (data.success || resp.ok) return res.json({ ok: true, message: `Local Falcon connected — ${(data.data || []).length} reports found` });
+      return res.status(400).json({ error: data.message || 'Invalid API key' });
+    }
+
+    if (req.params.kind === 'wordpress') {
+      if (!cfg.url || !cfg.username || !cfg.appPassword) return res.status(400).json({ error: 'URL, username, and app password required' });
+      const wpUrl = cfg.url.replace(/\/wp-admin\/?$/, '').replace(/\/$/, '');
+      const authHeader = 'Basic ' + Buffer.from(`${cfg.username}:${cfg.appPassword}`).toString('base64');
+      const resp = await fetch(`${wpUrl}/wp-json/wp/v2/users/me`, {
+        headers: { Authorization: authHeader }
+      });
+      if (resp.ok) {
+        const user = await resp.json();
+        return res.json({ ok: true, message: `WordPress connected as ${user.name || user.slug}` });
+      }
+      return res.status(400).json({ error: `WordPress auth failed (${resp.status})` });
+    }
+
+    res.json({ ok: true, message: 'Connection stored' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== 6. AUDITS ====================
 
 // Trigger an audit (GBP, GSC, or Website)

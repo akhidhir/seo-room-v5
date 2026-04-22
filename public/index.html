@@ -3907,6 +3907,19 @@
                 normalized[key] = { ...val, connected: val.status === 'connected' };
               }
               setIntegrations(prev => ({ ...prev, ...normalized }));
+              // Populate credential inputs from saved config
+              if (normalized.dataforseo?.config) {
+                const c = normalized.dataforseo.config;
+                setDfCredentials({ username: c.username || '', password: c.password || '' });
+              }
+              if (normalized.localfalcon?.config) {
+                const c = normalized.localfalcon.config;
+                setLfCredentials({ apiKey: c.apiKey || '' });
+              }
+              if (normalized.wordpress?.config) {
+                const c = normalized.wordpress.config;
+                setWpCredentials({ url: c.url || '', username: c.username || '', appPassword: c.appPassword || '' });
+              }
             }
           }
         } catch (err) {
@@ -3942,32 +3955,37 @@
         }
       };
 
+      const [testResult, setTestResult] = useState({});
+
       const handleTestConnection = async (type) => {
         setTestLoading((prev) => ({ ...prev, [type]: true }));
+        setTestResult((prev) => ({ ...prev, [type]: null }));
         try {
           if (type === 'gsc' || type === 'gbp') {
             const data = await api(`/user/${type}/status`);
-            if (data.connected) alert(`${type.toUpperCase()} connected!`);
-            else alert(`${type.toUpperCase()} not connected`);
+            setTestResult((prev) => ({ ...prev, [type]: data.connected ? 'Connected' : 'Not connected' }));
           } else {
-            await api(`/projects/${project.id}/integrations/${type}/test`, { method: 'POST' });
-            alert('Connection successful!');
+            const data = await api(`/projects/${project.id}/integrations/${type}/test`, { method: 'POST' });
+            setTestResult((prev) => ({ ...prev, [type]: data.message || 'Connected' }));
           }
         } catch (err) {
-          setError(err.message);
+          setTestResult((prev) => ({ ...prev, [type]: '✗ ' + err.message }));
         } finally {
           setTestLoading((prev) => ({ ...prev, [type]: false }));
+          setTimeout(() => setTestResult((prev) => ({ ...prev, [type]: null })), 4000);
         }
       };
 
       const [savedType, setSavedType] = useState(null);
 
       const handleSaveCredentials = async (type, credentials) => {
+        if (!project?.id) { setError('No project selected'); return; }
         try {
-          await api(`/projects/${project.id}/integrations/${type}`, {
+          const data = await api(`/projects/${project.id}/integrations/${type}`, {
             method: 'PUT',
             body: { status: 'connected', config: credentials },
           });
+          if (data.error) { setError(data.error); return; }
           await loadIntegrations();
           setSavedType(type);
           setTimeout(() => setSavedType(null), 2000);
@@ -4082,7 +4100,7 @@
                   disabled={testLoading.dataforseo}
                 >
                   {testLoading.dataforseo ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
-                  Test
+                  {testResult.dataforseo || 'Test'}
                 </button>
               </div>
             </div>
@@ -4121,7 +4139,7 @@
                   disabled={testLoading.localfalcon}
                 >
                   {testLoading.localfalcon ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
-                  Test
+                  {testResult.localfalcon || 'Test'}
                 </button>
               </div>
             </div>
@@ -4174,7 +4192,7 @@
                   disabled={testLoading.wordpress}
                 >
                   {testLoading.wordpress ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
-                  Test
+                  {testResult.wordpress || 'Test'}
                 </button>
               </div>
             </div>
