@@ -769,6 +769,198 @@ app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
   }
 });
 
+// ==================== ON-PAGE AUDIT (Yoast + Content Analysis) ====================
+
+// Run on-page audit — fetches Yoast scores + WP pages, analyzes content
+app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    // Get WP URL from project
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const wpUrl = project.wordpress_url;
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured. Set it in Project Settings.' });
+
+    const wpBase = wpUrl.replace(/\/$/, '');
+    const domain = wpBase.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    // 1. Try to get Yoast scores from seoroom-helper plugin
+    let yoastMap = {};
+    try {
+      const yoastResp = await fetch(`${wpBase}/wp-json/seoroom/v1/yoast-scores`, {
+        signal: AbortSignal.timeout(30000)
+      });
+      if (yoastResp.ok) {
+        const scores = await yoastResp.json();
+        for (const s of scores) { yoastMap[s.id] = s; }
+        console.log(`[onpage-audit] Got Yoast scores for ${scores.length} pages via plugin`);
+      }
+    } catch (e) {
+      console.log(`[onpage-audit] seoroom plugin not available: ${e.message}`);
+    }
+
+    // 2. Fetch all published pages from WP REST API
+    let allPages = [];
+    let page = 1;
+    while (true) {
+      try {
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, {
+          signal: AbortSignal.timeout(30000)
+        });
+        if (!resp.ok) break;
+        const pages = await resp.json();
+        if (!Array.isArray(pages) || pages.length === 0) break;
+        allPages = allPages.concat(pages);
+        if (pages.length < 50) break;
+        page++;
+      } catch { break; }
+    }
+    // Also fetch posts
+    page = 1;
+    while (true) {
+      try {
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, {
+          signal: AbortSignal.timeout(30000)
+        });
+        if (!resp.ok) break;
+        const posts = await resp.json();
+        if (!Array.isArray(posts) || posts.length === 0) break;
+        allPages = allPages.concat(posts);
+        if (posts.length < 50) break;
+        page++;
+      } catch { break; }
+    }
+
+    console.log(`[onpage-audit] Fetched ${allPages.length} pages/posts`);
+    if (allPages.length === 0) return res.json({ pages: [], message: 'No published pages found' });
+
+    // 3. Analyze each page
+    const results = [];
+    for (const pg of allPages) {
+      const url = pg.link || '';
+      const slug = pg.slug || '';
+      const title = pg.title?.rendered || '';
+      const content = pg.content?.rendered || '';
+      const yoast = pg.yoast_head_json || {};
+      const pluginData = yoastMap[pg.id];
+
+      // Extract fields
+      const metaTitle = yoast.title || '';
+      const metaDesc = yoast.description || '';
+      const focusKeyword = pluginData?.focus_keyword || '';
+      const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+
+      // Count links
+      const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
+      let m; let internalLinks = 0; let externalLinks = 0;
+      while ((m = linkRegex.exec(content)) !== null) {
+        const href = m[1];
+        if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
+        if (href.includes(domain) || href.startsWith('/')) internalLinks++;
+        else if (href.startsWith('http')) externalLinks++;
+      }
+
+      // Count images
+      const imgMatches = content.match(/<img[^>]*>/gi) || [];
+      const images = imgMatches.length;
+      const imagesWithAlt = imgMatches.filter(img => /alt=["'][^"']+["']/i.test(img)).length;
+
+      // Extract H1
+      const h1Match = content.match(/<h1[^>]*>(.*?)<\/h1>/i);
+      const h1 = h1Match ? h1Match[1].replace(/<[^>]+>/g, '') : title;
+
+      // Determine Yoast score
+      let yoastScore = 'gray';
+      if (pluginData) {
+        const seoScore = pluginData.seo_score || 0;
+        yoastScore = seoScore >= 70 ? 'green' : seoScore >= 40 ? 'orange' : 'red';
+      } else {
+        // Heuristic based on meta completeness
+        const hasGoodTitle = metaTitle.length >= 30 && metaTitle.length <= 60;
+        const hasGoodDesc = metaDesc.length >= 120 && metaDesc.length <= 155;
+        const hasFocus = !!focusKeyword;
+        const goodCount = [hasGoodTitle, hasGoodDesc, hasFocus, wordCount >= 500].filter(Boolean).length;
+        yoastScore = goodCount >= 3 ? 'green' : goodCount >= 1 ? 'orange' : 'red';
+      }
+
+      // Readability score
+      let yoastReadability = 'gray';
+      if (pluginData?.readability_score) {
+        const rs = pluginData.readability_score;
+        yoastReadability = rs >= 70 ? 'green' : rs >= 40 ? 'orange' : 'red';
+      } else {
+        yoastReadability = wordCount >= 800 ? 'green' : wordCount >= 300 ? 'orange' : 'red';
+      }
+
+      // Build issues
+      const issues = [];
+      const kwLower = focusKeyword.toLowerCase();
+
+      if (!metaTitle) issues.push({ type: 'problem', text: 'Meta title is missing' });
+      else {
+        if (metaTitle.length < 30) issues.push({ type: 'problem', text: `Meta title too short (${metaTitle.length} chars) — should be 50-60` });
+        if (metaTitle.length > 60) issues.push({ type: 'warning', text: `Meta title too long (${metaTitle.length} chars) — max 60` });
+        if (metaTitle.length >= 50 && metaTitle.length <= 60) issues.push({ type: 'good', text: 'Title tag length is good' });
+        if (kwLower && metaTitle.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Title tag contains focus keyword' });
+        else if (kwLower) issues.push({ type: 'warning', text: 'Focus keyword not in title tag' });
+      }
+
+      if (!metaDesc) issues.push({ type: 'problem', text: 'Meta description is empty' });
+      else {
+        if (metaDesc.length < 120) issues.push({ type: 'warning', text: `Meta description short (${metaDesc.length} chars) — aim for 120-155` });
+        if (metaDesc.length > 155) issues.push({ type: 'warning', text: `Meta description too long (${metaDesc.length} chars) — max 155` });
+        if (metaDesc.length >= 120 && metaDesc.length <= 155) issues.push({ type: 'good', text: 'Meta description length is good' });
+        if (kwLower && metaDesc.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Meta description contains focus keyword' });
+      }
+
+      if (!focusKeyword) issues.push({ type: 'problem', text: 'No focus keyword set' });
+      if (wordCount < 300) issues.push({ type: 'problem', text: `Content is very thin (${wordCount} words)` });
+      else if (wordCount < 800) issues.push({ type: 'warning', text: `Content could be longer (${wordCount} words) — aim for 800+` });
+      else issues.push({ type: 'good', text: `Good content length (${wordCount} words)` });
+
+      if (internalLinks < 3) issues.push({ type: 'warning', text: `Only ${internalLinks} internal links — add more for better linking` });
+      else issues.push({ type: 'good', text: `Good internal linking (${internalLinks} links)` });
+
+      if (images > 0 && imagesWithAlt < images) issues.push({ type: 'warning', text: `${images - imagesWithAlt} image(s) missing alt text` });
+      else if (images > 0) issues.push({ type: 'good', text: 'All images have alt text' });
+
+      if (externalLinks === 0) issues.push({ type: 'warning', text: 'No external links' });
+
+      results.push({
+        id: pg.id,
+        url: url.replace(wpBase, '') || '/',
+        title,
+        yoastScore,
+        yoastReadability,
+        focusKeyword,
+        wordCount,
+        metaTitle,
+        metaTitleLen: metaTitle.length,
+        metaDesc,
+        metaDescLen: metaDesc.length,
+        h1,
+        internalLinks,
+        externalLinks,
+        images,
+        imagesWithAlt,
+        issues
+      });
+    }
+
+    // Sort: red first, then orange, then green
+    const scoreOrder = { red: 0, orange: 1, gray: 2, green: 3 };
+    results.sort((a, b) => (scoreOrder[a.yoastScore] || 2) - (scoreOrder[b.yoastScore] || 2));
+
+    console.log(`[onpage-audit] Analyzed ${results.length} pages. Red: ${results.filter(r => r.yoastScore === 'red').length}, Orange: ${results.filter(r => r.yoastScore === 'orange').length}, Green: ${results.filter(r => r.yoastScore === 'green').length}`);
+    res.json({ pages: results });
+  } catch (e) {
+    console.error('[onpage-audit] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== 11. GSC OAUTH & RANK TRACKING ====================
 
 // Helper: get GSC access token (with auto-refresh)

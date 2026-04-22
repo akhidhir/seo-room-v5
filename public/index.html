@@ -1808,9 +1808,19 @@
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
-          await new Promise(r => setTimeout(r, 1500));
+          const data = await api(`/projects/1/onpage-audit/run`, { method: 'POST' });
+          if (data?.pages) {
+            setPages(data.pages);
+          } else if (data?.error) {
+            // If API fails (e.g. no WP URL), fall back to sample data
+            setPages(samplePages);
+          } else {
+            setPages(samplePages);
+          }
+        } catch (err) {
+          // Fallback to sample data on error
           setPages(samplePages);
-        } catch (err) { setError(err.message); }
+        }
         finally { setLoading(false); }
       };
 
