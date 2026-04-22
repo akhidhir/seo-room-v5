@@ -110,7 +110,7 @@ async function initDb() {
       )
     `);
 
-    // Project integrations (GBP, GSC, DataForSEO, Local Falcon, WordPress, Ahrefs)
+    // Project integrations (DataForSEO, Local Falcon, WordPress, Ahrefs — per-project credentials)
     await client.query(`
       CREATE TABLE IF NOT EXISTS project_integrations (
         id SERIAL PRIMARY KEY,
@@ -120,6 +120,19 @@ async function initDb() {
         status TEXT DEFAULT 'not_connected',
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(project_id, kind)
+      )
+    `);
+
+    // User-level integrations (GSC, GBP — OAuth tokens shared across all projects)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_integrations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        config JSONB,
+        status TEXT DEFAULT 'not_connected',
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, kind)
       )
     `);
 
@@ -283,7 +296,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/health', '/api/gsc/callback'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
@@ -1016,7 +1029,7 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
     // Try to get fresh GSC data first, fall back to stored data
     let gscRows = [];
     let pageRows = [];
-    const accessToken = await getGscAccessToken(projectId);
+    const accessToken = await getGscAccessToken(req.auth?.userId);
 
     if (accessToken) {
       // Find matching GSC site
@@ -1251,8 +1264,8 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     const findings = [];
     const config = project.config && typeof project.config === 'string' ? JSON.parse(project.config) : (project.config || {});
 
-    // Check GBP integration status
-    const gbpInt = await pool.query('SELECT * FROM project_integrations WHERE project_id=$1 AND kind=$2', [projectId, 'gbp']);
+    // Check GBP integration status (user-level)
+    const gbpInt = await pool.query('SELECT * FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth?.userId, 'gbp']);
     const gbpConnected = gbpInt.rows.length > 0 && gbpInt.rows[0].status === 'connected';
 
     // Use project metadata + what we know about the business
@@ -1454,11 +1467,11 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
   }
 });
 
-// ==================== 11. GSC OAUTH & RANK TRACKING ====================
+// ==================== 11. USER-LEVEL OAUTH (GSC & GBP) ====================
 
-// Helper: get GSC access token (with auto-refresh)
-async function getGscAccessToken(projectId) {
-  const r = await pool.query('SELECT config FROM project_integrations WHERE project_id=$1 AND kind=$2 AND status=$3', [projectId, 'gsc', 'connected']);
+// Helper: get GSC access token by userId (user-level, shared across all projects)
+async function getGscAccessToken(userId) {
+  const r = await pool.query('SELECT config FROM user_integrations WHERE user_id=$1 AND kind=$2 AND status=$3', [userId, 'gsc', 'connected']);
   if (r.rows.length === 0) return null;
   let config = r.rows[0].config;
   if (typeof config === 'string') config = JSON.parse(config);
@@ -1478,140 +1491,15 @@ async function getGscAccessToken(projectId) {
     if (newTokens.error) { console.error('[gsc] Token refresh failed:', newTokens.error); return null; }
     config.access_token = newTokens.access_token;
     config.expires_at = Date.now() + (newTokens.expires_in * 1000);
-    await pool.query('UPDATE project_integrations SET config=$1, updated_at=NOW() WHERE project_id=$2 AND kind=$3',
-      [JSON.stringify(config), projectId, 'gsc']);
+    await pool.query('UPDATE user_integrations SET config=$1, updated_at=NOW() WHERE user_id=$2 AND kind=$3',
+      [JSON.stringify(config), userId, 'gsc']);
   }
   return config.access_token;
 }
 
-// Helper: call DataForSEO API
-// ==================== GSC OAUTH ====================
-// Step 1: Start OAuth — redirect user to Google consent
-app.get('/api/gsc/connect/:projectId', (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
-  const state = Buffer.from(JSON.stringify({
-    projectId: req.params.projectId,
-    token: req.headers.authorization?.replace('Bearer ', '')
-  })).toString('base64url');
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GSC_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
-  res.json({ url });
-});
-
-// Step 2: Google callback — exchange code for tokens, store in DB
-app.get('/api/gsc/callback', async (req, res) => {
-  try {
-    const { code, state } = req.query;
-    if (!code || !state) return res.status(400).send('Missing code or state');
-    const { projectId, token } = JSON.parse(Buffer.from(state, 'base64url').toString());
-
-    // Verify JWT
-    let userId;
-    try { userId = jwt.verify(token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
-
-    // Verify project ownership
-    const proj = await pool.query('SELECT id FROM projects WHERE id=$1 AND user_id=$2', [projectId, userId]);
-    if (proj.rows.length === 0) return res.status(403).send('Project not found');
-
-    // Exchange code for tokens
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_REDIRECT_URI, grant_type: 'authorization_code'
-      })
-    });
-    const tokens = await tokenRes.json();
-    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
-
-    // Store in project_integrations
-    await pool.query(
-      `INSERT INTO project_integrations (project_id, kind, config, status)
-       VALUES ($1, 'gsc', $2, 'connected')
-       ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
-      [projectId, JSON.stringify({
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: Date.now() + (tokens.expires_in * 1000)
-      })]
-    );
-    console.log(`[gsc] OAuth tokens stored for project ${projectId}`);
-
-    // Redirect back to dashboard
-    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GSC connected! You can close this tab.</p></body></html>');
-  } catch (err) {
-    console.error('[gsc] OAuth callback error:', err.message);
-    res.status(500).send('OAuth failed: ' + err.message);
-  }
-});
-
-// Check GSC connection status
-app.get('/api/projects/:projectId/gsc/status', async (req, res) => {
-  const r = await pool.query('SELECT status, updated_at FROM project_integrations WHERE project_id=$1 AND kind=$2', [req.params.projectId, 'gsc']);
-  if (r.rows.length === 0) return res.json({ connected: false });
-  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
-});
-
-// ==================== GBP OAUTH ====================
-
-// Step 1: Start GBP OAuth
-app.get('/api/gbp/connect/:projectId', (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
-  const state = Buffer.from(JSON.stringify({
-    projectId: req.params.projectId,
-    token: req.headers.authorization?.replace('Bearer ', '')
-  })).toString('base64url');
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GBP_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GBP_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
-  res.json({ url });
-});
-
-// Step 2: GBP callback
-app.get('/api/gbp/callback', async (req, res) => {
-  try {
-    const { code, state } = req.query;
-    if (!code || !state) return res.status(400).send('Missing code or state');
-    const { projectId, token } = JSON.parse(Buffer.from(state, 'base64url').toString());
-
-    let userId;
-    try { userId = jwt.verify(token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
-
-    const proj = await pool.query('SELECT id FROM projects WHERE id=$1 AND user_id=$2', [projectId, userId]);
-    if (proj.rows.length === 0) return res.status(403).send('Project not found');
-
-    // Exchange code for tokens
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GBP_REDIRECT_URI, grant_type: 'authorization_code'
-      })
-    });
-    const tokens = await tokenRes.json();
-    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
-
-    // Store in project_integrations
-    await pool.query(
-      `INSERT INTO project_integrations (project_id, kind, config, status)
-       VALUES ($1, 'gbp', $2, 'connected')
-       ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
-      [projectId, JSON.stringify({
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: Date.now() + (tokens.expires_in * 1000)
-      })]
-    );
-    console.log(`[gbp] OAuth tokens stored for project ${projectId}`);
-    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GBP connected! You can close this tab.</p></body></html>');
-  } catch (err) {
-    console.error('[gbp] OAuth callback error:', err.message);
-    res.status(500).send('OAuth failed: ' + err.message);
-  }
-});
-
-// GBP token helper
-async function getGbpAccessToken(projectId) {
-  const r = await pool.query('SELECT config FROM project_integrations WHERE project_id=$1 AND kind=$2 AND status=$3', [projectId, 'gbp', 'connected']);
+// Helper: get GBP access token by userId (user-level)
+async function getGbpAccessToken(userId) {
+  const r = await pool.query('SELECT config FROM user_integrations WHERE user_id=$1 AND kind=$2 AND status=$3', [userId, 'gbp', 'connected']);
   if (r.rows.length === 0) return null;
   let config = r.rows[0].config;
   if (typeof config === 'string') config = JSON.parse(config);
@@ -1630,33 +1518,163 @@ async function getGbpAccessToken(projectId) {
     if (newTokens.error) { console.error('[gbp] Token refresh failed:', newTokens.error); return null; }
     config.access_token = newTokens.access_token;
     config.expires_at = Date.now() + (newTokens.expires_in * 1000);
-    await pool.query('UPDATE project_integrations SET config=$1, updated_at=NOW() WHERE project_id=$2 AND kind=$3',
-      [JSON.stringify(config), projectId, 'gbp']);
+    await pool.query('UPDATE user_integrations SET config=$1, updated_at=NOW() WHERE user_id=$2 AND kind=$3',
+      [JSON.stringify(config), userId, 'gbp']);
   }
   return config.access_token;
 }
 
-// GBP status
-app.get('/api/projects/:projectId/gbp/status', async (req, res) => {
-  const r = await pool.query('SELECT status, updated_at FROM project_integrations WHERE project_id=$1 AND kind=$2', [req.params.projectId, 'gbp']);
+// ==================== GSC OAUTH (USER-LEVEL) ====================
+
+// Start GSC OAuth — no projectId needed
+app.get('/api/user/gsc/connect', (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
+  const state = Buffer.from(JSON.stringify({
+    token: req.headers.authorization?.replace('Bearer ', '')
+  })).toString('base64url');
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GSC_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
+  res.json({ url });
+});
+
+// GSC callback — store tokens at user level
+app.get('/api/gsc/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+    const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
+    const token = stateData.token;
+
+    let userId;
+    try { userId = jwt.verify(token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
+
+    // Exchange code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI, grant_type: 'authorization_code'
+      })
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
+
+    // Store in user_integrations (not project_integrations)
+    await pool.query(
+      `INSERT INTO user_integrations (user_id, kind, config, status)
+       VALUES ($1, 'gsc', $2, 'connected')
+       ON CONFLICT (user_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [userId, JSON.stringify({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000)
+      })]
+    );
+    console.log(`[gsc] OAuth tokens stored for user ${userId}`);
+
+    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GSC connected! You can close this tab.</p></body></html>');
+  } catch (err) {
+    console.error('[gsc] OAuth callback error:', err.message);
+    res.status(500).send('OAuth failed: ' + err.message);
+  }
+});
+
+// User-level GSC status
+app.get('/api/user/gsc/status', async (req, res) => {
+  const r = await pool.query('SELECT status, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'gsc']);
   if (r.rows.length === 0) return res.json({ connected: false });
   res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
 });
 
-// GBP disconnect
-app.post('/api/projects/:projectId/gbp/disconnect', async (req, res) => {
-  await pool.query('UPDATE project_integrations SET status=$1, config=$2, updated_at=NOW() WHERE project_id=$3 AND kind=$4',
-    ['disconnected', '{}', req.params.projectId, 'gbp']);
+// User-level GSC disconnect
+app.post('/api/user/gsc/disconnect', async (req, res) => {
+  await pool.query('UPDATE user_integrations SET status=$1, config=$2, updated_at=NOW() WHERE user_id=$3 AND kind=$4',
+    ['disconnected', '{}', req.auth.userId, 'gsc']);
   res.json({ ok: true });
 });
 
-// GBP: List accounts and locations
+// ==================== GBP OAUTH (USER-LEVEL) ====================
+
+// Start GBP OAuth — no projectId needed
+app.get('/api/user/gbp/connect', (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
+  const state = Buffer.from(JSON.stringify({
+    token: req.headers.authorization?.replace('Bearer ', '')
+  })).toString('base64url');
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GBP_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GBP_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
+  res.json({ url });
+});
+
+// GBP callback — store tokens at user level
+app.get('/api/gbp/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+    const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
+    const token = stateData.token;
+
+    let userId;
+    try { userId = jwt.verify(token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GBP_REDIRECT_URI, grant_type: 'authorization_code'
+      })
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
+
+    await pool.query(
+      `INSERT INTO user_integrations (user_id, kind, config, status)
+       VALUES ($1, 'gbp', $2, 'connected')
+       ON CONFLICT (user_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [userId, JSON.stringify({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000)
+      })]
+    );
+    console.log(`[gbp] OAuth tokens stored for user ${userId}`);
+    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GBP connected! You can close this tab.</p></body></html>');
+  } catch (err) {
+    console.error('[gbp] OAuth callback error:', err.message);
+    res.status(500).send('OAuth failed: ' + err.message);
+  }
+});
+
+// User-level GBP status
+app.get('/api/user/gbp/status', async (req, res) => {
+  const r = await pool.query('SELECT status, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'gbp']);
+  if (r.rows.length === 0) return res.json({ connected: false });
+  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
+});
+
+// User-level GBP disconnect
+app.post('/api/user/gbp/disconnect', async (req, res) => {
+  await pool.query('UPDATE user_integrations SET status=$1, config=$2, updated_at=NOW() WHERE user_id=$3 AND kind=$4',
+    ['disconnected', '{}', req.auth.userId, 'gbp']);
+  res.json({ ok: true });
+});
+
+// User-level: get all Google integration statuses
+app.get('/api/user/integrations', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT kind, status, updated_at FROM user_integrations WHERE user_id=$1', [req.auth.userId]);
+    const integrations = {};
+    r.rows.forEach(row => { integrations[row.kind] = { status: row.status, connected: row.status === 'connected', updated_at: row.updated_at }; });
+    res.json({ integrations });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GBP: List accounts and locations (uses user-level token)
 app.get('/api/projects/:projectId/gbp/locations', async (req, res) => {
   try {
-    const accessToken = await getGbpAccessToken(req.params.projectId);
-    if (!accessToken) return res.status(400).json({ error: 'GBP not connected' });
+    const accessToken = await getGbpAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(400).json({ error: 'GBP not connected — connect in Integrations' });
 
-    // List accounts
     const acctRes = await fetch('https://mybusinessaccountmanagement.googleapis.com/v1/accounts', {
       headers: { Authorization: `Bearer ${accessToken}` }
     }).then(r => r.json());
@@ -1664,7 +1682,6 @@ app.get('/api/projects/:projectId/gbp/locations', async (req, res) => {
     const accounts = acctRes.accounts || [];
     if (accounts.length === 0) return res.json({ accounts: [], locations: [] });
 
-    // List locations for each account
     const allLocations = [];
     for (const acct of accounts) {
       const locRes = await fetch(`https://mybusinessbusinessinformation.googleapis.com/v1/${acct.name}/locations?readMask=name,title,storefrontAddress,phoneNumbers,categories,websiteUri,regularHours,metadata`, {
@@ -1681,19 +1698,12 @@ app.get('/api/projects/:projectId/gbp/locations', async (req, res) => {
   }
 });
 
-// Disconnect GSC
-app.post('/api/projects/:projectId/gsc/disconnect', async (req, res) => {
-  await pool.query('UPDATE project_integrations SET status=$1, config=$2, updated_at=NOW() WHERE project_id=$3 AND kind=$4',
-    ['disconnected', '{}', req.params.projectId, 'gsc']);
-  res.json({ ok: true });
-});
-
 // Sync GSC keywords — fetches real positions from Google and stores them
 app.post('/api/projects/:projectId/gsc/sync-keywords', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const accessToken = await getGscAccessToken(projectId);
-    if (!accessToken) return res.status(400).json({ error: 'GSC not connected' });
+    const accessToken = await getGscAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(400).json({ error: 'GSC not connected — connect in Integrations' });
 
     const proj = await pool.query('SELECT domain FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SEO Room v5</title>
+  <title>Agency Interrogations</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -1082,7 +1082,7 @@
           <div className="login-form">
             <div className="login-header">
               <div className="login-title">
-                <i className="fas fa-rocket"></i> SEO Room
+                <i className="fas fa-rocket"></i> Agency Interrogations
               </div>
               <div className="login-subtitle">SEO Automation for Agencies</div>
             </div>
@@ -3868,22 +3868,35 @@
       const [wpCredentials, setWpCredentials] = useState({ url: '', username: '', appPassword: '' });
 
       useEffect(() => {
-        if (project) loadIntegrations();
+        loadIntegrations();
       }, [project?.id]);
 
       const loadIntegrations = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/integrations`);
-          if (data && !data.error) {
-            const raw = data.integrations || data || {};
-            // Normalize: server returns {kind: {status, config}}, frontend expects {kind: {connected: bool, ...}}
-            const normalized = {};
-            for (const [key, val] of Object.entries(raw)) {
-              normalized[key] = { ...val, connected: val.status === 'connected' };
+          // Load user-level integrations (GSC, GBP)
+          const userData = await api('/user/integrations');
+          if (userData && !userData.error) {
+            const raw = userData.integrations || {};
+            setIntegrations(prev => ({
+              ...prev,
+              gsc: raw.gsc || { connected: false },
+              gbp: raw.gbp || { connected: false },
+            }));
+          }
+          // Load project-level integrations (DataForSEO, LocalFalcon, WordPress, Ahrefs)
+          if (project?.id) {
+            const projData = await api(`/projects/${project.id}/integrations`);
+            if (projData && !projData.error) {
+              const raw = projData.integrations || projData || {};
+              const normalized = {};
+              for (const [key, val] of Object.entries(raw)) {
+                if (key === 'gsc' || key === 'gbp') continue; // skip — these are user-level now
+                normalized[key] = { ...val, connected: val.status === 'connected' };
+              }
+              setIntegrations(prev => ({ ...prev, ...normalized }));
             }
-            setIntegrations(prev => ({ ...prev, ...normalized }));
           }
         } catch (err) {
           setError(err.message);
@@ -3895,7 +3908,8 @@
       const handleConnectOAuth = async (type) => {
         try {
           const token = localStorage.getItem('token');
-          const data = await fetch(`/api/${type}/connect/${project.id}`, {
+          // User-level OAuth — no projectId
+          const data = await fetch(`/api/user/${type}/connect`, {
             headers: { 'Authorization': `Bearer ${token}` }
           }).then(r => r.json());
           if (data.url) {
@@ -3908,13 +3922,22 @@
         }
       };
 
+      const handleDisconnectOAuth = async (type) => {
+        try {
+          await api(`/user/${type}/disconnect`, { method: 'POST' });
+          await loadIntegrations();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
       const handleTestConnection = async (type) => {
         setTestLoading((prev) => ({ ...prev, [type]: true }));
         try {
-          if (type === 'gsc') {
-            const data = await api(`/projects/${project.id}/gsc/status`);
-            if (data.connected) alert('GSC connected!');
-            else alert('GSC not connected');
+          if (type === 'gsc' || type === 'gbp') {
+            const data = await api(`/user/${type}/status`);
+            if (data.connected) alert(`${type.toUpperCase()} connected!`);
+            else alert(`${type.toUpperCase()} not connected`);
           } else {
             await api(`/projects/${project.id}/integrations/${type}/test`, { method: 'POST' });
             alert('Connection successful!');
@@ -3949,26 +3972,34 @@
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
+          <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '16px', padding: '10px 14px', background: 'var(--bg2)', borderRadius: '8px' }}>
+            <i className="fas fa-info-circle" style={{ marginRight: '6px' }}></i>
+            Google connections are <strong>account-level</strong> — connect once and they work across all your projects.
+          </div>
+
           {/* Google Business Profile */}
           <div className="integration-card">
             <div className="integration-header">
               <div className="integration-title">
                 <i className="fas fa-map-marker-alt" style={{ marginRight: '8px', color: '#EA4335' }}></i>
                 Google Business Profile
+                <span style={{ fontSize: '11px', color: 'var(--text2)', marginLeft: '8px', fontWeight: 400 }}>Account-level</span>
               </div>
               <div className="integration-status">
                 <div className={`status-dot ${integrations.gbp?.connected ? 'connected' : 'disconnected'}`}></div>
                 <span>{integrations.gbp?.connected ? 'Connected' : 'Not Connected'}</span>
               </div>
             </div>
-            {integrations.gbp?.connected && (
-              <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '12px' }}>
-                {integrations.gbp?.businessName || 'Your Business'}
-              </div>
-            )}
-            <button className="btn btn-primary" onClick={() => handleConnectOAuth('gbp')}>
-              <i className="fas fa-link"></i> {integrations.gbp?.connected ? 'Reconnect' : 'Connect'}
-            </button>
+            <div className="btn-group" style={{ gap: '8px' }}>
+              <button className="btn btn-primary" onClick={() => handleConnectOAuth('gbp')}>
+                <i className="fas fa-link"></i> {integrations.gbp?.connected ? 'Reconnect' : 'Connect'}
+              </button>
+              {integrations.gbp?.connected && (
+                <button className="btn btn-secondary" onClick={() => handleDisconnectOAuth('gbp')}>
+                  <i className="fas fa-unlink"></i> Disconnect
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Google Search Console */}
@@ -3977,20 +4008,23 @@
               <div className="integration-title">
                 <i className="fas fa-chart-line" style={{ marginRight: '8px', color: '#4285F4' }}></i>
                 Google Search Console
+                <span style={{ fontSize: '11px', color: 'var(--text2)', marginLeft: '8px', fontWeight: 400 }}>Account-level</span>
               </div>
               <div className="integration-status">
                 <div className={`status-dot ${integrations.gsc?.connected ? 'connected' : 'disconnected'}`}></div>
                 <span>{integrations.gsc?.connected ? 'Connected' : 'Not Connected'}</span>
               </div>
             </div>
-            {integrations.gsc?.connected && (
-              <div style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '12px' }}>
-                {integrations.gsc?.property || 'Your Property'}
-              </div>
-            )}
-            <button className="btn btn-primary" onClick={() => handleConnectOAuth('gsc')}>
-              <i className="fas fa-link"></i> {integrations.gsc?.connected ? 'Reconnect' : 'Connect'}
-            </button>
+            <div className="btn-group" style={{ gap: '8px' }}>
+              <button className="btn btn-primary" onClick={() => handleConnectOAuth('gsc')}>
+                <i className="fas fa-link"></i> {integrations.gsc?.connected ? 'Reconnect' : 'Connect'}
+              </button>
+              {integrations.gsc?.connected && (
+                <button className="btn btn-secondary" onClick={() => handleDisconnectOAuth('gsc')}>
+                  <i className="fas fa-unlink"></i> Disconnect
+                </button>
+              )}
+            </div>
           </div>
 
           {/* DataForSEO */}
@@ -4463,7 +4497,7 @@
           <div className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
             <div className="sidebar-header">
               <i className="fas fa-rocket"></i>
-              <span>SEO Room</span>
+              <span>Agency Interrogations</span>
             </div>
 
             <div className="sidebar-content">
@@ -4509,7 +4543,7 @@
                   <i className="fas fa-bars"></i>
                 </button>
                 <div>
-                  <div className="topbar-title">{project?.name || 'SEO Room'}</div>
+                  <div className="topbar-title">{project?.name || 'Agency Interrogations'}</div>
                   <div className="topbar-domain">{project?.domain || 'No project selected'}</div>
                 </div>
               </div>
