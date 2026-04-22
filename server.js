@@ -26,8 +26,9 @@ const GBP_SCOPES = 'https://www.googleapis.com/auth/business.manage';
 const GBP_REDIRECT_URI = process.env.GBP_REDIRECT_URI || 'https://seo-room-v5-production.up.railway.app/api/gbp/callback';
 
 // External APIs
-const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN;
-const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
+// Legacy — kept for reference but no longer used
+// const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN;
+// const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
 const LOCAL_FALCON_KEY = process.env.LOCAL_FALCON_KEY;
 const SERPAPI_KEY = process.env.SERPAPI_KEY;
 
@@ -46,9 +47,8 @@ if (!DATABASE_URL) {
 
 // Warn on missing optional integrations
 if (!GOOGLE_CLIENT_ID) console.warn('[boot] GOOGLE_CLIENT_ID not set — GSC OAuth disabled');
-if (!DATAFORSEO_LOGIN) console.warn('[boot] DATAFORSEO_LOGIN not set — SERP rank tracking disabled');
-if (!LOCAL_FALCON_KEY) console.warn('[boot] LOCAL_FALCON_KEY not set — Maps rank tracking disabled');
-if (!SERPAPI_KEY) console.warn('[boot] SERPAPI_KEY not set — SERPapi Maps sync disabled');
+if (!SERPAPI_KEY) console.warn('[boot] SERPAPI_KEY not set — SERP + Maps rank tracking disabled');
+if (!LOCAL_FALCON_KEY) console.warn('[boot] LOCAL_FALCON_KEY not set — Local Falcon grid scanning disabled');
 if (!ANTHROPIC_API_KEY) console.warn('[boot] ANTHROPIC_API_KEY not set — AI audits disabled');
 
 // Database pool
@@ -524,16 +524,15 @@ app.post('/api/projects/:id/integrations/:kind/test', async (req, res) => {
     const { config, status } = r.rows[0];
     const cfg = typeof config === 'string' ? JSON.parse(config) : (config || {});
 
-    if (req.params.kind === 'dataforseo') {
-      if (!cfg.username || !cfg.password) return res.status(400).json({ error: 'Username and password required' });
-      const authHeader = 'Basic ' + Buffer.from(`${cfg.username}:${cfg.password}`).toString('base64');
-      const resp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
-        method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
-        body: JSON.stringify([{ keyword: 'test', location_code: 2036, language_code: 'en' }])
-      });
-      const data = await resp.json();
-      if (data.status_code === 20000) return res.json({ ok: true, message: 'DataForSEO connected successfully' });
-      return res.status(400).json({ error: data.status_message || 'Invalid credentials' });
+    if (req.params.kind === 'serpapi') {
+      if (!cfg.apiKey) return res.status(400).json({ error: 'API key required' });
+      const resp = await fetch(`https://serpapi.com/search.json?engine=google&q=test&api_key=${cfg.apiKey}&num=1`);
+      if (resp.ok) {
+        const data = await resp.json();
+        return res.json({ ok: true, message: `SerpAPI connected — ${data.search_metadata?.status || 'OK'}` });
+      }
+      const text = await resp.text();
+      return res.status(400).json({ error: text.substring(0, 200) || 'Invalid API key' });
     }
 
     if (req.params.kind === 'localfalcon') {
@@ -701,23 +700,17 @@ app.post('/api/action-items/:id/execute', async (req, res) => {
 });
 
 
-// ==================== DATAFORSEO HELPER ====================
+// ==================== SERPAPI HELPER ====================
 
-async function dataforseoRequest(endpoint, method, body) {
-  if (!DATAFORSEO_LOGIN || !DATAFORSEO_PASSWORD) {
-    throw new Error('DataForSEO credentials not configured');
+async function serpApiSearch(params) {
+  if (!SERPAPI_KEY) throw new Error('SERPAPI_KEY not configured');
+  const searchParams = new URLSearchParams({ ...params, api_key: SERPAPI_KEY });
+  const resp = await fetch(`https://serpapi.com/search.json?${searchParams}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`SerpAPI error ${resp.status}: ${text.substring(0, 200)}`);
   }
-  const auth = Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64');
-  const opts = {
-    method,
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json'
-    }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(`https://api.dataforseo.com/v3${endpoint}`, opts);
-  return r.json();
+  return resp.json();
 }
 
 // ==================== 11b. SPEED AUDIT (via SEO Room Helper plugin) ====================
@@ -2215,7 +2208,7 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
 
 // Sync ranks — calls DataForSEO for all tracked keywords
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
-  if (!DATAFORSEO_LOGIN) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to env.' });
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -2227,231 +2220,158 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
 
-    console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}"`);
+    console.log(`[rank-sync] Starting SerpAPI sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}"`);
 
-    // Build DataForSEO tasks — organic SERP (all keywords)
-    const serpTasks = kwRes.rows.map(kw => ({
-      keyword: kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword,
-      location_code: kw.location_code || 2036,
-      language_code: kw.language_code || 'en',
-      device: 'desktop',
-      os: 'windows',
-      depth: 30
-    }));
-
-    // GPS coordinates for Perth suburbs — used for hyper-local Maps searches
-    const suburbCoords = {
-      'leeming': '-32.0728,115.8640', 'cannington': '-32.0170,115.9340', 'east cannington': '-32.0100,115.9500',
-      'ferndale': '-32.0300,115.9500', 'lynwood': '-32.0400,115.9300', 'parkwood': '-32.0450,115.9150',
-      'queens park': '-32.0050,115.9400', 'riverton': '-32.0350,115.8940', 'rossmoyne': '-32.0380,115.8700',
-      'shelley': '-32.0280,115.8800', 'willetton': '-32.0530,115.8890', 'wilson': '-32.0230,115.9100',
-      'canning vale': '-32.0580,115.9180', 'bentley': '-32.0000,115.9200', 'welshpool': '-31.9930,115.9450',
-      'atwell': '-32.1440,115.8640', 'aubin grove': '-32.1640,115.8660', 'banjup': '-32.1290,115.8580',
-      'beeliar': '-32.1350,115.8150', 'bibra lake': '-32.0930,115.8200', 'cockburn': '-32.1300,115.8500',
-      'coogee': '-32.1190,115.7650', 'coolbellup': '-32.0830,115.8030', 'hamilton hill': '-32.0820,115.7770',
-      'hammond park': '-32.1620,115.8470', 'henderson': '-32.1490,115.7730', 'jandakot': '-32.1050,115.8700',
-      'lake coogee': '-32.1280,115.7800', 'munster': '-32.1310,115.7870', 'north coogee': '-32.1100,115.7640',
-      'north lake': '-32.0770,115.8330', 'south lake': '-32.0870,115.8350', 'spearwood': '-32.1050,115.7830',
-      'success': '-32.1440,115.8490', 'treeby': '-32.1500,115.8630', 'wattleup': '-32.1470,115.7990',
-      'yangebup': '-32.1220,115.8140'
+    // GPS coordinates for Perth suburbs
+    const suburbGPS = {
+      'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
+      'east cannington': { lat: -32.0100, lng: 115.9500 }, 'ferndale': { lat: -32.0300, lng: 115.9500 },
+      'lynwood': { lat: -32.0400, lng: 115.9300 }, 'parkwood': { lat: -32.0450, lng: 115.9150 },
+      'queens park': { lat: -32.0050, lng: 115.9400 }, 'riverton': { lat: -32.0350, lng: 115.8940 },
+      'rossmoyne': { lat: -32.0380, lng: 115.8700 }, 'shelley': { lat: -32.0280, lng: 115.8800 },
+      'willetton': { lat: -32.0530, lng: 115.8890 }, 'wilson': { lat: -32.0230, lng: 115.9100 },
+      'canning vale': { lat: -32.0580, lng: 115.9180 }, 'bentley': { lat: -32.0000, lng: 115.9200 },
+      'welshpool': { lat: -31.9930, lng: 115.9450 }, 'atwell': { lat: -32.1440, lng: 115.8640 },
+      'aubin grove': { lat: -32.1640, lng: 115.8660 }, 'banjup': { lat: -32.1290, lng: 115.8580 },
+      'beeliar': { lat: -32.1350, lng: 115.8150 }, 'bibra lake': { lat: -32.0930, lng: 115.8200 },
+      'cockburn': { lat: -32.1300, lng: 115.8500 }, 'coogee': { lat: -32.1190, lng: 115.7650 },
+      'coolbellup': { lat: -32.0830, lng: 115.8030 }, 'hamilton hill': { lat: -32.0820, lng: 115.7770 },
+      'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
+      'jandakot': { lat: -32.1050, lng: 115.8700 }, 'lake coogee': { lat: -32.1280, lng: 115.7800 },
+      'munster': { lat: -32.1310, lng: 115.7870 }, 'north coogee': { lat: -32.1100, lng: 115.7640 },
+      'north lake': { lat: -32.0770, lng: 115.8330 }, 'south lake': { lat: -32.0870, lng: 115.8350 },
+      'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
+      'treeby': { lat: -32.1500, lng: 115.8630 }, 'wattleup': { lat: -32.1470, lng: 115.7990 },
+      'yangebup': { lat: -32.1220, lng: 115.8140 }, 'murdoch': { lat: -32.0660, lng: 115.8430 }
     };
-
-    // Maps/local pack positions are extracted from SERP results (no separate Maps API call)
-
-    // Parallel batch helper — runs N requests concurrently
-    async function batchRequests(tasks, endpoint, label, concurrency = 5) {
-      const responses = new Array(tasks.length).fill(null);
-      for (let i = 0; i < tasks.length; i += concurrency) {
-        const batch = tasks.slice(i, i + concurrency);
-        const promises = batch.map((task, j) =>
-          dataforseoRequest(endpoint, 'POST', [task])
-            .then(resp => { responses[i + j] = resp?.tasks?.[0] || null; })
-            .catch(e => { console.error(`[rank-sync] ${label} error for "${task.keyword}":`, e.message); responses[i + j] = null; })
-        );
-        await Promise.all(promises);
-      }
-      return responses;
-    }
-
-    // Call SERP API — 5 concurrent requests (each with 1 task)
-    console.log(`[rank-sync] Fetching SERP for ${serpTasks.length} keywords (5 parallel)...`);
-    const serpResponses = await batchRequests(serpTasks, '/serp/google/organic/live/advanced', 'SERP');
-
-    // Maps positions now extracted from SERP local pack — no separate Maps API call needed
 
     const results = [];
     const competitors = project.competitors || [];
     const competitorDomains = competitors.map(c => (c.domain || c).replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase());
-
-    // Build maps index: maps results are only for keywords with location
-    // Maps positions extracted from SERP local pack (no separate Maps API)
-
     const baseTime = Date.now();
-    // Process SERP results
-    for (let i = 0; i < kwRes.rows.length; i++) {
-      const kw = kwRes.rows[i];
-      const serpTask = serpResponses[i];
-      // Local pack data extracted from SERP results below
 
-      let serp = { position: null, url: null, title: null, snippet: null, type: null };
-      let maps = { position: null, title: null, rating: null, reviews: null, address: null };
-      let kwCompetitors = [];
-      const localPackTop3 = [];
+    // Process keywords in parallel (5 at a time) via SerpAPI
+    for (let i = 0; i < kwRes.rows.length; i += 5) {
+      const batch = kwRes.rows.slice(i, i + 5);
+      const promises = batch.map(async (kw, j) => {
+        const idx = i + j;
+        const query = kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword;
+        try {
+          // Build SerpAPI params
+          const paramObj = {
+            engine: 'google',
+            q: query,
+            google_domain: 'google.com.au',
+            gl: 'au',
+            hl: 'en',
+            num: 30
+          };
+          // Use GPS coords for suburb-level accuracy
+          const gps = kw.location ? suburbGPS[kw.location.toLowerCase()] : null;
+          if (gps) {
+            paramObj.lat = gps.lat;
+            paramObj.lon = gps.lng;
+          } else {
+            paramObj.location = 'Perth, Western Australia, Australia';
+          }
 
-      // Parse SERP
-      if (serpTask?.result?.[0]?.items) {
-        const items = serpTask.result[0].items;
-        const types = [...new Set(items.map(it => it.type))];
-        if (i === 0) console.log(`[rank-sync] First keyword "${kw.keyword}" has ${items.length} items. Types: ${types.join(', ')}. Matching domain="${domain}"`);
+          const data = await serpApiSearch(paramObj);
+          if (idx === 0) console.log(`[rank-sync] First keyword "${query}" response keys:`, Object.keys(data));
 
-        let lpPos = 0; // track local pack position across items
-        for (const item of items) {
-          const itemDomain = (item.domain || '').replace(/^www\./, '').toLowerCase();
-          const pos = item.rank_group || item.rank_absolute;
+          // Parse organic results
+          let serp = { position: null, url: null, title: null, snippet: null, type: null };
+          let kwCompetitors = [];
+          for (const item of (data.organic_results || [])) {
+            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+            const pos = item.position;
 
-          if (item.type === 'organic') {
-            // Check if this is our site
-            if (domain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain))) {
+            if (domain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain.split('/')[0]))) {
               if (!serp.position) {
-                serp = { position: pos, url: item.url, title: item.title, snippet: item.description, type: 'organic' };
+                serp = { position: pos, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               }
             } else {
-              // Track top 3 organic results as competitors (always)
               if (kwCompetitors.filter(c => c.source === 'serp').length < 3) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.url, title: item.title, source: 'serp' });
+                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
-            // Also add named competitors if not already added
+            // Named competitors
             for (const cd of competitorDomains) {
               if ((itemDomain.includes(cd) || cd.includes(itemDomain)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.url, title: item.title, source: 'serp' });
+                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
           }
 
-          // Local pack — DataForSEO returns each as a top-level item with type 'local_pack'
-          if (item.type === 'local_pack') {
-            lpPos++;
-            const titleLower = (item.title || '').toLowerCase();
+          // Parse local pack
+          let maps = { position: null, title: null, rating: null, reviews: null, address: null };
+          const localPackTop3 = [];
+          const localResults = data.local_results?.places || data.local_results || [];
+          const localPack = Array.isArray(localResults) ? localResults : [];
+          const nameLower = businessName.toLowerCase();
+          const nameNoSpaces = nameLower.replace(/\s+/g, '');
+          const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+
+          for (let p = 0; p < localPack.length; p++) {
+            const place = localPack[p];
+            const titleLower = (place.title || '').toLowerCase();
             const titleNoSpaces = titleLower.replace(/\s+/g, '');
-            const nameLower = businessName.toLowerCase();
-            const nameNoSpaces = nameLower.replace(/\s+/g, '');
-            const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
-            const nameMatch = titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
-              (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)));
-            const domainMatch = domain && itemDomain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain));
+            const pos = place.position || (p + 1);
+            const placeDomain = (place.links?.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
 
-            if (domainMatch || nameMatch) {
-              if (!maps.position) {
-                maps = { position: lpPos, title: item.title, rating: item.rating?.value, reviews: item.rating?.votes_count, address: item.address };
-              }
-            }
-
-            // Always capture top 3 local pack results
-            if (lpPos <= 3) {
-              localPackTop3.push({ position: lpPos, title: item.title, domain: itemDomain, rating: item.rating?.value, reviews: item.rating?.votes_count, source: 'local' });
-            }
-          }
-
-          // Some SERP results have nested items (local_pack container)
-          if (item.items && Array.isArray(item.items)) {
-            for (const sub of item.items) {
-              lpPos++;
-              const subDomain = (sub.domain || '').replace(/^www\./, '').toLowerCase();
-              const subTitleLower = (sub.title || '').toLowerCase();
-              const subTitleNoSpaces = subTitleLower.replace(/\s+/g, '');
-              const nameLower = businessName.toLowerCase();
-              const nameNoSpaces = nameLower.replace(/\s+/g, '');
-              const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
-              const nameMatch = subTitleLower.includes(nameLower) || subTitleNoSpaces.includes(nameNoSpaces) ||
-                (nameWords.length >= 2 && nameWords.every(w => subTitleLower.includes(w)));
-              const domainMatch = domain && subDomain && (subDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(subDomain));
-
-              if (domainMatch || nameMatch) {
-                if (!maps.position) {
-                  maps = { position: lpPos, title: sub.title, rating: sub.rating?.value, reviews: sub.rating?.votes_count, address: sub.address };
-                }
-              }
-
-              if (lpPos <= 3) {
-                localPackTop3.push({ position: lpPos, title: sub.title, domain: subDomain, rating: sub.rating?.value, reviews: sub.rating?.votes_count, source: 'local' });
-              }
-            }
-          }
-        }
-        if (i === 0) console.log(`[rank-sync] First keyword result: serp_pos=${serp.position}, maps_pos=${maps.position}`);
-      } else {
-        if (i === 0) console.log(`[rank-sync] First keyword "${kw.keyword}" SERP task:`, String(JSON.stringify(serpTask?.result?.[0] || serpTask || 'no data')).substring(0, 500));
-      }
-
-      // Add local pack top 3 as competitors (excluding our own business)
-      if (localPackTop3.length > 0) {
-        const nameLower = businessName.toLowerCase();
-        const nameNoSpaces = nameLower.replace(/\s+/g, '');
-        const filtered = localPackTop3.filter(t => {
-          const tLower = (t.title || '').toLowerCase();
-          const tNoSpaces = tLower.replace(/\s+/g, '');
-          return !tLower.includes(nameLower) && !tNoSpaces.includes(nameNoSpaces);
-        });
-        kwCompetitors = [...filtered, ...kwCompetitors];
-        if (!maps.position && i < 3) console.log(`[rank-sync] NO local pack match for "${kw.keyword}" in ${kw.location}. businessName="${businessName}". Top 3:`, localPackTop3.map(t => t.title));
-      }
-
-      // Save to DB
-      await pool.query(
-        `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-        [projectId, kw.keyword, kw.location || '', kw.location_code, kw.language_code,
-         serp.position, serp.url, serp.title, serp.snippet, serp.type,
-         maps.position, maps.title, maps.rating, maps.reviews, maps.address,
-         JSON.stringify(kwCompetitors), new Date(baseTime + i).toISOString()]
-      );
-
-      results.push({ keyword: kw.keyword, location: kw.location, serp_position: serp.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title), competitors: kwCompetitors.length });
-    }
-
-    // Fetch search volume — batch all keywords in one task (up to 700 per task)
-    console.log(`[rank-sync] Fetching search volume for ${kwRes.rows.length} keywords...`);
-    try {
-      const allKeywords = kwRes.rows.map(kw => kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword);
-      const volTask = [{
-        keywords: allKeywords,
-        location_code: 2036,
-        language_code: 'en'
-      }];
-      const volResp = await dataforseoRequest('/keywords_data/google_ads/search_volume/live', 'POST', volTask);
-      console.log(`[rank-sync] Volume API status:`, volResp?.status_code, 'results:', volResp?.tasks?.[0]?.result?.length || 0);
-
-      const volResults = volResp?.tasks?.[0]?.result || [];
-      // Build lookup by keyword
-      const volMap = {};
-      for (const v of volResults) {
-        if (v.keyword) volMap[v.keyword.toLowerCase()] = v;
-      }
-
-      let volSaved = 0;
-      for (const kw of kwRes.rows) {
-        const kwString = (kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword).toLowerCase();
-        const v = volMap[kwString];
-        if (v) {
-          try {
-            await pool.query(
-              `UPDATE rank_keywords SET search_volume=$1, cpc=$2, competition=$3 WHERE id=$4`,
-              [v.search_volume || 0, v.cpc || 0, String(v.competition || ''), kw.id]
+            const nameMatch = nameLower && (
+              titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+              (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
             );
-            volSaved++;
-          } catch(saveErr) {
-            if (volSaved === 0) console.log(`[rank-sync] Volume save error:`, saveErr.message);
+            const domainMatch = domain && placeDomain && (placeDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(placeDomain));
+
+            if ((nameMatch || domainMatch) && !maps.position) {
+              maps = { position: pos, title: place.title, rating: place.rating, reviews: place.reviews, address: place.address };
+            }
+            if (pos <= 3) {
+              localPackTop3.push({ position: pos, title: place.title, rating: place.rating, reviews: place.reviews, source: 'local' });
+            }
           }
+
+          // Add local pack competitors (excluding our business)
+          if (localPackTop3.length > 0) {
+            const filtered = localPackTop3.filter(t => {
+              const tLower = (t.title || '').toLowerCase();
+              const tNoSpaces = tLower.replace(/\s+/g, '');
+              return !tLower.includes(nameLower) && !tNoSpaces.includes(nameNoSpaces);
+            });
+            kwCompetitors = [...filtered, ...kwCompetitors];
+          }
+
+          // Extract search volume from search_information if available
+          const searchInfo = data.search_information || {};
+
+          // Save to DB
+          await pool.query(
+            `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            [projectId, kw.keyword, kw.location || '', kw.location_code, kw.language_code,
+             serp.position, serp.url, serp.title, serp.snippet, serp.type,
+             maps.position, maps.title, maps.rating, maps.reviews, maps.address,
+             JSON.stringify(kwCompetitors), new Date(baseTime + idx).toISOString()]
+          );
+
+          if (idx < 3) console.log(`[rank-sync] "${query}" → serp=${serp.position || '>30'}, maps=${maps.position || 'N/A'}`);
+          results[idx] = { keyword: kw.keyword, location: kw.location, serp_position: serp.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title), competitors: kwCompetitors.length };
+        } catch (err) {
+          console.error(`[rank-sync] Error for "${query}":`, err.message);
+          results[idx] = { keyword: kw.keyword, location: kw.location, error: err.message };
         }
-      }
-      console.log(`[rank-sync] Volume saved for ${volSaved}/${kwRes.rows.length} keywords`);
-    } catch (volErr) {
-      console.log('[rank-sync] Volume fetch failed (non-critical):', volErr.message);
+      });
+      await Promise.all(promises);
     }
 
-    console.log(`[rank-sync] Done. Synced ${results.length} keywords.`);
-    res.json({ ok: true, synced: results.length, results });
+    // Search volume via SerpAPI — use google_trends or keyword info if available
+    // SerpAPI doesn't have a bulk volume endpoint like DataForSEO, so we skip bulk volume fetch
+    // Volume data can be populated via GSC import or manual CSV upload instead
+
+    const synced = results.filter(r => r && !r.error).length;
+    console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords.`);
+    res.json({ ok: true, synced, results: results.filter(Boolean) });
   } catch (e) {
     console.error('[rank-sync] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -2521,9 +2441,9 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Discover keywords a domain ranks for via DataForSEO
+// Discover keywords a domain ranks for via SerpAPI (site: search)
 app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => {
-  if (!DATAFORSEO_LOGIN) return res.status(503).json({ error: 'DataForSEO not configured' });
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -2531,33 +2451,80 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
     const project = projRes.rows[0];
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
 
-    const taskData = [{
-      target: domain,
-      location_code: 2036,
-      language_code: 'en',
-      limit: 200,
-      order_by: ['keyword_data.keyword_info.search_volume,desc'],
-      filters: ['keyword_data.keyword_info.search_volume', '>', 0]
-    }];
+    if (!domain) return res.status(400).json({ error: 'Project has no website/domain configured' });
 
-    console.log(`[discover] Fetching ranked keywords for ${domain}`);
-    const resp = await dataforseoRequest('/dataforseo_labs/google/ranked_keywords/live', 'POST', taskData);
+    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI`);
 
-    if (resp.status_code !== 20000) {
-      console.error('[discover] API error:', JSON.stringify(resp).substring(0, 500));
-      return res.status(400).json({ error: `DataForSEO error: ${resp.status_message || 'Unknown'}` });
+    // Use Google organic search with site: to find pages that rank, then extract keywords
+    // Also check GSC data first as a primary keyword source
+    const keywords = [];
+    const seen = new Set();
+
+    // 1. Pull from GSC if available
+    try {
+      const gscRes = await pool.query(
+        `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT 200`,
+        [projectId]
+      );
+      for (const r of gscRes.rows) {
+        const kw = r.keyword.toLowerCase().trim();
+        if (kw && !seen.has(kw)) {
+          seen.add(kw);
+          keywords.push({ keyword: r.keyword, volume: null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
+        }
+      }
+      console.log(`[discover] Found ${keywords.length} keywords from GSC`);
+    } catch (e) { console.log('[discover] GSC lookup skipped:', e.message); }
+
+    // 2. Use SerpAPI to search for the domain and extract related keywords from SERP features
+    const searchQueries = [`site:${domain}`, domain];
+    for (const q of searchQueries) {
+      try {
+        const data = await serpApiSearch({
+          engine: 'google',
+          q: q,
+          google_domain: 'google.com.au',
+          gl: 'au',
+          hl: 'en',
+          num: 100
+        });
+
+        // Extract related searches as keyword suggestions
+        for (const rs of (data.related_searches || [])) {
+          const kw = (rs.query || '').toLowerCase().trim();
+          if (kw && !seen.has(kw)) {
+            seen.add(kw);
+            keywords.push({ keyword: rs.query, volume: null, position: null, url: null, competition: null, source: 'related' });
+          }
+        }
+
+        // Extract "people also ask" as keyword ideas
+        for (const paa of (data.related_questions || [])) {
+          const kw = (paa.question || '').toLowerCase().trim();
+          if (kw && !seen.has(kw)) {
+            seen.add(kw);
+            keywords.push({ keyword: paa.question, volume: null, position: null, url: null, competition: null, source: 'paa' });
+          }
+        }
+
+        // Extract organic result URLs that belong to this domain
+        for (const item of (data.organic_results || [])) {
+          const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+          if (itemDomain.includes(domain.toLowerCase())) {
+            // The title often contains the primary keyword for this page
+            const title = (item.title || '').toLowerCase().replace(/\s*[-|–—].*$/, '').trim();
+            if (title && title.length > 3 && title.length < 80 && !seen.has(title)) {
+              seen.add(title);
+              keywords.push({ keyword: item.title.replace(/\s*[-|–—].*$/, '').trim(), volume: null, position: item.position, url: item.link, competition: null, source: 'serp' });
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[discover] SerpAPI query "${q}" failed:`, e.message);
+      }
     }
 
-    const items = resp.tasks?.[0]?.result?.[0]?.items || [];
-    const keywords = items.map(item => ({
-      keyword: item.keyword_data?.keyword,
-      volume: item.keyword_data?.keyword_info?.search_volume || 0,
-      position: item.ranked_serp_element?.serp_item?.rank_group || null,
-      url: item.ranked_serp_element?.serp_item?.url || null,
-      competition: item.keyword_data?.keyword_info?.competition || null,
-    })).filter(k => k.keyword);
-
-    console.log(`[discover] Found ${keywords.length} keywords for ${domain}`);
+    console.log(`[discover] Found ${keywords.length} total keywords for ${domain}`);
     res.json({ ok: true, keywords, total: keywords.length });
   } catch (e) {
     console.error('[discover] Error:', e.message);

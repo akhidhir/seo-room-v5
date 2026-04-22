@@ -3866,7 +3866,7 @@
       const [integrations, setIntegrations] = useState({
         gbp: { connected: false },
         gsc: { connected: false },
-        dataforseo: { connected: false },
+        serpapi: { connected: false },
         localfalcon: { connected: false },
         wordpress: { connected: false },
         ahrefs: { active: false },
@@ -3874,7 +3874,7 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [testLoading, setTestLoading] = useState({});
-      const [dfCredentials, setDfCredentials] = useState({ username: '', password: '' });
+      const [serpApiCredentials, setSerpApiCredentials] = useState({ apiKey: '' });
       const [lfCredentials, setLfCredentials] = useState({ apiKey: '' });
       const [wpCredentials, setWpCredentials] = useState({ url: '', username: '', appPassword: '' });
 
@@ -3896,7 +3896,7 @@
               gbp: raw.gbp || { connected: false },
             }));
           }
-          // Load project-level integrations (DataForSEO, LocalFalcon, WordPress, Ahrefs)
+          // Load project-level integrations (SerpAPI, LocalFalcon, WordPress, Ahrefs)
           if (project?.id) {
             const projData = await api(`/projects/${project.id}/integrations`);
             if (projData && !projData.error) {
@@ -3908,9 +3908,9 @@
               }
               setIntegrations(prev => ({ ...prev, ...normalized }));
               // Populate credential inputs from saved config
-              if (normalized.dataforseo?.config) {
-                const c = normalized.dataforseo.config;
-                setDfCredentials({ username: c.username || '', password: c.password || '' });
+              if (normalized.serpapi?.config) {
+                const c = normalized.serpapi.config;
+                setSerpApiCredentials({ apiKey: c.apiKey || '' });
               }
               if (normalized.localfalcon?.config) {
                 const c = normalized.localfalcon.config;
@@ -4060,47 +4060,40 @@
             </div>
           </div>
 
-          {/* DataForSEO */}
+          {/* SerpAPI */}
           <div className="integration-card">
             <div className="integration-header">
               <div className="integration-title">
                 <i className="fas fa-search" style={{ marginRight: '8px', color: '#FF6B35' }}></i>
-                DataForSEO
+                SerpAPI
               </div>
               <div className="integration-status">
-                <div className={`status-dot ${integrations.dataforseo?.connected ? 'connected' : 'disconnected'}`}></div>
-                <span>{integrations.dataforseo?.connected ? 'Connected' : 'Not Connected'}</span>
+                <div className={`status-dot ${integrations.serpapi?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.serpapi?.connected ? 'Connected' : 'Not Connected'}</span>
               </div>
             </div>
             <div className="integration-fields">
               <input
-                type="text"
-                className="form-input"
-                placeholder="Username"
-                value={dfCredentials.username}
-                onChange={(e) => setDfCredentials((prev) => ({ ...prev, username: e.target.value }))}
-              />
-              <input
                 type="password"
                 className="form-input"
-                placeholder="Password"
-                value={dfCredentials.password}
-                onChange={(e) => setDfCredentials((prev) => ({ ...prev, password: e.target.value }))}
+                placeholder="API Key"
+                value={serpApiCredentials.apiKey}
+                onChange={(e) => setSerpApiCredentials((prev) => ({ ...prev, apiKey: e.target.value }))}
               />
               <div className="btn-group">
                 <button
-                  className={`btn ${savedType === 'dataforseo' ? 'btn-success' : 'btn-primary'}`}
-                  onClick={() => handleSaveCredentials('dataforseo', dfCredentials)}
+                  className={`btn ${savedType === 'serpapi' ? 'btn-success' : 'btn-primary'}`}
+                  onClick={() => handleSaveCredentials('serpapi', serpApiCredentials)}
                 >
-                  <i className={`fas ${savedType === 'dataforseo' ? 'fa-check' : 'fa-save'}`}></i> {savedType === 'dataforseo' ? 'Saved' : 'Save'}
+                  <i className={`fas ${savedType === 'serpapi' ? 'fa-check' : 'fa-save'}`}></i> {savedType === 'serpapi' ? 'Saved' : 'Save'}
                 </button>
                 <button
                   className="btn btn-secondary"
-                  onClick={() => handleTestConnection('dataforseo')}
-                  disabled={testLoading.dataforseo}
+                  onClick={() => handleTestConnection('serpapi')}
+                  disabled={testLoading.serpapi}
                 >
-                  {testLoading.dataforseo ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
-                  {testResult.dataforseo || 'Test'}
+                  {testLoading.serpapi ? <span className="spinner"></span> : <i className="fas fa-check"></i>}
+                  {testResult.serpapi || 'Test'}
                 </button>
               </div>
             </div>
