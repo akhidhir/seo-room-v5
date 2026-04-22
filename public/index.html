@@ -3384,19 +3384,21 @@
         setError('');
         try {
           const data = await api('/projects/current');
-          setProject(data.project);
-          setFormData({
-            name: data.project.name,
-            domain: data.project.domain,
-            businessName: data.project.businessName || '',
-            industry: data.project.industry || '',
-            location: data.project.location || '',
-            serviceAreas: data.project.serviceAreas || [],
-            competitors: data.project.competitors || [],
-            isLocalBusiness: data.project.is_local_business !== false,
-            isElementorSite: data.project.is_elementor_site !== false,
-            wordpressUrl: data.project.wordpress_url || '',
-          });
+          if (data?.project) {
+            setProject(data.project);
+            setFormData({
+              name: data.project.name,
+              domain: data.project.domain,
+              businessName: data.project.businessName || '',
+              industry: data.project.industry || '',
+              location: data.project.location || '',
+              serviceAreas: data.project.serviceAreas || [],
+              competitors: data.project.competitors || [],
+              isLocalBusiness: data.project.is_local_business !== false,
+              isElementorSite: data.project.is_elementor_site !== false,
+              wordpressUrl: data.project.wordpress_url || '',
+            });
+          }
         } catch (err) {
           setError(err.message);
         } finally {
