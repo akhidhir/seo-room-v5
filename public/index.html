@@ -1016,7 +1016,7 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback, useMemo } = React;
 
-    const API_BASE = 'http://localhost:3000/api';
+    const API_BASE = window.location.origin + '/api';
 
     const api = async (path, opts = {}) => {
       const token = localStorage.getItem('token');
@@ -2397,8 +2397,8 @@
 
       const loadData = async () => {
         const [kwRes, rankRes] = await Promise.all([
-          api(`/api/projects/${project.id}/rank-tracking/keywords`),
-          api(`/api/projects/${project.id}/rank-tracking/latest`)
+          api(`/projects/${project.id}/rank-tracking/keywords`),
+          api(`/projects/${project.id}/rank-tracking/latest`)
         ]);
         if (Array.isArray(kwRes)) setKeywords(kwRes);
         if (Array.isArray(rankRes)) setRankings(rankRes);
@@ -2407,21 +2407,21 @@
       useEffect(() => { if (project) loadData(); }, [project?.id]);
 
       const addKeyword = async (kw, location) => {
-        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
+        await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
         loadData();
       };
       const removeKeyword = async (id) => {
-        await api(`/api/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
+        await api(`/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
         loadData();
       };
       const deleteAllKeywords = async () => {
         if (!confirm('Delete ALL tracked keywords and ranking data? This cannot be undone.')) return;
-        await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'DELETE' });
+        await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'DELETE' });
         loadData();
       };
       const importKeywords = async () => {
         setImporting(true);
-        const r = await api(`/api/projects/${project.id}/rank-tracking/import`, { method: 'POST', body: { limit: 50 } });
+        const r = await api(`/projects/${project.id}/rank-tracking/import`, { method: 'POST', body: { limit: 50 } });
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setImporting(false);
       };
@@ -2452,9 +2452,9 @@
             }
             if (gscRows.length === 0) { alert('No keywords found in CSV'); setImporting(false); return; }
             // Upload GSC data (positions, clicks, impressions)
-            const gscR = await api(`/api/projects/${project.id}/gsc/upload-csv`, { method: 'POST', body: { rows: gscRows } });
+            const gscR = await api(`/projects/${project.id}/gsc/upload-csv`, { method: 'POST', body: { rows: gscRows } });
             // Also add to rank tracking keywords
-            const kwR = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            const kwR = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
             alert(`Uploaded ${gscR.synced || gscRows.length} GSC keywords with positions + added ${kwR.added || kws.length} to rank tracking`);
             loadData();
           } else {
@@ -2466,7 +2466,7 @@
               if (kw && kw.length > 0) kws.push(kw);
             }
             if (kws.length === 0) { alert('No keywords found in file'); setImporting(false); return; }
-            const r = await api(`/api/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
+            const r = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: kws } });
             if (r.ok) alert(`Imported ${r.added} keywords (${r.total} total)`);
             else if (r.error) alert(r.error);
             loadData();
@@ -2477,7 +2477,7 @@
       };
       const syncRanks = async () => {
         setSyncing(true);
-        const r = await api(`/api/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
+        const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setSyncing(false);
       };
@@ -2528,7 +2528,7 @@
 
       const discoverKeywords = async () => {
         setDiscovering(true);
-        const r = await api(`/api/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
+        const r = await api(`/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
         if (r.ok && r.keywords) {
           // Filter out keywords already tracked
           const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
@@ -2544,7 +2544,7 @@
         if (selectedDiscovered.size === 0) return;
         // Send full data (volume, position, url, competition)
         const kws = discovered.filter(k => selectedDiscovered.has(k.keyword));
-        const r = await api(`/api/projects/${project.id}/rank-tracking/import-discovered`, { method: 'POST', body: { keywords: kws } });
+        const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, { method: 'POST', body: { keywords: kws } });
         if (r.ok) alert(`Added ${r.added} keywords with positions & volume`);
         else if (r.error) alert(r.error);
         setDiscovered(null);
@@ -2570,7 +2570,7 @@
 
       async function loadHistory(kw) {
         setSelectedKw(kw);
-        const r = await api(`/api/projects/${project.id}/rank-tracking/history?keyword=${encodeURIComponent(kw)}&days=90`);
+        const r = await api(`/projects/${project.id}/rank-tracking/history?keyword=${encodeURIComponent(kw)}&days=90`);
         if (Array.isArray(r)) setHistory(r);
       }
 
@@ -2825,14 +2825,14 @@
 
       const handleCheckRankings = async () => {
         setSyncing(true);
-        const r = await api(`/api/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
+        const r = await api(`/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
         if (r.ok) { await loadData(); } else if (r.error) alert(r.error);
         setSyncing(false);
         setMapsChecked(true);
 
       const cleanMapsData = async () => {
         if (!confirm('Clean all old Maps data? This removes stale rankings so you start fresh.')) return;
-        await api(`/api/projects/${project.id}/maps/clean`, { method: 'DELETE' });
+        await api(`/projects/${project.id}/maps/clean`, { method: 'DELETE' });
         setMapsChecked(false);
         loadData();
       };
@@ -2842,7 +2842,7 @@
         if (mapKws.length === 0) return;
         if (!confirm(`Delete all ${mapKws.length} Maps keywords? This cannot be undone.`)) return;
         for (const kw of mapKws) {
-          await api(`/api/projects/${project.id}/rank-tracking/keywords/${kw.id}`, { method: 'DELETE' });
+          await api(`/projects/${project.id}/rank-tracking/keywords/${kw.id}`, { method: 'DELETE' });
         }
         setMapsChecked(false);
         loadData();
@@ -2861,7 +2861,7 @@
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
       const openGenerator = async () => {
-        const areas = await api(`/api/projects/${project.id}/service-areas`);
+        const areas = await api(`/projects/${project.id}/service-areas`);
         if (!Array.isArray(areas) || areas.length === 0) {
           alert('No service areas found. Add them in Settings & Integrations first.');
           return;
@@ -2892,7 +2892,7 @@
         const toAdd = genCombos.filter((_, i) => genSelected.has(i));
         if (toAdd.length === 0) return;
         for (const c of toAdd) {
-          await api(`/api/projects/${project.id}/rank-tracking/keywords`, {
+          await api(`/projects/${project.id}/rank-tracking/keywords`, {
             method: 'POST',
             body: { keywords: [c.service], location: c.location }
           });
@@ -3747,7 +3747,7 @@
 
       const handleConnectOAuth = (type) => {
         // Stub OAuth flow
-        window.open(`http://localhost:3000/oauth/${type}`, 'oauth', 'width=600,height=700');
+        window.open(`/oauth/${type}`, 'oauth', 'width=600,height=700');
       };
 
       const handleTestConnection = async (type) => {
