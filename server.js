@@ -1392,22 +1392,44 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
     if (accessToken && matchedSite) {
       try {
         // Get important pages from sitemap or pageRows
-        const pagesToCheck = (pageRows || [])
-          .sort((a, b) => b.impressions - a.impressions)
-          .slice(0, 15)
-          .map(p => p.page);
-
-        // Also check homepage if not in list
         const baseUrl = `https://${domain}`;
-        if (!pagesToCheck.some(p => p === baseUrl || p === baseUrl + '/')) {
-          pagesToCheck.unshift(baseUrl + '/');
+        const pagesToCheck = [baseUrl + '/'];
+
+        // Add service pages and suburb pages from sitemap or page data
+        const allPages = (pageRows || []).map(p => p.page);
+
+        // Services pages (contain /services, /plumber, /gas-fitting, /blocked-drain etc)
+        const servicePages = allPages.filter(p =>
+          p.match(/\/(services|plumb|gas|drain|hot-water|water-filter|leak|burst|tap|toilet|bathroom|kitchen|emergency)/i)
+        );
+        pagesToCheck.push(...servicePages);
+
+        // Suburb/location pages
+        const serviceAreas = project.service_areas || [];
+        for (const area of serviceAreas) {
+          const suburbSlug = (area.name || '').toLowerCase().replace(/\s+/g, '-');
+          if (suburbSlug) {
+            // Try common URL patterns for suburb pages
+            const suburbUrl = allPages.find(p => p.toLowerCase().includes(suburbSlug));
+            if (suburbUrl && !pagesToCheck.includes(suburbUrl)) pagesToCheck.push(suburbUrl);
+            else if (!pagesToCheck.some(p => p.includes(suburbSlug))) {
+              pagesToCheck.push(`${baseUrl}/plumber-${suburbSlug}/`);
+            }
+          }
         }
+
+        // Also add any remaining high-impression pages not yet included
+        for (const p of allPages.slice(0, 20)) {
+          if (!pagesToCheck.includes(p)) pagesToCheck.push(p);
+        }
+
+        console.log(`[gsc-audit] Indexing check: ${pagesToCheck.length} pages to check (home + services + suburbs)`);
 
         let notIndexed = [];
         let crawledNotIndexed = [];
         let mobileIssues = [];
 
-        for (const pageUrl of pagesToCheck.slice(0, 10)) {
+        for (const pageUrl of pagesToCheck.slice(0, 50)) {
           try {
             const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
               method: 'POST',
@@ -1487,7 +1509,7 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
           findings.push({
             pillar: 'gsc', category: 'Indexing Issues',
             title: 'All checked pages are indexed',
-            description: `${pagesToCheck.slice(0, 10).length} top pages checked — all are indexed by Google.`,
+            description: `${pagesToCheck.length} pages checked (home, services, suburbs) — all are indexed by Google.`,
             recommendation: 'Continue monitoring. New pages should be submitted via GSC sitemap.',
             severity: 'Low',
             current_value: 'All indexed',
