@@ -1675,8 +1675,7 @@
         finally { setPsLoading(null); }
       };
 
-      const handleApprove = (finding) => setApprovedIds(prev => new Set([...prev, finding.id]));
-      const handleReject = (finding) => setFindings(prev => prev.filter(f => f.id !== finding.id));
+      // handleApprove and handleReject defined above
 
       const stats = useMemo(() => ({
         critical: findings.filter(f => f.severity === 'Critical').length,
