@@ -1429,7 +1429,7 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
         let crawledNotIndexed = [];
         let mobileIssues = [];
 
-        for (const pageUrl of pagesToCheck.slice(0, 50)) {
+        for (const pageUrl of pagesToCheck.slice(0, 20)) {
           try {
             const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
               method: 'POST',
@@ -1451,9 +1451,9 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
                   try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
 
                   if (coverageState === 'Crawled - currently not indexed' || coverageState === 'Discovered - currently not indexed') {
-                    crawledNotIndexed.push({ url: path, state: coverageState, lastCrawl: indexStatus.lastCrawlTime });
+                    crawledNotIndexed.push({ url: path, state: coverageState, lastCrawl: indexStatus.lastCrawlTime, robotsTxt: indexStatus.robotsTxtState, indexing: indexStatus.indexingState, crawlable: indexStatus.pageFetchState });
                   } else {
-                    notIndexed.push({ url: path, state: coverageState || verdict, reason: indexStatus.pageFetchState });
+                    notIndexed.push({ url: path, state: coverageState || verdict, reason: indexStatus.pageFetchState, robotsTxt: indexStatus.robotsTxtState, indexing: indexStatus.indexingState, lastCrawl: indexStatus.lastCrawlTime });
                   }
                 }
               }
@@ -1469,38 +1469,40 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
           } catch (e) { /* skip individual page errors */ }
         }
 
-        if (notIndexed.length > 0) {
+        // Create individual findings per page for better detail
+        for (const page of notIndexed) {
           findings.push({
             pillar: 'gsc', category: 'Indexing Issues',
-            title: `${notIndexed.length} important pages NOT indexed`,
-            description: `These pages are not in Google's index: ${notIndexed.map(p => `${p.url} (${p.state})`).join(', ')}`,
-            recommendation: 'Check robots.txt, noindex tags, and canonical tags. Submit these URLs for indexing via GSC. Ensure pages have unique, valuable content.',
+            title: `${page.url} — NOT indexed`,
+            description: `Status: ${page.state}. Fetch state: ${page.reason || 'unknown'}. ${page.robotsTxt ? 'Robots.txt: ' + page.robotsTxt + '.' : ''} ${page.indexing ? 'Indexing state: ' + page.indexing + '.' : ''} This page is completely invisible in Google search results.`,
+            recommendation: `1) Check if ${page.url} has a noindex meta tag or is blocked by robots.txt. 2) Verify the canonical tag points to itself. 3) Submit the URL for indexing in Google Search Console. 4) Add internal links from other pages pointing to this URL.`,
             severity: 'Critical',
-            current_value: `${notIndexed.length} pages not indexed`,
-            recommended_value: 'All important pages indexed'
+            current_value: `Not indexed | ${page.state}`,
+            recommended_value: 'Indexed and ranking'
           });
         }
 
-        if (crawledNotIndexed.length > 0) {
+        for (const page of crawledNotIndexed) {
+          const lastCrawlStr = page.lastCrawl ? new Date(page.lastCrawl).toLocaleDateString() : 'unknown';
           findings.push({
             pillar: 'gsc', category: 'Indexing Issues',
-            title: `${crawledNotIndexed.length} pages crawled but not indexed`,
-            description: `Google crawled these pages but chose not to index them: ${crawledNotIndexed.map(p => `${p.url} (${p.state})`).join(', ')}. This usually means Google doesn't find the content valuable enough.`,
-            recommendation: 'Improve content quality and uniqueness. Add internal links pointing to these pages. Ensure they have clear purpose and aren\'t thin or duplicate content.',
-            severity: crawledNotIndexed.length > 3 ? 'Critical' : 'Medium',
-            current_value: `${crawledNotIndexed.length} crawled, not indexed`,
-            recommended_value: 'All crawled pages indexed'
+            title: `${page.url} — Crawled but NOT indexed`,
+            description: `Status: "${page.state}". Last crawled: ${lastCrawlStr}. Google visited this page but decided not to add it to the index. Common reasons: thin content, duplicate content, low internal links, or Google considers it low quality.`,
+            recommendation: `1) Review the content on ${page.url} — is it unique and valuable? At least 500+ words? 2) Check for duplicate content with other pages on the site. 3) Add 3-5 internal links from high-authority pages pointing to this URL. 4) Add schema markup (FAQ, LocalBusiness). 5) Request indexing in GSC after improvements.`,
+            severity: 'Medium',
+            current_value: `Crawled, not indexed | Last crawl: ${lastCrawlStr}`,
+            recommended_value: 'Indexed and ranking'
           });
         }
 
-        if (mobileIssues.length > 0) {
+        for (const page of mobileIssues) {
           findings.push({
             pillar: 'gsc', category: 'Mobile Usability',
-            title: `${mobileIssues.length} pages with mobile usability issues`,
-            description: `Pages failing mobile usability: ${mobileIssues.map(p => `${p.url} (${p.issues})`).join(', ')}`,
-            recommendation: 'Fix mobile viewport, text sizing, and tap target spacing. Test with Google\'s Mobile-Friendly Test tool.',
+            title: `${page.url} — Mobile usability issues`,
+            description: `Issues found: ${page.issues}. Mobile usability problems hurt rankings since Google uses mobile-first indexing.`,
+            recommendation: `Fix the mobile issues on ${page.url}: ensure proper viewport meta tag, readable text without zooming, adequate tap target sizing, and no horizontal scrolling.`,
             severity: 'Medium',
-            current_value: `${mobileIssues.length} pages with issues`,
+            current_value: `${page.issues}`,
             recommended_value: '0 mobile issues'
           });
         }
