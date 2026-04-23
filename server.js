@@ -993,13 +993,15 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     const baseUrl = `https://${domain}`;
 
-    // Discover pages from multiple sources
+    // Discover pages: ONLY home, services, and suburb pages
     const pageSet = new Set();
+    const serviceKeywords = /\/(service|plumb|gas|drain|hot-water|water-filter|leak|burst|tap|toilet|bathroom|kitchen|emergency|blocked|repair|install|maintenance|fix)/i;
 
     // 1. Homepage
     pageSet.add(baseUrl + '/');
 
-    // 2. From sitemap
+    // 2. From sitemap — filter to only services and suburb pages
+    let allSitemapUrls = [];
     try {
       let sitemapResp = await fetch(`${baseUrl}/sitemap_index.xml`, { signal: AbortSignal.timeout(10000) });
       if (!sitemapResp.ok) sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { signal: AbortSignal.timeout(10000) });
@@ -1013,33 +1015,44 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
               if (subResp.ok) {
                 const subXml = await subResp.text();
                 (subXml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
-                  const url = m.replace(/<\/?loc>/g, '');
-                  if (!url.endsWith('.xml') && !url.match(/\.(jpg|png|gif|pdf)$/i)) pageSet.add(url);
+                  allSitemapUrls.push(m.replace(/<\/?loc>/g, ''));
                 });
               }
             } catch (e) {}
           }
         } else {
           (xml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
-            const url = m.replace(/<\/?loc>/g, '');
-            if (!url.endsWith('.xml') && !url.match(/\.(jpg|png|gif|pdf)$/i)) pageSet.add(url);
+            allSitemapUrls.push(m.replace(/<\/?loc>/g, ''));
           });
         }
       }
     } catch (e) { console.log('[indexing] Sitemap fetch failed:', e.message); }
 
-    // 3. From service areas (suburb pages)
+    // Filter sitemap URLs to only service and suburb pages
     const serviceAreas = project.service_areas || [];
-    for (const area of serviceAreas) {
-      const slug = (area.name || '').toLowerCase().replace(/\s+/g, '-');
-      if (slug) {
-        pageSet.add(`${baseUrl}/plumber-${slug}/`);
-        pageSet.add(`${baseUrl}/${slug}/`);
-      }
+    const suburbSlugs = serviceAreas.map(a => (a.name || '').toLowerCase().replace(/\s+/g, '-')).filter(Boolean);
+
+    for (const url of allSitemapUrls) {
+      if (url.endsWith('.xml') || url.match(/\.(jpg|png|gif|pdf)$/i)) continue;
+      // Include if it matches service keywords
+      if (serviceKeywords.test(url)) { pageSet.add(url); continue; }
+      // Include if it matches a suburb slug
+      if (suburbSlugs.some(slug => url.toLowerCase().includes(slug))) { pageSet.add(url); continue; }
+      // Include if it's a top-level page (e.g. /about/, /contact/, /services/)
+      const path = url.replace(baseUrl, '').replace(/^\/|\/$/g, '');
+      if (path && !path.includes('/') && !path.match(/^(blog|news|tag|category|author|page|feed)/i)) { pageSet.add(url); }
+    }
+
+    // 3. Add suburb pages from service areas (in case not in sitemap)
+    for (const slug of suburbSlugs) {
+      // Try common URL patterns
+      const match = allSitemapUrls.find(u => u.toLowerCase().includes(slug));
+      if (match) pageSet.add(match);
+      else pageSet.add(`${baseUrl}/plumber-${slug}/`);
     }
 
     const allPages = [...pageSet];
-    console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId}`);
+    console.log(`[indexing] Checking ${allPages.length} pages (filtered from ${allSitemapUrls.length} sitemap URLs) for project ${projectId}`);
 
     // Check each page via URL Inspection API
     const results = [];
