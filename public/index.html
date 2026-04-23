@@ -1979,9 +1979,27 @@
     function IndexingPage({ project }) {
       const [results, setResults] = useState([]);
       const [loading, setLoading] = useState(false);
+      const [initialLoading, setInitialLoading] = useState(true);
       const [error, setError] = useState('');
       const [stats, setStats] = useState({ total: 0, indexed: 0, notIndexed: 0, errors: 0 });
       const [filter, setFilter] = useState('all');
+      const [lastChecked, setLastChecked] = useState(null);
+
+      // Load previous results on mount
+      useEffect(() => {
+        (async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+            if (data.results && data.results.length > 0) {
+              setResults(data.results);
+              setStats({ total: data.total || data.results.length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 });
+              if (data.completed_at) setLastChecked(new Date(data.completed_at));
+              else if (data.ran_at) setLastChecked(new Date(data.ran_at));
+            }
+          } catch (err) { console.log('[indexing] No previous results:', err.message); }
+          finally { setInitialLoading(false); }
+        })();
+      }, [project.id]);
 
       const runCheck = async () => {
         setLoading(true); setError('');
@@ -1989,6 +2007,7 @@
           const data = await api(`/projects/${project.id}/indexing/check`, { method: 'POST' });
           setResults(data.results || []);
           setStats({ total: data.total, indexed: data.indexed, notIndexed: data.notIndexed, errors: data.errors });
+          setLastChecked(new Date());
         } catch (err) { setError(err.message); }
         finally { setLoading(false); }
       };
@@ -2041,9 +2060,12 @@
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Check which pages are indexed by Google — home, services, and suburb pages</p>
             </div>
-            <button className="btn btn-primary" onClick={runCheck} disabled={loading} style={{ fontSize: 13 }}>
-              {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Check Indexing</>}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {lastChecked && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Last checked: {lastChecked.toLocaleDateString()} {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+              <button className="btn btn-primary" onClick={runCheck} disabled={loading} style={{ fontSize: 13 }}>
+                {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />{results.length > 0 ? 'Re-check' : 'Check Indexing'}</>}
+              </button>
+            </div>
           </div>
 
           {loading && (
@@ -2188,12 +2210,18 @@
             </div>
           </>}
 
-          {!loading && results.length === 0 && (
+          {!loading && !initialLoading && results.length === 0 && (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
               <i className="fas fa-file-import" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
               <div style={{ fontSize: 16, marginBottom: 8 }}>No indexing check run yet</div>
               <div style={{ fontSize: 13 }}>Click "Check Indexing" to inspect all pages via Google Search Console API.</div>
               <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text3)' }}>Requires GSC connected in Agency Integrations.</div>
+            </div>
+          )}
+          {initialLoading && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <span className="spinner" style={{ marginBottom: 12, display: 'inline-block' }}></span>
+              <div style={{ fontSize: 13 }}>Loading previous results...</div>
             </div>
           )}
         </div>

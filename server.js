@@ -1108,18 +1108,49 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     console.log(`[indexing] Done: ${indexed} indexed, ${notIndexed} not indexed, ${errors} errors out of ${results.length}`);
 
-    res.json({
-      total: results.length,
+    const sortedResults = results.sort((a, b) => {
+      const order = { FAIL: 0, NEUTRAL: 1, ERROR: 2, UNKNOWN: 3, PASS: 4 };
+      return (order[a.verdict] || 3) - (order[b.verdict] || 3);
+    });
+
+    // Save to audits table for persistence
+    const auditData = {
+      total: sortedResults.length,
       indexed,
       notIndexed,
       errors,
-      results: results.sort((a, b) => {
-        const order = { FAIL: 0, NEUTRAL: 1, ERROR: 2, UNKNOWN: 3, PASS: 4 };
-        return (order[a.verdict] || 3) - (order[b.verdict] || 3);
-      }),
-    });
+      results: sortedResults,
+      ran_at: new Date().toISOString(),
+    };
+    try {
+      await pool.query(
+        `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
+         VALUES ($1, 'indexing', 'completed', $2, NOW(), NOW()) RETURNING id`,
+        [projectId, JSON.stringify(auditData)]
+      );
+      console.log(`[indexing] Saved results to audits table for project ${projectId}`);
+    } catch (saveErr) {
+      console.error('[indexing] Failed to save audit:', saveErr.message);
+    }
+
+    res.json(auditData);
   } catch (e) {
     console.error('[indexing] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest indexing results (persistence across navigation)
+app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar='indexing' ORDER BY completed_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ results: [] });
+    const data = typeof result.rows[0].audit_data === 'string' ? JSON.parse(result.rows[0].audit_data) : result.rows[0].audit_data;
+    res.json({ ...data, completed_at: result.rows[0].completed_at });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
