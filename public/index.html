@@ -3814,25 +3814,19 @@
 
             <div className="form-group" style={{ marginTop: 12 }}>
               <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span><i className="fas fa-map-marker-alt" style={{ marginRight: 6, color: '#EA4335' }} />Google Business Profile Location</span>
-                {gbpLocations.length > 0 && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>Connected</span>}
+                <span><i className="fas fa-map-marker-alt" style={{ marginRight: 6, color: '#EA4335' }} />Google Business Profile</span>
+                {formData.gbpLocationId && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>Linked</span>}
               </label>
-              {gbpLocations.length > 0 ? (
-                <select className="form-input" value={formData.gbpLocationId}
-                  onChange={(e) => {
-                    const loc = gbpLocations.find(l => l.id === e.target.value);
-                    setFormData(prev => ({ ...prev, gbpLocationId: e.target.value, gbpLocationName: loc?.title || '' }));
-                  }}>
-                  <option value="">— Select GBP Location —</option>
-                  {gbpLocations.map(l => <option key={l.id} value={l.id}>{l.title} — {l.address}</option>)}
-                </select>
-              ) : (
-                <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, fontSize: 13, color: 'var(--text3)' }}>
-                  {loadingGbp ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }} />Loading locations...</> :
-                    formData.gbpLocationName ? <span style={{ color: 'var(--text)' }}>{formData.gbpLocationName}</span> :
-                    'GBP not connected or no locations found — connect in Agency Integrations'}
-                </div>
-              )}
+              <input
+                type="text"
+                className="form-input"
+                value={formData.gbpLocationId}
+                onChange={(e) => setFormData(prev => ({ ...prev, gbpLocationId: e.target.value }))}
+                placeholder="Paste Google Maps URL or Place ID (e.g. ChIJ...)"
+              />
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+                Find your business on Google Maps → click Share → Copy link → paste here. The system will use this to fetch your exact profile data.
+              </div>
             </div>
           </div>
 
