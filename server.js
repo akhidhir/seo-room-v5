@@ -966,6 +966,151 @@ app.get('/api/projects/:projectId/audits/speed/latest', async (req, res) => {
   }
 });
 
+// ==================== INDEXING STATUS CHECK ====================
+
+// Discover all important pages and check indexing status
+app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const gscProperty = project.gsc_property;
+
+    const accessToken = await getGscAccessToken(req.auth?.userId);
+    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+
+    // Find matching GSC site
+    let matchedSite = gscProperty;
+    if (!matchedSite) {
+      const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }).then(r => r.json());
+      matchedSite = (sites.siteEntry || []).map(s => s.siteUrl).find(s => s.includes(domain.replace(/^www\./, '')));
+    }
+    if (!matchedSite) return res.status(400).json({ error: 'GSC property not found. Set it in Project Settings.' });
+
+    const baseUrl = `https://${domain}`;
+
+    // Discover pages from multiple sources
+    const pageSet = new Set();
+
+    // 1. Homepage
+    pageSet.add(baseUrl + '/');
+
+    // 2. From sitemap
+    try {
+      let sitemapResp = await fetch(`${baseUrl}/sitemap_index.xml`, { signal: AbortSignal.timeout(10000) });
+      if (!sitemapResp.ok) sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { signal: AbortSignal.timeout(10000) });
+      if (sitemapResp.ok) {
+        const xml = await sitemapResp.text();
+        if (xml.includes('<sitemapindex')) {
+          const subUrls = (xml.match(/<loc>([^<]+)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
+          for (const subUrl of subUrls.slice(0, 3)) {
+            try {
+              const subResp = await fetch(subUrl, { signal: AbortSignal.timeout(10000) });
+              if (subResp.ok) {
+                const subXml = await subResp.text();
+                (subXml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
+                  const url = m.replace(/<\/?loc>/g, '');
+                  if (!url.endsWith('.xml') && !url.match(/\.(jpg|png|gif|pdf)$/i)) pageSet.add(url);
+                });
+              }
+            } catch (e) {}
+          }
+        } else {
+          (xml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
+            const url = m.replace(/<\/?loc>/g, '');
+            if (!url.endsWith('.xml') && !url.match(/\.(jpg|png|gif|pdf)$/i)) pageSet.add(url);
+          });
+        }
+      }
+    } catch (e) { console.log('[indexing] Sitemap fetch failed:', e.message); }
+
+    // 3. From service areas (suburb pages)
+    const serviceAreas = project.service_areas || [];
+    for (const area of serviceAreas) {
+      const slug = (area.name || '').toLowerCase().replace(/\s+/g, '-');
+      if (slug) {
+        pageSet.add(`${baseUrl}/plumber-${slug}/`);
+        pageSet.add(`${baseUrl}/${slug}/`);
+      }
+    }
+
+    const allPages = [...pageSet];
+    console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId}`);
+
+    // Check each page via URL Inspection API
+    const results = [];
+    for (const pageUrl of allPages) {
+      try {
+        const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite })
+        });
+        if (inspRes.ok) {
+          const inspData = await inspRes.json();
+          const idx = inspData.inspectionResult?.indexStatusResult || {};
+          const mobile = inspData.inspectionResult?.mobileUsabilityResult || {};
+          const rich = inspData.inspectionResult?.richResultsResult || {};
+          let path;
+          try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+
+          results.push({
+            url: pageUrl,
+            path,
+            verdict: idx.verdict || 'UNKNOWN',
+            coverageState: idx.coverageState || 'Unknown',
+            robotsTxtState: idx.robotsTxtState || null,
+            indexingState: idx.indexingState || null,
+            pageFetchState: idx.pageFetchState || null,
+            lastCrawlTime: idx.lastCrawlTime || null,
+            crawledAs: idx.crawledAs || null,
+            googleCanonical: idx.googleCanonical || null,
+            userCanonical: idx.userCanonical || null,
+            referringUrls: idx.referringUrls || [],
+            mobileVerdict: mobile.verdict || null,
+            mobileIssues: (mobile.issues || []).map(i => i.issueType),
+            richVerdict: rich.verdict || null,
+          });
+        } else {
+          let path;
+          try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+          const errText = await inspRes.text();
+          results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: `API error: ${inspRes.status}`, error: errText.substring(0, 100) });
+        }
+      } catch (e) {
+        let path;
+        try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+        results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: e.message });
+      }
+    }
+
+    // Summary stats
+    const indexed = results.filter(r => r.verdict === 'PASS').length;
+    const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length;
+    const errors = results.filter(r => r.verdict === 'ERROR').length;
+
+    console.log(`[indexing] Done: ${indexed} indexed, ${notIndexed} not indexed, ${errors} errors out of ${results.length}`);
+
+    res.json({
+      total: results.length,
+      indexed,
+      notIndexed,
+      errors,
+      results: results.sort((a, b) => {
+        const order = { FAIL: 0, NEUTRAL: 1, ERROR: 2, UNKNOWN: 3, PASS: 4 };
+        return (order[a.verdict] || 3) - (order[b.verdict] || 3);
+      }),
+    });
+  } catch (e) {
+    console.error('[indexing] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== ON-PAGE AUDIT (Yoast + Content Analysis) ====================
 
 // Run on-page audit — fetches Yoast scores + WP pages, analyzes content

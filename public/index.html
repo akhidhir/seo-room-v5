@@ -1975,6 +1975,148 @@
     }
 
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
+    // ============ INDEXING PAGE ============
+    function IndexingPage({ project }) {
+      const [results, setResults] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [stats, setStats] = useState({ total: 0, indexed: 0, notIndexed: 0, errors: 0 });
+      const [filter, setFilter] = useState('all');
+
+      const runCheck = async () => {
+        setLoading(true); setError('');
+        try {
+          const data = await api(`/projects/${project.id}/indexing/check`, { method: 'POST' });
+          setResults(data.results || []);
+          setStats({ total: data.total, indexed: data.indexed, notIndexed: data.notIndexed, errors: data.errors });
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+      };
+
+      const filtered = filter === 'all' ? results
+        : filter === 'indexed' ? results.filter(r => r.verdict === 'PASS')
+        : filter === 'not-indexed' ? results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL')
+        : results.filter(r => r.verdict === 'ERROR');
+
+      const verdictColor = (v) => v === 'PASS' ? '#22c55e' : v === 'FAIL' ? '#ef4444' : v === 'NEUTRAL' ? '#f59e0b' : '#64748b';
+      const verdictLabel = (r) => {
+        if (r.verdict === 'PASS') return 'Indexed';
+        if (r.verdict === 'FAIL') return r.coverageState || 'Not Indexed';
+        if (r.verdict === 'NEUTRAL') return r.coverageState || 'Excluded';
+        return r.coverageState || 'Error';
+      };
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-file-import" style={{ marginRight: 10, color: 'var(--accent)' }} />Indexing Status
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Check which pages are indexed by Google — home, services, and suburb pages</p>
+            </div>
+            <button className="btn btn-primary" onClick={runCheck} disabled={loading} style={{ fontSize: 13 }}>
+              {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Check Indexing</>}
+            </button>
+          </div>
+
+          {loading && (
+            <div className="audit-loading-overlay">
+              <span className="spinner-large"></span>
+              <div className="audit-loading-text">Checking Indexing Status</div>
+              <div className="audit-loading-sub">Inspecting each page via Google Search Console API... this may take a minute</div>
+            </div>
+          )}
+
+          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {!loading && results.length > 0 && <>
+            {/* Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { label: 'Total Pages', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
+                { label: 'Indexed', value: stats.indexed, color: '#22c55e', icon: 'fas fa-check-circle' },
+                { label: 'Not Indexed', value: stats.notIndexed, color: '#ef4444', icon: 'fas fa-times-circle' },
+                { label: 'Errors', value: stats.errors, color: '#64748b', icon: 'fas fa-exclamation-triangle' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: '1px solid var(--border)', cursor: 'pointer' }}
+                  onClick={() => setFilter(s.label === 'Total Pages' ? 'all' : s.label === 'Indexed' ? 'indexed' : s.label === 'Not Indexed' ? 'not-indexed' : 'errors')}>
+                  <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
+                  <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Filter tabs */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: 'var(--bg)', borderRadius: 8, padding: 3 }}>
+              {[
+                { id: 'all', label: `All (${stats.total})` },
+                { id: 'indexed', label: `Indexed (${stats.indexed})` },
+                { id: 'not-indexed', label: `Not Indexed (${stats.notIndexed})` },
+                { id: 'errors', label: `Errors (${stats.errors})` },
+              ].map(t => (
+                <button key={t.id} onClick={() => setFilter(t.id)} style={{
+                  flex: 1, padding: '8px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  background: filter === t.id ? 'var(--primary)' : 'transparent',
+                  color: filter === t.id ? '#fff' : 'var(--text3)',
+                }}>{t.label}</button>
+              ))}
+            </div>
+
+            {/* Results table */}
+            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.5fr 1fr 1fr 0.8fr', padding: '12px 16px', background: 'var(--bg)', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '1px solid var(--border)' }}>
+                <span>Page URL</span>
+                <span>Status</span>
+                <span>Last Crawl</span>
+                <span>Mobile</span>
+                <span>Robots</span>
+              </div>
+              {filtered.map((r, idx) => (
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1.5fr 1fr 1fr 0.8fr', padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, alignItems: 'center',
+                  background: r.verdict === 'FAIL' ? 'rgba(239,68,68,0.05)' : r.verdict === 'NEUTRAL' ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontWeight: 600 }}>{r.path}</span>
+                    {r.googleCanonical && r.googleCanonical !== r.url && (
+                      <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>Canonical: {r.googleCanonical}</div>
+                    )}
+                  </div>
+                  <div>
+                    <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                      background: `${verdictColor(r.verdict)}20`, color: verdictColor(r.verdict) }}>
+                      {verdictLabel(r)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                    {r.lastCrawlTime ? new Date(r.lastCrawlTime).toLocaleDateString() : '—'}
+                  </div>
+                  <div>
+                    {r.mobileVerdict === 'PASS' ? <span style={{ color: '#22c55e', fontSize: 12 }}><i className="fas fa-check" /> OK</span>
+                      : r.mobileVerdict === 'FAIL' ? <span style={{ color: '#ef4444', fontSize: 12 }}><i className="fas fa-times" /> {(r.mobileIssues || []).join(', ') || 'Fail'}</span>
+                      : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: r.robotsTxtState === 'ALLOWED' ? '#22c55e' : r.robotsTxtState === 'DISALLOWED' ? '#ef4444' : 'var(--text3)' }}>
+                    {r.robotsTxtState === 'ALLOWED' ? 'Allowed' : r.robotsTxtState === 'DISALLOWED' ? 'Blocked' : '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>}
+
+          {!loading && results.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-file-import" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No indexing check run yet</div>
+              <div style={{ fontSize: 13 }}>Click "Check Indexing" to inspect all pages via Google Search Console API.</div>
+              <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text3)' }}>Requires GSC connected in Agency Integrations.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     function OnPageAuditPage({ project }) {
       const [pages, setPages] = useState([]);
       const [loading, setLoading] = useState(false);
@@ -4637,6 +4779,8 @@
             return <TechnicalAuditPage project={project} />;
           case 'onpage-audit':
             return <OnPageAuditPage project={project} />;
+          case 'indexing':
+            return <IndexingPage project={project} />;
           case 'gbp-actions':
             return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" project={project} />;
           case 'gsc-actions':
@@ -4678,6 +4822,7 @@
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line' },
           { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
           { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
+          { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
         ]},
         { section: 'ACTION PLAN', items: [
           { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
