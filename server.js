@@ -450,8 +450,10 @@ app.put('/api/projects/:id', async (req, res) => {
        gsc_property || null, gbp_location_id || null, gbp_location_name || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
     res.json({ project: result.rows[0] });
   } catch (e) {
+    console.error('[project-update] Error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1123,17 +1125,17 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
       ran_at: new Date().toISOString(),
     };
     try {
-      await pool.query(
+      const saveResult = await pool.query(
         `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
-         VALUES ($1, 'indexing', 'completed', $2, NOW(), NOW()) RETURNING id`,
-        [projectId, JSON.stringify(auditData)]
+         VALUES ($1::int, 'indexing', 'completed', $2::jsonb, NOW(), NOW()) RETURNING id`,
+        [parseInt(projectId), JSON.stringify(auditData)]
       );
-      console.log(`[indexing] Saved results to audits table for project ${projectId}`);
+      console.log(`[indexing] Saved audit id=${saveResult.rows[0].id} for project ${projectId} (${sortedResults.length} pages)`);
     } catch (saveErr) {
-      console.error('[indexing] Failed to save audit:', saveErr.message);
+      console.error('[indexing] Failed to save audit:', saveErr.message, saveErr.stack);
     }
 
-    res.json(auditData);
+    res.json({ ...auditData, saved: true });
   } catch (e) {
     console.error('[indexing] Error:', e.message);
     res.status(500).json({ error: e.message });

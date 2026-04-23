@@ -1987,19 +1987,22 @@
 
       // Load previous results on mount
       useEffect(() => {
+        if (!project?.id) { setInitialLoading(false); return; }
         (async () => {
           try {
+            console.log('[indexing] Loading previous results for project', project.id);
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+            console.log('[indexing] Got data:', data?.total, 'pages,', data?.results?.length, 'results');
             if (data.results && data.results.length > 0) {
               setResults(data.results);
               setStats({ total: data.total || data.results.length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 });
               if (data.completed_at) setLastChecked(new Date(data.completed_at));
               else if (data.ran_at) setLastChecked(new Date(data.ran_at));
             }
-          } catch (err) { console.log('[indexing] No previous results:', err.message); }
+          } catch (err) { console.error('[indexing] Failed to load previous results:', err.message); }
           finally { setInitialLoading(false); }
         })();
-      }, [project.id]);
+      }, [project?.id]);
 
       const runCheck = async () => {
         setLoading(true); setError('');
@@ -4012,18 +4015,20 @@
 
       const handleAddCompetitor = () => {
         if (!newCompetitor.trim()) return;
-        setFormData((prev) => ({
-          ...prev,
-          competitors: [...prev.competitors, newCompetitor],
-        }));
+        const updated = [...formData.competitors, newCompetitor.trim()];
+        setFormData((prev) => ({ ...prev, competitors: updated }));
         setNewCompetitor('');
+        // Auto-save competitors
+        const pid = project?.id || currentProject?.id;
+        if (pid) api(`/projects/${pid}`, { method: 'PUT', body: { competitors: updated } }).catch(e => console.error('Save competitors:', e));
       };
 
       const handleRemoveCompetitor = (index) => {
-        setFormData((prev) => ({
-          ...prev,
-          competitors: prev.competitors.filter((_, i) => i !== index),
-        }));
+        const updated = formData.competitors.filter((_, i) => i !== index);
+        setFormData((prev) => ({ ...prev, competitors: updated }));
+        // Auto-save competitors
+        const pid = project?.id || currentProject?.id;
+        if (pid) api(`/projects/${pid}`, { method: 'PUT', body: { competitors: updated } }).catch(e => console.error('Save competitors:', e));
       };
 
       const loadGscSites = async () => {
