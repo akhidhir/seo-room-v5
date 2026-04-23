@@ -1400,7 +1400,36 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
   }
 });
 
-// ==================== GBP AUDIT (AI-Powered via Google Places API + SerpAPI fallback) ====================
+// ==================== GBP AUDIT (Comprehensive Local SEO Audit) ====================
+
+// Australian business directory database
+const AUSTRALIAN_DIRECTORIES = [
+  { name: 'Google Business Profile', url: 'business.google.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 1, description: 'Most important local listing — drives Maps rankings' },
+  { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 2, description: 'Growing in importance with iPhone users' },
+  { name: 'Bing Places', url: 'bingplaces.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 3, description: 'Powers Bing, Cortana, and some voice search results' },
+  { name: 'Yellow Pages Australia', url: 'yellowpages.com.au', type: 'Major', free: true, paid_option: '$30-300/mo', difficulty: 'Easy', priority: 4, description: 'High DA Australian directory, free basic listing' },
+  { name: 'True Local', url: 'truelocal.com.au', type: 'Major', free: true, paid_option: '$20-200/mo', difficulty: 'Easy', priority: 5, description: 'Popular Australian directory with good SEO authority' },
+  { name: 'Hotfrog', url: 'hotfrog.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 6, description: 'Free Australian business directory with decent DA' },
+  { name: 'Local Business Guide', url: 'localbusinessguide.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 7, description: 'Australian local business directory' },
+  { name: 'Start Local', url: 'startlocal.com.au', type: 'Major', free: true, paid_option: '$99-499/yr', difficulty: 'Easy', priority: 8, description: 'Australian directory with categories' },
+  { name: 'Yelp Australia', url: 'yelp.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 9, description: 'International directory, helps with global SEO signals' },
+  { name: 'Facebook Business', url: 'facebook.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 10, description: 'Social proof + local signals + reviews' },
+  { name: 'LinkedIn Company', url: 'linkedin.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 11, description: 'Professional presence, B2B signals' },
+  { name: 'Word of Mouth', url: 'wordofmouth.com.au', type: 'Major', free: true, paid_option: 'Contact for pricing', difficulty: 'Easy', priority: 12, description: 'Australian review platform, good for tradies' },
+  { name: 'Oneflare', url: 'oneflare.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 13, description: 'Lead gen for trades/services, good citations' },
+  { name: 'hipages', url: 'hipages.com.au', type: 'Industry', free: false, paid_option: '$50-500/mo', difficulty: 'Medium', priority: 14, description: 'Top trades directory in Australia, strong local SEO' },
+  { name: 'ServiceSeeking', url: 'serviceseeking.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 15, description: 'Trades lead gen platform with business profiles' },
+  { name: 'Bark', url: 'bark.com', type: 'Industry', free: true, paid_option: 'Pay per lead', difficulty: 'Easy', priority: 16, description: 'International service marketplace' },
+  { name: 'Localsearch', url: 'localsearch.com.au', type: 'Major', free: true, paid_option: '$30-200/mo', difficulty: 'Easy', priority: 17, description: 'Australian business directory and digital marketing' },
+  { name: 'Australian Business Directory', url: 'australianbusinessdirectory.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 18, description: 'Basic free Australian listing' },
+  { name: 'dLook', url: 'dlook.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 19, description: 'Free Australian business directory' },
+  { name: 'Superpages', url: 'superpages.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 20, description: 'Australian online directory' },
+  { name: 'Fyple', url: 'fyple.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 21, description: 'Free business listing directory' },
+  { name: 'EnrollBusiness', url: 'enrollbusiness.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 22, description: 'Free international business directory' },
+  { name: 'Cylex', url: 'cylex.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 23, description: 'Free business directory with map integration' },
+  { name: 'Spoke', url: 'spoke.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 24, description: 'Business profile and networking' },
+  { name: 'Foursquare', url: 'foursquare.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 25, description: 'Location data powers Apple Maps, Uber, and others' },
+];
 
 app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
   const { projectId } = req.params;
@@ -1420,14 +1449,15 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const businessName = project.business_name || project.name || '';
     const location = project.location || '';
+    const industry = project.industry || '';
     const GOOGLE_KEY = process.env.PAGESPEED_API_KEY || process.env.GOOGLE_API_KEY;
 
-    // ===== PHASE 1: Gather GBP data via Google Places API =====
-    const gbpData = { profile: null, source: 'none', mapsRankings: [] };
+    // ===== PHASE 1: Gather all data =====
+    const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
+    // 1. Get business profile via Google Places API
     if (GOOGLE_KEY && businessName) {
       try {
-        // Step 1: Text Search to find the place
         const searchQuery = location ? `${businessName} ${location.split(',')[0].trim()}` : businessName;
         console.log(`[gbp-audit] Places API search: "${searchQuery}"`);
 
@@ -1436,20 +1466,14 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.types,places.primaryType,places.primaryTypeDisplayName,places.editorialSummary,places.regularOpeningHours,places.photos,places.reviews,places.businessStatus,places.currentOpeningHours,places.priceLevel,places.googleMapsUri,places.shortFormattedAddress,places.servesBreakfast,places.paymentOptions,places.accessibilityOptions'
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.types,places.primaryType,places.primaryTypeDisplayName,places.editorialSummary,places.regularOpeningHours,places.photos,places.reviews,places.businessStatus,places.googleMapsUri'
           },
           body: JSON.stringify({ textQuery: searchQuery, languageCode: 'en' })
         });
 
-        if (!searchResp.ok) {
-          const errText = await searchResp.text();
-          console.error(`[gbp-audit] Places API search error ${searchResp.status}: ${errText.substring(0, 300)}`);
-        } else {
+        if (searchResp.ok) {
           const searchData = await searchResp.json();
           const places = searchData.places || [];
-          console.log(`[gbp-audit] Places API returned ${places.length} results`);
-
-          // Find best match
           const match = places.find(p =>
             (p.websiteUri && p.websiteUri.includes(domain)) ||
             (p.displayName?.text && p.displayName.text.toLowerCase().includes(businessName.split(' ')[0].toLowerCase()))
@@ -1459,8 +1483,8 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
             gbpData.source = 'google_places';
             gbpData.profile = {
               name: match.displayName?.text || '',
-              address: match.formattedAddress || match.shortFormattedAddress || '',
-              phone: match.nationalPhoneNumber || match.internationalPhoneNumber || null,
+              address: match.formattedAddress || '',
+              phone: match.nationalPhoneNumber || null,
               website: match.websiteUri || null,
               rating: match.rating || null,
               reviewCount: match.userRatingCount || 0,
@@ -1468,172 +1492,203 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
               primaryType: match.primaryTypeDisplayName?.text || match.primaryType || null,
               description: match.editorialSummary?.text || null,
               businessStatus: match.businessStatus || null,
-              priceLevel: match.priceLevel || null,
               googleMapsUrl: match.googleMapsUri || null,
-              placeId: match.id || null,
-
-              // Hours
-              hours: null,
-              hoursText: null,
-
-              // Photos
               photoCount: (match.photos || []).length,
-              photoRefs: (match.photos || []).slice(0, 5).map(p => p.name),
-
-              // Reviews (full text from API!)
+              hoursSet: !!(match.regularOpeningHours?.periods),
+              hoursText: (match.regularOpeningHours?.weekdayDescriptions || []).join('; '),
+              hoursDays: (match.regularOpeningHours?.periods || []).length,
               reviews: (match.reviews || []).map(r => ({
                 rating: r.rating,
-                text: r.text?.text || r.originalText?.text || '',
-                time: r.publishTime || r.relativePublishTimeDescription || '',
-                authorName: r.authorAttribution?.displayName || '',
-                hasResponse: !!(r.flagContentUri), // Places API doesn't return owner responses in search
+                text: (r.text?.text || '').substring(0, 150),
+                time: r.relativePublishTimeDescription || '',
+                author: r.authorAttribution?.displayName || '',
               })),
             };
-
-            // Parse hours
-            if (match.regularOpeningHours) {
-              gbpData.profile.hours = match.regularOpeningHours.periods || [];
-              gbpData.profile.hoursText = (match.regularOpeningHours.weekdayDescriptions || []).join('; ');
-              gbpData.profile.openNow = match.regularOpeningHours.openNow;
-            }
-
-            // Count reviews by star
-            if (gbpData.profile.reviews.length > 0) {
-              gbpData.profile.reviewsByRating = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
-              gbpData.profile.reviews.forEach(r => {
-                if (r.rating >= 1 && r.rating <= 5) gbpData.profile.reviewsByRating[r.rating]++;
-              });
-              gbpData.profile.unansweredReviews = gbpData.profile.reviews.filter(r => !r.hasResponse).length;
-            }
-
-            console.log(`[gbp-audit] Places API profile: "${gbpData.profile.name}", rating: ${gbpData.profile.rating}, reviews: ${gbpData.profile.reviewCount}, photos: ${gbpData.profile.photoCount}, type: ${gbpData.profile.primaryType}, description: ${gbpData.profile.description ? 'yes' : 'no'}`);
-            console.log(`[gbp-audit] Hours: ${gbpData.profile.hoursText ? 'yes' : 'no'}, Types: ${gbpData.profile.types.length}`);
+            console.log(`[gbp-audit] Profile: "${gbpData.profile.name}", ${gbpData.profile.rating}★, ${gbpData.profile.reviewCount} reviews, ${gbpData.profile.photoCount} photos, desc: ${gbpData.profile.description ? 'yes' : 'no'}`);
           }
+        } else {
+          const err = await searchResp.text();
+          console.error(`[gbp-audit] Places API error ${searchResp.status}: ${err.substring(0, 200)}`);
         }
-      } catch (e) {
-        console.error('[gbp-audit] Places API error:', e.message);
-      }
+      } catch (e) { console.error('[gbp-audit] Places API error:', e.message); }
     }
 
-    // Fallback to SerpAPI if Places API failed
+    // Fallback to SerpAPI
     if (!gbpData.profile && SERPAPI_KEY && businessName) {
       try {
-        console.log(`[gbp-audit] Falling back to SerpAPI`);
-        const searchQueries = [businessName, `${businessName} ${domain}`].filter(Boolean);
-        let data = null;
-        for (const q of searchQueries) {
-          data = await serpApiSearch({ engine: 'google_maps', q, type: 'search' });
-          if ((data.local_results || []).length > 0) break;
-        }
-        const results = (data?.local_results) || [];
-        const match = results.find(r => r.website?.includes(domain) || r.title?.toLowerCase().includes(businessName.split(' ')[0].toLowerCase())) || results[0];
+        const data = await serpApiSearch({ engine: 'google_maps', q: businessName, type: 'search' });
+        const match = (data.local_results || []).find(r => r.website?.includes(domain)) || (data.local_results || [])[0];
         if (match) {
           gbpData.source = 'serpapi';
           gbpData.profile = {
             name: match.title, address: match.address, phone: match.phone,
             website: match.website, rating: match.rating, reviewCount: match.reviews,
             primaryType: match.type, types: match.types || [],
-            description: match.description || null,
-            photoCount: null, hours: null, hoursText: null, reviews: [],
+            photoCount: null, hoursSet: null, description: null, reviews: [],
           };
-          console.log(`[gbp-audit] SerpAPI fallback: "${match.title}", rating: ${match.rating}`);
         }
       } catch (e) { console.log(`[gbp-audit] SerpAPI fallback failed: ${e.message}`); }
     }
 
-    // Get maps ranking data from DB
+    // 2. Get maps ranking data + identify competitors
     const mapsData = await pool.query(
       `SELECT keyword, location, maps_position, maps_title, maps_rating, maps_reviews, checked_at
        FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL
-       ORDER BY checked_at DESC LIMIT 100`, [projectId]
+       ORDER BY checked_at DESC LIMIT 200`, [projectId]
     );
     gbpData.mapsRankings = mapsData.rows.map(r => ({
       keyword: r.keyword, location: r.location,
       position: r.maps_position, rating: r.maps_rating, reviews: r.maps_reviews,
     }));
 
-    const serviceAreas = project.service_areas || [];
+    // Extract top competitors from maps data (businesses ranking above us)
+    const competitorMap = {};
+    for (const r of mapsData.rows) {
+      if (r.maps_title && r.maps_title.toLowerCase() !== businessName.toLowerCase()) {
+        if (!competitorMap[r.maps_title]) {
+          competitorMap[r.maps_title] = { name: r.maps_title, rating: r.maps_rating, reviews: r.maps_reviews, appearances: 0, avgPosition: 0, keywords: [] };
+        }
+        competitorMap[r.maps_title].appearances++;
+        competitorMap[r.maps_title].keywords.push({ keyword: r.keyword, location: r.location, position: r.maps_position });
+      }
+    }
+    // Top 5 competitors by appearances
+    gbpData.competitors = Object.values(competitorMap)
+      .sort((a, b) => b.appearances - a.appearances)
+      .slice(0, 5)
+      .map(c => ({
+        ...c,
+        avgPosition: (c.keywords.reduce((s, k) => s + k.position, 0) / c.keywords.length).toFixed(1),
+        keywords: c.keywords.slice(0, 5),
+      }));
 
-    console.log(`[gbp-audit] Final data: source=${gbpData.source}, profile=${!!gbpData.profile}, mapsRankings=${gbpData.mapsRankings.length}`);
+    // 3. Look up top competitor profiles via Places API for comparison
+    if (GOOGLE_KEY && gbpData.competitors.length > 0) {
+      for (const comp of gbpData.competitors.slice(0, 3)) {
+        try {
+          const compResp = await fetch('https://places.googleapis.com/v1/places:searchText', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': GOOGLE_KEY,
+              'X-Goog-FieldMask': 'places.displayName,places.rating,places.userRatingCount,places.types,places.primaryTypeDisplayName,places.photos,places.editorialSummary,places.regularOpeningHours,places.websiteUri'
+            },
+            body: JSON.stringify({ textQuery: `${comp.name} ${location.split(',')[0] || ''}`.trim(), languageCode: 'en' })
+          });
+          if (compResp.ok) {
+            const compData = await compResp.json();
+            const p = (compData.places || [])[0];
+            if (p) {
+              comp.profile = {
+                rating: p.rating, reviews: p.userRatingCount,
+                photoCount: (p.photos || []).length,
+                primaryType: p.primaryTypeDisplayName?.text || null,
+                categories: (p.types || []).length,
+                hasDescription: !!p.editorialSummary?.text,
+                hasHours: !!(p.regularOpeningHours?.periods),
+                website: p.websiteUri || null,
+              };
+            }
+          }
+        } catch (e) { /* skip competitor lookup errors */ }
+      }
+    }
+
+    const serviceAreas = project.service_areas || [];
+    console.log(`[gbp-audit] Final: source=${gbpData.source}, competitors=${gbpData.competitors.length}, rankings=${gbpData.mapsRankings.length}`);
 
     // ===== PHASE 2: AI Analysis =====
     let findings = [];
 
     if (anthropic) {
       try {
-        const aiPrompt = `You are an expert local SEO auditor specializing in Google Business Profile optimization. Analyze this GBP data and return detailed, actionable findings.
+        const aiPrompt = `You are an expert local SEO auditor. Analyze this data and produce a comprehensive GBP audit based on the THREE PILLARS of local search ranking: PROXIMITY, RELEVANCE, and PROMINENCE.
 
 PROJECT: ${project.name} (${domain})
-Business Name: ${businessName}
-Industry: ${project.industry || 'unknown'}
+Business: ${businessName}
+Industry: ${industry || 'trades/services'}
 Location: ${location}
 Service Areas: ${JSON.stringify(serviceAreas).substring(0, 500)}
-Data Source: ${gbpData.source} (${gbpData.source === 'google_places' ? 'official Google Places API - highly accurate' : 'SerpAPI scraping - may have gaps'})
+Data Source: ${gbpData.source}
 
-GBP PROFILE DATA:
+===== BUSINESS PROFILE =====
 ${JSON.stringify(gbpData.profile, null, 1)}
 
-MAPS RANKING DATA (${gbpData.mapsRankings.length} keywords tracked):
-${JSON.stringify(gbpData.mapsRankings.slice(0, 30), null, 1)}
+===== TOP COMPETITORS (from Maps rankings) =====
+${JSON.stringify(gbpData.competitors, null, 1)}
+
+===== MAPS RANKINGS (${gbpData.mapsRankings.length} tracked) =====
+${JSON.stringify(gbpData.mapsRankings.slice(0, 40), null, 1)}
+
+===== DIRECTORY DATABASE =====
+${JSON.stringify(gbpData.directories.map(d => ({ name: d.name, type: d.type, free: d.free, paid: d.paid_option || null, difficulty: d.difficulty, priority: d.priority })), null, 1)}
 
 Return a JSON object with "findings" array. Each finding MUST have:
 - pillar: "gbp"
-- category: one of "Profile Completeness", "Categories", "Reviews", "Photos", "NAP Consistency", "Maps Ranking", "Service Areas"
+- category: one of "Proximity", "Relevance", "Prominence", "Citations & Directories", "Competitor Gap", "Reviews", "Photos", "Profile Completeness", "Maps Ranking"
 - title: concise issue title
-- description: what's wrong and business impact (use specific numbers from the data)
-- recommendation: specific action to fix it
+- description: detailed explanation with real numbers
+- recommendation: specific, actionable steps
 - severity: "Critical", "Medium", or "Low"
-- current_value: current state (real data)
-- recommended_value: target state
+- current_value: real data
+- recommended_value: target
 
-RULES:
-- ONLY report findings based on data you can verify. Do NOT guess or assume.
-- If a field is null, skip it — don't flag missing data unless the source is "google_places" (which is authoritative).
-- Use actual numbers: real review counts, real ratings, real keyword positions.
-- Be specific about which keywords rank poorly and in which locations.
+PRODUCE FINDINGS FOR EACH AREA:
 
-ANALYZE:
+1. THREE PILLARS ASSESSMENT:
 
-PROFILE COMPLETENESS:
-- Business description: is it set? Quality and keyword usage?
-- Hours: set for all 7 days?
-- Website URL: correct domain?
-- Phone: present?
-- Address: complete?
+PROXIMITY:
+- How well do tracked locations cover the service area?
+- Are there gaps in suburb coverage?
+- Score the proximity strategy
 
-CATEGORIES:
-- Primary category: optimal for "${project.industry || 'this business'}"?
-- Additional categories count (benchmark: 3-5)
-- Suggest specific missing categories
+RELEVANCE:
+- Primary category optimization (is it the best match?)
+- Additional categories (competitor comparison — what categories do competitors have?)
+- Keyword relevance in business description
+- Service alignment with search queries
 
-REVIEWS:
-- Total count (benchmark: 50+ for competitive local SEO)
-- Average rating (target: 4.5+)
-- Review text quality — are customers leaving detailed reviews?
-- Any negative reviews that need responses?
+PROMINENCE:
+- Review count vs competitors (who has more? specific numbers)
+- Rating comparison (are we above/below competitors?)
+- Photo count vs competitors
+- Citation count assessment (see directories below)
+- Overall prominence score
 
-PHOTOS:
-- Count (benchmark: 20+)
-- Need exterior, interior, team, work photos
+2. COMPETITOR GAP ANALYSIS:
+- For each top competitor, what are they doing better?
+- Do they have more reviews? Higher rating? More photos? Better categories?
+- Which keywords do competitors outrank us on? By how much?
+- What specific actions would close the gap?
 
-MAPS RANKINGS:
-- Keywords not in top 3 (list specific examples with positions)
-- Average position across tracked keywords
-- Best vs worst performing keywords/locations
-- Location-specific gaps
+3. CITATIONS & DIRECTORIES:
+- Recommend the TOP 10 directories this business should be listed on, ordered by priority
+- For each: name, free/paid, approximate cost, difficulty to join, and WHY it matters
+- Flag any industry-specific directories (like hipages for tradies)
+- Estimate current citation health based on available data
 
-NAP CONSISTENCY:
-- Does website URL match domain?
-- Phone format consistency
+4. REVIEWS STRATEGY:
+- Current count vs benchmark vs competitors
+- Rating quality assessment
+- Review velocity recommendations
+- Response strategy
 
-SERVICE AREAS:
-- Coverage gaps vs tracked keywords
+5. MAPS RANKING PERFORMANCE:
+- Specific keywords not in top 3 with current positions
+- Location-specific performance gaps
+- Best performing vs worst performing areas
 
+6. PROFILE OPTIMIZATION:
+- Any missing profile elements (only flag what data confirms)
+- Photo count assessment
+- Description quality if available
+
+Be data-driven — use real numbers, real competitor names, real positions. No generic advice.
 Return ONLY valid JSON: {"findings": [...]}`;
 
         const response = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 8000,
+          max_tokens: 12000,
           messages: [{ role: 'user', content: aiPrompt }]
         });
 
@@ -1645,46 +1700,38 @@ Return ONLY valid JSON: {"findings": [...]}`;
           const parsed = JSON.parse(jsonMatch[0]);
           if (parsed.findings && Array.isArray(parsed.findings)) {
             findings = parsed.findings.map(f => ({
-              pillar: 'gbp',
-              category: f.category || 'General',
-              title: f.title,
-              description: f.description,
-              recommendation: f.recommendation,
-              severity: f.severity || 'Medium',
-              current_value: f.current_value || '',
-              recommended_value: f.recommended_value || '',
+              pillar: 'gbp', category: f.category || 'General',
+              title: f.title, description: f.description,
+              recommendation: f.recommendation, severity: f.severity || 'Medium',
+              current_value: f.current_value || '', recommended_value: f.recommended_value || '',
             }));
           }
         }
       } catch (aiErr) {
-        console.error('[gbp-audit] AI analysis failed:', aiErr.message);
+        console.error('[gbp-audit] AI failed:', aiErr.message);
       }
     }
 
     // Fallback
     if (findings.length === 0) {
       if (!gbpData.profile) {
-        findings.push({ pillar: 'gbp', category: 'Profile Completeness', title: 'GBP profile not found', description: `Could not find "${businessName}" on Google Maps.`, recommendation: 'Verify your Google Business Profile at business.google.com', severity: 'Critical', current_value: 'Not found', recommended_value: 'Verified listing' });
-      } else {
-        if (gbpData.profile.reviewCount < 30) findings.push({ pillar: 'gbp', category: 'Reviews', title: `Only ${gbpData.profile.reviewCount} reviews`, description: 'More reviews needed for competitive local SEO.', recommendation: 'Implement review generation strategy.', severity: 'Medium', current_value: `${gbpData.profile.reviewCount}`, recommended_value: '50+' });
-        if (gbpData.profile.photoCount != null && gbpData.profile.photoCount < 20) findings.push({ pillar: 'gbp', category: 'Photos', title: `Only ${gbpData.profile.photoCount} photos`, description: 'Profiles with 20+ photos get more engagement.', recommendation: 'Add exterior, interior, team, and work photos.', severity: 'Medium', current_value: `${gbpData.profile.photoCount}`, recommended_value: '20+' });
+        findings.push({ pillar: 'gbp', category: 'Profile Completeness', title: 'GBP profile not found on Google Maps', description: `Could not find "${businessName}".`, recommendation: 'Verify your listing at business.google.com', severity: 'Critical', current_value: 'Not found', recommended_value: 'Verified' });
       }
-      if (findings.length === 0) findings.push({ pillar: 'gbp', category: 'Profile Completeness', title: 'Add keywords in Maps Rankings', description: 'Track local keywords to get ranking analysis.', recommendation: 'Go to Maps Rankings and add target keywords.', severity: 'Medium', current_value: 'No data', recommended_value: 'Active tracking' });
+      findings.push({ pillar: 'gbp', category: 'Citations & Directories', title: 'Directory citation audit needed', description: 'Submit your business to top Australian directories for prominence signals.', recommendation: 'Start with Yellow Pages, True Local, Hotfrog, and Yelp (all free).', severity: 'Medium', current_value: 'Unknown', recommended_value: '15+ citations' });
     }
 
-    // Save findings
+    // Save
     for (const f of findings) {
       const r = await pool.query(
         `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
         [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
       );
-      f.id = r.rows[0].id;
-      f.status = 'new';
+      f.id = r.rows[0].id; f.status = 'new';
     }
 
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-      ['completed', JSON.stringify({ findingsCount: findings.length, source: gbpData.source, profileFound: !!gbpData.profile }), auditId]);
+      ['completed', JSON.stringify({ findingsCount: findings.length, source: gbpData.source, competitors: gbpData.competitors.length }), auditId]);
 
     console.log(`[gbp-audit] Project ${projectId}: ${findings.length} findings via ${gbpData.source}`);
     res.json({ findings });
