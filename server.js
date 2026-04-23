@@ -1430,9 +1430,12 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
 
       try {
         // Get accounts
-        const acctRes = await fetch('https://mybusinessaccountmanagement.googleapis.com/v1/accounts', {
+        const acctResp = await fetch('https://mybusinessaccountmanagement.googleapis.com/v1/accounts', {
           headers: { Authorization: `Bearer ${accessToken}` }
-        }).then(r => r.json());
+        });
+        const acctRes = await acctResp.json();
+        console.log(`[gbp-audit] Accounts API status: ${acctResp.status}, keys: ${Object.keys(acctRes).join(',')}, accounts: ${(acctRes.accounts || []).length}`);
+        if (acctRes.error) console.log(`[gbp-audit] Accounts API error:`, JSON.stringify(acctRes.error).substring(0, 300));
         const accounts = acctRes.accounts || [];
 
         // Get locations with full details
