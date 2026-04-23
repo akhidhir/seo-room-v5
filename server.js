@@ -1201,6 +1201,93 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
+// Scan all directories to check if business is listed
+app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const businessName = project.business_name || project.name || '';
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    if (!SERPAPI_KEY) return res.status(400).json({ error: 'SerpAPI key not configured' });
+    if (!businessName) return res.status(400).json({ error: 'Business name required in Project Settings' });
+
+    console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain})`);
+
+    const results = [];
+    for (const dir of AUSTRALIAN_DIRECTORIES) {
+      try {
+        // Search Google for the business on this directory
+        const searchData = await serpApiSearch({
+          engine: 'google',
+          q: `site:${dir.url} "${businessName}"`,
+          num: 3,
+          api_key: SERPAPI_KEY,
+        });
+
+        const organicResults = searchData.organic_results || [];
+        const found = organicResults.length > 0;
+        const listingUrl = found ? organicResults[0].link : null;
+        const snippet = found ? (organicResults[0].snippet || '') : '';
+
+        // Also check if domain appears in results (backup check)
+        let domainMatch = false;
+        if (!found && domain) {
+          const domainSearch = await serpApiSearch({
+            engine: 'google',
+            q: `site:${dir.url} "${domain}"`,
+            num: 3,
+            api_key: SERPAPI_KEY,
+          });
+          const domainResults = domainSearch.organic_results || [];
+          if (domainResults.length > 0) {
+            domainMatch = true;
+            results.push({
+              name: dir.name,
+              status: 'listed',
+              listing_url: domainResults[0].link,
+              notes: `Found via domain search. ${domainResults[0].snippet || ''}`.trim(),
+            });
+            continue;
+          }
+        }
+
+        results.push({
+          name: dir.name,
+          status: found ? 'listed' : 'not_listed',
+          listing_url: listingUrl,
+          notes: found ? `Auto-detected: ${snippet}`.substring(0, 200) : '',
+        });
+
+        console.log(`[citations] ${dir.name}: ${found ? 'FOUND' : 'NOT FOUND'}`);
+      } catch (e) {
+        console.log(`[citations] Error checking ${dir.name}:`, e.message);
+        results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: `Scan error: ${e.message}` });
+      }
+    }
+
+    // Save all results to DB
+    for (const r of results) {
+      await pool.query(
+        `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (project_id, directory_name)
+         DO UPDATE SET status=$3, listing_url=COALESCE($4, citations.listing_url), notes=$5, updated_at=NOW()`,
+        [projectId, r.name, r.status, r.listing_url, r.notes]
+      );
+    }
+
+    const listed = results.filter(r => r.status === 'listed').length;
+    console.log(`[citations] Scan complete: ${listed}/${results.length} listed`);
+    res.json({ results, stats: { total: results.length, listed, not_listed: results.length - listed } });
+  } catch (e) {
+    console.error('[citations] Scan error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Update citation status for a directory
 app.put('/api/projects/:projectId/citations/:directoryName', async (req, res) => {
   const { projectId, directoryName } = req.params;

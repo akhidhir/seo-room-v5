@@ -2240,6 +2240,7 @@
       const [editUrl, setEditUrl] = useState('');
       const [editNotes, setEditNotes] = useState('');
       const [saving, setSaving] = useState(null);
+      const [scanning, setScanning] = useState(false);
 
       useEffect(() => {
         if (project?.id) loadCitations();
@@ -2253,6 +2254,16 @@
           setStats(data.stats || { total: 0, listed: 0, pending: 0, not_listed: 0 });
         } catch (e) { console.error('Load citations:', e); }
         finally { setLoading(false); }
+      };
+
+      const scanCitations = async () => {
+        setScanning(true);
+        try {
+          const data = await api(`/projects/${project.id}/citations/scan`, { method: 'POST' });
+          // Reload to get fresh data
+          await loadCitations();
+        } catch (e) { console.error('Scan citations:', e); }
+        finally { setScanning(false); }
       };
 
       const recalcStats = (dirs) => ({
@@ -2315,7 +2326,18 @@
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Track your business listings across Australian directories — NAP consistency is a key local ranking factor</p>
             </div>
+            <button className="btn btn-primary" onClick={scanCitations} disabled={scanning} style={{ fontSize: 13 }}>
+              {scanning ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Scan All Directories</>}
+            </button>
           </div>
+
+          {scanning && (
+            <div className="audit-loading-overlay">
+              <span className="spinner-large"></span>
+              <div className="audit-loading-text">Scanning Citations</div>
+              <div className="audit-loading-sub">Checking each directory for your business listing via Google... this takes 1-2 minutes</div>
+            </div>
+          )}
 
           {/* Stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
