@@ -1497,14 +1497,17 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
                 gbpData.profile.phone = d.phone || gbpData.profile.phone;
 
                 // Check for user reviews sample
-                if (d.user_reviews) {
-                  gbpData.profile.recent_reviews = (d.user_reviews || []).slice(0, 5).map(r => ({
+                // Parse reviews — SerpAPI may return as object with "most_relevant" array or direct array
+                const reviewsList = Array.isArray(d.user_reviews) ? d.user_reviews
+                  : (d.user_reviews?.most_relevant || d.user_reviews?.newest || d.reviews || []);
+                if (Array.isArray(reviewsList) && reviewsList.length > 0) {
+                  gbpData.profile.recent_reviews = reviewsList.slice(0, 5).map(r => ({
                     rating: r.rating,
-                    text: (r.snippet || r.extracted_snippet || '').substring(0, 100),
+                    text: (r.snippet || r.extracted_snippet || r.text || '').substring(0, 100),
                     date: r.date,
-                    response: r.response?.snippet ? true : false,
+                    response: !!(r.response || r.owner_response),
                   }));
-                  gbpData.profile.unanswered_reviews = (d.user_reviews || []).filter(r => !r.response).length;
+                  gbpData.profile.unanswered_reviews = reviewsList.filter(r => !r.response && !r.owner_response).length;
                 }
               }
             } catch (e) {
