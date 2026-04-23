@@ -1731,6 +1731,18 @@
         { id: 'speed', label: 'Speed & Images', icon: 'fas fa-tachometer-alt' },
       ];
 
+      // Health score: 100 minus weighted penalties
+      const healthScore = useMemo(() => {
+        if (!findings.length) return null;
+        const penalty = stats.critical * 12 + stats.medium * 5 + stats.low * 2;
+        return Math.max(0, Math.min(100, 100 - penalty));
+      }, [findings, stats]);
+
+      const healthColor = (score) => score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
+      const healthLabel = (score) => score >= 80 ? 'Good' : score >= 50 ? 'Needs Work' : 'Poor';
+
+      const [severityFilter, setSeverityFilter] = useState('all');
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -1740,6 +1752,9 @@
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Site speed, crawlability, broken links, schema, security, mobile usability</p>
             </div>
+            <button className="btn btn-primary" onClick={tab === 'general' ? runAudit : runSpeedAudit} disabled={loading || speedLoading} style={{ fontSize: 13 }}>
+              {(loading || speedLoading) ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />{tab === 'general' ? 'Run Technical Audit' : 'Run Speed Audit'}</>}
+            </button>
           </div>
 
           {/* Tab switcher */}
@@ -1758,11 +1773,6 @@
 
           {/* ====== GENERAL TAB ====== */}
           {tab === 'general' && <>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-              <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
-                {loading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Technical Audit</>}
-              </button>
-            </div>
 
             {loading && (
               <div className="audit-loading-overlay">
@@ -1774,38 +1784,73 @@
 
             {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
-            {findings.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
-                {[
-                  { label: 'Critical', value: stats.critical, color: '#ef4444' },
-                  { label: 'Medium', value: stats.medium, color: '#f59e0b' },
-                  { label: 'Low', value: stats.low, color: '#3b82f6' },
-                ].map(s => (
-                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: 36, fontWeight: 800, color: s.color }}>{s.value}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+            {findings.length > 0 && <>
+              {/* Health score + stats row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 16, marginBottom: 24 }}>
+                {/* Health score circle */}
+                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'relative', width: 80, height: 80 }}>
+                    <svg viewBox="0 0 80 80" style={{ transform: 'rotate(-90deg)' }}>
+                      <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border)" strokeWidth="6" />
+                      <circle cx="40" cy="40" r="34" fill="none" stroke={healthColor(healthScore)} strokeWidth="6"
+                        strokeDasharray={`${(healthScore / 100) * 213.6} 213.6`}
+                        strokeLinecap="round" style={{ transition: 'stroke-dasharray 0.5s' }} />
+                    </svg>
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: healthColor(healthScore) }}>{healthScore}</span>
+                    </div>
                   </div>
-                ))}
+                  <div style={{ fontSize: 11, fontWeight: 600, color: healthColor(healthScore), marginTop: 8, textTransform: 'uppercase' }}>{healthLabel(healthScore)}</div>
+                </div>
+
+                {/* Severity stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                  {[
+                    { id: 'Critical', label: 'Critical', value: stats.critical, color: '#ef4444', icon: 'fas fa-exclamation-circle' },
+                    { id: 'Medium', label: 'Medium', value: stats.medium, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+                    { id: 'Low', label: 'Low', value: stats.low, color: '#3b82f6', icon: 'fas fa-info-circle' },
+                  ].map(s => (
+                    <div key={s.id} onClick={() => setSeverityFilter(severityFilter === s.id ? 'all' : s.id)}
+                      style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: severityFilter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s' }}>
+                      <i className={s.icon} style={{ fontSize: 18, color: s.color, display: 'block', marginBottom: 8 }} />
+                      <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.value}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
+
+              {/* Active filter indicator */}
+              {severityFilter !== 'all' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
+                  <span>Showing: <strong style={{ color: severityFilter === 'Critical' ? '#ef4444' : severityFilter === 'Medium' ? '#f59e0b' : '#3b82f6' }}>{severityFilter}</strong> findings only</span>
+                  <button onClick={() => setSeverityFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>Clear filter</button>
+                </div>
+              )}
+            </>}
 
             {!loading && findings.length > 0 && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
             {categories.map(cat => {
-              const catFindings = findings.filter(f => f.category === cat.key);
-              if (catFindings.length === 0) return null;
+              const allCatFindings = findings.filter(f => f.category === cat.key);
+              const catFindings = severityFilter === 'all' ? allCatFindings : allCatFindings.filter(f => f.severity === severityFilter);
+              if (allCatFindings.length === 0) return null;
+              if (catFindings.length === 0 && severityFilter !== 'all') return null;
               const isOpen = expandedCats.has(cat.key);
-              const hasCritical = catFindings.some(f => f.severity === 'Critical');
+              const critCount = allCatFindings.filter(f => f.severity === 'Critical').length;
+              const medCount = allCatFindings.filter(f => f.severity === 'Medium').length;
+              const lowCount = allCatFindings.filter(f => f.severity === 'Low').length;
               return (
                 <div key={cat.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                   <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat.key) ? s.delete(cat.key) : s.add(cat.key); return s; })}
                     style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cat.color}12`, borderBottom: isOpen ? `2px solid ${cat.color}` : 'none', cursor: 'pointer' }}>
                     <i className={cat.icon} style={{ color: cat.color, fontSize: 18 }} />
-                    <span style={{ fontSize: 15, fontWeight: 700, color: cat.color }}>{cat.label}</span>
-                    {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
-                    <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
-                      {catFindings.length}
-                    </span>
-                    <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
+                    <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)' }}>{cat.label}</span>
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {critCount > 0 && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>{critCount}</span>}
+                      {medCount > 0 && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 700 }}>{medCount}</span>}
+                      {lowCount > 0 && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.15)', color: '#3b82f6', fontWeight: 700 }}>{lowCount}</span>}
+                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }} />
+                    </div>
                   </div>
                   {isOpen && <div style={{ padding: 8 }}>
                   {catFindings.map(f => (
@@ -1836,11 +1881,13 @@
 
           {/* ====== SPEED & IMAGES TAB ====== */}
           {tab === 'speed' && <>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-              <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 13 }}>
-                {speedLoading ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Scanning pages...</> : <><i className="fas fa-tachometer-alt" style={{ marginRight: 6 }} />Run Speed Audit</>}
-              </button>
-            </div>
+            {speedLoading && (
+              <div className="audit-loading-overlay">
+                <span className="spinner-large"></span>
+                <div className="audit-loading-text">Running Speed Audit</div>
+                <div className="audit-loading-sub">Scanning pages for image issues, WebP, lazy loading, Core Web Vitals...</div>
+              </div>
+            )}
 
             {speedError && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{speedError}</div>}
 
