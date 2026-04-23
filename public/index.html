@@ -2234,6 +2234,13 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [expandedPage, setExpandedPage] = useState(null);
+      const [sortBy, setSortBy] = useState(null);
+      const [sortDir, setSortDir] = useState('asc');
+
+      const toggleSort = (col) => {
+        if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
+        else { setSortBy(col); setSortDir('asc'); }
+      };
 
       // Load previous results on mount
       useEffect(() => {
@@ -2286,6 +2293,25 @@
         };
       }, [pages]);
 
+      const sortedPages = useMemo(() => {
+        if (!sortBy) return pages;
+        const scoreVal = { green: 3, orange: 2, red: 1 };
+        return [...pages].sort((a, b) => {
+          let av, bv;
+          switch (sortBy) {
+            case 'seo': av = scoreVal[a.yoastScore] || 0; bv = scoreVal[b.yoastScore] || 0; break;
+            case 'read': av = scoreVal[a.yoastReadability] || 0; bv = scoreVal[b.yoastReadability] || 0; break;
+            case 'words': av = a.wordCount || 0; bv = b.wordCount || 0; break;
+            case 'links': av = a.internalLinks || 0; bv = b.internalLinks || 0; break;
+            case 'issues': av = (a.issues || []).filter(i => i.type === 'problem').length; bv = (b.issues || []).filter(i => i.type === 'problem').length; break;
+            case 'page': av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase(); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+            case 'keyword': av = (a.focusKeyword || '').toLowerCase(); bv = (b.focusKeyword || '').toLowerCase(); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+            default: return 0;
+          }
+          return sortDir === 'asc' ? av - bv : bv - av;
+        });
+      }, [pages, sortBy, sortDir]);
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -2333,17 +2359,24 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Page</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>SEO</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>Read.</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 160 }}>Focus Keyword</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70 }}>Words</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 60 }}>Links</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Issues</th>
+                    {[
+                      { key: 'page', label: 'Page', align: 'left', width: undefined },
+                      { key: 'seo', label: 'SEO', align: 'center', width: 70 },
+                      { key: 'read', label: 'Read.', align: 'center', width: 70 },
+                      { key: 'keyword', label: 'Focus Keyword', align: 'left', width: 160 },
+                      { key: 'words', label: 'Words', align: 'center', width: 70 },
+                      { key: 'links', label: 'Links', align: 'center', width: 60 },
+                      { key: 'issues', label: 'Issues', align: 'center', width: 80 },
+                    ].map(col => (
+                      <th key={col.key} onClick={() => toggleSort(col.key)} style={{ padding: '10px 14px', textAlign: col.align, fontWeight: 600, color: sortBy === col.key ? 'var(--accent)' : 'var(--text2)', width: col.width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                        {col.label}
+                        {sortBy === col.key && <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 4, fontSize: 10 }} />}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {pages.map(page => {
+                  {sortedPages.map(page => {
                     const seo = yoastDot(page.yoastScore);
                     const read = yoastDot(page.yoastReadability);
                     const problems = page.issues.filter(i => i.type === 'problem').length;
