@@ -1028,27 +1028,26 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
       }
     } catch (e) { console.log('[indexing] Sitemap fetch failed:', e.message); }
 
-    // Filter sitemap URLs to only service and suburb pages
+    // Filter sitemap URLs to ONLY service and suburb pages (strict)
     const serviceAreas = project.service_areas || [];
     const suburbSlugs = serviceAreas.map(a => (a.name || '').toLowerCase().replace(/\s+/g, '-')).filter(Boolean);
 
     for (const url of allSitemapUrls) {
       if (url.endsWith('.xml') || url.match(/\.(jpg|png|gif|pdf)$/i)) continue;
-      // Include if it matches service keywords
-      if (serviceKeywords.test(url)) { pageSet.add(url); continue; }
+      const lowerUrl = url.toLowerCase();
+      // Include if it matches service keywords in the path
+      if (serviceKeywords.test(lowerUrl)) { pageSet.add(url); continue; }
       // Include if it matches a suburb slug
-      if (suburbSlugs.some(slug => url.toLowerCase().includes(slug))) { pageSet.add(url); continue; }
-      // Include if it's a top-level page (e.g. /about/, /contact/, /services/)
+      if (suburbSlugs.some(slug => lowerUrl.includes(slug))) { pageSet.add(url); continue; }
+      // Include only specific important pages
       const path = url.replace(baseUrl, '').replace(/^\/|\/$/g, '');
-      if (path && !path.includes('/') && !path.match(/^(blog|news|tag|category|author|page|feed)/i)) { pageSet.add(url); }
+      if (['contact', 'about', 'services', 'about-us', 'contact-us'].includes(path.toLowerCase())) { pageSet.add(url); }
     }
 
     // 3. Add suburb pages from service areas (in case not in sitemap)
     for (const slug of suburbSlugs) {
-      // Try common URL patterns
       const match = allSitemapUrls.find(u => u.toLowerCase().includes(slug));
       if (match) pageSet.add(match);
-      else pageSet.add(`${baseUrl}/plumber-${slug}/`);
     }
 
     const allPages = [...pageSet];
