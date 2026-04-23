@@ -1214,12 +1214,75 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     if (!SERPAPI_KEY) return res.status(400).json({ error: 'SerpAPI key not configured' });
     if (!businessName) return res.status(400).json({ error: 'Business name required in Project Settings' });
 
+    const location = project.location || '';
+    const gbpPlaceId = project.gbp_location_id || '';
+
     console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain})`);
+
+    // Platforms that can't be checked via site: search — detect differently
+    const specialPlatforms = {
+      'Google Business Profile': async () => {
+        // If GBP is connected or Place ID is set, it's listed
+        if (gbpPlaceId) return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'Verified: GBP Place ID connected in Project Settings' };
+        // Otherwise search Google Maps
+        try {
+          const mapsData = await serpApiSearch({ engine: 'google_maps', q: `${businessName} ${location}`, api_key: SERPAPI_KEY });
+          const match = (mapsData.local_results || []).find(r => r.title?.toLowerCase().includes(businessName.toLowerCase().split(' ')[0]) || (r.website && r.website.includes(domain)));
+          if (match) return { status: 'listed', listing_url: match.place_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id}` : match.link, notes: `Found on Google Maps: ${match.title}, ${match.rating || '?'} stars, ${match.reviews || 0} reviews` };
+        } catch (e) {}
+        return null;
+      },
+      'Apple Maps (Apple Business Connect)': async () => {
+        // Can't check programmatically — search Google for apple maps listing
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:maps.apple.com "${businessName}"`, num: 3, api_key: SERPAPI_KEY });
+          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: `Found on Apple Maps` };
+        } catch (e) {}
+        return null;
+      },
+      'Bing Places': async () => {
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:bing.com/maps "${businessName}" ${location.split(',')[0] || ''}`, num: 3, api_key: SERPAPI_KEY });
+          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: `Found on Bing Maps` };
+        } catch (e) {}
+        return null;
+      },
+      'Facebook Business': async () => {
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:facebook.com "${businessName}" ${location.split(',')[0] || ''}`, num: 5, api_key: SERPAPI_KEY });
+          const match = (data.organic_results || []).find(r => r.link?.includes('facebook.com/') && !r.link?.includes('/posts/') && !r.link?.includes('/photos/'));
+          if (match) return { status: 'listed', listing_url: match.link, notes: `Found: ${match.title || ''}`.trim() };
+        } catch (e) {}
+        return null;
+      },
+      'LinkedIn Company': async () => {
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:linkedin.com/company "${businessName}"`, num: 3, api_key: SERPAPI_KEY });
+          const match = (data.organic_results || []).find(r => r.link?.includes('linkedin.com/company/'));
+          if (match) return { status: 'listed', listing_url: match.link, notes: `Found: ${match.title || ''}`.trim() };
+        } catch (e) {}
+        return null;
+      },
+    };
 
     const results = [];
     for (const dir of AUSTRALIAN_DIRECTORIES) {
       try {
-        // Search Google for the business on this directory
+        // Use special detection for platforms that don't work with site: search
+        if (specialPlatforms[dir.name]) {
+          const specialResult = await specialPlatforms[dir.name]();
+          if (specialResult) {
+            results.push({ name: dir.name, ...specialResult });
+            console.log(`[citations] ${dir.name}: FOUND (special)`);
+            continue;
+          }
+          // If special check found nothing, mark as not listed
+          results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: 'Not found via automated scan' });
+          console.log(`[citations] ${dir.name}: NOT FOUND (special)`);
+          continue;
+        }
+
+        // Standard site: search for regular directories
         const searchData = await serpApiSearch({
           engine: 'google',
           q: `site:${dir.url} "${businessName}"`,
@@ -1228,12 +1291,11 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         });
 
         const organicResults = searchData.organic_results || [];
-        const found = organicResults.length > 0;
-        const listingUrl = found ? organicResults[0].link : null;
-        const snippet = found ? (organicResults[0].snippet || '') : '';
+        let found = organicResults.length > 0;
+        let listingUrl = found ? organicResults[0].link : null;
+        let snippet = found ? (organicResults[0].snippet || '') : '';
 
-        // Also check if domain appears in results (backup check)
-        let domainMatch = false;
+        // Backup: search by domain
         if (!found && domain) {
           const domainSearch = await serpApiSearch({
             engine: 'google',
@@ -1243,14 +1305,9 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           });
           const domainResults = domainSearch.organic_results || [];
           if (domainResults.length > 0) {
-            domainMatch = true;
-            results.push({
-              name: dir.name,
-              status: 'listed',
-              listing_url: domainResults[0].link,
-              notes: `Found via domain search. ${domainResults[0].snippet || ''}`.trim(),
-            });
-            continue;
+            found = true;
+            listingUrl = domainResults[0].link;
+            snippet = `Found via domain. ${domainResults[0].snippet || ''}`.trim();
           }
         }
 
