@@ -273,6 +273,9 @@ async function initDb() {
     // Add columns for existing databases
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wordpress_url TEXT`);
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gsc_property TEXT`);
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_id TEXT`);
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
     console.log('[boot] Database schema initialized');
@@ -423,6 +426,9 @@ app.put('/api/projects/:id', async (req, res) => {
   const is_local_business = b.is_local_business ?? b.isLocalBusiness;
   const is_elementor_site = b.is_elementor_site ?? b.isElementorSite;
   const wordpress_url = b.wordpress_url || b.wordpressUrl;
+  const gsc_property = b.gsc_property || b.gscProperty;
+  const gbp_location_id = b.gbp_location_id || b.gbpLocationId;
+  const gbp_location_name = b.gbp_location_name || b.gbpLocationName;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -431,13 +437,17 @@ app.put('/api/projects/:id', async (req, res) => {
            competitors=COALESCE($7::text[], competitors),
            is_local_business=COALESCE($8, is_local_business), is_elementor_site=COALESCE($9, is_elementor_site),
            wordpress_url=COALESCE($10, wordpress_url),
-           service_areas=COALESCE($11::jsonb, service_areas)
+           service_areas=COALESCE($11::jsonb, service_areas),
+           gsc_property=COALESCE($12, gsc_property),
+           gbp_location_id=COALESCE($13, gbp_location_id),
+           gbp_location_name=COALESCE($14, gbp_location_name)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
        competitors && Array.isArray(competitors) ? competitors : null,
        is_local_business, is_elementor_site, wordpress_url,
-       service_areas ? JSON.stringify(service_areas) : null]
+       service_areas ? JSON.stringify(service_areas) : null,
+       gsc_property || null, gbp_location_id || null, gbp_location_name || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     res.json({ project: result.rows[0] });
@@ -1679,11 +1689,13 @@ PROMINENCE:
 - Best performing vs worst performing areas
 
 6. PROFILE OPTIMIZATION:
-- Any missing profile elements (only flag what data confirms)
-- Photo count assessment
-- Description quality if available
+- Photo count assessment (compare to competitors)
+- Hours completeness if data available
 
-Be data-driven — use real numbers, real competitor names, real positions. No generic advice.
+CRITICAL RULES:
+- NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these even when they exist on Google. Only flag if the data source explicitly shows empty/missing.
+- Be data-driven — use real numbers, real competitor names, real keyword positions.
+- No generic advice — every finding must reference specific data points.
 Return ONLY valid JSON: {"findings": [...]}`;
 
         const response = await anthropic.messages.create({
@@ -2141,6 +2153,42 @@ async function getGbpAccessToken(userId) {
   }
   return config.access_token;
 }
+
+// List available GSC sites for dropdown in Project Settings
+app.get('/api/user/gsc/sites', async (req, res) => {
+  try {
+    const accessToken = await getGscAccessToken(req.auth.userId);
+    if (!accessToken) return res.json({ sites: [], error: 'GSC not connected' });
+    const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }).then(r => r.json());
+    res.json({ sites: (sites.siteEntry || []).map(s => ({ url: s.siteUrl, permission: s.permissionLevel })) });
+  } catch (e) { res.json({ sites: [], error: e.message }); }
+});
+
+// List available GBP locations for dropdown in Project Settings
+app.get('/api/user/gbp/locations', async (req, res) => {
+  try {
+    const accessToken = await getGbpAccessToken(req.auth.userId);
+    if (!accessToken) return res.json({ locations: [], error: 'GBP not connected' });
+    const acctRes = await fetch('https://mybusinessaccountmanagement.googleapis.com/v1/accounts', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }).then(r => r.json());
+    const allLocations = [];
+    for (const acct of (acctRes.accounts || [])) {
+      try {
+        const locRes = await fetch(
+          `https://mybusinessbusinessinformation.googleapis.com/v1/${acct.name}/locations?readMask=name,title,storefrontAddress,websiteUri`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        }).then(r => r.json());
+        for (const l of (locRes.locations || [])) {
+          allLocations.push({ id: l.name, title: l.title, address: l.storefrontAddress?.addressLines?.join(', ') || '', website: l.websiteUri || '' });
+        }
+      } catch (e) { /* skip account errors */ }
+    }
+    res.json({ locations: allLocations });
+  } catch (e) { res.json({ locations: [], error: e.message }); }
+});
 
 // ==================== GSC OAUTH (USER-LEVEL) ====================
 

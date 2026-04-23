@@ -1277,37 +1277,54 @@
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
-          {findings.length > 0 && (
+          {findings.length > 0 && (() => {
+            const categoryConfig = {
+              'Proximity': { icon: 'fas fa-map-pin', color: '#ef4444' },
+              'Relevance': { icon: 'fas fa-bullseye', color: '#f59e0b' },
+              'Prominence': { icon: 'fas fa-star', color: '#8b5cf6' },
+              'Citations & Directories': { icon: 'fas fa-building', color: '#3b82f6' },
+              'Competitor Gap': { icon: 'fas fa-chess', color: '#ec4899' },
+              'Reviews': { icon: 'fas fa-comments', color: '#22c55e' },
+              'Photos': { icon: 'fas fa-camera', color: '#06b6d4' },
+              'Profile Completeness': { icon: 'fas fa-user-check', color: '#f97316' },
+              'Maps Ranking': { icon: 'fas fa-map-marked-alt', color: '#6366f1' },
+              'Categories': { icon: 'fas fa-tags', color: '#14b8a6' },
+              'Service Areas': { icon: 'fas fa-globe', color: '#a855f7' },
+              'NAP Consistency': { icon: 'fas fa-address-card', color: '#64748b' },
+            };
+            const categories = [...new Set(findings.map(f => f.category))];
+            return (
             <>
-              <div className="stats-grid">
-                <div className="stat-card">
-                  <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.critical}</div>
-                  <div className="stat-label">Critical Issues</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 36, fontWeight: 800, color: '#ef4444' }}>{stats.critical}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Critical</div>
                 </div>
-                <div className="stat-card">
-                  <div className="stat-value" style={{ color: 'var(--warning)' }}>{stats.medium}</div>
-                  <div className="stat-label">Medium Issues</div>
+                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 36, fontWeight: 800, color: '#f59e0b' }}>{stats.medium}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Medium</div>
                 </div>
-                <div className="stat-card">
-                  <div className="stat-value" style={{ color: 'var(--info)' }}>{stats.low}</div>
-                  <div className="stat-label">Low Issues</div>
+                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 36, fontWeight: 800, color: '#3b82f6' }}>{stats.low}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Low</div>
                 </div>
               </div>
 
-              <div className="card">
-                <div className="card-title">Findings</div>
-              </div>
-
-              {['Critical', 'Medium', 'Low'].map((severity) => {
-                const severityFindings = findings.filter((f) => f.severity === severity);
-                if (severityFindings.length === 0) return null;
-
+              {categories.map(cat => {
+                const cfg = categoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
+                const catFindings = findings.filter(f => f.category === cat);
+                const hasCritical = catFindings.some(f => f.severity === 'Critical');
+                const hasMedium = catFindings.some(f => f.severity === 'Medium');
                 return (
-                  <div key={severity}>
-                    <div style={{ fontSize: '15px', fontWeight: '600', margin: '16px 0 12px' }}>
-                      {severity} Issues ({severityFindings.length})
+                  <div key={cat} style={{ marginBottom: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '12px 16px', background: `${cfg.color}15`, borderRadius: 10, borderLeft: `4px solid ${cfg.color}` }}>
+                      <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
+                      <span style={{ fontSize: 16, fontWeight: 700, color: cfg.color }}>{cat}</span>
+                      <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>
+                        {catFindings.length} {catFindings.length === 1 ? 'finding' : 'findings'}
+                      </span>
                     </div>
-                    {severityFindings.map((finding) => (
+                    {catFindings.map(finding => (
                       <FindingCard
                         key={finding.id}
                         finding={finding}
@@ -1322,7 +1339,8 @@
                 );
               })}
             </>
-          )}
+            );
+          })()}
 
           {!loading && findings.length === 0 && (
             <div className="empty-state">
@@ -3500,9 +3518,16 @@
         isLocalBusiness: true,
         isElementorSite: true,
         wordpressUrl: '',
+        gscProperty: '',
+        gbpLocationId: '',
+        gbpLocationName: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
+      const [gscSites, setGscSites] = useState([]);
+      const [gbpLocations, setGbpLocations] = useState([]);
+      const [loadingGsc, setLoadingGsc] = useState(false);
+      const [loadingGbp, setLoadingGbp] = useState(false);
       const [newCompetitor, setNewCompetitor] = useState('');
 
       useEffect(() => {
@@ -3527,8 +3552,14 @@
               isLocalBusiness: data.project.is_local_business !== false,
               isElementorSite: data.project.is_elementor_site !== false,
               wordpressUrl: data.project.wordpress_url || '',
+              gscProperty: data.project.gsc_property || '',
+              gbpLocationId: data.project.gbp_location_id || '',
+              gbpLocationName: data.project.gbp_location_name || '',
             });
           }
+          // Load available GSC sites and GBP locations
+          loadGscSites();
+          loadGbpLocations();
         } catch (err) {
           setError(err.message);
         } finally {
@@ -3587,6 +3618,24 @@
           ...prev,
           competitors: prev.competitors.filter((_, i) => i !== index),
         }));
+      };
+
+      const loadGscSites = async () => {
+        setLoadingGsc(true);
+        try {
+          const data = await api('/user/gsc/sites');
+          setGscSites(data.sites || []);
+        } catch (e) { /* GSC not connected */ }
+        finally { setLoadingGsc(false); }
+      };
+
+      const loadGbpLocations = async () => {
+        setLoadingGbp(true);
+        try {
+          const data = await api('/user/gbp/locations');
+          setGbpLocations(data.locations || []);
+        } catch (e) { /* GBP not connected */ }
+        finally { setLoadingGbp(false); }
       };
 
       if (loading) {
@@ -3732,6 +3781,52 @@
               <div style={{ color: 'var(--text2)', fontSize: '12px', marginTop: '4px' }}>
                 {formData.isElementorSite ? 'Requires seoroom-helper.php installed as mu-plugin' : 'Uses standard WP REST API for content updates'}
               </div>
+            </div>
+          </div>
+
+          {/* Google Connections — per-project property/location selection */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fab fa-google" style={{ marginRight: 8, color: '#4285F4' }} />Google Connections
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
+              Connect your Google accounts in <strong>Agency Integrations</strong>, then select which property/location belongs to this project.
+            </div>
+
+            <div className="form-group">
+              <label className="form-label"><i className="fas fa-chart-line" style={{ marginRight: 6, color: '#4285F4' }} />Google Search Console Property</label>
+              {gscSites.length > 0 ? (
+                <select className="form-input" value={formData.gscProperty} onChange={(e) => setFormData(prev => ({ ...prev, gscProperty: e.target.value }))}>
+                  <option value="">— Select GSC Property —</option>
+                  {gscSites.map(s => <option key={s.url} value={s.url}>{s.url} ({s.permission})</option>)}
+                </select>
+              ) : (
+                <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, fontSize: 13, color: 'var(--text3)' }}>
+                  {loadingGsc ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }} />Loading sites...</> :
+                    formData.gscProperty ? <span style={{ color: 'var(--text)' }}>{formData.gscProperty}</span> :
+                    'GSC not connected — connect in Agency Integrations'}
+                </div>
+              )}
+            </div>
+
+            <div className="form-group" style={{ marginTop: 12 }}>
+              <label className="form-label"><i className="fas fa-map-marker-alt" style={{ marginRight: 6, color: '#EA4335' }} />Google Business Profile Location</label>
+              {gbpLocations.length > 0 ? (
+                <select className="form-input" value={formData.gbpLocationId}
+                  onChange={(e) => {
+                    const loc = gbpLocations.find(l => l.id === e.target.value);
+                    setFormData(prev => ({ ...prev, gbpLocationId: e.target.value, gbpLocationName: loc?.title || '' }));
+                  }}>
+                  <option value="">— Select GBP Location —</option>
+                  {gbpLocations.map(l => <option key={l.id} value={l.id}>{l.title} — {l.address}</option>)}
+                </select>
+              ) : (
+                <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, fontSize: 13, color: 'var(--text3)' }}>
+                  {loadingGbp ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }} />Loading locations...</> :
+                    formData.gbpLocationName ? <span style={{ color: 'var(--text)' }}>{formData.gbpLocationName}</span> :
+                    'GBP not connected or no locations found — connect in Agency Integrations'}
+                </div>
+              )}
             </div>
           </div>
 
