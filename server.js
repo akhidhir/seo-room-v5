@@ -271,6 +271,7 @@ async function initDb() {
     `);
 
     // Add columns for existing databases
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS competitors TEXT[]`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wordpress_url TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gsc_property TEXT`);
