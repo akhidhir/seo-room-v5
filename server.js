@@ -713,7 +713,9 @@ app.post('/api/action-items/:id/execute', async (req, res) => {
 
 async function serpApiSearch(params) {
   if (!SERPAPI_KEY) throw new Error('SERPAPI_KEY not configured');
-  const searchParams = new URLSearchParams({ ...params, api_key: SERPAPI_KEY });
+  // Filter out undefined/null values to avoid sending them as strings
+  const cleanParams = Object.fromEntries(Object.entries({ ...params, api_key: SERPAPI_KEY }).filter(([_, v]) => v != null));
+  const searchParams = new URLSearchParams(cleanParams);
   const resp = await fetch(`https://serpapi.com/search.json?${searchParams}`);
   if (!resp.ok) {
     const text = await resp.text();
@@ -1428,12 +1430,8 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         const searchQuery = location ? `${businessName} ${location}` : businessName;
         console.log(`[gbp-audit] SerpAPI search: "${searchQuery}"`);
 
-        const data = await serpApiSearch({
-          engine: 'google_maps',
-          q: searchQuery,
-          type: 'search',
-          ll: project.service_areas?.[0] ? undefined : undefined,
-        });
+        const params = { engine: 'google_maps', q: searchQuery, type: 'search' };
+        const data = await serpApiSearch(params);
 
         // Find the best matching result
         const results = data.local_results || [];
