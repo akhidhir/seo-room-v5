@@ -1427,11 +1427,22 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1. Search for the business on Google Maps via SerpAPI
     if (SERPAPI_KEY && businessName) {
       try {
-        const searchQuery = location ? `${businessName} ${location}` : businessName;
-        console.log(`[gbp-audit] SerpAPI search: "${searchQuery}"`);
+        // Try multiple search strategies — shorter queries work better on Google Maps
+        const searchQueries = [
+          businessName,
+          domain ? `${businessName} ${domain}` : null,
+          location ? `${businessName} ${location.split(',')[0].trim()}` : null,
+        ].filter(Boolean);
 
-        const params = { engine: 'google_maps', q: searchQuery, type: 'search' };
-        const data = await serpApiSearch(params);
+        let data = null;
+        let searchQuery = '';
+        for (const q of searchQueries) {
+          searchQuery = q;
+          console.log(`[gbp-audit] SerpAPI trying: "${q}"`);
+          data = await serpApiSearch({ engine: 'google_maps', q, type: 'search' });
+          if ((data.local_results || []).length > 0) break;
+        }
+        if (!data) data = { local_results: [] };
 
         // Find the best matching result
         const results = data.local_results || [];
