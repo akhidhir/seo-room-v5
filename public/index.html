@@ -2241,6 +2241,7 @@
       const [editNotes, setEditNotes] = useState('');
       const [saving, setSaving] = useState(null);
       const [scanning, setScanning] = useState(false);
+      const [filter, setFilter] = useState('all');
 
       useEffect(() => {
         if (project?.id) loadCitations();
@@ -2342,12 +2343,12 @@
           {/* Stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
             {[
-              { label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
-              { label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
-              { label: 'Pending', value: stats.pending, color: '#f59e0b', icon: 'fas fa-clock' },
-              { label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
+              { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
+              { id: 'listed', label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
+              { id: 'pending', label: 'Pending', value: stats.pending, color: '#f59e0b', icon: 'fas fa-clock' },
+              { id: 'not_listed', label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
             ].map(s => (
-              <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: '1px solid var(--border)' }}>
+              <div key={s.id} onClick={() => setFilter(s.id)} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: filter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', opacity: filter === 'all' || filter === s.id ? 1 : 0.5, transition: 'all 0.2s' }}>
                 <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
                 <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.value}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
@@ -2367,18 +2368,26 @@
           </div>
 
           {/* Directory tiers */}
+          {filter !== 'all' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
+              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : 'Not Listed'}</strong></span>
+              <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>Clear filter</button>
+            </div>
+          )}
+
           {tiers.map(tier => {
-            const tierDirs = directories.filter(d => d.type === tier.key);
+            const allTierDirs = directories.filter(d => d.type === tier.key).length;
+            const tierDirs = directories.filter(d => d.type === tier.key && (filter === 'all' || d.status === filter));
             if (tierDirs.length === 0) return null;
-            const tierListed = tierDirs.filter(d => d.status === 'listed').length;
+            const tierListed = directories.filter(d => d.type === tier.key && d.status === 'listed').length;
             return (
               <div key={tier.key} style={{ marginBottom: 20 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                   <i className={tier.icon} style={{ color: typeColor[tier.key], fontSize: 16 }} />
                   <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{tier.label}</span>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>— {tier.desc}</span>
-                  <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: tierListed === tierDirs.length ? '#22c55e' : 'var(--text3)' }}>
-                    {tierListed}/{tierDirs.length}
+                  <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: tierListed === allTierDirs ? '#22c55e' : 'var(--text3)' }}>
+                    {filter === 'all' ? `${tierListed}/${allTierDirs}` : `${tierDirs.length} shown`}
                   </span>
                 </div>
                 <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
