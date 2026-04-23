@@ -1256,6 +1256,7 @@
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
       const [expandedId, setExpandedId] = useState(null);
+      const [expandedCats, setExpandedCats] = useState(new Set());
 
       // Load previous findings on mount
       useEffect(() => {
@@ -1365,16 +1366,21 @@
               {categories.map(cat => {
                 const cfg = categoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
                 const catFindings = findings.filter(f => f.category === cat);
+                const isOpen = expandedCats.has(cat);
+                const hasCritical = catFindings.some(f => f.severity === 'Critical');
                 return (
                   <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: `2px solid ${cfg.color}` }}>
+                    <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat) ? s.delete(cat) : s.add(cat); return s; })}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: isOpen ? `2px solid ${cfg.color}` : 'none', cursor: 'pointer' }}>
                       <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
                       <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
+                      {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
                       <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
                         {catFindings.length}
                       </span>
+                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
                     </div>
-                    <div style={{ padding: 8 }}>
+                    {isOpen && <div style={{ padding: 8 }}>
                     {catFindings.map(finding => (
                       <FindingCard
                         key={finding.id}
@@ -1386,7 +1392,7 @@
                         onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
-                    </div>
+                    </div>}
                   </div>
                 );
               })}
@@ -1532,16 +1538,21 @@
               {categories.map(cat => {
                 const cfg = gscCategoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
                 const catFindings = findings.filter(f => f.category === cat);
+                const isOpen = expandedCats.has(cat);
+                const hasCritical = catFindings.some(f => f.severity === 'Critical');
                 return (
                   <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: `2px solid ${cfg.color}` }}>
+                    <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat) ? s.delete(cat) : s.add(cat); return s; })}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: isOpen ? `2px solid ${cfg.color}` : 'none', cursor: 'pointer' }}>
                       <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
                       <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
+                      {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
                       <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
                         {catFindings.length}
                       </span>
+                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
                     </div>
-                    <div style={{ padding: 8 }}>
+                    {isOpen && <div style={{ padding: 8 }}>
                     {catFindings.map(finding => (
                       <FindingCard
                         key={finding.id}
@@ -1553,7 +1564,7 @@
                         onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
-                    </div>
+                    </div>}
                   </div>
                 );
               })}
@@ -1780,16 +1791,21 @@
             {categories.map(cat => {
               const catFindings = findings.filter(f => f.category === cat.key);
               if (catFindings.length === 0) return null;
+              const isOpen = expandedCats.has(cat.key);
+              const hasCritical = catFindings.some(f => f.severity === 'Critical');
               return (
                 <div key={cat.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cat.color}12`, borderBottom: `2px solid ${cat.color}` }}>
+                  <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat.key) ? s.delete(cat.key) : s.add(cat.key); return s; })}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cat.color}12`, borderBottom: isOpen ? `2px solid ${cat.color}` : 'none', cursor: 'pointer' }}>
                     <i className={cat.icon} style={{ color: cat.color, fontSize: 18 }} />
                     <span style={{ fontSize: 15, fontWeight: 700, color: cat.color }}>{cat.label}</span>
+                    {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
                     <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
                       {catFindings.length}
                     </span>
+                    <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
                   </div>
-                  <div style={{ padding: 8 }}>
+                  {isOpen && <div style={{ padding: 8 }}>
                   {catFindings.map(f => (
                     <FindingCard
                       key={f.id}
@@ -1801,7 +1817,7 @@
                       onToggle={() => setExpandedId(expandedId === f.id ? null : f.id)}
                     />
                   ))}
-                  </div>
+                  </div>}
                 </div>
               );
             })}
