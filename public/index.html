@@ -1421,6 +1421,7 @@
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
       const [expandedId, setExpandedId] = useState(null);
+      const [expandedCats, setExpandedCats] = useState(new Set());
       const [summary, setSummary] = useState(null);
 
       // Load previous findings on mount
@@ -1595,6 +1596,7 @@
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
       const [expandedId, setExpandedId] = useState(null);
+      const [expandedCats, setExpandedCats] = useState(new Set());
 
       const handleApprove = async (finding) => {
         try {
