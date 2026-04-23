@@ -1194,6 +1194,7 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
     // Try to get fresh GSC data first, fall back to stored data
     let gscRows = [];
     let pageRows = [];
+    let matchedSite = null;
     const accessToken = await getGscAccessToken(req.auth?.userId);
 
     if (accessToken) {
@@ -1202,7 +1203,7 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
         headers: { Authorization: `Bearer ${accessToken}` }
       }).then(r => r.json());
       const available = (sites.siteEntry || []).map(s => s.siteUrl);
-      let matchedSite = available.find(s => s.includes(domain.replace(/^www\./, '')));
+      matchedSite = available.find(s => s.includes(domain.replace(/^www\./, '')));
       if (!matchedSite && available.length > 0) matchedSite = available[0];
 
       if (matchedSite) {
@@ -1384,6 +1385,119 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
           current_value: `Branded: ${brandPct.toFixed(0)}% (${brandedClicks}/${totalClicks} clicks)`,
           recommended_value: 'Below 50% branded'
         });
+      }
+    }
+
+    // 7. INDEXING ISSUES: Check key pages via URL Inspection API
+    if (accessToken && matchedSite) {
+      try {
+        // Get important pages from sitemap or pageRows
+        const pagesToCheck = (pageRows || [])
+          .sort((a, b) => b.impressions - a.impressions)
+          .slice(0, 15)
+          .map(p => p.page);
+
+        // Also check homepage if not in list
+        const baseUrl = `https://${domain}`;
+        if (!pagesToCheck.some(p => p === baseUrl || p === baseUrl + '/')) {
+          pagesToCheck.unshift(baseUrl + '/');
+        }
+
+        let notIndexed = [];
+        let crawledNotIndexed = [];
+        let mobileIssues = [];
+
+        for (const pageUrl of pagesToCheck.slice(0, 10)) {
+          try {
+            const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite })
+            });
+            if (inspRes.ok) {
+              const inspData = await inspRes.json();
+              const result = inspData.inspectionResult;
+              const indexStatus = result?.indexStatusResult;
+              const mobileStatus = result?.mobileUsabilityResult;
+
+              if (indexStatus) {
+                const verdict = indexStatus.verdict;
+                const coverageState = indexStatus.coverageState;
+
+                if (verdict === 'FAIL' || verdict === 'NEUTRAL') {
+                  let path;
+                  try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+
+                  if (coverageState === 'Crawled - currently not indexed' || coverageState === 'Discovered - currently not indexed') {
+                    crawledNotIndexed.push({ url: path, state: coverageState, lastCrawl: indexStatus.lastCrawlTime });
+                  } else {
+                    notIndexed.push({ url: path, state: coverageState || verdict, reason: indexStatus.pageFetchState });
+                  }
+                }
+              }
+
+              // Mobile usability
+              if (mobileStatus?.verdict === 'FAIL') {
+                let path;
+                try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+                const issues = (mobileStatus.issues || []).map(i => i.issueType).join(', ');
+                mobileIssues.push({ url: path, issues });
+              }
+            }
+          } catch (e) { /* skip individual page errors */ }
+        }
+
+        if (notIndexed.length > 0) {
+          findings.push({
+            pillar: 'gsc', category: 'Indexing Issues',
+            title: `${notIndexed.length} important pages NOT indexed`,
+            description: `These pages are not in Google's index: ${notIndexed.map(p => `${p.url} (${p.state})`).join(', ')}`,
+            recommendation: 'Check robots.txt, noindex tags, and canonical tags. Submit these URLs for indexing via GSC. Ensure pages have unique, valuable content.',
+            severity: 'Critical',
+            current_value: `${notIndexed.length} pages not indexed`,
+            recommended_value: 'All important pages indexed'
+          });
+        }
+
+        if (crawledNotIndexed.length > 0) {
+          findings.push({
+            pillar: 'gsc', category: 'Indexing Issues',
+            title: `${crawledNotIndexed.length} pages crawled but not indexed`,
+            description: `Google crawled these pages but chose not to index them: ${crawledNotIndexed.map(p => `${p.url} (${p.state})`).join(', ')}. This usually means Google doesn't find the content valuable enough.`,
+            recommendation: 'Improve content quality and uniqueness. Add internal links pointing to these pages. Ensure they have clear purpose and aren\'t thin or duplicate content.',
+            severity: crawledNotIndexed.length > 3 ? 'Critical' : 'Medium',
+            current_value: `${crawledNotIndexed.length} crawled, not indexed`,
+            recommended_value: 'All crawled pages indexed'
+          });
+        }
+
+        if (mobileIssues.length > 0) {
+          findings.push({
+            pillar: 'gsc', category: 'Mobile Usability',
+            title: `${mobileIssues.length} pages with mobile usability issues`,
+            description: `Pages failing mobile usability: ${mobileIssues.map(p => `${p.url} (${p.issues})`).join(', ')}`,
+            recommendation: 'Fix mobile viewport, text sizing, and tap target spacing. Test with Google\'s Mobile-Friendly Test tool.',
+            severity: 'Medium',
+            current_value: `${mobileIssues.length} pages with issues`,
+            recommended_value: '0 mobile issues'
+          });
+        }
+
+        if (notIndexed.length === 0 && crawledNotIndexed.length === 0) {
+          findings.push({
+            pillar: 'gsc', category: 'Indexing Issues',
+            title: 'All checked pages are indexed',
+            description: `${pagesToCheck.slice(0, 10).length} top pages checked — all are indexed by Google.`,
+            recommendation: 'Continue monitoring. New pages should be submitted via GSC sitemap.',
+            severity: 'Low',
+            current_value: 'All indexed',
+            recommended_value: 'All indexed'
+          });
+        }
+
+        console.log(`[gsc-audit] Indexing check: ${notIndexed.length} not indexed, ${crawledNotIndexed.length} crawled not indexed, ${mobileIssues.length} mobile issues`);
+      } catch (e) {
+        console.log(`[gsc-audit] URL Inspection failed: ${e.message}`);
       }
     }
 
