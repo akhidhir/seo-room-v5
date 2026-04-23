@@ -995,7 +995,8 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     // Discover pages: ONLY home, services, and suburb pages
     const pageSet = new Set();
-    const serviceKeywords = /\/(service|plumb|gas|drain|hot-water|water-filter|leak|burst|tap|toilet|bathroom|kitchen|emergency|blocked|repair|install|maintenance|fix)/i;
+    // Only match top-level service pages, not every URL containing these words
+    const servicePagePattern = /^\/(services?\/?|gas-fitt|drain-clean|hot-water|water-filter|emergency-plumb|blocked-drain|burst-pipe|leak-detect|tap-repair|toilet-repair|bathroom-renov|kitchen-plumb)([^\/]*)\/?$/i;
 
     // 1. Homepage
     pageSet.add(baseUrl + '/');
@@ -1034,14 +1035,14 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     for (const url of allSitemapUrls) {
       if (url.endsWith('.xml') || url.match(/\.(jpg|png|gif|pdf)$/i)) continue;
-      const lowerUrl = url.toLowerCase();
-      // Include if it matches service keywords in the path
-      if (serviceKeywords.test(lowerUrl)) { pageSet.add(url); continue; }
-      // Include if it matches a suburb slug
-      if (suburbSlugs.some(slug => lowerUrl.includes(slug))) { pageSet.add(url); continue; }
+      const path = url.replace(baseUrl, '');
+      // Include if it's a service page (top-level only)
+      if (servicePagePattern.test(path)) { pageSet.add(url); continue; }
+      // Include if the path IS a suburb slug (e.g. /plumber-leeming/ or /leeming/)
+      const cleanPath = path.replace(/^\/|\/$/g, '').toLowerCase();
+      if (suburbSlugs.some(slug => cleanPath === slug || cleanPath === `plumber-${slug}` || cleanPath === `plumbing-${slug}` || cleanPath === `plumber-in-${slug}`)) { pageSet.add(url); continue; }
       // Include only specific important pages
-      const path = url.replace(baseUrl, '').replace(/^\/|\/$/g, '');
-      if (['contact', 'about', 'services', 'about-us', 'contact-us'].includes(path.toLowerCase())) { pageSet.add(url); }
+      if (['contact', 'about', 'services', 'about-us', 'contact-us'].includes(cleanPath)) { pageSet.add(url); }
     }
 
     // 3. Add suburb pages from service areas (in case not in sitemap)
