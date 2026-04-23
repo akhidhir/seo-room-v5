@@ -1571,10 +1571,11 @@ Return a JSON object with "findings" array. Each finding MUST have:
 - current_value: current state (use real data)
 - recommended_value: target state
 
+IMPORTANT: Only report findings based on data you can actually see. If a field is null/missing in the data, it may just mean the API didn't return it — do NOT flag null fields as "missing" unless there's strong evidence. For example, if description is null, don't say "Missing Business Description" — the API often doesn't return this field even when it exists.
+
 ANALYZE THOROUGHLY:
 
-PROFILE COMPLETENESS:
-- Is business description set? Is it detailed with keywords? (750 chars ideal)
+PROFILE COMPLETENESS (only flag what you can verify):
 - Are business hours set for all 7 days?
 - Is the website URL correct and matching the domain?
 - Is phone number present?
