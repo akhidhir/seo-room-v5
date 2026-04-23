@@ -1361,20 +1361,20 @@
                 </div>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
               {categories.map(cat => {
                 const cfg = categoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
                 const catFindings = findings.filter(f => f.category === cat);
-                const hasCritical = catFindings.some(f => f.severity === 'Critical');
-                const hasMedium = catFindings.some(f => f.severity === 'Medium');
                 return (
-                  <div key={cat} style={{ marginBottom: 20 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '12px 16px', background: `${cfg.color}15`, borderRadius: 10, borderLeft: `4px solid ${cfg.color}` }}>
+                  <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: `2px solid ${cfg.color}` }}>
                       <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
-                      <span style={{ fontSize: 16, fontWeight: 700, color: cfg.color }}>{cat}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>
-                        {catFindings.length} {catFindings.length === 1 ? 'finding' : 'findings'}
+                      <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
+                        {catFindings.length}
                       </span>
                     </div>
+                    <div style={{ padding: 8 }}>
                     {catFindings.map(finding => (
                       <FindingCard
                         key={finding.id}
@@ -1386,9 +1386,11 @@
                         onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
+                    </div>
                   </div>
                 );
               })}
+              </div>
             </>
             );
           })()}
@@ -1526,18 +1528,20 @@
                 </div>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
               {categories.map(cat => {
                 const cfg = gscCategoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
                 const catFindings = findings.filter(f => f.category === cat);
                 return (
-                  <div key={cat} style={{ marginBottom: 20 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '12px 16px', background: `${cfg.color}15`, borderRadius: 10, borderLeft: `4px solid ${cfg.color}` }}>
+                  <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: `2px solid ${cfg.color}` }}>
                       <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
-                      <span style={{ fontSize: 16, fontWeight: 700, color: cfg.color }}>{cat}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>
-                        {catFindings.length} {catFindings.length === 1 ? 'finding' : 'findings'}
+                      <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
+                        {catFindings.length}
                       </span>
                     </div>
+                    <div style={{ padding: 8 }}>
                     {catFindings.map(finding => (
                       <FindingCard
                         key={finding.id}
@@ -1549,9 +1553,11 @@
                         onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
                       />
                     ))}
+                    </div>
                   </div>
                 );
               })}
+              </div>
             </>
             );
           })()}
@@ -1770,18 +1776,20 @@
               </div>
             )}
 
-            {!loading && findings.length > 0 && categories.map(cat => {
+            {!loading && findings.length > 0 && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
+            {categories.map(cat => {
               const catFindings = findings.filter(f => f.category === cat.key);
               if (catFindings.length === 0) return null;
               return (
-                <div key={cat.key} style={{ marginBottom: 20 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '12px 16px', background: `${cat.color}15`, borderRadius: 10, borderLeft: `4px solid ${cat.color}` }}>
+                <div key={cat.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cat.color}12`, borderBottom: `2px solid ${cat.color}` }}>
                     <i className={cat.icon} style={{ color: cat.color, fontSize: 18 }} />
-                    <span style={{ fontSize: 16, fontWeight: 700, color: cat.color }}>{cat.label}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>
-                      {catFindings.length} {catFindings.length === 1 ? 'finding' : 'findings'}
+                    <span style={{ fontSize: 15, fontWeight: 700, color: cat.color }}>{cat.label}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
+                      {catFindings.length}
                     </span>
                   </div>
+                  <div style={{ padding: 8 }}>
                   {catFindings.map(f => (
                     <FindingCard
                       key={f.id}
@@ -1793,9 +1801,11 @@
                       onToggle={() => setExpandedId(expandedId === f.id ? null : f.id)}
                     />
                   ))}
+                  </div>
                 </div>
               );
             })}
+            </div>}
 
             {!loading && findings.length === 0 && (
               <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
