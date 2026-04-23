@@ -416,6 +416,7 @@ app.get('/api/projects/:id', async (req, res) => {
 
 // Update project (accepts both camelCase and snake_case)
 app.put('/api/projects/:id', async (req, res) => {
+  console.log(`[project-update] PUT /projects/${req.params.id} body keys:`, Object.keys(req.body || {}), 'competitors:', JSON.stringify(req.body?.competitors));
   const b = req.body;
   const name = b.name;
   const domain = b.domain;
@@ -1901,6 +1902,43 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         avgPosition: (c.keywords.reduce((s, k) => s + k.position, 0) / c.keywords.length).toFixed(1),
         keywords: c.keywords.slice(0, 5),
       }));
+
+    // Fallback: if no competitors from maps data, use Project Settings competitors + SerpAPI lookup
+    if (gbpData.competitors.length === 0 && (project.competitors || []).length > 0 && SERPAPI_KEY) {
+      console.log(`[gbp-audit] No maps competitors found, looking up ${project.competitors.length} from Project Settings`);
+      for (const compDomain of (project.competitors || []).slice(0, 5)) {
+        try {
+          const cleanDomain = compDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          const compSearch = await serpApiSearch({
+            engine: 'google_maps',
+            q: `${cleanDomain} ${(project.industry || '')} ${(location || '').split(',')[0] || ''}`.trim(),
+            type: 'search',
+            api_key: SERPAPI_KEY,
+          });
+          const place = (compSearch.local_results || [])[0];
+          if (place) {
+            gbpData.competitors.push({
+              name: place.title || compDomain,
+              rating: place.rating || null,
+              reviews: place.reviews || null,
+              appearances: 0,
+              avgPosition: place.position || '—',
+              keywords: [],
+              source: 'project_settings',
+              profile: {
+                rating: place.rating,
+                reviews: place.reviews,
+                photoCount: (place.thumbnail ? 1 : 0),
+                categories: place.type ? 1 : 0,
+                primaryType: place.type || null,
+                website: place.website || null,
+              },
+            });
+          }
+        } catch (e) { console.log(`[gbp-audit] Competitor lookup failed for ${compDomain}:`, e.message); }
+      }
+      console.log(`[gbp-audit] Found ${gbpData.competitors.length} competitors from Project Settings`);
+    }
 
     // 3. Look up top competitor profiles via Places API for comparison
     if (GOOGLE_KEY && gbpData.competitors.length > 0) {
