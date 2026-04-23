@@ -270,6 +270,20 @@ async function initDb() {
       )
     `);
 
+    // Citation tracking (per-project directory listing status)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS citations (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        directory_name TEXT NOT NULL,
+        status TEXT DEFAULT 'not_listed',
+        listing_url TEXT,
+        notes TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, directory_name)
+      )
+    `);
+
     // Add columns for existing databases
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS competitors TEXT[]`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
@@ -1154,6 +1168,52 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
     if (result.rows.length === 0) return res.json({ results: [] });
     const data = typeof result.rows[0].audit_data === 'string' ? JSON.parse(result.rows[0].audit_data) : result.rows[0].audit_data;
     res.json({ ...data, completed_at: result.rows[0].completed_at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== CITATIONS & DIRECTORIES ====================
+
+// Get all directories with project-specific status
+app.get('/api/projects/:projectId/citations', async (req, res) => {
+  try {
+    const saved = await pool.query(
+      'SELECT directory_name, status, listing_url, notes, updated_at FROM citations WHERE project_id=$1',
+      [req.params.projectId]
+    );
+    const statusMap = {};
+    for (const row of saved.rows) {
+      statusMap[row.directory_name] = { status: row.status, listing_url: row.listing_url, notes: row.notes, updated_at: row.updated_at };
+    }
+    const directories = AUSTRALIAN_DIRECTORIES.map(d => ({
+      ...d,
+      status: statusMap[d.name]?.status || 'not_listed',
+      listing_url: statusMap[d.name]?.listing_url || '',
+      notes: statusMap[d.name]?.notes || '',
+      updated_at: statusMap[d.name]?.updated_at || null,
+    }));
+    const listed = directories.filter(d => d.status === 'listed').length;
+    const pending = directories.filter(d => d.status === 'pending').length;
+    res.json({ directories, stats: { total: directories.length, listed, pending, not_listed: directories.length - listed - pending } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update citation status for a directory
+app.put('/api/projects/:projectId/citations/:directoryName', async (req, res) => {
+  const { projectId, directoryName } = req.params;
+  const { status, listing_url, notes } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (project_id, directory_name)
+       DO UPDATE SET status=COALESCE($3, citations.status), listing_url=COALESCE($4, citations.listing_url), notes=COALESCE($5, citations.notes), updated_at=NOW()`,
+      [projectId, decodeURIComponent(directoryName), status || 'not_listed', listing_url || null, notes || null]
+    );
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

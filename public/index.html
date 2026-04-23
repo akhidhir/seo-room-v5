@@ -2231,6 +2231,220 @@
       );
     }
 
+    // ============ CITATIONS & DIRECTORIES PAGE ============
+    function CitationsPage({ project }) {
+      const [directories, setDirectories] = useState([]);
+      const [stats, setStats] = useState({ total: 0, listed: 0, pending: 0, not_listed: 0 });
+      const [loading, setLoading] = useState(true);
+      const [editingDir, setEditingDir] = useState(null);
+      const [editUrl, setEditUrl] = useState('');
+      const [editNotes, setEditNotes] = useState('');
+      const [saving, setSaving] = useState(null);
+
+      useEffect(() => {
+        if (project?.id) loadCitations();
+      }, [project?.id]);
+
+      const loadCitations = async () => {
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/citations`);
+          setDirectories(data.directories || []);
+          setStats(data.stats || { total: 0, listed: 0, pending: 0, not_listed: 0 });
+        } catch (e) { console.error('Load citations:', e); }
+        finally { setLoading(false); }
+      };
+
+      const recalcStats = (dirs) => ({
+        total: dirs.length,
+        listed: dirs.filter(d => d.status === 'listed').length,
+        pending: dirs.filter(d => d.status === 'pending').length,
+        not_listed: dirs.filter(d => d.status === 'not_listed').length,
+      });
+
+      const updateStatus = async (dir, newStatus) => {
+        setSaving(dir.name);
+        try {
+          await api(`/projects/${project.id}/citations/${encodeURIComponent(dir.name)}`, {
+            method: 'PUT',
+            body: { status: newStatus, listing_url: dir.listing_url, notes: dir.notes },
+          });
+          const updated = directories.map(d => d.name === dir.name ? { ...d, status: newStatus, updated_at: new Date().toISOString() } : d);
+          setDirectories(updated);
+          setStats(recalcStats(updated));
+        } catch (e) { console.error('Update citation:', e); }
+        finally { setSaving(null); }
+      };
+
+      const saveDetails = async (dir) => {
+        setSaving(dir.name);
+        try {
+          await api(`/projects/${project.id}/citations/${encodeURIComponent(dir.name)}`, {
+            method: 'PUT',
+            body: { status: dir.status, listing_url: editUrl, notes: editNotes },
+          });
+          setDirectories(prev => prev.map(d => d.name === dir.name ? { ...d, listing_url: editUrl, notes: editNotes } : d));
+          setEditingDir(null);
+        } catch (e) { console.error('Save citation details:', e); }
+        finally { setSaving(null); }
+      };
+
+      const typeColor = { Essential: '#22c55e', Major: '#3b82f6', Industry: '#f59e0b', Standard: '#64748b' };
+      const statusColor = { listed: '#22c55e', pending: '#f59e0b', not_listed: '#64748b' };
+
+      const tiers = [
+        { key: 'Essential', label: 'Essential Platforms', desc: 'Must-have listings — direct ranking impact', icon: 'fas fa-star' },
+        { key: 'Major', label: 'Major Directories', desc: 'High authority Australian directories', icon: 'fas fa-building' },
+        { key: 'Industry', label: 'Industry-Specific', desc: 'Trade & service platforms — leads + citations', icon: 'fas fa-hard-hat' },
+        { key: 'Standard', label: 'Standard Directories', desc: 'Additional citation sources for NAP consistency', icon: 'fas fa-list' },
+      ];
+
+      if (loading) return (
+        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+          <span className="spinner" style={{ marginBottom: 12, display: 'inline-block' }}></span>
+          <div style={{ fontSize: 13 }}>Loading citations...</div>
+        </div>
+      );
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-building" style={{ marginRight: 10, color: 'var(--accent)' }} />Citations & Directories
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Track your business listings across Australian directories — NAP consistency is a key local ranking factor</p>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+            {[
+              { label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
+              { label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
+              { label: 'Pending', value: stats.pending, color: '#f59e0b', icon: 'fas fa-clock' },
+              { label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
+            ].map(s => (
+              <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: '1px solid var(--border)' }}>
+                <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
+                <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Progress bar */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
+              <span>Citation Coverage</span>
+              <span>{stats.total > 0 ? Math.round((stats.listed / stats.total) * 100) : 0}%</span>
+            </div>
+            <div style={{ height: 8, background: 'var(--bg)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${stats.total > 0 ? (stats.listed / stats.total) * 100 : 0}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 4, transition: 'width 0.3s' }} />
+            </div>
+          </div>
+
+          {/* Directory tiers */}
+          {tiers.map(tier => {
+            const tierDirs = directories.filter(d => d.type === tier.key);
+            if (tierDirs.length === 0) return null;
+            const tierListed = tierDirs.filter(d => d.status === 'listed').length;
+            return (
+              <div key={tier.key} style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <i className={tier.icon} style={{ color: typeColor[tier.key], fontSize: 16 }} />
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{tier.label}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>— {tier.desc}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: tierListed === tierDirs.length ? '#22c55e' : 'var(--text3)' }}>
+                    {tierListed}/{tierDirs.length}
+                  </span>
+                </div>
+                <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  {tierDirs.map((dir, idx) => {
+                    const isEditing = editingDir === dir.name;
+                    return (
+                      <div key={dir.name} style={{ borderBottom: idx < tierDirs.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', padding: '12px 16px', alignItems: 'center', gap: 12 }}>
+                          {/* Directory info */}
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontWeight: 600, fontSize: 13 }}>{dir.name}</span>
+                              {dir.free ? (
+                                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>FREE</span>
+                              ) : (
+                                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 600 }}>PAID</span>
+                              )}
+                              {dir.paid_option && <span style={{ fontSize: 10, color: 'var(--text3)' }}>{dir.paid_option}</span>}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{dir.description}</div>
+                            {dir.listing_url && <a href={dir.listing_url} target="_blank" rel="noopener" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />{dir.listing_url}</a>}
+                          </div>
+
+                          {/* URL */}
+                          <div>
+                            <a href={`https://${dir.url}`} target="_blank" rel="noopener" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>
+                              <i className="fas fa-external-link-alt" style={{ marginRight: 4, fontSize: 10 }} />{dir.url}
+                            </a>
+                          </div>
+
+                          {/* Status dropdown */}
+                          <div>
+                            <select
+                              value={dir.status}
+                              onChange={(e) => updateStatus(dir, e.target.value)}
+                              disabled={saving === dir.name}
+                              style={{
+                                background: `${statusColor[dir.status]}18`,
+                                color: statusColor[dir.status],
+                                border: `1px solid ${statusColor[dir.status]}40`,
+                                borderRadius: 6, padding: '5px 8px', fontSize: 12, fontWeight: 600, cursor: 'pointer', width: '100%',
+                              }}
+                            >
+                              <option value="not_listed">Not Listed</option>
+                              <option value="pending">Pending</option>
+                              <option value="listed">Listed</option>
+                            </select>
+                          </div>
+
+                          {/* Actions */}
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                            <button
+                              className="btn btn-secondary btn-small"
+                              onClick={() => { setEditingDir(isEditing ? null : dir.name); setEditUrl(dir.listing_url || ''); setEditNotes(dir.notes || ''); }}
+                              style={{ fontSize: 11, padding: '4px 8px' }}
+                            >
+                              <i className={`fas fa-${isEditing ? 'times' : 'edit'}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Expanded edit row */}
+                        {isEditing && (
+                          <div style={{ padding: '8px 16px 14px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)', display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+                            <div style={{ flex: 2 }}>
+                              <label style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: 4 }}>Listing URL</label>
+                              <input type="text" className="form-input" value={editUrl} onChange={e => setEditUrl(e.target.value)} placeholder="https://..." style={{ fontSize: 12 }} />
+                            </div>
+                            <div style={{ flex: 2 }}>
+                              <label style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: 4 }}>Notes</label>
+                              <input type="text" className="form-input" value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="e.g. Listed on 2024-01-15, claimed" style={{ fontSize: 12 }} />
+                            </div>
+                            <button className="btn btn-primary btn-small" onClick={() => saveDetails(dir)} disabled={saving === dir.name} style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                              {saving === dir.name ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-save" style={{ marginRight: 4 }} />Save</>}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     function OnPageAuditPage({ project }) {
       const [pages, setPages] = useState([]);
@@ -4931,6 +5145,8 @@
             return <OnPageAuditPage project={project} />;
           case 'indexing':
             return <IndexingPage project={project} />;
+          case 'citations':
+            return <CitationsPage project={project} />;
           case 'gbp-actions':
             return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" project={project} />;
           case 'gsc-actions':
@@ -4973,6 +5189,7 @@
           { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
           { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
+          { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
         ]},
         { section: 'ACTION PLAN', items: [
           { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
