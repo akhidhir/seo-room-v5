@@ -1278,6 +1278,7 @@
       const [sevFilter, setSevFilter] = useState('all');
       const [catFilter, setCatFilter] = useState('all');
       const [search, setSearch] = useState('');
+      const [profileSummary, setProfileSummary] = useState(null);
 
       useEffect(() => {
         if (project) loadExisting();
@@ -1286,6 +1287,12 @@
       const loadExisting = async () => {
         const data = await api(`/projects/${project.id}/audit-findings`);
         if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gbp'));
+        // Load profile summary from latest audit
+        try {
+          const auditData = await api(`/projects/${project.id}/audits`);
+          const gbpAudit = (auditData.audits || []).find(a => a.pillar === 'gbp' && a.status === 'completed');
+          if (gbpAudit?.audit_data?.profileSummary) setProfileSummary(gbpAudit.audit_data.profileSummary);
+        } catch (e) {}
       };
 
       const runAudit = async () => {
@@ -1293,6 +1300,7 @@
         try {
           const data = await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
           setFindings(data.findings || []);
+          if (data.profileSummary) setProfileSummary(data.profileSummary);
         } catch (err) { setError(err.message); }
         finally { setLoading(false); }
       };
@@ -1358,6 +1366,34 @@
           )}
 
           {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 14, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
+
+          {/* Profile Summary Card */}
+          {profileSummary && !loading && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px', marginBottom: 24 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)', marginBottom: 16 }}>
+                <i className="fas fa-store" style={{ marginRight: 10, color: 'var(--accent)' }} />
+                {profileSummary.name || project.business_name}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+                {[
+                  { label: 'Rating', value: profileSummary.rating ? `${profileSummary.rating} ★` : '—', color: profileSummary.rating >= 4.5 ? '#22c55e' : profileSummary.rating >= 4.0 ? '#f59e0b' : '#ef4444', icon: 'fas fa-star' },
+                  { label: 'Reviews', value: profileSummary.review_count ?? '—', color: (profileSummary.review_count || 0) >= 100 ? '#22c55e' : (profileSummary.review_count || 0) >= 50 ? '#f59e0b' : '#ef4444', icon: 'fas fa-comments' },
+                  { label: 'Photos', value: profileSummary.photo_count ?? '—', color: (profileSummary.photo_count || 0) >= 20 ? '#22c55e' : (profileSummary.photo_count || 0) >= 10 ? '#f59e0b' : '#ef4444', icon: 'fas fa-camera' },
+                  { label: 'Category', value: profileSummary.primary_category || '—', color: profileSummary.primary_category ? '#22c55e' : '#ef4444', icon: 'fas fa-tag', isText: true },
+                  { label: 'Description', value: profileSummary.has_description ? 'Set' : 'Missing', color: profileSummary.has_description ? '#22c55e' : '#ef4444', icon: 'fas fa-align-left' },
+                  { label: 'Hours', value: profileSummary.has_hours ? 'Set' : profileSummary.has_hours === false ? 'Missing' : '—', color: profileSummary.has_hours ? '#22c55e' : profileSummary.has_hours === false ? '#ef4444' : '#64748b', icon: 'fas fa-clock' },
+                  { label: 'Phone', value: profileSummary.has_phone ? 'Set' : 'Missing', color: profileSummary.has_phone ? '#22c55e' : '#ef4444', icon: 'fas fa-phone' },
+                  { label: 'Website', value: profileSummary.has_website ? 'Set' : 'Missing', color: profileSummary.has_website ? '#22c55e' : '#ef4444', icon: 'fas fa-globe' },
+                ].map(item => (
+                  <div key={item.label} style={{ background: 'var(--bg)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                    <i className={item.icon} style={{ color: item.color, fontSize: 16, display: 'block', marginBottom: 6 }} />
+                    <div style={{ fontSize: item.isText ? 13 : 20, fontWeight: 700, color: item.color }}>{item.value}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase' }}>{item.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {!loading && findings.length > 0 && <>
             {/* Severity filter pills */}

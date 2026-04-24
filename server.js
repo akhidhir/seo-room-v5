@@ -2188,110 +2188,88 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
 
     if (anthropic) {
       try {
-        const aiPrompt = `You are an expert local SEO auditor. Analyze this data and produce a comprehensive GBP audit based on the THREE PILLARS of local search ranking: PROXIMITY, RELEVANCE, and PROMINENCE.
+        const aiPrompt = `You are an expert local SEO auditor. Audit this Google Business Profile and produce findings based on the THREE PILLARS of local search: PROXIMITY, RELEVANCE, and PROMINENCE.
 
 PROJECT: ${project.name} (${domain})
 Business: ${businessName}
 Industry: ${industry || 'trades/services'}
 Location: ${location}
 Service Areas: ${JSON.stringify(serviceAreas).substring(0, 500)}
-Data Source: ${gbpData.source}
 
-===== BUSINESS PROFILE =====
+===== CURRENT GBP PROFILE =====
 ${JSON.stringify(gbpData.profile, null, 1)}
 
-===== TOP COMPETITORS (from Maps rankings) =====
+===== COMPETITORS =====
 ${JSON.stringify(gbpData.competitors, null, 1)}
 
-===== MAPS RANKINGS (${gbpData.mapsRankings.length} tracked) =====
-${JSON.stringify(gbpData.mapsRankings.slice(0, 40), null, 1)}
+===== MAPS RANKINGS (sample of ${gbpData.mapsRankings.length}) =====
+${JSON.stringify(gbpData.mapsRankings.slice(0, 20), null, 1)}
 
-===== DIRECTORY DATABASE =====
-${JSON.stringify(gbpData.directories.map(d => ({ name: d.name, type: d.type, free: d.free, paid: d.paid_option || null, difficulty: d.difficulty, priority: d.priority })), null, 1)}
+Return JSON with "findings" array AND "profile_summary" object.
 
-Return a JSON object with "findings" array. Each finding MUST have:
-- pillar: "gbp"
-- category: one of "Proximity", "Relevance", "Prominence", "Citations & Directories", "Competitor Gap", "Reviews", "Photos", "Profile Completeness", "Maps Ranking"
-- title: a SHORT task-style title focused on what the business owner should DO (e.g. "Add 20+ photos to GBP", "Request reviews mentioning Shelley")
-- description: 1-2 sentences explaining WHY this matters, with real numbers. Focus on the business, not competitor deep-dives.
-- recommendation: ONE single sentence describing the ONE action to take. NOT a list. NOT multiple steps.
-- severity: "Critical", "Medium", or "Low"
-- current_value: short current state (e.g. "3 photos", "Position #8 in Shelley")
-- recommended_value: short target (e.g. "20+ photos", "Position #1-3")
+The "profile_summary" should contain:
+{
+  "rating": number or null,
+  "review_count": number or null,
+  "photo_count": number or null,
+  "primary_category": string or null,
+  "secondary_categories": array or [],
+  "has_description": boolean,
+  "has_hours": boolean,
+  "has_phone": boolean,
+  "has_website": boolean,
+  "services_listed": boolean or null,
+  "posts_active": boolean or null,
+  "pillar_scores": { "proximity": 1-10, "relevance": 1-10, "prominence": 1-10 }
+}
 
-PRODUCE FINDINGS FOR EACH AREA:
+Each finding MUST have: pillar, category, title, description, recommendation, severity, current_value, recommended_value.
 
-1. THREE PILLARS ASSESSMENT:
+CATEGORY must be one of: "Profile Completeness", "Categories & Services", "Reviews", "Photos", "Proximity", "Relevance", "Prominence", "Maps Ranking"
 
-PROXIMITY:
-- How well do tracked locations cover the service area?
-- Are there gaps in suburb coverage?
-- Score the proximity strategy
+FOCUS AREAS (in this priority order):
 
-RELEVANCE:
-- Primary category optimization (is it the best match?)
-- Additional categories (competitor comparison — what categories do competitors have?)
-- Keyword relevance in business description
-- Service alignment with search queries
+1. PROFILE COMPLETENESS (most important — audit what's on the profile):
+   - Is the primary category optimal for this industry? What should it be?
+   - Are there secondary categories? What's missing? (e.g. "Gas Fitter", "Water Heater Installation", "Drain Cleaning Service")
+   - Is a business description set? Is it keyword-optimized?
+   - Are business hours complete (all 7 days)?
+   - Is the phone number set?
+   - Is the website linked?
+   - Are services/products listed on GBP?
+   - Are GBP posts being used? (Q&A, updates, offers)
+   - Create ONE finding for EACH missing or suboptimal field.
 
-PROMINENCE:
-- Review count vs competitors (who has more? specific numbers)
-- Rating comparison (are we above/below competitors?)
-- Photo count vs competitors
-- Citation count assessment (see directories below)
-- Overall prominence score
+2. PHOTOS:
+   - How many photos? (benchmark: 20+ for trades)
+   - Types needed: logo, cover, team, job photos (before/after), office/van
+   - Create ONE finding for each type of photo needed
 
-2. COMPETITOR GAP ANALYSIS (create ONE finding per competitor):
-- For EACH competitor, create a separate finding analyzing what they do better
-- Include their specific review count, rating, photo count, categories
-- Which specific keywords/suburbs does this competitor outrank us? By how much?
-- What specific actions would close the gap with THIS competitor?
+3. REVIEWS:
+   - Current count and rating
+   - Are reviews being responded to?
+   - Do reviews mention service areas/suburbs?
+   - Create separate findings: "Respond to all reviews", "Get reviews mentioning [specific suburb]", etc.
 
-3. CITATIONS & DIRECTORIES:
-- Recommend the TOP 10 directories this business should be listed on, ordered by priority
-- For each: name, free/paid, approximate cost, difficulty to join, and WHY it matters
-- Flag any industry-specific directories (like hipages for tradies)
-- Estimate current citation health based on available data
+4. THREE PILLARS SCORES:
+   - PROXIMITY: Are service areas properly set? Any gaps?
+   - RELEVANCE: Do categories, description, and services match what people search for?
+   - PROMINENCE: Reviews, photos, citations — is the business well-known enough?
+   - Create 1-2 findings per pillar
 
-4. REVIEWS STRATEGY:
-- Current count vs benchmark vs competitors
-- Rating quality assessment
-- Review velocity recommendations
-- Response strategy
+5. MAPS RANKING (keep brief — max 5 findings):
+   - Only flag the 3-5 WORST performing suburbs, not every single one
+   - Focus on what to DO about it, not just restating the position
 
-5. MAPS RANKING PERFORMANCE (create ONE finding per suburb/keyword):
-- For EACH suburb where position is worse than #3, create a separate finding with that suburb's specific position, keyword, and what to do about it
-- For EACH strong-performing suburb (top 3), create a separate "maintain" finding
-- Never group suburbs together — each suburb gets its own finding
+RULES:
+- ONE finding = ONE action. Each is approved or dismissed independently.
+- "recommendation" = ONE sentence. ONE action. No lists.
+- "title" reads like a to-do: "Add Gas Fitter as secondary category", "Upload 10 before/after job photos", "Write keyword-rich business description"
+- NEVER flag missing data if the field is null in our data — the API may not return it.
+- Use real numbers. No generic advice.
+- Total: 15-30 focused findings. Quality over quantity.
 
-6. PROFILE OPTIMIZATION:
-- Photo count assessment (compare to competitors)
-- Hours completeness if data available
-
-CRITICAL RULES:
-
-1. ONE FINDING = ONE ACTION. The business owner will approve or dismiss each finding individually. Each finding is a SINGLE task.
-   - BAD recommendation: "1) Add photos 2) Get reviews 3) Update categories 4) Build citations"
-   - GOOD: 4 SEPARATE findings, each with its own title, description, and one-sentence recommendation.
-   - If you think of 6 things to do, that's 6 findings, not 1 finding with 6 steps.
-
-2. The "recommendation" field must be exactly ONE sentence. ONE action. No lists, no numbered steps, no "and also".
-   - BAD: "Add 20+ photos and also get reviews and update your categories"
-   - GOOD: "Upload 20 high-quality photos of recent plumbing jobs to your GBP profile."
-
-3. FOCUS ON THE BUSINESS, NOT COMPETITORS. Titles should say what to DO, not analyze competitors.
-   - BAD: "Little Pommie Plumber: Website Optimization vs Profile Strength"
-   - GOOD: "Upload 20+ photos to GBP (competitor has only 1)"
-   - BAD: "Competitor Review Count Advantage Analysis"
-   - GOOD: "Get 10 more reviews to overtake Little Pommie Plumber"
-
-4. The "title" reads like a to-do item: "Add gas fitting as secondary category", "Upload 20 job photos", "Get 5 reviews mentioning Willetton"
-
-5. NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these.
-6. Use real numbers from the data. No generic advice.
-7. Produce 30-50+ small, granular findings. Each one is independently actionable.
-
-Return ONLY valid JSON: {"findings": [...]}`;
+Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
 
         const response = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
@@ -2303,11 +2281,13 @@ Return ONLY valid JSON: {"findings": [...]}`;
         console.log(`[gbp-audit] AI response: ${text.length} chars`);
 
         const jsonMatch = text.match(/\{[\s\S]*\}/);
+        let profileSummary = null;
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
+          profileSummary = parsed.profile_summary || null;
           if (parsed.findings && Array.isArray(parsed.findings)) {
             findings = parsed.findings.map(f => ({
-              pillar: 'gbp', category: f.category || 'General',
+              pillar: 'gbp', category: f.category || 'Profile Completeness',
               title: f.title, description: f.description,
               recommendation: f.recommendation, severity: f.severity || 'Medium',
               current_value: f.current_value || '', recommended_value: f.recommended_value || '',
@@ -2319,12 +2299,26 @@ Return ONLY valid JSON: {"findings": [...]}`;
       }
     }
 
+    // Build profile summary from raw data if AI didn't provide one
+    const profileSummary = gbpData.profile ? {
+      name: gbpData.profile.name,
+      rating: gbpData.profile.rating,
+      review_count: gbpData.profile.reviewCount,
+      photo_count: gbpData.profile.photoCount,
+      primary_category: gbpData.profile.primaryType,
+      has_description: !!gbpData.profile.description,
+      has_hours: gbpData.profile.hoursSet,
+      has_phone: !!gbpData.profile.phone,
+      has_website: !!gbpData.profile.website,
+      address: gbpData.profile.address,
+      business_status: gbpData.profile.businessStatus,
+    } : null;
+
     // Fallback
     if (findings.length === 0) {
       if (!gbpData.profile) {
         findings.push({ pillar: 'gbp', category: 'Profile Completeness', title: 'GBP profile not found on Google Maps', description: `Could not find "${businessName}".`, recommendation: 'Verify your listing at business.google.com', severity: 'Critical', current_value: 'Not found', recommended_value: 'Verified' });
       }
-      findings.push({ pillar: 'gbp', category: 'Citations & Directories', title: 'Directory citation audit needed', description: 'Submit your business to top Australian directories for prominence signals.', recommendation: 'Start with Yellow Pages, True Local, Hotfrog, and Yelp (all free).', severity: 'Medium', current_value: 'Unknown', recommended_value: '15+ citations' });
     }
 
     // Save
@@ -2338,10 +2332,10 @@ Return ONLY valid JSON: {"findings": [...]}`;
     }
 
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-      ['completed', JSON.stringify({ findingsCount: findings.length, source: gbpData.source, competitors: gbpData.competitors.length }), auditId]);
+      ['completed', JSON.stringify({ findingsCount: findings.length, source: gbpData.source, competitors: gbpData.competitors.length, profileSummary }), auditId]);
 
     console.log(`[gbp-audit] Project ${projectId}: ${findings.length} findings via ${gbpData.source}`);
-    res.json({ findings });
+    res.json({ findings, profileSummary });
   } catch (e) {
     console.error('[gbp-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
