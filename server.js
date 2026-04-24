@@ -2089,8 +2089,8 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1b. Fallback to SerpAPI Maps if no extension data
     if (SERPAPI_KEY && businessName) {
       try {
-        const searchQ = businessName;
-        console.log(`[gbp-audit] SerpAPI search: "${searchQ}"`);
+        const searchQ = businessName.replace(/&/g, 'and');
+        console.log(`[gbp-audit] SerpAPI search: "${searchQ}" (original: "${businessName}"`);
 
         const data = await serpApiSearch({
           engine: 'google_maps',
