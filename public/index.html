@@ -5466,10 +5466,10 @@
             </div>
 
             <div className="sidebar-footer">
-              <select className="project-selector" onChange={(e) => handleProjectSwitch({ id: e.target.value, name: 'Project', domain: 'example.com' })}>
-                <option value="1">Current Project</option>
-                <option value="2">Project 2</option>
-              </select>
+              <button className="btn btn-secondary" style={{ width: '100%', marginBottom: 8, fontSize: 13, textAlign: 'left', padding: '8px 12px' }} onClick={() => setActiveTab('projects')}>
+                <i className="fas fa-folder" style={{ marginRight: 8 }}></i>
+                {project ? (project.name || 'Select Project') : 'Select Project'}
+              </button>
               <button className="btn btn-danger" style={{ width: '100%' }} onClick={handleLogout}>
                 <i className="fas fa-sign-out-alt"></i> Sign out
               </button>
