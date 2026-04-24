@@ -2237,11 +2237,11 @@ PROMINENCE:
 - Citation count assessment (see directories below)
 - Overall prominence score
 
-2. COMPETITOR GAP ANALYSIS:
-- For each top competitor, what are they doing better?
-- Do they have more reviews? Higher rating? More photos? Better categories?
-- Which keywords do competitors outrank us on? By how much?
-- What specific actions would close the gap?
+2. COMPETITOR GAP ANALYSIS (create ONE finding per competitor):
+- For EACH competitor, create a separate finding analyzing what they do better
+- Include their specific review count, rating, photo count, categories
+- Which specific keywords/suburbs does this competitor outrank us? By how much?
+- What specific actions would close the gap with THIS competitor?
 
 3. CITATIONS & DIRECTORIES:
 - Recommend the TOP 10 directories this business should be listed on, ordered by priority
@@ -2255,24 +2255,31 @@ PROMINENCE:
 - Review velocity recommendations
 - Response strategy
 
-5. MAPS RANKING PERFORMANCE:
-- Specific keywords not in top 3 with current positions
-- Location-specific performance gaps
-- Best performing vs worst performing areas
+5. MAPS RANKING PERFORMANCE (create ONE finding per suburb/keyword):
+- For EACH suburb where position is worse than #3, create a separate finding with that suburb's specific position, keyword, and what to do about it
+- For EACH strong-performing suburb (top 3), create a separate "maintain" finding
+- Never group suburbs together — each suburb gets its own finding
 
 6. PROFILE OPTIMIZATION:
 - Photo count assessment (compare to competitors)
 - Hours completeness if data available
 
 CRITICAL RULES:
+- ONE FINDING PER ISSUE. NEVER group multiple suburbs, competitors, or problems into a single finding. For example:
+  - BAD: "Mid-Tier Suburbs (Shelley #8, Willetton #9, Queens Park #10) Show Improvement Potential"
+  - GOOD: Three separate findings — "Shelley: Position #8 — Improvement Potential", "Willetton: Position #9 — Improvement Potential", "Queens Park: Position #10 — Improvement Potential"
+  - BAD: "Multiple competitors outranking us"
+  - GOOD: Separate finding for EACH competitor with their specific strengths
+- Each finding title should be clear and specific — one suburb, one keyword, one competitor, one issue.
 - NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these even when they exist on Google. Only flag if the data source explicitly shows empty/missing.
 - Be data-driven — use real numbers, real competitor names, real keyword positions.
 - No generic advice — every finding must reference specific data points.
+- Produce MORE findings (20-40+) with granular, actionable items rather than fewer grouped findings.
 Return ONLY valid JSON: {"findings": [...]}`;
 
         const response = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 12000,
+          max_tokens: 16000,
           messages: [{ role: 'user', content: aiPrompt }]
         });
 
