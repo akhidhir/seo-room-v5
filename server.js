@@ -2004,7 +2004,7 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     if (SERPAPI_KEY && businessName) {
       try {
         // Search with just business name — SerpAPI handles location via ll parameter
-        const searchQ = `${businessName} ${(location || '').split(',')[0].trim()}`.trim();
+        const searchQ = businessName;
         console.log(`[gbp-audit] SerpAPI search: "${searchQ}"`);
 
         const data = await serpApiSearch({
