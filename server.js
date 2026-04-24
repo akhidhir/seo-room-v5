@@ -2013,6 +2013,7 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         );
         if (placesRes.ok) {
           const placesData = await placesRes.json();
+          console.log(`[gbp-audit] Places API returned ${(placesData.results || []).length} results, status: ${placesData.status}`);
           const match = (placesData.results || []).find(p =>
             (p.name && p.name.toLowerCase().includes(businessName.split(' ')[0].toLowerCase())) ||
             (p.formatted_address && domain && p.formatted_address.toLowerCase().includes(location.split(',')[0].toLowerCase().trim()))
@@ -2065,6 +2066,7 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
                 }
               } catch (e) { console.log(`[gbp-audit] Place details error: ${e.message}`); }
             }
+            console.log(`[gbp-audit] FULL PROFILE DATA:`, JSON.stringify(gbpData.profile, null, 2));
             console.log(`[gbp-audit] Profile: "${gbpData.profile.name}", ${gbpData.profile.rating} stars, ${gbpData.profile.reviewCount} reviews, ${gbpData.profile.photoCount || '?'} photos`);
           }
         }
