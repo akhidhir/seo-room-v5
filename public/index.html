@@ -1418,7 +1418,20 @@
               <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Issues
               <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} items</span>
             </h2>
-            <div style={{ marginLeft: 'auto' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button className="btn btn-secondary" onClick={async () => {
+                try {
+                  // Tell the extension to collect GBP data via dashboard bridge
+                  const token = localStorage.getItem('token');
+                  window.postMessage({ source: 'seo-room-dashboard', type: 'GBP_COLLECT', projectId: project.id, authToken: token }, '*');
+                  // Also try direct extension message
+                  if (chrome?.runtime?.sendMessage) {
+                    chrome.runtime.sendMessage({ type: 'DASHBOARD_GBP_COLLECT', projectId: project.id, authToken: token });
+                  }
+                } catch (e) { console.error('Extension sync:', e); }
+              }} style={{ fontSize: 14, padding: '10px 16px' }}>
+                <i className="fas fa-sync" style={{ marginRight: 6 }} /> Sync GBP
+              </button>
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
                 <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Running...' : 'Re-run'}
               </button>
@@ -1442,6 +1455,9 @@
                 {profileSummary.rating && <span style={{ fontSize: 17, fontWeight: 700, color: '#f59e0b' }}>{profileSummary.rating} ★</span>}
                 {profileSummary.review_count != null && <span style={{ fontSize: 15, color: 'var(--text2)' }}><i className="fas fa-comments" style={{ marginRight: 4, fontSize: 13 }} />{profileSummary.review_count} reviews</span>}
                 {profileSummary.address && <span style={{ fontSize: 14, color: 'var(--text3)' }}><i className="fas fa-map-marker-alt" style={{ marginRight: 4, fontSize: 12 }} />{profileSummary.address}</span>}
+                {profileSummary.has_description && <span style={{ fontSize: 13, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />Description</span>}
+                {profileSummary.has_hours && <span style={{ fontSize: 13, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />Hours</span>}
+                {profileSummary.photo_count > 0 && <span style={{ fontSize: 13, color: 'var(--text2)' }}><i className="fas fa-camera" style={{ marginRight: 4 }} />{profileSummary.photo_count} photos</span>}
               </div>
               {profileSummary.categories && profileSummary.categories.length > 0 && (
                 <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>

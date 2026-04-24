@@ -1173,6 +1173,44 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
   }
 });
 
+// ==================== GBP PROFILE (from Chrome Extension) ====================
+
+// Store GBP profile data scraped by the extension
+app.post('/api/projects/:projectId/gbp-profile', async (req, res) => {
+  const { projectId } = req.params;
+  const profileData = req.body;
+  try {
+    // Store in project_integrations as kind='gbp_profile'
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+       VALUES ($1, 'gbp_profile', $2, 'connected', NOW())
+       ON CONFLICT (project_id, kind)
+       DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [projectId, JSON.stringify(profileData)]
+    );
+    console.log(`[gbp-profile] Stored GBP profile for project ${projectId}: ${profileData.business?.name || 'unknown'}`);
+    res.json({ ok: true, message: 'GBP profile data saved' });
+  } catch (e) {
+    console.error('[gbp-profile] Save error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get stored GBP profile data
+app.get('/api/projects/:projectId/gbp-profile', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ profile: null });
+    const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
+    res.json({ profile: config, updated_at: result.rows[0].updated_at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== CITATIONS & DIRECTORIES ====================
 
 // Get all directories with project-specific status
@@ -2000,21 +2038,55 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // ===== PHASE 1: Gather all data =====
     const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
-    // 1. Get business profile
-    const gbpUrl = project.gbp_location_id || '';
+    // 1. Get business profile — prefer extension-scraped data (100% accurate)
 
-    // 1a. If we have a GBP share URL, resolve it to get the real Maps URL
-    if (gbpUrl && gbpUrl.includes('share.google')) {
-      try {
-        console.log(`[gbp-audit] Resolving GBP share URL: ${gbpUrl}`);
-        const resolveResp = await fetch(gbpUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0' } });
-        const resolvedUrl = resolveResp.url;
-        console.log(`[gbp-audit] Resolved to: ${resolvedUrl}`);
-        // Extract place info from the resolved URL if possible
-      } catch (e) { console.log(`[gbp-audit] Share URL resolve error: ${e.message}`); }
-    }
+    // 1a. Check for extension-scraped GBP data (most accurate source)
+    try {
+      const extData = await pool.query(
+        `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`,
+        [projectId]
+      );
+      if (extData.rows.length > 0) {
+        const ext = typeof extData.rows[0].config === 'string' ? JSON.parse(extData.rows[0].config) : extData.rows[0].config;
+        const ageHours = (Date.now() - new Date(extData.rows[0].updated_at).getTime()) / (1000 * 60 * 60);
+        console.log(`[gbp-audit] Extension data found (${Math.round(ageHours)}h old)`);
 
-    // 1b. Search SerpAPI Maps
+        gbpData.source = 'extension';
+        gbpData.profile = {
+          name: ext.business?.name || businessName,
+          address: ext.address || '',
+          phone: ext.phone || null,
+          website: ext.website || null,
+          rating: ext.reviews?.averageRating || null,
+          reviewCount: ext.reviews?.totalCount || 0,
+          primaryType: (ext.categories || []).find(c => c.primary)?.name || null,
+          categories: (ext.categories || []).map(c => c.name),
+          description: ext.description || null,
+          hoursSet: (ext.hours || []).length > 0,
+          hoursText: (ext.hours || []).map(h => `${h.day}: ${h.hours}`).join('; '),
+          hoursDays: (ext.hours || []).length,
+          photoCount: ext.photos?.totalCount || 0,
+          photosByOwner: ext.photos?.byOwner || 0,
+          photosByCustomer: ext.photos?.byCustomer || 0,
+          services: ext.services || [],
+          serviceAreas: ext.service_areas || [],
+          posts: ext.posts || { count: 0 },
+          attributes: ext.attributes || [],
+          products: ext.products || [],
+          reviews: [],
+          collectedAt: ext.collected_at,
+          dataAge: `${Math.round(ageHours)}h`,
+        };
+        console.log(`[gbp-audit] PROFILE (extension):`, JSON.stringify({
+          name: gbpData.profile.name, rating: gbpData.profile.rating, reviews: gbpData.profile.reviewCount,
+          photos: gbpData.profile.photoCount, categories: gbpData.profile.categories,
+          description: gbpData.profile.description ? 'YES' : 'NO', hours: gbpData.profile.hoursSet,
+          services: gbpData.profile.services.length, posts: gbpData.profile.posts.count,
+        }));
+      }
+    } catch (e) { console.log(`[gbp-audit] Extension data check error: ${e.message}`); }
+
+    // 1b. Fallback to SerpAPI Maps if no extension data
     if (SERPAPI_KEY && businessName) {
       try {
         const searchQ = businessName;
