@@ -2253,6 +2253,13 @@ Service Areas: ${JSON.stringify(serviceAreas).substring(0, 500)}
 ===== CURRENT GBP PROFILE =====
 ${JSON.stringify(gbpData.profile, null, 1)}
 
+IMPORTANT DATA NOTES:
+- If "description" is null/NO, it means our API couldn't retrieve it — it does NOT mean the business has no description. DO NOT flag it as missing.
+- If "hoursSet" is false/null, it means our API couldn't retrieve hours — DO NOT flag hours as missing.
+- If "photoCount" is 1 or very low, our API only counts thumbnails — the actual count may be higher. Flag photos cautiously.
+- ONLY flag things as missing if you are CERTAIN from the data. When in doubt, skip that finding.
+- Focus on what you CAN see: categories, rating, review count, rankings, competitors.
+
 ===== COMPETITORS =====
 ${JSON.stringify(gbpData.competitors, null, 1)}
 
