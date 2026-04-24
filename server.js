@@ -2112,10 +2112,14 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
       console.log(`[gbp-audit] No maps competitors found, looking up ${project.competitors.length} from Project Settings`);
       for (const compDomain of (project.competitors || []).slice(0, 5)) {
         try {
-          const cleanDomain = compDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          const cleanDomain = compDomain.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+          // Extract a business name from domain: "littlepommieplumber.com.au" -> "little pommie plumber"
+          const domainName = cleanDomain.split('.')[0].replace(/[-_]/g, ' ');
+          const searchQuery = `${domainName} ${(location || '').split(',')[0] || ''}`.trim();
+          console.log(`[gbp-audit] Competitor search: "${searchQuery}" (from ${compDomain})`);
           const compSearch = await serpApiSearch({
             engine: 'google_maps',
-            q: `${cleanDomain} ${(project.industry || '')} ${(location || '').split(',')[0] || ''}`.trim(),
+            q: searchQuery,
             type: 'search',
             api_key: SERPAPI_KEY,
           });
