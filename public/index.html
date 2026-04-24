@@ -1269,25 +1269,25 @@
     }
 
     // ============ GBP AUDIT PAGE ============
+    // ============ GBP AUDIT PAGE (v4-style table) ============
     function GBPAuditPage({ project }) {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
-      const [approvedIds, setApprovedIds] = useState(new Set());
-      const [expandedId, setExpandedId] = useState(null);
-      const [sevFilter, setSevFilter] = useState('all');
-      const [catFilter, setCatFilter] = useState('all');
-      const [search, setSearch] = useState('');
+      const [selected, setSelected] = useState(new Set());
+      const [reviewFinding, setReviewFinding] = useState(null);
+      const [searchQ, setSearchQ] = useState('');
+      const [filterSev, setFilterSev] = useState('all');
+      const [filterStatus, setFilterStatus] = useState('active');
+      const [sortCol, setSortCol] = useState('severity');
+      const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
 
-      useEffect(() => {
-        if (project) loadExisting();
-      }, [project?.id]);
+      useEffect(() => { if (project) loadExisting(); }, [project?.id]);
 
       const loadExisting = async () => {
         const data = await api(`/projects/${project.id}/audit-findings`);
         if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gbp'));
-        // Load profile summary from latest audit
         try {
           const auditData = await api(`/projects/${project.id}/audits`);
           const gbpAudit = (auditData.audits || []).find(a => a.pillar === 'gbp' && a.status === 'completed');
@@ -1305,56 +1305,124 @@
         finally { setLoading(false); }
       };
 
-      const handleApprove = async (finding) => {
+      const updateStatus = async (id, status) => {
         try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
-          setApprovedIds(prev => new Set([...prev, finding.id]));
+          await api(`/audit-findings/${id}`, { method: 'PUT', body: { status } });
+          setFindings(prev => prev.map(f => f.id === id ? { ...f, status } : f));
         } catch (err) { setError(err.message); }
       };
 
-      const handleReject = async (finding) => {
-        try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
-          setFindings(prev => prev.filter(f => f.id !== finding.id));
-        } catch (err) { setError(err.message); }
+      const bulkAction = async (status) => {
+        for (const id of selected) { await updateStatus(id, status); }
+        setSelected(new Set());
       };
 
-      const stats = useMemo(() => ({
-        critical: findings.filter(f => f.severity === 'Critical').length,
-        medium: findings.filter(f => f.severity === 'Medium').length,
-        low: findings.filter(f => f.severity === 'Low').length,
-      }), [findings]);
+      const selectBySeverity = (sev) => {
+        const ids = sorted.filter(f => f.status !== 'fixed' && (sev === 'all' || (f.severity || '').toLowerCase() === sev)).map(f => f.id);
+        setSelected(new Set(ids));
+      };
 
-      const categories = useMemo(() => [...new Set(findings.map(f => f.category))], [findings]);
+      const toggleSelect = (id) => { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); setSelected(s); };
+      const toggleSort = (col) => { if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortCol(col); setSortDir('asc'); } };
 
-      const filtered = useMemo(() => {
-        let list = findings;
-        if (sevFilter !== 'all') list = list.filter(f => f.severity === sevFilter);
-        if (catFilter !== 'all') list = list.filter(f => f.category === catFilter);
-        if (search.trim()) {
-          const q = search.toLowerCase();
-          list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q));
-        }
+      const sevOrder = { Critical: 0, critical: 0, High: 1, high: 1, Medium: 2, medium: 2, Low: 3, low: 3 };
+
+      const sorted = useMemo(() => {
+        let list = [...findings];
+        if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
+        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
+        else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
+        if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
+        list.sort((a, b) => {
+          let av, bv;
+          if (sortCol === 'severity') { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
+          else if (sortCol === 'title') { av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase(); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
+          else if (sortCol === 'category') { av = (a.category || ''); bv = (b.category || ''); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
+          else { av = 0; bv = 0; }
+          return sortDir === 'asc' ? av - bv : bv - av;
+        });
         return list;
-      }, [findings, sevFilter, catFilter, search]);
+      }, [findings, filterSev, filterStatus, searchQ, sortCol, sortDir]);
 
-      const sevColor = { Critical: '#ef4444', Medium: '#f59e0b', Low: '#3b82f6' };
+      const SortIcon = ({ col }) => sortCol === col ? <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 4, fontSize: 10 }} /> : null;
+
+      const sevBadge = (sev) => {
+        const colors = { Critical: '#ef4444', critical: '#ef4444', High: '#f97316', high: '#f97316', Medium: '#f59e0b', medium: '#f59e0b', Low: '#3b82f6', low: '#3b82f6' };
+        const c = colors[sev] || '#64748b';
+        return <span style={{ padding: '4px 14px', borderRadius: 4, fontSize: 14, fontWeight: 700, background: c + '20', color: c }}>{sev}</span>;
+      };
+
+      const statusBadge = (status) => {
+        const cfg = { new: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', label: 'new' }, approved: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'approved' }, rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'ignored' }, fixed: { bg: 'rgba(34,197,94,0.25)', color: '#22c55e', label: 'Fixed' } };
+        const c = cfg[status] || cfg.new;
+        return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
+      };
+
+      // Review panel
+      if (reviewFinding) {
+        const f = reviewFinding;
+        return (
+          <div>
+            <button className="btn btn-secondary" onClick={() => setReviewFinding(null)} style={{ marginBottom: 16, fontSize: 15, padding: '8px 16px' }}>
+              <i className="fas fa-arrow-left" style={{ marginRight: 8 }} /> Back to Issues
+            </button>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 28 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
+                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>{sevBadge(f.severity)} <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: 'rgba(99,102,241,0.15)', color: '#818cf8' }}>{f.category}</span></div>
+              </div>
+              {f.description && (
+                <div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>What's the issue</div>
+                  <div style={{ fontSize: 17, lineHeight: 1.7, color: 'var(--text1)' }}>{f.description}</div>
+                </div>
+              )}
+              {f.recommendation && (
+                <div style={{ marginBottom: 20, padding: 20, background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 10 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Suggested Fix</div>
+                  <div style={{ fontSize: 17, lineHeight: 1.7, color: 'var(--text1)' }}>{f.recommendation}</div>
+                </div>
+              )}
+              {(f.current_value || f.recommended_value) && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+                  <div style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.06)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Current State</div>
+                    <div style={{ fontSize: 17, fontWeight: 600, color: '#ef4444' }}>{f.current_value || '—'}</div>
+                  </div>
+                  <div style={{ padding: '16px 20px', background: 'rgba(34,197,94,0.06)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Target</div>
+                    <div style={{ fontSize: 17, fontWeight: 600, color: '#22c55e' }}>{f.recommended_value || '—'}</div>
+                  </div>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 14, marginTop: 24 }}>
+                <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
+                  <i className="fas fa-check" style={{ marginRight: 8 }} /> Move to Action Plan
+                </button>
+                <button className="btn btn-secondary" onClick={() => { updateStatus(f.id, 'rejected'); setReviewFinding(null); }} style={{ fontSize: 16, padding: '12px 28px' }}>
+                  <i className="fas fa-eye-slash" style={{ marginRight: 8 }} /> Ignore
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
 
       return (
         <div>
-          {/* Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
-            <div>
-              <h2 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>
-                <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Audit
-              </h2>
-              <p style={{ color: 'var(--text3)', fontSize: 14, marginTop: 4 }}>
-                {findings.length > 0 ? `${findings.length} issues found` : 'Analyze your Google Business Profile'}
-              </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
+              <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Issues
+              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} items</span>
+            </h2>
+            <div style={{ marginLeft: 'auto' }}>
+              <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
+                <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Running...' : 'Re-run'}
+              </button>
             </div>
-            <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 14, padding: '10px 20px' }}>
-              {loading ? <><span className="spinner"></span>Running...</> : <><i className="fas fa-play" style={{ marginRight: 8 }} />{findings.length > 0 ? 'Re-run Audit' : 'Run GBP Audit'}</>}
-            </button>
           </div>
 
           {loading && (
@@ -1365,171 +1433,96 @@
             </div>
           )}
 
-          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 14, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
+          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
 
-          {/* Profile Summary Card */}
           {profileSummary && !loading && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px', marginBottom: 24 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)', marginBottom: 16 }}>
-                <i className="fas fa-store" style={{ marginRight: 10, color: 'var(--accent)' }} />
-                {profileSummary.name || project.business_name}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 20px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 17, fontWeight: 700 }}><i className="fas fa-store" style={{ marginRight: 8, color: 'var(--accent)' }} />{profileSummary.name || project.business_name}</span>
+                {profileSummary.rating && <span style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>{profileSummary.rating} ★</span>}
+                {profileSummary.review_count != null && <span style={{ fontSize: 15, color: 'var(--text2)' }}>{profileSummary.review_count} reviews</span>}
+                {profileSummary.photo_count != null && <span style={{ fontSize: 15, color: 'var(--text2)' }}>{profileSummary.photo_count} photos</span>}
+                {profileSummary.primary_category && <span style={{ fontSize: 14, padding: '3px 12px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text2)' }}>{profileSummary.primary_category}</span>}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-                {[
-                  { label: 'Rating', value: profileSummary.rating ? `${profileSummary.rating} ★` : '—', color: profileSummary.rating >= 4.5 ? '#22c55e' : profileSummary.rating >= 4.0 ? '#f59e0b' : '#ef4444', icon: 'fas fa-star' },
-                  { label: 'Reviews', value: profileSummary.review_count ?? '—', color: (profileSummary.review_count || 0) >= 100 ? '#22c55e' : (profileSummary.review_count || 0) >= 50 ? '#f59e0b' : '#ef4444', icon: 'fas fa-comments' },
-                  { label: 'Photos', value: profileSummary.photo_count ?? '—', color: (profileSummary.photo_count || 0) >= 20 ? '#22c55e' : (profileSummary.photo_count || 0) >= 10 ? '#f59e0b' : '#ef4444', icon: 'fas fa-camera' },
-                  { label: 'Category', value: profileSummary.primary_category || '—', color: profileSummary.primary_category ? '#22c55e' : '#ef4444', icon: 'fas fa-tag', isText: true },
-                  { label: 'Description', value: profileSummary.has_description ? 'Set' : 'Missing', color: profileSummary.has_description ? '#22c55e' : '#ef4444', icon: 'fas fa-align-left' },
-                  { label: 'Hours', value: profileSummary.has_hours ? 'Set' : profileSummary.has_hours === false ? 'Missing' : '—', color: profileSummary.has_hours ? '#22c55e' : profileSummary.has_hours === false ? '#ef4444' : '#64748b', icon: 'fas fa-clock' },
-                  { label: 'Phone', value: profileSummary.has_phone ? 'Set' : 'Missing', color: profileSummary.has_phone ? '#22c55e' : '#ef4444', icon: 'fas fa-phone' },
-                  { label: 'Website', value: profileSummary.has_website ? 'Set' : 'Missing', color: profileSummary.has_website ? '#22c55e' : '#ef4444', icon: 'fas fa-globe' },
-                ].map(item => (
-                  <div key={item.label} style={{ background: 'var(--bg)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
-                    <i className={item.icon} style={{ color: item.color, fontSize: 16, display: 'block', marginBottom: 6 }} />
-                    <div style={{ fontSize: item.isText ? 13 : 20, fontWeight: 700, color: item.color }}>{item.value}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase' }}>{item.label}</div>
-                  </div>
+            </div>
+          )}
+
+          {selected.size > 0 && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
+              <span style={{ fontSize: 15, color: 'var(--text2)' }}>{selected.size} selected:</span>
+              <button className="btn btn-small" onClick={() => bulkAction('approved')} style={{ fontSize: 14 }}>Move to Action Plan</button>
+              <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14 }}>Ignore</button>
+              <button className="btn btn-small" onClick={() => setSelected(new Set())} style={{ fontSize: 14, color: 'var(--text3)' }}>Clear</button>
+            </div>
+          )}
+
+          {findings.length > 0 && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 14, color: 'var(--text2)' }}>Select:</span>
+              <button className="btn btn-small" style={{ background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 14 }} onClick={() => selectBySeverity('critical')}>Critical ({findings.filter(f => (f.severity||'').toLowerCase() === 'critical').length})</button>
+              <button className="btn btn-small" style={{ background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.3)', color: '#f59e0b', fontSize: 14 }} onClick={() => selectBySeverity('medium')}>Medium ({findings.filter(f => (f.severity||'').toLowerCase() === 'medium').length})</button>
+              <button className="btn btn-small" style={{ background: 'rgba(59,130,246,0.15)', borderColor: 'rgba(59,130,246,0.3)', color: '#3b82f6', fontSize: 14 }} onClick={() => selectBySeverity('low')}>Low ({findings.filter(f => (f.severity||'').toLowerCase() === 'low').length})</button>
+              <button className="btn btn-small" onClick={() => selectBySeverity('all')} style={{ fontSize: 14 }}>All ({findings.length})</button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input type="text" placeholder="Search findings..." value={searchQ} onChange={e => setSearchQ(e.target.value)}
+              style={{ flex: 1, minWidth: 200, background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }} />
+            <select value={filterSev} onChange={e => setFilterSev(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
+              <option value="all">All Severities</option>
+              <option value="critical">Critical</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
+              <option value="active">Active</option>
+              <option value="all">All</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Ignored</option>
+            </select>
+            <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.length}</span>
+          </div>
+
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ width: 36, padding: '14px 10px' }}><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(sorted.map(f => f.id)) : new Set())} checked={selected.size === sorted.length && sorted.length > 0} /></th>
+                  <th style={{ width: 40, padding: '14px 6px', color: 'var(--text3)', fontWeight: 600, fontSize: 14 }}>#</th>
+                  <th style={{ padding: '14px', cursor: 'pointer', fontWeight: 600, color: 'var(--text2)', fontSize: 15 }} onClick={() => toggleSort('title')}>Finding<SortIcon col="title" /></th>
+                  <th style={{ width: 110, padding: '14px 10px', cursor: 'pointer', fontWeight: 600, color: 'var(--text2)', fontSize: 14 }} onClick={() => toggleSort('severity')}>Severity<SortIcon col="severity" /></th>
+                  <th style={{ padding: '14px', fontWeight: 600, color: 'var(--text2)', fontSize: 14, maxWidth: 400 }}>Details</th>
+                  <th style={{ width: 120, padding: '14px 10px', cursor: 'pointer', fontWeight: 600, color: 'var(--text2)', fontSize: 14, textAlign: 'center' }} onClick={() => toggleSort('category')}>Category<SortIcon col="category" /></th>
+                  <th style={{ width: 100, padding: '14px 10px', fontWeight: 600, color: 'var(--text2)', fontSize: 14, textAlign: 'center' }}>Status</th>
+                  <th style={{ width: 90, padding: '14px 10px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', fontSize: 14 }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text3)', padding: 50, fontSize: 16 }}>
+                    {findings.length === 0 ? 'No findings yet. Click Re-run to start.' : 'No results match filters.'}
+                  </td></tr>
+                ) : sorted.map((f, i) => (
+                  <tr key={f.id} style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
+                    onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
+                    <td style={{ padding: '14px 10px' }}><input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} /></td>
+                    <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{i + 1}</td>
+                    <td style={{ padding: '14px', fontWeight: 600, fontSize: 16 }}>{f.title}</td>
+                    <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
+                    <td style={{ padding: '14px', fontSize: 14, color: 'var(--text2)', maxWidth: 400, lineHeight: 1.5 }}>{(f.description || '').substring(0, 150)}{(f.description || '').length > 150 ? '...' : ''}</td>
+                    <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text3)' }}>{f.category}</span></td>
+                    <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
+                    <td style={{ padding: '14px 10px', textAlign: 'center' }}>
+                      <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
+                        <i className="fas fa-search" style={{ marginRight: 4 }} /> Review
+                      </button>
+                    </td>
+                  </tr>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {!loading && findings.length > 0 && <>
-            {/* Severity filter pills */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 600 }}>Filter:</span>
-              {[
-                { id: 'all', label: `All (${findings.length})`, color: 'var(--accent)' },
-                { id: 'Critical', label: `Critical (${stats.critical})`, color: '#ef4444' },
-                { id: 'Medium', label: `Medium (${stats.medium})`, color: '#f59e0b' },
-                { id: 'Low', label: `Low (${stats.low})`, color: '#3b82f6' },
-              ].map(s => (
-                <button key={s.id} onClick={() => setSevFilter(s.id)}
-                  style={{
-                    padding: '6px 16px', borderRadius: 20, border: 'none', cursor: 'pointer',
-                    fontSize: 14, fontWeight: 700,
-                    background: sevFilter === s.id ? s.color : `${s.color}18`,
-                    color: sevFilter === s.id ? '#fff' : s.color,
-                    transition: 'all 0.2s',
-                  }}>{s.label}</button>
-              ))}
-            </div>
-
-            {/* Search + category filter */}
-            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-              <div style={{ flex: 1, position: 'relative' }}>
-                <i className="fas fa-search" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 14 }} />
-                <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="Search findings..."
-                  style={{ width: '100%', padding: '12px 14px 12px 40px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text1)', fontSize: 15, outline: 'none' }} />
-              </div>
-              <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
-                style={{ padding: '12px 16px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text1)', fontSize: 14, cursor: 'pointer', minWidth: 180 }}>
-                <option value="all">All Categories</option>
-                {categories.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-
-            {/* Results count */}
-            <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 12 }}>
-              {filtered.length} of {findings.length} issues
-              {(sevFilter !== 'all' || catFilter !== 'all' || search) && (
-                <button onClick={() => { setSevFilter('all'); setCatFilter('all'); setSearch(''); }}
-                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 13, marginLeft: 8 }}>Clear filters</button>
-              )}
-            </div>
-
-            {/* Issues list */}
-            <div>
-              {filtered.map((finding, idx) => {
-                const isExpanded = expandedId === finding.id;
-                const isApproved = approvedIds.has(finding.id) || finding.status === 'approved';
-                const sColor = sevColor[finding.severity] || '#64748b';
-                return (
-                  <div key={finding.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: `4px solid ${sColor}`, borderRadius: 10, marginBottom: 8, overflow: 'hidden' }}>
-                    {/* Row header */}
-                    <div onClick={() => setExpandedId(isExpanded ? null : finding.id)}
-                      style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16 }}>
-                      {/* Number */}
-                      <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 600, minWidth: 28 }}>#{idx + 1}</span>
-                      {/* Title + category */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text1)', marginBottom: 2 }}>{finding.title}</div>
-                        {!isExpanded && finding.description && (
-                          <div style={{ fontSize: 14, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{finding.description}</div>
-                        )}
-                      </div>
-                      {/* Category badge */}
-                      <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, background: 'var(--bg)', color: 'var(--text3)', fontWeight: 600, whiteSpace: 'nowrap' }}>{finding.category}</span>
-                      {/* Severity badge */}
-                      <span style={{ fontSize: 13, padding: '4px 14px', borderRadius: 6, fontWeight: 700, background: `${sColor}18`, color: sColor, whiteSpace: 'nowrap' }}>{finding.severity}</span>
-                      {/* Status */}
-                      {isApproved && <span style={{ fontSize: 12, color: '#22c55e', whiteSpace: 'nowrap' }}><i className="fas fa-check-circle" /></span>}
-                      {/* Chevron */}
-                      <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 13 }} />
-                    </div>
-
-                    {/* Expanded detail */}
-                    {isExpanded && (
-                      <div style={{ padding: '0 20px 20px', borderTop: '1px solid var(--border)' }}>
-                        {/* Description */}
-                        <div style={{ fontSize: 16, color: 'var(--text2)', lineHeight: 1.7, margin: '16px 0', paddingLeft: 44 }}>{finding.description}</div>
-
-                        {/* Recommendation */}
-                        {finding.recommendation && (
-                          <div style={{ margin: '0 0 16px', marginLeft: 44, padding: '16px 20px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-                            <i className="fas fa-arrow-right" style={{ color: '#22c55e', fontSize: 18, marginTop: 2, flexShrink: 0 }} />
-                            <div style={{ fontSize: 16, color: 'var(--text1)', lineHeight: 1.6, fontWeight: 500 }}>{finding.recommendation}</div>
-                          </div>
-                        )}
-
-                        {/* Now / Goal */}
-                        {(finding.current_value || finding.current) && (finding.recommended_value || finding.recommended) && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16, marginLeft: 44 }}>
-                            <div style={{ padding: '14px 18px', background: 'rgba(239,68,68,0.06)', borderRadius: 10, border: '1px solid rgba(239,68,68,0.12)' }}>
-                              <div style={{ color: 'var(--text3)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Now</div>
-                              <div style={{ color: '#ef4444', fontSize: 16, fontWeight: 600 }}>{finding.current_value || finding.current}</div>
-                            </div>
-                            <div style={{ padding: '14px 18px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.12)' }}>
-                              <div style={{ color: 'var(--text3)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Goal</div>
-                              <div style={{ color: '#22c55e', fontSize: 16, fontWeight: 600 }}>{finding.recommended_value || finding.recommended}</div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Actions */}
-                        <div style={{ display: 'flex', gap: 12, marginLeft: 44 }}>
-                          {!isApproved ? (
-                            <>
-                              <button className="btn btn-success" onClick={(e) => { e.stopPropagation(); handleApprove(finding); }} style={{ fontSize: 15, padding: '10px 24px', fontWeight: 600 }}>
-                                <i className="fas fa-check" style={{ marginRight: 8 }}></i> Approve
-                              </button>
-                              <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); handleReject(finding); }} style={{ fontSize: 15, padding: '10px 24px', fontWeight: 600 }}>
-                                <i className="fas fa-times" style={{ marginRight: 8 }}></i> Dismiss
-                              </button>
-                            </>
-                          ) : (
-                            <span style={{ padding: '10px 24px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 15 }}>
-                              <i className="fas fa-check-circle" style={{ marginRight: 8 }} /> Added to Action Plan
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </>}
-
-          {!loading && findings.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 80, color: 'var(--text3)' }}>
-              <i className="fas fa-map-marker-alt" style={{ fontSize: 52, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div style={{ fontSize: 18, marginBottom: 8 }}>No GBP audit run yet</div>
-              <div style={{ fontSize: 15 }}>Click "Run GBP Audit" to analyze your profile, reviews, competitors, and rankings.</div>
-            </div>
-          )}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
     }
