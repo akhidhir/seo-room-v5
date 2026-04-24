@@ -2269,16 +2269,26 @@ PROMINENCE:
 - Hours completeness if data available
 
 CRITICAL RULES:
-- ONE FINDING PER ISSUE. NEVER group multiple suburbs, competitors, or problems into a single finding. For example:
-  - BAD: "Mid-Tier Suburbs (Shelley #8, Willetton #9, Queens Park #10) Show Improvement Potential"
-  - GOOD: Three separate findings — "Shelley: Position #8 — Improvement Potential", "Willetton: Position #9 — Improvement Potential", "Queens Park: Position #10 — Improvement Potential"
-  - BAD: "Multiple competitors outranking us"
-  - GOOD: Separate finding for EACH competitor with their specific strengths
-- Each finding title should be clear and specific — one suburb, one keyword, one competitor, one issue.
-- NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these even when they exist on Google. Only flag if the data source explicitly shows empty/missing.
-- Be data-driven — use real numbers, real competitor names, real keyword positions.
-- No generic advice — every finding must reference specific data points.
-- Produce MORE findings (20-40+) with granular, actionable items rather than fewer grouped findings.
+
+1. ONE FINDING = ONE ACTION. Each finding must be a single, specific, actionable task that someone can approve or dismiss independently.
+   - BAD: "Review Count Advantage Analysis" with 6 steps in the recommendation
+   - GOOD: 6 separate findings — "Get 5-star review quality checks", "Investigate 0.1 rating gap", "Match citation consistency", etc.
+   - BAD: "Shelley, Willetton, and Queens Park need improvement"
+   - GOOD: 3 separate findings — one for each suburb
+
+2. The "recommendation" field should be ONE clear sentence describing THE SINGLE action to take. Not a list. Not multiple steps.
+   Example: "Request 3-5 new reviews from recent customers in Shelley, mentioning 'plumber Shelley' in their review."
+
+3. The "title" should read like a task on a to-do list:
+   - "Get more reviews mentioning Shelley"
+   - "Add FAQ schema to service pages"
+   - "List on Yellow Pages Australia (free)"
+   - "Close rating gap with Little Pommie Plumber (4.9 vs 5.0)"
+
+4. NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these.
+5. Be data-driven — use real numbers, real competitor names, real positions.
+6. Produce 30-50+ granular findings. More small items > fewer big items.
+
 Return ONLY valid JSON: {"findings": [...]}`;
 
         const response = await anthropic.messages.create({
