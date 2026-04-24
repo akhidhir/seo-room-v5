@@ -2000,86 +2000,93 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // ===== PHASE 1: Gather all data =====
     const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
-    // 1. Get business profile via Google Places API (old/legacy — rich data)
-    if (GOOGLE_KEY && businessName) {
+    // 1. Get business profile via SerpAPI Google Maps (no Google billing needed)
+    if (SERPAPI_KEY && businessName) {
       try {
-        const searchQuery = encodeURIComponent(`${businessName} ${location || ''}`);
-        console.log(`[gbp-audit] Places API search: "${businessName} ${location || ''}"`);
+        // Search with just business name — SerpAPI handles location via ll parameter
+        const searchQ = `${businessName} ${(location || '').split(',')[0].trim()}`.trim();
+        console.log(`[gbp-audit] SerpAPI search: "${searchQ}"`);
 
-        const placesRes = await fetch(
-          `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${searchQuery}&key=${GOOGLE_KEY}`,
-          { signal: AbortSignal.timeout(10000) }
-        );
-        if (placesRes.ok) {
-          const placesData = await placesRes.json();
-          console.log(`[gbp-audit] Places API status: ${placesData.status}, results: ${(placesData.results || []).length}`);
+        const data = await serpApiSearch({
+          engine: 'google_maps',
+          q: searchQ,
+          type: 'search',
+          api_key: SERPAPI_KEY,
+        });
 
-          if (placesData.status === 'OK' && placesData.results?.length > 0) {
-            // Match by domain or name
-            const match = placesData.results.find(p => p.name && p.name.toLowerCase().includes(businessName.split(' ')[0].toLowerCase())) || placesData.results[0];
+        const results = data.local_results || [];
+        console.log(`[gbp-audit] SerpAPI found ${results.length} results`);
 
-            gbpData.source = 'google_places';
-            gbpData.profile = {
-              name: match.name || '',
-              address: match.formatted_address || '',
-              rating: match.rating || null,
-              reviewCount: match.user_ratings_total || 0,
-              types: match.types || [],
-              primaryType: (match.types || []).find(t => !['point_of_interest', 'establishment'].includes(t))?.replace(/_/g, ' ') || null,
-              businessStatus: match.business_status || null,
-              placeId: match.place_id || null,
-            };
+        // Match by website domain (most accurate)
+        const match = results.find(r => r.website && r.website.includes(domain)) ||
+          results.find(r => r.title && r.title.toLowerCase().includes('houseworks')) ||
+          null;
 
-            // Get detailed info with place_id
-            if (match.place_id) {
-              try {
-                const detailRes = await fetch(
-                  `https://maps.googleapis.com/maps/api/place/details/json?place_id=${match.place_id}&fields=name,formatted_address,formatted_phone_number,international_phone_number,website,opening_hours,reviews,photos,types,url,editorial_summary,business_status&key=${GOOGLE_KEY}`,
-                  { signal: AbortSignal.timeout(10000) }
-                );
-                if (detailRes.ok) {
-                  const detail = await detailRes.json();
-                  if (detail.result) {
-                    const d = detail.result;
-                    gbpData.profile.phone = d.formatted_phone_number || d.international_phone_number || null;
-                    gbpData.profile.website = d.website || null;
-                    gbpData.profile.googleMapsUrl = d.url || null;
-                    gbpData.profile.hoursSet = !!(d.opening_hours?.periods);
-                    gbpData.profile.hoursText = (d.opening_hours?.weekday_text || []).join('; ');
-                    gbpData.profile.hoursDays = (d.opening_hours?.periods || []).length;
-                    gbpData.profile.photoCount = (d.photos || []).length;
-                    gbpData.profile.description = d.editorial_summary?.overview || null;
-                    gbpData.profile.types = d.types || gbpData.profile.types;
-                    gbpData.profile.categories = (d.types || []).filter(t => !['point_of_interest', 'establishment'].includes(t)).map(t => t.replace(/_/g, ' '));
-                    gbpData.profile.reviews = (d.reviews || []).slice(0, 10).map(r => ({
-                      rating: r.rating,
-                      text: (r.text || '').substring(0, 200),
-                      time: r.relative_time_description || '',
-                      author: r.author_name || '',
-                    }));
-                  }
-                }
-              } catch (e) { console.log(`[gbp-audit] Place details error: ${e.message}`); }
-            }
+        if (match) {
+          console.log(`[gbp-audit] Matched: "${match.title}" (${match.website || 'no website'})`);
+          gbpData.source = 'serpapi';
+          gbpData.profile = {
+            name: match.title || '',
+            address: match.address || '',
+            phone: match.phone || null,
+            website: match.website || null,
+            rating: match.rating || null,
+            reviewCount: match.reviews || 0,
+            primaryType: match.type || null,
+            categories: match.types || (match.type ? [match.type] : []),
+            placeId: match.place_id || null,
+            photoCount: match.thumbnail ? 1 : 0,
+            serviceOptions: match.service_options || null,
+          };
 
-            console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
-              name: gbpData.profile.name,
-              rating: gbpData.profile.rating,
-              reviews: gbpData.profile.reviewCount,
-              photos: gbpData.profile.photoCount,
-              phone: gbpData.profile.phone ? 'YES' : 'NO',
-              primaryType: gbpData.profile.primaryType,
-              categories: gbpData.profile.categories,
-              description: gbpData.profile.description ? 'YES (' + gbpData.profile.description.substring(0, 50) + '...)' : 'NO',
-              hours: gbpData.profile.hoursSet,
-              website: gbpData.profile.website ? 'YES' : 'NO',
-            }));
+          // Get full details via place data_id
+          if (match.data_id) {
+            try {
+              console.log(`[gbp-audit] Fetching details for data_id: ${match.data_id}`);
+              const detail = await serpApiSearch({
+                engine: 'google_maps',
+                type: 'place',
+                data_id: match.data_id,
+                api_key: SERPAPI_KEY,
+              });
+              const p = detail.place_results || detail;
+              if (p) {
+                gbpData.profile.name = p.title || gbpData.profile.name;
+                gbpData.profile.address = p.address || gbpData.profile.address;
+                gbpData.profile.phone = p.phone || gbpData.profile.phone;
+                gbpData.profile.website = p.website || gbpData.profile.website;
+                gbpData.profile.rating = p.rating || gbpData.profile.rating;
+                gbpData.profile.reviewCount = p.reviews || gbpData.profile.reviewCount;
+                gbpData.profile.description = p.description || null;
+                gbpData.profile.primaryType = p.type || gbpData.profile.primaryType;
+                gbpData.profile.categories = p.types || gbpData.profile.categories;
+                gbpData.profile.photoCount = (p.images || p.photos || []).length || gbpData.profile.photoCount;
+                gbpData.profile.hoursSet = !!(p.operating_hours);
+                gbpData.profile.hoursText = p.operating_hours ? Object.entries(p.operating_hours).map(([d, h]) => `${d}: ${Array.isArray(h) ? h.join(', ') : h}`).join('; ') : '';
+                gbpData.profile.hoursDays = p.operating_hours ? Object.keys(p.operating_hours).length : 0;
+                gbpData.profile.googleMapsUrl = p.data_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id || ''}` : null;
+                gbpData.profile.reviews = (p.user_reviews?.most_relevant || []).slice(0, 10).map(r => ({
+                  rating: r.rating,
+                  text: (r.snippet || r.extracted_snippet?.original || '').substring(0, 200),
+                  time: r.date || '',
+                  author: r.user?.name || '',
+                }));
+                console.log(`[gbp-audit] Detail: description=${p.description ? 'YES' : 'NO'}, hours=${!!p.operating_hours}, photos=${gbpData.profile.photoCount}, categories=${(p.types || []).join(',')}`);
+              }
+            } catch (e) { console.log(`[gbp-audit] Detail lookup error: ${e.message}`); }
           }
+
+          console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
+            name: gbpData.profile.name, rating: gbpData.profile.rating, reviews: gbpData.profile.reviewCount,
+            photos: gbpData.profile.photoCount, phone: gbpData.profile.phone ? 'YES' : 'NO',
+            categories: gbpData.profile.categories, description: gbpData.profile.description ? 'YES' : 'NO',
+            hours: gbpData.profile.hoursSet, website: gbpData.profile.website ? 'YES' : 'NO',
+          }));
         } else {
-          const err = await placesRes.text();
-          console.error(`[gbp-audit] Places API error ${placesRes.status}: ${err.substring(0, 200)}`);
+          console.log(`[gbp-audit] No match found for domain "${domain}" in ${results.length} results`);
+          if (results.length > 0) console.log(`[gbp-audit] First result: "${results[0].title}" (${results[0].website || 'no site'})`);
         }
-      } catch (e) { console.error('[gbp-audit] Places API error:', e.message); }
+      } catch (e) { console.error('[gbp-audit] SerpAPI error:', e.message); }
     }
 
     // 1b. Scrape website for NAP consistency + schema
