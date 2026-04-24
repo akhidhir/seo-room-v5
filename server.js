@@ -2003,18 +2003,27 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1. Get business profile via SerpAPI Google Maps (primary — no Google API key issues)
     if (SERPAPI_KEY && businessName) {
       try {
-        const searchQuery = `${businessName} ${location || ''}`.trim();
-        console.log(`[gbp-audit] SerpAPI Maps search: "${searchQuery}"`);
-
-        const data = await serpApiSearch({
-          engine: 'google_maps',
-          q: searchQuery,
-          type: 'search',
-          api_key: SERPAPI_KEY,
-        });
-
-        const results = data.local_results || [];
-        console.log(`[gbp-audit] SerpAPI returned ${results.length} results`);
+        // Try multiple search queries — full location string often returns 0 results
+        const queries = [
+          businessName,
+          `${businessName} ${(location || '').split(',')[0].trim()}`,
+        ];
+        let results = [];
+        let usedQuery = '';
+        for (const q of queries) {
+          if (!q) continue;
+          console.log(`[gbp-audit] SerpAPI Maps search: "${q}"`);
+          const data = await serpApiSearch({
+            engine: 'google_maps',
+            q: q,
+            type: 'search',
+            api_key: SERPAPI_KEY,
+          });
+          results = data.local_results || [];
+          usedQuery = q;
+          console.log(`[gbp-audit] SerpAPI returned ${results.length} results for "${q}"`);
+          if (results.length > 0) break;
+        }
 
         const match = results.find(r =>
           (r.website && r.website.includes(domain)) ||
