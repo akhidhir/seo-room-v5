@@ -2000,81 +2000,90 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // ===== PHASE 1: Gather all data =====
     const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
-    // 1. Get business profile via Google Places API (New)
-    if (GOOGLE_KEY && businessName) {
+    // 1. Get business profile via SerpAPI Google Maps (primary — no Google API key issues)
+    if (SERPAPI_KEY && businessName) {
       try {
-        const searchQuery = location ? `${businessName} ${location.split(',')[0].trim()}` : businessName;
-        console.log(`[gbp-audit] Places API (new) search: "${searchQuery}"`);
+        const searchQuery = `${businessName} ${location || ''}`.trim();
+        console.log(`[gbp-audit] SerpAPI Maps search: "${searchQuery}"`);
 
-        const searchResp = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': GOOGLE_KEY,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.types,places.primaryType,places.primaryTypeDisplayName,places.editorialSummary,places.regularOpeningHours,places.photos,places.reviews,places.businessStatus,places.googleMapsUri,places.shortFormattedAddress'
-          },
-          body: JSON.stringify({ textQuery: searchQuery, languageCode: 'en' })
+        const data = await serpApiSearch({
+          engine: 'google_maps',
+          q: searchQuery,
+          type: 'search',
+          api_key: SERPAPI_KEY,
         });
 
-        if (searchResp.ok) {
-          const searchData = await searchResp.json();
-          const places = searchData.places || [];
-          console.log(`[gbp-audit] Found ${places.length} places`);
+        const results = data.local_results || [];
+        console.log(`[gbp-audit] SerpAPI returned ${results.length} results`);
 
-          const match = places.find(p =>
-            (p.websiteUri && p.websiteUri.includes(domain)) ||
-            (p.displayName?.text && p.displayName.text.toLowerCase().includes(businessName.split(' ')[0].toLowerCase()))
-          ) || places[0];
+        const match = results.find(r =>
+          (r.website && r.website.includes(domain)) ||
+          (r.title && r.title.toLowerCase().includes(businessName.split(' ')[0].toLowerCase()))
+        ) || results[0];
 
-          if (match) {
-            // Map types to readable category names
-            const readableTypes = (match.types || [])
-              .filter(t => !['point_of_interest', 'establishment', 'health', 'food'].includes(t))
-              .map(t => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+        if (match) {
+          gbpData.source = 'serpapi';
 
-            gbpData.source = 'google_places';
-            gbpData.profile = {
-              name: match.displayName?.text || '',
-              address: match.formattedAddress || '',
-              phone: match.nationalPhoneNumber || match.internationalPhoneNumber || null,
-              website: match.websiteUri || null,
-              rating: match.rating || null,
-              reviewCount: match.userRatingCount || 0,
-              types: match.types || [],
-              primaryType: match.primaryTypeDisplayName?.text || (match.primaryType || '').replace(/_/g, ' ') || null,
-              categories: readableTypes,
-              description: match.editorialSummary?.text || null,
-              businessStatus: match.businessStatus || null,
-              googleMapsUrl: match.googleMapsUri || null,
-              photoCount: (match.photos || []).length,
-              hoursSet: !!(match.regularOpeningHours?.periods),
-              hoursText: (match.regularOpeningHours?.weekdayDescriptions || []).join('; '),
-              hoursDays: (match.regularOpeningHours?.periods || []).length,
-              reviews: (match.reviews || []).map(r => ({
-                rating: r.rating,
-                text: (r.text?.text || '').substring(0, 200),
-                time: r.relativePublishTimeDescription || '',
-                author: r.authorAttribution?.displayName || '',
-              })),
-            };
-            console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
-              name: gbpData.profile.name,
-              rating: gbpData.profile.rating,
-              reviews: gbpData.profile.reviewCount,
-              photos: gbpData.profile.photoCount,
-              phone: gbpData.profile.phone,
-              primaryType: gbpData.profile.primaryType,
-              categories: gbpData.profile.categories,
-              description: gbpData.profile.description ? 'YES' : 'NO',
-              hours: gbpData.profile.hoursSet,
-              website: gbpData.profile.website ? 'YES' : 'NO',
-            }));
+          // If we have a place_id/data_id, get full details
+          let details = {};
+          if (match.place_id || match.data_id) {
+            try {
+              const detailData = await serpApiSearch({
+                engine: 'google_maps',
+                type: 'place',
+                place_id: match.place_id || undefined,
+                data_id: match.data_id || undefined,
+                api_key: SERPAPI_KEY,
+              });
+              details = detailData.place_results || detailData || {};
+            } catch (e) { console.log(`[gbp-audit] SerpAPI detail error: ${e.message}`); }
           }
-        } else {
-          const err = await searchResp.text();
-          console.error(`[gbp-audit] Places API error ${searchResp.status}: ${err.substring(0, 300)}`);
+
+          // Merge search result + detail data
+          const profile = details || match;
+          gbpData.profile = {
+            name: profile.title || match.title || '',
+            address: profile.address || match.address || '',
+            phone: profile.phone || match.phone || null,
+            website: profile.website || match.website || null,
+            rating: profile.rating || match.rating || null,
+            reviewCount: profile.reviews || match.reviews || 0,
+            types: profile.types || match.type ? [match.type] : [],
+            primaryType: profile.type || match.type || null,
+            categories: (profile.types || [match.type]).filter(Boolean),
+            description: profile.description || null,
+            businessStatus: profile.business_status || null,
+            googleMapsUrl: profile.gps_coordinates ? `https://www.google.com/maps?q=${profile.gps_coordinates.latitude},${profile.gps_coordinates.longitude}` : null,
+            photoCount: (profile.images || profile.photos || []).length || match.thumbnail ? 1 : 0,
+            hoursSet: !!(profile.operating_hours || profile.hours),
+            hoursText: profile.operating_hours ? Object.entries(profile.operating_hours).map(([day, hrs]) => `${day}: ${hrs}`).join('; ') : '',
+            hoursDays: profile.operating_hours ? Object.keys(profile.operating_hours).length : 0,
+            reviews: (profile.user_reviews?.most_relevant || profile.reviews_results || []).slice(0, 10).map(r => ({
+              rating: r.rating,
+              text: (r.snippet || r.description || '').substring(0, 200),
+              time: r.date || '',
+              author: r.user?.name || r.username || '',
+            })),
+            // Extra fields from SerpAPI
+            priceRange: profile.price || match.price || null,
+            serviceOptions: profile.service_options || match.service_options || null,
+            placeId: match.place_id || null,
+          };
+
+          console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
+            name: gbpData.profile.name,
+            rating: gbpData.profile.rating,
+            reviews: gbpData.profile.reviewCount,
+            photos: gbpData.profile.photoCount,
+            phone: gbpData.profile.phone ? 'YES' : 'NO',
+            primaryType: gbpData.profile.primaryType,
+            categories: gbpData.profile.categories,
+            description: gbpData.profile.description ? 'YES' : 'NO',
+            hours: gbpData.profile.hoursSet,
+            website: gbpData.profile.website ? 'YES' : 'NO',
+          }));
         }
-      } catch (e) { console.error('[gbp-audit] Places API error:', e.message); }
+      } catch (e) { console.error('[gbp-audit] SerpAPI profile error:', e.message); }
     }
 
     // 1b. Scrape website for NAP consistency + schema
@@ -2100,23 +2109,6 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
           console.log(`[gbp-audit] Website check: phone=${gbpData.websiteCheck.hasPhone}, address=${gbpData.websiteCheck.hasAddress}, schema=${gbpData.websiteCheck.hasLocalBusinessSchema || false}`);
         }
       } catch (e) { console.log(`[gbp-audit] Website scrape error: ${e.message}`); }
-    }
-
-    // Fallback to SerpAPI
-    if (!gbpData.profile && SERPAPI_KEY && businessName) {
-      try {
-        const data = await serpApiSearch({ engine: 'google_maps', q: businessName, type: 'search' });
-        const match = (data.local_results || []).find(r => r.website?.includes(domain)) || (data.local_results || [])[0];
-        if (match) {
-          gbpData.source = 'serpapi';
-          gbpData.profile = {
-            name: match.title, address: match.address, phone: match.phone,
-            website: match.website, rating: match.rating, reviewCount: match.reviews,
-            primaryType: match.type, types: match.types || [],
-            photoCount: null, hoursSet: null, description: null, reviews: [],
-          };
-        }
-      } catch (e) { console.log(`[gbp-audit] SerpAPI fallback failed: ${e.message}`); }
     }
 
     // 2. Get maps ranking data + identify competitors
