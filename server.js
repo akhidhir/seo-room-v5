@@ -2086,7 +2086,9 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
       }
     } catch (e) { console.log(`[gbp-audit] Extension data check error: ${e.message}`); }
 
-    // 1b. Fallback to SerpAPI Maps if no extension data
+    // 1b. SerpAPI Maps — run to get rating/reviews/categories
+    // Extension data will be merged on top afterwards for hours/description
+    const extensionProfile = gbpData.profile; // Save extension data to merge later
     if (SERPAPI_KEY && businessName) {
       try {
         const searchQ = businessName.replace(/&/g, 'and');
@@ -2379,6 +2381,19 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     }
 
     const serviceAreas = project.service_areas || [];
+    // Merge extension data on top of SerpAPI data (extension wins for hours, address)
+    if (extensionProfile && gbpData.profile) {
+      if (extensionProfile.hoursSet) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = extensionProfile.hoursText; gbpData.profile.hoursDays = extensionProfile.hoursDays; }
+      if (extensionProfile.address) gbpData.profile.address = extensionProfile.address;
+      if (extensionProfile.description) gbpData.profile.description = extensionProfile.description;
+      if (extensionProfile.services && extensionProfile.services.length > 0) gbpData.profile.services = extensionProfile.services;
+      if (extensionProfile.posts) gbpData.profile.posts = extensionProfile.posts;
+      if (extensionProfile.attributes && extensionProfile.attributes.length > 0) gbpData.profile.attributes = extensionProfile.attributes;
+      if (extensionProfile.photoCount > 1) gbpData.profile.photoCount = extensionProfile.photoCount;
+      gbpData.profile.extensionData = true;
+      console.log(`[gbp-audit] Merged extension data: hours=${gbpData.profile.hoursSet}, desc=${gbpData.profile.description ? 'YES' : 'NO'}, photos=${gbpData.profile.photoCount}`);
+    }
+
     console.log(`[gbp-audit] Final: source=${gbpData.source}, competitors=${gbpData.competitors.length}, rankings=${gbpData.mapsRankings.length}`);
 
     // ===== PHASE 2: AI Analysis =====
