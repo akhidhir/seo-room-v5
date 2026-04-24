@@ -2039,16 +2039,31 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
             serviceOptions: match.service_options || null,
           };
 
-          // Get full details via place data_id
-          if (match.data_id) {
+          // Get more data via Google Knowledge Graph (regular Google search)
+          {
             try {
-              console.log(`[gbp-audit] Fetching details for data_id: ${match.data_id}`);
-              const detail = await serpApiSearch({
-                engine: 'google_maps',
-                type: 'place',
-                data_id: match.data_id,
+              const kpData = await serpApiSearch({
+                engine: 'google',
+                q: businessName,
                 api_key: SERPAPI_KEY,
               });
+              const kp = kpData.knowledge_graph || {};
+              console.log(`[gbp-audit] Knowledge graph: title="${kp.title || 'none'}", desc=${kp.description ? 'YES' : 'NO'}, hours=${kp.hours ? 'YES' : 'NO'}, type="${kp.type || 'none'}"`);
+
+              // Also check local_results from Google search for richer data
+              const localResult = (kpData.local_results?.places || [])[0];
+              if (localResult) {
+                console.log(`[gbp-audit] Local result: photos=${localResult.photos_count || '?'}, hours=${localResult.operating_hours ? 'YES' : 'NO'}`);
+                if (localResult.description) gbpData.profile.description = localResult.description;
+                if (localResult.operating_hours) {
+                  gbpData.profile.hoursSet = true;
+                  gbpData.profile.hoursText = JSON.stringify(localResult.operating_hours);
+                }
+              }
+              if (kp.description) gbpData.profile.description = kp.description;
+              if (kp.hours) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = kp.hours; }
+
+              const detail = { place_results: kp };
               const p = detail.place_results || detail;
               if (p) {
                 gbpData.profile.name = p.title || gbpData.profile.name;
