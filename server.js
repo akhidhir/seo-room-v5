@@ -2003,11 +2003,13 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1. Get business profile via SerpAPI Google Maps (primary — no Google API key issues)
     if (SERPAPI_KEY && businessName) {
       try {
-        // Try multiple search queries — full location string often returns 0 results
+        // Try multiple search queries
         const queries = [
           businessName,
           `${businessName} ${(location || '').split(',')[0].trim()}`,
-        ];
+          domain ? domain.replace(/^www\./, '').split('.')[0] : null,
+          project.name,
+        ].filter(Boolean);
         let results = [];
         let usedQuery = '';
         for (const q of queries) {
