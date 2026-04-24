@@ -2074,6 +2074,9 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
           attributes: ext.attributes || [],
           products: ext.products || [],
           reviews: [],
+          thirdPartyReviews: ext.thirdPartyReviews || [],
+          socialProfiles: ext.socialProfiles || [],
+          monthlyViews: ext.monthlyViews || null,
           collectedAt: ext.collected_at,
           dataAge: `${Math.round(ageHours)}h`,
         };
@@ -2390,6 +2393,9 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
       if (extensionProfile.posts) gbpData.profile.posts = extensionProfile.posts;
       if (extensionProfile.attributes && extensionProfile.attributes.length > 0) gbpData.profile.attributes = extensionProfile.attributes;
       if (extensionProfile.photoCount > 1) gbpData.profile.photoCount = extensionProfile.photoCount;
+      if (extensionProfile.thirdPartyReviews) gbpData.profile.thirdPartyReviews = extensionProfile.thirdPartyReviews;
+      if (extensionProfile.socialProfiles) gbpData.profile.socialProfiles = extensionProfile.socialProfiles;
+      if (extensionProfile.monthlyViews) gbpData.profile.monthlyViews = extensionProfile.monthlyViews;
       gbpData.profile.extensionData = true;
       console.log(`[gbp-audit] Merged extension data: hours=${gbpData.profile.hoursSet}, desc=${gbpData.profile.description ? 'YES' : 'NO'}, photos=${gbpData.profile.photoCount}`);
     }
@@ -2443,43 +2449,42 @@ The "profile_summary" should contain:
   "pillar_scores": { "proximity": 1-10, "relevance": 1-10, "prominence": 1-10 }
 }
 
-Each finding MUST have: pillar, category, title, description, recommendation, severity, current_value, recommended_value.
+Each finding MUST have: gbp_pillar, category, title, description, recommendation, severity, current_value, recommended_value.
 
-CATEGORY must be one of: "Profile Completeness", "Categories & Services", "Reviews", "Photos", "Proximity", "Relevance", "Prominence", "Maps Ranking"
+"gbp_pillar" MUST be one of: "Proximity", "Relevance", "Prominence"
+- PROXIMITY = service areas, address accuracy, geo-targeting, maps ranking position, distance-based issues
+- RELEVANCE = categories, description keywords, services listed, posts, attributes, business info completeness
+- PROMINENCE = reviews (count, rating, responses), photos, citations, social profiles, third-party reviews, brand signals
 
-FOCUS AREAS (in this priority order):
+"category" is a subcategory within the pillar. Must be one of:
+  Proximity: "Service Areas", "Maps Ranking", "Geo-Targeting"
+  Relevance: "Categories & Services", "Profile Completeness", "Posts & Updates", "Description"
+  Prominence: "Reviews", "Photos", "Citations", "Social Profiles"
 
-1. PROFILE COMPLETENESS (most important — audit what's on the profile):
-   - Is the primary category optimal for this industry? What should it be?
-   - Are there secondary categories? What's missing? (e.g. "Gas Fitter", "Water Heater Installation", "Drain Cleaning Service")
-   - Is a business description set? Is it keyword-optimized?
-   - Are business hours complete (all 7 days)?
-   - Is the phone number set?
-   - Is the website linked?
+ORGANIZE findings by the THREE PILLARS:
+
+1. PROXIMITY (service areas + maps visibility):
+   - Are service areas properly set on GBP? Any gaps vs project settings?
+   - Which suburbs have weak/no ranking? (top 3-5 worst only)
+   - Is address accurate and consistent?
+
+2. RELEVANCE (categories, content, business info):
+   - Is the primary category optimal? What should it be?
+   - Are there secondary categories? What's missing? (e.g. "Gas Fitter", "Drain Cleaning Service")
+   - Is the business description keyword-optimized?
    - Are services/products listed on GBP?
-   - Are GBP posts being used? (Q&A, updates, offers)
+   - Are GBP posts being used? How often?
+   - Are business hours complete (all 7 days)?
+   - Are attributes set (licenses, payment methods, accessibility)?
    - Create ONE finding for EACH missing or suboptimal field.
 
-2. PHOTOS:
-   - How many photos? (benchmark: 20+ for trades)
-   - Types needed: logo, cover, team, job photos (before/after), office/van
-   - Create ONE finding for each type of photo needed
-
-3. REVIEWS:
-   - Current count and rating
-   - Are reviews being responded to?
-   - Do reviews mention service areas/suburbs?
-   - Create separate findings: "Respond to all reviews", "Get reviews mentioning [specific suburb]", etc.
-
-4. THREE PILLARS SCORES:
-   - PROXIMITY: Are service areas properly set? Any gaps?
-   - RELEVANCE: Do categories, description, and services match what people search for?
-   - PROMINENCE: Reviews, photos, citations — is the business well-known enough?
-   - Create 1-2 findings per pillar
-
-5. MAPS RANKING (keep brief — max 5 findings):
-   - Only flag the 3-5 WORST performing suburbs, not every single one
-   - Focus on what to DO about it, not just restating the position
+3. PROMINENCE (reputation + brand signals):
+   - Reviews: count, rating, are they being responded to? Do reviews mention suburbs?
+   - Photos: how many? Types needed: logo, cover, team, before/after, van
+   - Third-party reviews: Facebook, hipages, etc.
+   - Social profiles: connected and active?
+   - Citations: NAP consistency across directories
+   - Create separate findings for each issue
 
 RULES:
 - ONE finding = ONE action. Each is approved or dismissed independently.
@@ -2524,12 +2529,16 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
           if (!parsed) throw new Error('Could not parse AI response as JSON');
           profileSummary = parsed.profile_summary || null;
           if (parsed.findings && Array.isArray(parsed.findings)) {
-            findings = parsed.findings.map(f => ({
-              pillar: 'gbp', category: f.category || 'Profile Completeness',
-              title: f.title, description: f.description,
-              recommendation: f.recommendation, severity: f.severity || 'Medium',
-              current_value: f.current_value || '', recommended_value: f.recommended_value || '',
-            }));
+            findings = parsed.findings.map(f => {
+              const gbpPillar = ['Proximity', 'Relevance', 'Prominence'].includes(f.gbp_pillar) ? f.gbp_pillar : 'Relevance';
+              return {
+                pillar: 'gbp', category: `${gbpPillar} > ${f.category || 'General'}`,
+                gbp_pillar: gbpPillar,
+                title: f.title, description: f.description,
+                recommendation: f.recommendation, severity: f.severity || 'Medium',
+                current_value: f.current_value || '', recommended_value: f.recommended_value || '',
+              };
+            });
           }
         }
       } catch (aiErr) {

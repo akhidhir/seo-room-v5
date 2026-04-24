@@ -1279,6 +1279,7 @@
       const [searchQ, setSearchQ] = useState('');
       const [filterSev, setFilterSev] = useState('all');
       const [filterStatus, setFilterStatus] = useState('active');
+      const [filterPillar, setFilterPillar] = useState('all');
       const [sortCol, setSortCol] = useState('severity');
       const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
@@ -1327,22 +1328,38 @@
 
       const sevOrder = { Critical: 0, critical: 0, High: 1, high: 1, Medium: 2, medium: 2, Low: 3, low: 3 };
 
+      // Extract gbp_pillar from category field ("Proximity > Service Areas" → "Proximity")
+      const getPillar = (f) => {
+        if (f.gbp_pillar) return f.gbp_pillar;
+        if (f.category && f.category.includes(' > ')) return f.category.split(' > ')[0];
+        return 'Relevance';
+      };
+      const getSubcat = (f) => {
+        if (f.category && f.category.includes(' > ')) return f.category.split(' > ')[1];
+        return f.category || 'General';
+      };
+
       const sorted = useMemo(() => {
         let list = [...findings];
         if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
+        if (filterPillar !== 'all') list = list.filter(f => getPillar(f) === filterPillar);
         if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
         else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
         if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
+        // Group by pillar, then sort within each group
+        const pillarOrder = { Proximity: 0, Relevance: 1, Prominence: 2 };
         list.sort((a, b) => {
+          const pa = pillarOrder[getPillar(a)] ?? 1;
+          const pb = pillarOrder[getPillar(b)] ?? 1;
+          if (pa !== pb) return pa - pb;
           let av, bv;
           if (sortCol === 'severity') { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
-          else if (sortCol === 'title') { av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase(); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
-          else if (sortCol === 'category') { av = (a.category || ''); bv = (b.category || ''); return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
-          else { av = 0; bv = 0; }
+          else if (sortCol === 'title') { av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase(); return av.localeCompare(bv); }
+          else { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
           return sortDir === 'asc' ? av - bv : bv - av;
         });
         return list;
-      }, [findings, filterSev, filterStatus, searchQ, sortCol, sortDir]);
+      }, [findings, filterSev, filterPillar, filterStatus, searchQ, sortCol, sortDir]);
 
       const SortIcon = ({ col }) => sortCol === col ? <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 4, fontSize: 10 }} /> : null;
 
@@ -1372,7 +1389,13 @@
                   <div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
                   <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>{sevBadge(f.severity)} <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: 'rgba(99,102,241,0.15)', color: '#818cf8' }}>{f.category}</span></div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {sevBadge(f.severity)}
+                  {(() => { const pc = { Proximity: '#f59e0b', Relevance: '#6366f1', Prominence: '#22c55e' }; const p = getPillar(f); const c = pc[p] || '#818cf8';
+                    return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c + '15', color: c }}>{p}</span>;
+                  })()}
+                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: 'var(--bg)', color: 'var(--text3)' }}>{getSubcat(f)}</span>
+                </div>
               </div>
               {f.description && (
                 <div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
@@ -1481,12 +1504,38 @@
           )}
 
           {findings.length > 0 && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, color: 'var(--text2)' }}>Select:</span>
-              <button className="btn btn-small" style={{ background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 14 }} onClick={() => selectBySeverity('critical')}>Critical ({findings.filter(f => (f.severity||'').toLowerCase() === 'critical').length})</button>
-              <button className="btn btn-small" style={{ background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.3)', color: '#f59e0b', fontSize: 14 }} onClick={() => selectBySeverity('medium')}>Medium ({findings.filter(f => (f.severity||'').toLowerCase() === 'medium').length})</button>
-              <button className="btn btn-small" style={{ background: 'rgba(59,130,246,0.15)', borderColor: 'rgba(59,130,246,0.3)', color: '#3b82f6', fontSize: 14 }} onClick={() => selectBySeverity('low')}>Low ({findings.filter(f => (f.severity||'').toLowerCase() === 'low').length})</button>
-              <button className="btn btn-small" onClick={() => selectBySeverity('all')} style={{ fontSize: 14 }}>All ({findings.length})</button>
+            <div style={{ marginBottom: 16 }}>
+              {/* Pillar tabs */}
+              <div style={{ display: 'flex', gap: 0, marginBottom: 12 }}>
+                {[
+                  { key: 'all', label: 'All Pillars', icon: 'fas fa-layer-group', color: 'var(--accent)' },
+                  { key: 'Proximity', label: 'Proximity', icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Service areas & geo-targeting' },
+                  { key: 'Relevance', label: 'Relevance', icon: 'fas fa-bullseye', color: '#6366f1', desc: 'Categories, content & business info' },
+                  { key: 'Prominence', label: 'Prominence', icon: 'fas fa-star', color: '#22c55e', desc: 'Reviews, photos & brand signals' },
+                ].map(tab => {
+                  const count = tab.key === 'all' ? findings.length : findings.filter(f => getPillar(f) === tab.key).length;
+                  const active = filterPillar === tab.key;
+                  return (
+                    <button key={tab.key} onClick={() => setFilterPillar(tab.key)}
+                      style={{ flex: 1, padding: '14px 10px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)',
+                        borderBottom: active ? `3px solid ${tab.color}` : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)',
+                        fontWeight: active ? 700 : 500, fontSize: 15, transition: 'all 0.15s',
+                        borderRadius: tab.key === 'all' ? '8px 0 0 0' : tab.key === 'Prominence' ? '0 8px 0 0' : 0 }}>
+                      <i className={tab.icon} style={{ marginRight: 8 }} />{tab.label}
+                      <span style={{ marginLeft: 8, fontSize: 13, opacity: 0.7 }}>({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Severity quick-select */}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 14, color: 'var(--text2)' }}>Select:</span>
+                <button className="btn btn-small" style={{ background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 14 }} onClick={() => selectBySeverity('critical')}>Critical ({sorted.filter(f => (f.severity||'').toLowerCase() === 'critical').length})</button>
+                <button className="btn btn-small" style={{ background: 'rgba(249,115,22,0.15)', borderColor: 'rgba(249,115,22,0.3)', color: '#f97316', fontSize: 14 }} onClick={() => selectBySeverity('high')}>High ({sorted.filter(f => (f.severity||'').toLowerCase() === 'high').length})</button>
+                <button className="btn btn-small" style={{ background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.3)', color: '#f59e0b', fontSize: 14 }} onClick={() => selectBySeverity('medium')}>Medium ({sorted.filter(f => (f.severity||'').toLowerCase() === 'medium').length})</button>
+                <button className="btn btn-small" style={{ background: 'rgba(59,130,246,0.15)', borderColor: 'rgba(59,130,246,0.3)', color: '#3b82f6', fontSize: 14 }} onClick={() => selectBySeverity('low')}>Low ({sorted.filter(f => (f.severity||'').toLowerCase() === 'low').length})</button>
+                <button className="btn btn-small" onClick={() => selectBySeverity('all')} style={{ fontSize: 14 }}>All ({sorted.length})</button>
+              </div>
             </div>
           )}
 
@@ -1496,6 +1545,7 @@
             <select value={filterSev} onChange={e => setFilterSev(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
               <option value="all">All Severities</option>
               <option value="critical">Critical</option>
+              <option value="high">High</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>
             </select>
@@ -1527,23 +1577,50 @@
                   <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text3)', padding: 50, fontSize: 16 }}>
                     {findings.length === 0 ? 'No findings yet. Click Re-run to start.' : 'No results match filters.'}
                   </td></tr>
-                ) : sorted.map((f, i) => (
-                  <tr key={f.id} style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
-                    onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
-                    <td style={{ padding: '14px 10px' }}><input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} /></td>
-                    <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{i + 1}</td>
-                    <td style={{ padding: '14px', fontWeight: 600, fontSize: 16 }}>{f.title}</td>
-                    <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
-                    <td style={{ padding: '14px', fontSize: 14, color: 'var(--text2)', maxWidth: 400, lineHeight: 1.5 }}>{(f.description || '').substring(0, 150)}{(f.description || '').length > 150 ? '...' : ''}</td>
-                    <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text3)' }}>{f.category}</span></td>
-                    <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
-                    <td style={{ padding: '14px 10px', textAlign: 'center' }}>
-                      <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
-                        <i className="fas fa-search" style={{ marginRight: 4 }} /> Review
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                ) : (() => {
+                  const pillarColors = { Proximity: '#f59e0b', Relevance: '#6366f1', Prominence: '#22c55e' };
+                  const pillarIcons = { Proximity: 'fas fa-map-marker-alt', Relevance: 'fas fa-bullseye', Prominence: 'fas fa-star' };
+                  let lastPillar = null;
+                  let num = 0;
+                  return sorted.map((f) => {
+                    const pillar = getPillar(f);
+                    const subcat = getSubcat(f);
+                    const showHeader = pillar !== lastPillar && filterPillar === 'all';
+                    lastPillar = pillar;
+                    num++;
+                    const pColor = pillarColors[pillar] || '#6366f1';
+                    return React.createElement(React.Fragment, { key: f.id },
+                      showHeader && (
+                        <tr style={{ background: pColor + '10' }}>
+                          <td colSpan={8} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: pColor, borderBottom: `2px solid ${pColor}30` }}>
+                            <i className={pillarIcons[pillar] || 'fas fa-circle'} style={{ marginRight: 10 }} />{pillar}
+                            <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>
+                              ({sorted.filter(s => getPillar(s) === pillar).length} issues)
+                            </span>
+                          </td>
+                        </tr>
+                      ),
+                      <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
+                        onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
+                        <td style={{ padding: '14px 10px' }}><input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} /></td>
+                        <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{num}</td>
+                        <td style={{ padding: '14px', fontWeight: 600, fontSize: 16 }}>
+                          <span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: pColor, marginRight: 10, verticalAlign: 'middle' }} />
+                          {f.title}
+                        </td>
+                        <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
+                        <td style={{ padding: '14px', fontSize: 14, color: 'var(--text2)', maxWidth: 400, lineHeight: 1.5 }}>{(f.description || '').substring(0, 150)}{(f.description || '').length > 150 ? '...' : ''}</td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: pColor + '15', color: pColor }}>{subcat}</span></td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}>
+                          <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
+                            <i className="fas fa-search" style={{ marginRight: 4 }} /> Review
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
           </div>
