@@ -2212,12 +2212,12 @@ ${JSON.stringify(gbpData.directories.map(d => ({ name: d.name, type: d.type, fre
 Return a JSON object with "findings" array. Each finding MUST have:
 - pillar: "gbp"
 - category: one of "Proximity", "Relevance", "Prominence", "Citations & Directories", "Competitor Gap", "Reviews", "Photos", "Profile Completeness", "Maps Ranking"
-- title: concise issue title
-- description: detailed explanation with real numbers
-- recommendation: specific, actionable steps
+- title: a SHORT task-style title focused on what the business owner should DO (e.g. "Add 20+ photos to GBP", "Request reviews mentioning Shelley")
+- description: 1-2 sentences explaining WHY this matters, with real numbers. Focus on the business, not competitor deep-dives.
+- recommendation: ONE single sentence describing the ONE action to take. NOT a list. NOT multiple steps.
 - severity: "Critical", "Medium", or "Low"
-- current_value: real data
-- recommended_value: target
+- current_value: short current state (e.g. "3 photos", "Position #8 in Shelley")
+- recommended_value: short target (e.g. "20+ photos", "Position #1-3")
 
 PRODUCE FINDINGS FOR EACH AREA:
 
@@ -2270,24 +2270,26 @@ PROMINENCE:
 
 CRITICAL RULES:
 
-1. ONE FINDING = ONE ACTION. Each finding must be a single, specific, actionable task that someone can approve or dismiss independently.
-   - BAD: "Review Count Advantage Analysis" with 6 steps in the recommendation
-   - GOOD: 6 separate findings — "Get 5-star review quality checks", "Investigate 0.1 rating gap", "Match citation consistency", etc.
-   - BAD: "Shelley, Willetton, and Queens Park need improvement"
-   - GOOD: 3 separate findings — one for each suburb
+1. ONE FINDING = ONE ACTION. The business owner will approve or dismiss each finding individually. Each finding is a SINGLE task.
+   - BAD recommendation: "1) Add photos 2) Get reviews 3) Update categories 4) Build citations"
+   - GOOD: 4 SEPARATE findings, each with its own title, description, and one-sentence recommendation.
+   - If you think of 6 things to do, that's 6 findings, not 1 finding with 6 steps.
 
-2. The "recommendation" field should be ONE clear sentence describing THE SINGLE action to take. Not a list. Not multiple steps.
-   Example: "Request 3-5 new reviews from recent customers in Shelley, mentioning 'plumber Shelley' in their review."
+2. The "recommendation" field must be exactly ONE sentence. ONE action. No lists, no numbered steps, no "and also".
+   - BAD: "Add 20+ photos and also get reviews and update your categories"
+   - GOOD: "Upload 20 high-quality photos of recent plumbing jobs to your GBP profile."
 
-3. The "title" should read like a task on a to-do list:
-   - "Get more reviews mentioning Shelley"
-   - "Add FAQ schema to service pages"
-   - "List on Yellow Pages Australia (free)"
-   - "Close rating gap with Little Pommie Plumber (4.9 vs 5.0)"
+3. FOCUS ON THE BUSINESS, NOT COMPETITORS. Titles should say what to DO, not analyze competitors.
+   - BAD: "Little Pommie Plumber: Website Optimization vs Profile Strength"
+   - GOOD: "Upload 20+ photos to GBP (competitor has only 1)"
+   - BAD: "Competitor Review Count Advantage Analysis"
+   - GOOD: "Get 10 more reviews to overtake Little Pommie Plumber"
 
-4. NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these.
-5. Be data-driven — use real numbers, real competitor names, real positions.
-6. Produce 30-50+ granular findings. More small items > fewer big items.
+4. The "title" reads like a to-do item: "Add gas fitting as secondary category", "Upload 20 job photos", "Get 5 reviews mentioning Willetton"
+
+5. NEVER flag "Missing Business Description" or "Missing Hours" if the field is null — the API often doesn't return these.
+6. Use real numbers from the data. No generic advice.
+7. Produce 30-50+ small, granular findings. Each one is independently actionable.
 
 Return ONLY valid JSON: {"findings": [...]}`;
 

@@ -1205,8 +1205,8 @@
           <div style={{ cursor: 'pointer', padding: '14px 16px' }} onClick={onToggle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
-                <i className={sevIcon} style={{ color: sevColor, fontSize: 16, flexShrink: 0 }} />
-                <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{finding.title}</span>
+                <i className={sevIcon} style={{ color: sevColor, fontSize: 18, flexShrink: 0 }} />
+                <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{finding.title}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12 }}>
                 <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, fontWeight: 700, background: `${sevColor}20`, color: sevColor, textTransform: 'uppercase' }}>{finding.severity}</span>
@@ -1215,63 +1215,50 @@
             </div>
             {/* Always show a one-line summary */}
             {!isExpanded && finding.description && (
-              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 6, marginLeft: 26, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{finding.description.substring(0, 120)}...</div>
+              <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 6, marginLeft: 28, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{finding.description.substring(0, 150)}</div>
             )}
           </div>
           {isExpanded && (
             <div style={{ padding: '0 16px 16px' }}>
               {/* What's wrong */}
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 14, marginLeft: 26 }}>{finding.description}</div>
+              <div style={{ fontSize: 15, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 16, marginLeft: 28 }}>{finding.description}</div>
 
               {/* What to do - recommendation */}
               {finding.recommendation && (
-                <div style={{ margin: '0 0 14px', padding: '14px 16px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <i className="fas fa-lightbulb" style={{ fontSize: 14 }} /> What to do
-                  </div>
-                  {recSteps.length > 1 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {recSteps.map((step, i) => (
-                        <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 14, color: 'var(--text2)', lineHeight: 1.5 }}>
-                          <span style={{ flexShrink: 0, width: 22, height: 22, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{i + 1}</span>
-                          <span>{step.trim()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>{finding.recommendation}</div>
-                  )}
+                <div style={{ margin: '0 0 16px', padding: '16px 18px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <i className="fas fa-arrow-right" style={{ color: '#22c55e', fontSize: 16, marginTop: 2, flexShrink: 0 }} />
+                  <div style={{ fontSize: 15, color: 'var(--text1)', lineHeight: 1.6, fontWeight: 500 }}>{finding.recommendation}</div>
                 </div>
               )}
 
               {/* Current vs Target */}
               {currentVal && recommendedVal && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-                  <div style={{ padding: '12px 14px', background: 'rgba(239,68,68,0.06)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.12)' }}>
-                    <div style={{ color: 'var(--text3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Current</div>
-                    <div style={{ color: '#ef4444', fontSize: 14, fontWeight: 500 }}>{currentVal}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                  <div style={{ padding: '14px 16px', background: 'rgba(239,68,68,0.06)', borderRadius: 10, border: '1px solid rgba(239,68,68,0.12)' }}>
+                    <div style={{ color: 'var(--text3)', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Now</div>
+                    <div style={{ color: '#ef4444', fontSize: 15, fontWeight: 600 }}>{currentVal}</div>
                   </div>
-                  <div style={{ padding: '12px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px solid rgba(34,197,94,0.12)' }}>
-                    <div style={{ color: 'var(--text3)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Target</div>
-                    <div style={{ color: '#22c55e', fontSize: 14, fontWeight: 500 }}>{recommendedVal}</div>
+                  <div style={{ padding: '14px 16px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.12)' }}>
+                    <div style={{ color: 'var(--text3)', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>Goal</div>
+                    <div style={{ color: '#22c55e', fontSize: 15, fontWeight: 600 }}>{recommendedVal}</div>
                   </div>
                 </div>
               )}
 
               {/* Action buttons */}
-              <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
                 {!isApproved && finding.status !== 'approved' ? (
                   <>
-                    <button className="btn btn-success" onClick={(e) => { e.stopPropagation(); onApprove(finding); }} style={{ fontSize: 13, padding: '8px 16px' }}>
-                      <i className="fas fa-check" style={{ marginRight: 6 }}></i> Approve & Add to Action Plan
+                    <button className="btn btn-success" onClick={(e) => { e.stopPropagation(); onApprove(finding); }} style={{ fontSize: 14, padding: '10px 20px', fontWeight: 600 }}>
+                      <i className="fas fa-check" style={{ marginRight: 8 }}></i> Approve
                     </button>
-                    <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); onReject(finding); }} style={{ fontSize: 13, padding: '8px 16px' }}>
-                      <i className="fas fa-times" style={{ marginRight: 6 }}></i> Dismiss
+                    <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); onReject(finding); }} style={{ fontSize: 14, padding: '10px 20px', fontWeight: 600 }}>
+                      <i className="fas fa-times" style={{ marginRight: 8 }}></i> Dismiss
                     </button>
                   </>
                 ) : (
-                  <span style={{ padding: '8px 16px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 13 }}>
-                    <i className="fas fa-check-circle" style={{ marginRight: 6 }} /> Sent to Action Plan
+                  <span style={{ padding: '10px 20px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 14 }}>
+                    <i className="fas fa-check-circle" style={{ marginRight: 8 }} /> Added to Action Plan
                   </span>
                 )}
               </div>
