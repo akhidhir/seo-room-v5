@@ -2503,7 +2503,25 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         let profileSummary = null;
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
+          // Clean common JSON issues from AI responses
+          let jsonStr = jsonMatch[0]
+            .replace(/,\s*}/g, '}')      // trailing commas before }
+            .replace(/,\s*]/g, ']')      // trailing commas before ]
+            .replace(/[\x00-\x1f]/g, ' ') // control characters
+            .replace(/"\s*\n\s*"/g, '", "'); // missing commas between strings
+          let parsed;
+          try { parsed = JSON.parse(jsonStr); } catch (e) {
+            // Second attempt: try to extract just the findings array
+            console.log(`[gbp-audit] JSON parse retry after cleanup...`);
+            const findingsMatch = text.match(/"findings"\s*:\s*\[([\s\S]*)\]/);
+            if (findingsMatch) {
+              try { parsed = { findings: JSON.parse('[' + findingsMatch[1] + ']') }; } catch (e2) {
+                console.error('[gbp-audit] JSON parse failed even after cleanup:', e2.message);
+                parsed = null;
+              }
+            }
+          }
+          if (!parsed) throw new Error('Could not parse AI response as JSON');
           profileSummary = parsed.profile_summary || null;
           if (parsed.findings && Array.isArray(parsed.findings)) {
             findings = parsed.findings.map(f => ({
