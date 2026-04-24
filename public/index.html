@@ -1288,9 +1288,23 @@
       const [error, setError] = useState('');
       const [approvedIds, setApprovedIds] = useState(new Set());
       const [expandedId, setExpandedId] = useState(null);
-      const [expandedCats, setExpandedCats] = useState(new Set());
+      const [activeTab, setActiveTab] = useState('overview');
 
-      // Load previous findings on mount
+      const categoryConfig = {
+        'Proximity': { icon: 'fas fa-map-pin', color: '#ef4444', desc: 'How close your business is to the searcher' },
+        'Relevance': { icon: 'fas fa-bullseye', color: '#f59e0b', desc: 'How well your profile matches the search query' },
+        'Prominence': { icon: 'fas fa-star', color: '#8b5cf6', desc: 'How well-known your business is online' },
+        'Citations & Directories': { icon: 'fas fa-building', color: '#3b82f6', desc: 'Your presence across online directories' },
+        'Competitor Gap': { icon: 'fas fa-chess', color: '#ec4899', desc: 'How you compare to top competitors' },
+        'Reviews': { icon: 'fas fa-comments', color: '#22c55e', desc: 'Review count, rating, and response strategy' },
+        'Photos': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quality, quantity, and optimization' },
+        'Profile Completeness': { icon: 'fas fa-user-check', color: '#f97316', desc: 'Missing or incomplete profile fields' },
+        'Maps Ranking': { icon: 'fas fa-map-marked-alt', color: '#6366f1', desc: 'Your position in Google Maps results' },
+        'Categories': { icon: 'fas fa-tags', color: '#14b8a6', desc: 'Primary and secondary business categories' },
+        'Service Areas': { icon: 'fas fa-globe', color: '#a855f7', desc: 'Geographic areas you serve' },
+        'NAP Consistency': { icon: 'fas fa-address-card', color: '#64748b', desc: 'Name, Address, Phone consistency across the web' },
+      };
+
       useEffect(() => {
         if (project) loadExisting();
       }, [project?.id]);
@@ -1301,57 +1315,57 @@
       };
 
       const runAudit = async () => {
-        setLoading(true);
-        setError('');
+        setLoading(true); setError(''); setActiveTab('overview');
         try {
           const data = await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
           setFindings(data.findings || []);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
-        }
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
       };
 
       const handleApprove = async (finding) => {
         try {
           await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
-          setApprovedIds((prev) => new Set([...prev, finding.id]));
-        } catch (err) {
-          setError(err.message);
-        }
+          setApprovedIds(prev => new Set([...prev, finding.id]));
+        } catch (err) { setError(err.message); }
       };
 
       const handleReject = async (finding) => {
         try {
           await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
-          setFindings((prev) => prev.filter((f) => f.id !== finding.id));
-        } catch (err) {
-          setError(err.message);
-        }
+          setFindings(prev => prev.filter(f => f.id !== finding.id));
+        } catch (err) { setError(err.message); }
       };
 
-      const stats = useMemo(() => {
-        const critical = findings.filter((f) => f.severity === 'Critical').length;
-        const medium = findings.filter((f) => f.severity === 'Medium').length;
-        const low = findings.filter((f) => f.severity === 'Low').length;
-        return { critical, medium, low };
-      }, [findings]);
+      const stats = useMemo(() => ({
+        critical: findings.filter(f => f.severity === 'Critical').length,
+        medium: findings.filter(f => f.severity === 'Medium').length,
+        low: findings.filter(f => f.severity === 'Low').length,
+      }), [findings]);
+
+      const categories = useMemo(() => [...new Set(findings.map(f => f.category))], [findings]);
+
+      const healthScore = useMemo(() => {
+        if (!findings.length) return null;
+        const penalty = stats.critical * 12 + stats.medium * 5 + stats.low * 2;
+        return Math.max(0, Math.min(100, 100 - penalty));
+      }, [findings, stats]);
+
+      const healthColor = (s) => s >= 80 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
 
       return (
-        <>
-          <div className="page-header">
-            <div className="page-title">
-              <i className="fas fa-map-marker-alt"></i> GBP Audit
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Audit
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Analyze your Google Business Profile across all local ranking factors</p>
             </div>
-            <div className="page-subtitle">Analyze your Google Business Profile for optimization opportunities</div>
+            <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
+              {loading ? <><span className="spinner"></span>Running...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run GBP Audit</>}
+            </button>
           </div>
-
-          <button className="btn btn-primary mb-24" onClick={runAudit} disabled={loading}>
-            {loading ? <><span className="spinner"></span>Running Audit...</> : <><i className="fas fa-play" style={{ marginRight: 6 }}></i>Run GBP Audit</>}
-          </button>
-
-          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
 
           {loading && (
             <div className="audit-loading-overlay">
@@ -1361,88 +1375,152 @@
             </div>
           )}
 
-          {!loading && findings.length > 0 && (() => {
-            const categoryConfig = {
-              'Proximity': { icon: 'fas fa-map-pin', color: '#ef4444' },
-              'Relevance': { icon: 'fas fa-bullseye', color: '#f59e0b' },
-              'Prominence': { icon: 'fas fa-star', color: '#8b5cf6' },
-              'Citations & Directories': { icon: 'fas fa-building', color: '#3b82f6' },
-              'Competitor Gap': { icon: 'fas fa-chess', color: '#ec4899' },
-              'Reviews': { icon: 'fas fa-comments', color: '#22c55e' },
-              'Photos': { icon: 'fas fa-camera', color: '#06b6d4' },
-              'Profile Completeness': { icon: 'fas fa-user-check', color: '#f97316' },
-              'Maps Ranking': { icon: 'fas fa-map-marked-alt', color: '#6366f1' },
-              'Categories': { icon: 'fas fa-tags', color: '#14b8a6' },
-              'Service Areas': { icon: 'fas fa-globe', color: '#a855f7' },
-              'NAP Consistency': { icon: 'fas fa-address-card', color: '#64748b' },
-            };
-            const categories = [...new Set(findings.map(f => f.category))];
-            return (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#ef4444' }}>{stats.critical}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Critical</div>
-                </div>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#f59e0b' }}>{stats.medium}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Medium</div>
-                </div>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#3b82f6' }}>{stats.low}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Low</div>
-                </div>
-              </div>
+          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
+          {/* Sub-navigation tabs */}
+          {!loading && findings.length > 0 && (
+            <div style={{ display: 'flex', gap: 0, marginBottom: 24, borderBottom: '2px solid var(--border)', overflowX: 'auto' }}>
+              <button onClick={() => setActiveTab('overview')} style={{
+                padding: '12px 18px', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, background: 'transparent',
+                color: activeTab === 'overview' ? 'var(--accent)' : 'var(--text3)',
+                borderBottom: activeTab === 'overview' ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: -2, whiteSpace: 'nowrap', transition: 'all 0.2s',
+              }}>
+                <i className="fas fa-th-large" style={{ marginRight: 6 }} />Overview
+              </button>
               {categories.map(cat => {
                 const cfg = categoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
                 const catFindings = findings.filter(f => f.category === cat);
-                const isOpen = expandedCats.has(cat);
                 const hasCritical = catFindings.some(f => f.severity === 'Critical');
                 return (
-                  <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                    <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat) ? s.delete(cat) : s.add(cat); return s; })}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: isOpen ? `2px solid ${cfg.color}` : 'none', cursor: 'pointer' }}>
-                      <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
-                      <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
-                      {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
-                      <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
-                        {catFindings.length}
-                      </span>
-                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
+                  <button key={cat} onClick={() => setActiveTab(cat)} style={{
+                    padding: '12px 16px', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, background: 'transparent',
+                    color: activeTab === cat ? cfg.color : 'var(--text3)',
+                    borderBottom: activeTab === cat ? `2px solid ${cfg.color}` : '2px solid transparent',
+                    marginBottom: -2, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.2s',
+                  }}>
+                    <i className={cfg.icon} style={{ fontSize: 12 }} />
+                    {cat}
+                    {hasCritical && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ====== OVERVIEW TAB ====== */}
+          {activeTab === 'overview' && !loading && findings.length > 0 && <>
+            {/* Health score + severity stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 16, marginBottom: 28 }}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ position: 'relative', width: 80, height: 80 }}>
+                  <svg viewBox="0 0 80 80" style={{ transform: 'rotate(-90deg)' }}>
+                    <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border)" strokeWidth="6" />
+                    <circle cx="40" cy="40" r="34" fill="none" stroke={healthColor(healthScore)} strokeWidth="6"
+                      strokeDasharray={`${(healthScore / 100) * 213.6} 213.6`} strokeLinecap="round" />
+                  </svg>
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 22, fontWeight: 800, color: healthColor(healthScore) }}>{healthScore}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: healthColor(healthScore), marginTop: 8, textTransform: 'uppercase' }}>
+                  {healthScore >= 80 ? 'Good' : healthScore >= 50 ? 'Needs Work' : 'Poor'}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                {[
+                  { label: 'Critical', value: stats.critical, color: '#ef4444', icon: 'fas fa-exclamation-circle' },
+                  { label: 'Medium', value: stats.medium, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+                  { label: 'Low', value: stats.low, color: '#3b82f6', icon: 'fas fa-info-circle' },
+                ].map(s => (
+                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
+                    <i className={s.icon} style={{ fontSize: 18, color: s.color, display: 'block', marginBottom: 8 }} />
+                    <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Category cards — click to navigate */}
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 14 }}>Audit Categories</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              {categories.map(cat => {
+                const cfg = categoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b', desc: '' };
+                const catFindings = findings.filter(f => f.category === cat);
+                const critCount = catFindings.filter(f => f.severity === 'Critical').length;
+                const medCount = catFindings.filter(f => f.severity === 'Medium').length;
+                const lowCount = catFindings.filter(f => f.severity === 'Low').length;
+                return (
+                  <div key={cat} onClick={() => setActiveTab(cat)}
+                    style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.2s', borderLeft: `4px solid ${cfg.color}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <i className={cfg.icon} style={{ color: cfg.color, fontSize: 20 }} />
+                        <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{cat}</span>
+                      </div>
+                      <i className="fas fa-arrow-right" style={{ color: 'var(--text3)', fontSize: 12 }} />
                     </div>
-                    {isOpen && <div style={{ padding: 8 }}>
-                    {catFindings.map(finding => (
-                      <FindingCard
-                        key={finding.id}
-                        finding={finding}
-                        onApprove={handleApprove}
-                        onReject={handleReject}
-                        isApproved={approvedIds.has(finding.id)}
-                        expanded={expandedId === finding.id}
-                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
-                      />
-                    ))}
-                    </div>}
+                    <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 10 }}>{cfg.desc}</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {critCount > 0 && <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontWeight: 600 }}>{critCount} Critical</span>}
+                      {medCount > 0 && <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontWeight: 600 }}>{medCount} Medium</span>}
+                      {lowCount > 0 && <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, background: 'rgba(59,130,246,0.12)', color: '#3b82f6', fontWeight: 600 }}>{lowCount} Low</span>}
+                    </div>
                   </div>
                 );
               })}
+            </div>
+          </>}
+
+          {/* ====== CATEGORY SUB-PAGES ====== */}
+          {activeTab !== 'overview' && !loading && findings.length > 0 && (() => {
+            const cfg = categoryConfig[activeTab] || { icon: 'fas fa-circle', color: '#64748b', desc: '' };
+            const catFindings = findings.filter(f => f.category === activeTab);
+            return (
+              <div>
+                {/* Category header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 8 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: `${cfg.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className={cfg.icon} style={{ color: cfg.color, fontSize: 20 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{activeTab}</div>
+                    <div style={{ fontSize: 13, color: 'var(--text3)' }}>{cfg.desc}</div>
+                  </div>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                    {catFindings.filter(f => f.severity === 'Critical').length > 0 && <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontWeight: 700 }}>{catFindings.filter(f => f.severity === 'Critical').length} Critical</span>}
+                    {catFindings.filter(f => f.severity === 'Medium').length > 0 && <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontWeight: 700 }}>{catFindings.filter(f => f.severity === 'Medium').length} Medium</span>}
+                    {catFindings.filter(f => f.severity === 'Low').length > 0 && <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, background: 'rgba(59,130,246,0.12)', color: '#3b82f6', fontWeight: 700 }}>{catFindings.filter(f => f.severity === 'Low').length} Low</span>}
+                  </div>
+                </div>
+
+                {/* Findings — full width, no grid */}
+                <div style={{ marginTop: 16 }}>
+                  {catFindings.map(finding => (
+                    <FindingCard
+                      key={finding.id}
+                      finding={finding}
+                      onApprove={handleApprove}
+                      onReject={handleReject}
+                      isApproved={approvedIds.has(finding.id)}
+                      expanded={expandedId === finding.id}
+                      onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
+                    />
+                  ))}
+                </div>
               </div>
-            </>
             );
           })()}
 
           {!loading && findings.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-state-icon">
-                <i className="fas fa-search"></i>
-              </div>
-              <div className="empty-state-title">No audit run yet</div>
-              <div>Click "Run GBP Audit" to discover optimization opportunities</div>
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-map-marker-alt" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No GBP audit run yet</div>
+              <div style={{ fontSize: 13 }}>Click "Run GBP Audit" to analyze your profile, reviews, competitors, and rankings.</div>
             </div>
           )}
-        </>
+        </div>
       );
     }
 
