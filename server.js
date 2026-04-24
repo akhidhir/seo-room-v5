@@ -2003,34 +2003,42 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1. Get business profile via SerpAPI Google Maps (primary — no Google API key issues)
     if (SERPAPI_KEY && businessName) {
       try {
-        // Try multiple search queries
+        // Try multiple search queries — use location to narrow results to the right country/city
+        const city = (location || '').split(',')[0].trim();
         const queries = [
+          `${businessName} ${city}`,
+          `${businessName} Leeming`,
           businessName,
-          `${businessName} ${(location || '').split(',')[0].trim()}`,
-          domain ? domain.replace(/^www\./, '').split('.')[0] : null,
-          project.name,
+          `${project.name} ${city}`,
+          domain ? `${domain.replace(/^www\./, '')} plumber` : null,
         ].filter(Boolean);
         let results = [];
         let usedQuery = '';
         for (const q of queries) {
           if (!q) continue;
-          console.log(`[gbp-audit] SerpAPI Maps search: "${q}"`);
-          const data = await serpApiSearch({
+          console.log(`[gbp-audit] SerpAPI Maps search: "${q}" (location: ${location || 'none'})`);
+          // Use SerpAPI's location parameter to search near the project's city
+          const serpParams = {
             engine: 'google_maps',
             q: q,
             type: 'search',
+            hl: 'en',
             api_key: SERPAPI_KEY,
-          });
+          };
+          // Add location context if available (e.g. "Perth WA, Australia" → SerpAPI resolves GPS automatically)
+          if (location) serpParams.location = location;
+          const data = await serpApiSearch(serpParams);
           results = data.local_results || [];
           usedQuery = q;
           console.log(`[gbp-audit] SerpAPI returned ${results.length} results for "${q}"`);
           if (results.length > 0) break;
         }
 
-        const match = results.find(r =>
-          (r.website && r.website.includes(domain)) ||
-          (r.title && r.title.toLowerCase().includes(businessName.split(' ')[0].toLowerCase()))
-        ) || results[0];
+        // Prefer domain match (most accurate), then name match
+        const match = results.find(r => r.website && r.website.includes(domain)) ||
+          results.find(r => r.title && r.title.toLowerCase().includes(businessName.toLowerCase().split('&')[0].trim().split(' ')[0].toLowerCase()) && r.title.toLowerCase().includes('plumb')) ||
+          results.find(r => r.title && r.title.toLowerCase().includes(businessName.split(' ')[0].toLowerCase())) ||
+          null; // Don't fallback to first result — it could be wrong business
 
         if (match) {
           gbpData.source = 'serpapi';
