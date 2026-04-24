@@ -2000,10 +2000,23 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // ===== PHASE 1: Gather all data =====
     const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
-    // 1. Get business profile via SerpAPI Google Maps (no Google billing needed)
+    // 1. Get business profile
+    const gbpUrl = project.gbp_location_id || '';
+
+    // 1a. If we have a GBP share URL, resolve it to get the real Maps URL
+    if (gbpUrl && gbpUrl.includes('share.google')) {
+      try {
+        console.log(`[gbp-audit] Resolving GBP share URL: ${gbpUrl}`);
+        const resolveResp = await fetch(gbpUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const resolvedUrl = resolveResp.url;
+        console.log(`[gbp-audit] Resolved to: ${resolvedUrl}`);
+        // Extract place info from the resolved URL if possible
+      } catch (e) { console.log(`[gbp-audit] Share URL resolve error: ${e.message}`); }
+    }
+
+    // 1b. Search SerpAPI Maps
     if (SERPAPI_KEY && businessName) {
       try {
-        // Search with just business name — SerpAPI handles location via ll parameter
         const searchQ = businessName;
         console.log(`[gbp-audit] SerpAPI search: "${searchQ}"`);
 
