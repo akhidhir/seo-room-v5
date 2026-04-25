@@ -1317,38 +1317,36 @@
         } catch (err) { setError(err.message); setLoading(false); }
       };
 
-      // Parse report into sections
+      // Parse report into sections — only split on numbered headers
       const parseReportSections = (text) => {
         if (!text) return [];
         const lines = text.split('\n');
         const sections = [];
-        let current = { title: 'Overview', content: [] };
+        let current = null;
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          // Section headers: "1. PROFILE HEALTH SCORE" or "## SECTION"
-          const sectionMatch = trimmed.match(/^(\d+)\.\s+(.+)/) || trimmed.match(/^#{1,3}\s+(.+)/);
-          if (sectionMatch && trimmed === trimmed.toUpperCase().replace(/[^A-Z\s\d.#]/g, '') ||
-              (sectionMatch && /^[A-Z\s&/()]+$/.test(sectionMatch[2] || sectionMatch[1]))) {
-            // Looks like a section header (all caps)
-            if (current.content.length > 0 || current.title !== 'Overview') {
-              sections.push(current);
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          // Match "### N. SECTION NAME" or "N. SECTION NAME"
+          const numbered = trimmed.match(/^(?:#{1,3}\s+)?(\d+)\.\s+(.+)/);
+          if (numbered) {
+            const title = numbered[2].replace(/\*\*/g, '').trim();
+            if (title.length > 3) {
+              if (current) sections.push(current);
+              current = { title, content: [] };
+              continue;
             }
-            current = { title: (sectionMatch[2] || sectionMatch[1]).trim().replace(/\*\*/g, ''), content: [] };
-            continue;
           }
-          // Also catch bold section headers like "**NAP Consistency Table**"
-          const boldMatch = trimmed.match(/^\*\*([A-Z][^*]+)\*\*$/);
-          if (boldMatch && boldMatch[1].length > 5) {
-            if (current.content.length > 0 || current.title !== 'Overview') {
-              sections.push(current);
+          // Everything else is content
+          if (current) {
+            current.content.push(lines[i]);
+          } else {
+            // Before first section — create an intro section
+            if (!current) {
+              current = { title: 'Overview', content: [lines[i]] };
             }
-            current = { title: boldMatch[1].trim(), content: [] };
-            continue;
           }
-          current.content.push(line);
         }
-        if (current.content.length > 0) sections.push(current);
+        if (current) sections.push(current);
         return sections;
       };
 
@@ -1524,13 +1522,12 @@
       const sections = [];
       for (const line of report.split('\n')) {
         const trimmed = line.trim();
-        const sectionMatch = trimmed.match(/^(\d+)\.\s+(.+)/);
-        if (sectionMatch && /^[A-Z\s&/()]+$/.test(sectionMatch[2])) {
-          sections.push(sectionMatch[2].trim());
-        }
-        const boldMatch = trimmed.match(/^\*\*([A-Z][^*]+)\*\*$/);
-        if (boldMatch && boldMatch[1].length > 5 && /[A-Z]/.test(boldMatch[1])) {
-          sections.push(boldMatch[1].trim());
+        // Only match "### N. SECTION NAME" or "N. SECTION NAME" (numbered, mostly uppercase)
+        const numbered = trimmed.match(/^(?:#{1,3}\s+)?(\d+)\.\s+(.+)/);
+        if (numbered) {
+          const title = numbered[2].replace(/\*\*/g, '').trim();
+          // Must be mostly uppercase or a clear section title
+          if (title.length > 3) sections.push(title);
         }
       }
       return sections;
