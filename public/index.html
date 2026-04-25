@@ -1275,6 +1275,8 @@
       const [report, setReport] = useState('');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
+      const [activeTab, setActiveTab] = useState('overview');
+      const [parsed, setParsed] = useState(null);
 
       useEffect(() => { if (project) checkStatus(); }, [project?.id]);
 
@@ -1286,6 +1288,7 @@
             startPolling();
           } else if (data.status === 'completed' && data.report) {
             setReport(data.report);
+            setParsed(parseReport(data.report));
           } else if (data.status === 'failed' && data.error) {
             setError(data.error);
           }
@@ -1298,7 +1301,7 @@
             const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
             if (data.status === 'completed') {
               clearInterval(pollInterval);
-              if (data.report) setReport(data.report);
+              if (data.report) { setReport(data.report); setParsed(parseReport(data.report)); }
               setLoading(false);
             } else if (data.status === 'failed') {
               clearInterval(pollInterval);
@@ -1310,252 +1313,357 @@
       };
 
       const runAudit = async () => {
-        setLoading(true); setError(''); setReport('');
+        setLoading(true); setError(''); setReport(''); setParsed(null);
         try {
           await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
-          // POST returns immediately, start polling for result
           startPolling();
         } catch (err) { setError(err.message); setLoading(false); }
       };
 
-      // Parse agent report into structured, categorized view
+      // Parse the agent report into structured data
       const parseReport = (text) => {
-        const sections = [];
-        const issues = [];
-        const tables = [];
-        let currentSection = null;
         const lines = text.split('\n');
+        const issues = [];
+        const sections = [];
+        let currentSection = { title: '', lines: [], tables: [] };
+        let inTable = false;
+        let tableRows = [];
+        let healthScore = null;
 
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
+          const line = lines[i];
+          const trimmed = line.trim();
 
-          // Numbered issue rows: | 1 | Category | Issue | Description | Priority | Fix |
-          const issueMatch = line.match(/^\|\s*(\d+)\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+?)\s*\|$/);
+          // Issue rows: | 1 | Category | Issue | Desc | Priority | Fix |
+          const issueMatch = trimmed.match(/^\|\s*(\d+)\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+?)\s*\|$/);
           if (issueMatch) {
-            const [_, num, category, issue, description, priority, fix] = issueMatch;
-            const priText = priority.trim();
-            let priLevel = 'medium';
-            if (/high|\u{1F534}/u.test(priText.toLowerCase())) priLevel = 'high';
-            else if (/low|\u{1F7E2}/u.test(priText.toLowerCase())) priLevel = 'low';
+            const priText = issueMatch[5].trim().toLowerCase();
+            let priority = 'medium';
+            if (priText.includes('high') || priText.includes('\u{1F534}')) priority = 'high';
+            else if (priText.includes('low') || priText.includes('\u{1F7E2}') || priText.includes('\u{1F7E1}')) priority = 'low';
             issues.push({
-              num: num.trim(),
-              category: category.trim(),
-              issue: issue.trim(),
-              description: description.trim(),
-              priority: priLevel,
-              priorityLabel: priText.replace(/[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F7E2}]/gu, '').trim(),
-              fix: fix.trim(),
+              num: parseInt(issueMatch[1]),
+              category: issueMatch[2].trim(),
+              issue: issueMatch[3].trim(),
+              description: issueMatch[4].trim(),
+              priority,
+              fix: issueMatch[6].trim(),
             });
             continue;
           }
 
-          // Section headers: "1. PROFILE HEALTH SCORE" or "## SECTION" or "3. WEBSITE ALIGNMENT"
-          if (/^\d+\.\s+[A-Z]/.test(line) || /^#{1,3}\s+[A-Z]/.test(line)) {
-            currentSection = line.replace(/^#+\s*/, '').replace(/^\d+\.\s*/, '').replace(/\*\*/g, '');
-            sections.push({ title: currentSection, content: [], tables: [] });
-            continue;
+          // Health score
+          const scoreMatch = trimmed.match(/Health Score:\s*(\d+)\/(\d+)/);
+          if (scoreMatch) {
+            healthScore = { score: parseInt(scoreMatch[1]), max: parseInt(scoreMatch[2]), grade: trimmed.split('—')[1]?.trim() || '' };
           }
 
-          // Table rows
-          if (line.startsWith('|') && line.endsWith('|') && !line.match(/^\|[\s-|]+\|$/)) {
-            const cells = line.split('|').filter(c => c.trim()).map(c => c.trim());
-            if (cells.length >= 2 && sections.length > 0) {
-              const sec = sections[sections.length - 1];
-              if (!sec._currentTable) sec._currentTable = [];
-              sec._currentTable.push(cells);
+          // Section headers
+          if (/^\d+\.\s+[A-Z]/.test(trimmed) || /^#{1,3}\s+[A-Z]/.test(trimmed)) {
+            if (currentSection.title) {
+              if (tableRows.length > 0) { currentSection.tables.push(tableRows); tableRows = []; }
+              sections.push(currentSection);
             }
+            currentSection = { title: trimmed.replace(/^#+\s*/, '').replace(/^\d+\.\s*/, '').replace(/\*\*/g, ''), lines: [], tables: [] };
             continue;
           }
 
-          // Table separator (skip)
-          if (line.match(/^\|[\s-|]+\|$/)) {
-            continue;
-          }
+          // Table separator — skip
+          if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
 
-          // Horizontal rule (section break)
-          if (line === '---' || line === '***') {
-            if (sections.length > 0 && sections[sections.length - 1]._currentTable) {
-              sections[sections.length - 1].tables.push(sections[sections.length - 1]._currentTable);
-              delete sections[sections.length - 1]._currentTable;
+          // Table rows (non-issue, like scoring/NAP/hours tables)
+          if (trimmed.startsWith('|') && trimmed.endsWith('|') && !issueMatch) {
+            const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+            if (cells.length >= 2) {
+              tableRows.push(cells);
+              inTable = true;
+              continue;
             }
-            continue;
           }
+
+          // End of table
+          if (inTable && !trimmed.startsWith('|')) {
+            if (tableRows.length > 0) { currentSection.tables.push(tableRows); tableRows = []; }
+            inTable = false;
+          }
+
+          // Horizontal rule
+          if (trimmed === '---' || trimmed === '***') continue;
 
           // Regular content
-          if (line && sections.length > 0) {
-            // Flush any pending table
-            const sec = sections[sections.length - 1];
-            if (sec._currentTable) {
-              sec.tables.push(sec._currentTable);
-              delete sec._currentTable;
-            }
-            sec.content.push(line);
+          if (trimmed && !trimmed.startsWith('|')) {
+            currentSection.lines.push(trimmed);
           }
         }
+        // Flush
+        if (tableRows.length > 0) currentSection.tables.push(tableRows);
+        if (currentSection.title) sections.push(currentSection);
 
-        // Flush final tables
-        sections.forEach(s => {
-          if (s._currentTable) {
-            s.tables.push(s._currentTable);
-            delete s._currentTable;
-          }
-        });
+        // Build category list from issues
+        const categories = [...new Set(issues.map(i => i.category))];
 
-        return { issues, sections };
+        return { healthScore, issues, sections, categories };
       };
 
-      const renderReport = (text) => {
-        const { issues, sections } = parseReport(text);
+      if (!parsed && !loading && !error && !report) {
+        return (
+          <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 60, fontSize: 16, background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
+            <i className="fas fa-robot" style={{ fontSize: 40, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+            No external audit yet.
+            <div style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 15, padding: '10px 20px' }}>
+                <i className="fas fa-robot" style={{ marginRight: 8 }} />Run External Audit
+              </button>
+            </div>
+          </div>
+        );
+      }
 
-        // Group issues by category
-        const grouped = {};
-        issues.forEach(iss => {
-          if (!grouped[iss.category]) grouped[iss.category] = [];
-          grouped[iss.category].push(iss);
-        });
+      if (loading) {
+        return (
+          <div className="audit-loading-overlay">
+            <span className="spinner-large"></span>
+            <div className="audit-loading-text">External GBP Audit</div>
+            <div className="audit-loading-sub">Managed agent is researching your business across the web. This takes 2-5 minutes.</div>
+          </div>
+        );
+      }
 
-        const priColor = { high: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
-        const priBg = { high: 'rgba(239,68,68,0.1)', medium: 'rgba(245,158,11,0.1)', low: 'rgba(59,130,246,0.08)' };
-        const priIcon = { high: 'fa-circle-exclamation', medium: 'fa-triangle-exclamation', low: 'fa-info-circle' };
+      if (error) {
+        return (
+          <div>
+            <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}>
+              <i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}
+            </div>
+            <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 15, padding: '10px 20px' }}>
+              <i className="fas fa-robot" style={{ marginRight: 8 }} />Re-run External Audit
+            </button>
+          </div>
+        );
+      }
 
+      if (!parsed) return null;
+
+      // Build tabs: Overview + each issue category + each report section with tables
+      const tabs = [{ key: 'overview', label: 'Overview', icon: 'fa-chart-simple' }];
+      parsed.categories.forEach(cat => {
+        tabs.push({ key: 'cat_' + cat, label: cat, icon: 'fa-circle-exclamation' });
+      });
+      parsed.sections.forEach((sec, i) => {
+        if (sec.tables.length > 0 || sec.lines.length > 3) {
+          tabs.push({ key: 'sec_' + i, label: sec.title, icon: 'fa-table' });
+        }
+      });
+
+      const priColor = { high: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
+      const priBadge = (pri) => (
+        <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: priColor[pri], color: '#fff', textTransform: 'uppercase', letterSpacing: 0.5 }}>{pri}</span>
+      );
+
+      const renderOverview = () => {
         const stats = {
-          total: issues.length,
-          high: issues.filter(i => i.priority === 'high').length,
-          medium: issues.filter(i => i.priority === 'medium').length,
-          low: issues.filter(i => i.priority === 'low').length,
+          total: parsed.issues.length,
+          high: parsed.issues.filter(i => i.priority === 'high').length,
+          medium: parsed.issues.filter(i => i.priority === 'medium').length,
+          low: parsed.issues.filter(i => i.priority === 'low').length,
         };
 
         return (
           <div>
-            {/* Stats Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent)' }}>{stats.total}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Total Issues</div>
-              </div>
-              <div style={{ background: 'var(--card)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#ef4444' }}>{stats.high}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>High Priority</div>
-              </div>
-              <div style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{stats.medium}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 1 }}>Medium</div>
-              </div>
-              <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#3b82f6' }}>{stats.low}</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1 }}>Low</div>
-              </div>
-            </div>
-
-            {/* Issues by Category */}
-            {issues.length > 0 && (
-              <div style={{ marginBottom: 28 }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: 'var(--text1)' }}>
-                  <i className="fas fa-list-check" style={{ marginRight: 8, color: 'var(--accent)' }} />Action Items
-                </h3>
-                {Object.entries(grouped).map(([cat, items]) => (
-                  <div key={cat} style={{ marginBottom: 20 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
-                      {cat} <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>({items.length} issue{items.length > 1 ? 's' : ''})</span>
-                    </div>
-                    {items.map((iss, j) => (
-                      <div key={j} style={{ background: priBg[iss.priority], border: `1px solid ${priColor[iss.priority]}22`, borderLeft: `4px solid ${priColor[iss.priority]}`, borderRadius: '0 10px 10px 0', padding: '14px 18px', marginBottom: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <i className={`fas ${priIcon[iss.priority]}`} style={{ color: priColor[iss.priority], fontSize: 14 }} />
-                          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{iss.issue}</span>
-                          <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: priColor[iss.priority], color: '#fff', textTransform: 'uppercase' }}>{iss.priority}</span>
-                        </div>
-                        <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 8, paddingLeft: 24 }}>{iss.description}</div>
-                        <div style={{ fontSize: 14, color: 'var(--text1)', lineHeight: 1.6, paddingLeft: 24, background: 'rgba(34,197,94,0.06)', borderLeft: '2px solid #22c55e', padding: '8px 12px 8px 24px', borderRadius: '0 6px 6px 0', marginLeft: 24 }}>
-                          <strong style={{ color: '#22c55e' }}>Fix: </strong>{iss.fix}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
+            {/* Health Score */}
+            {parsed.healthScore && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, padding: '20px 24px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12 }}>
+                <div style={{ fontSize: 48, fontWeight: 800, color: parsed.healthScore.score >= 70 ? '#22c55e' : parsed.healthScore.score >= 50 ? '#f59e0b' : '#ef4444' }}>{parsed.healthScore.score}<span style={{ fontSize: 20, color: 'var(--text3)' }}>/{parsed.healthScore.max}</span></div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)' }}>Profile Health Score</div>
+                  <div style={{ fontSize: 14, color: 'var(--text3)' }}>{parsed.healthScore.grade}</div>
+                </div>
               </div>
             )}
 
-            {/* Additional Sections (tables, summaries) */}
-            {sections.filter(s => s.tables.length > 0 || s.content.length > 0).map((sec, si) => (
-              <div key={si} style={{ marginBottom: 24 }}>
-                <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)', marginBottom: 12, paddingBottom: 8, borderBottom: '2px solid var(--border)' }}>
-                  {sec.title}
-                </h3>
-                {sec.content.map((line, li) => {
-                  const clean = line.replace(/\*\*/g, '');
-                  if (/^(Key Takeaway|Score Rationale|Health Score)/i.test(clean)) {
-                    return <div key={li} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', lineHeight: 1.7, marginBottom: 8, padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>;
-                  }
-                  return <div key={li} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4 }}>{clean}</div>;
-                })}
-                {sec.tables.map((table, ti) => {
-                  if (table.length < 2) return null;
-                  const headers = table[0];
-                  const rows = table.slice(1);
-                  return (
-                    <div key={ti} style={{ overflowX: 'auto', marginBottom: 12 }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                          <tr>
-                            {headers.map((h, hi) => (
-                              <th key={hi} style={{ padding: '10px 12px', background: 'var(--bg)', borderBottom: '2px solid var(--border)', textAlign: 'left', fontWeight: 700, color: 'var(--text1)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((row, ri) => (
-                            <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                              {row.map((cell, ci) => (
-                                <td key={ci} style={{ padding: '10px 12px', color: 'var(--text2)', fontSize: 13, lineHeight: 1.5 }}>{cell}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+            {/* Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { label: 'Total Issues', val: stats.total, color: 'var(--accent)' },
+                { label: 'High Priority', val: stats.high, color: '#ef4444' },
+                { label: 'Medium', val: stats.medium, color: '#f59e0b' },
+                { label: 'Low', val: stats.low, color: '#3b82f6' },
+              ].map((s, i) => (
+                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.val}</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: s.color, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* All Issues Table */}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg)' }}>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>#</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>Category</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>Issue</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>Priority</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsed.issues.map((iss, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setActiveTab('cat_' + iss.category)}>
+                      <td style={{ padding: '12px 16px', fontSize: 14, color: 'var(--text3)', fontWeight: 600 }}>{iss.num}</td>
+                      <td style={{ padding: '12px 16px', fontSize: 14, color: 'var(--accent)', fontWeight: 600 }}>{iss.category}</td>
+                      <td style={{ padding: '12px 16px', fontSize: 14, color: 'var(--text1)' }}>{iss.issue}</td>
+                      <td style={{ padding: '12px 16px' }}>{priBadge(iss.priority)}</td>
+                      <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                        <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: 'rgba(99,102,241,0.1)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }} onClick={(e) => { e.stopPropagation(); setActiveTab('cat_' + iss.category); }}>
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         );
       };
 
-      return (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
-              <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />External GBP Audit
-            </h2>
-            <div style={{ marginLeft: 'auto' }}>
-              <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
-                <i className="fas fa-robot" style={{ marginRight: 8 }} /> {loading ? 'Agent Researching...' : 'Run External Audit'}
-              </button>
+      const renderCategoryTab = (category) => {
+        const catIssues = parsed.issues.filter(i => i.category === category);
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{category}</h3>
+              <span style={{ fontSize: 13, color: 'var(--text3)' }}>{catIssues.length} issue{catIssues.length !== 1 ? 's' : ''}</span>
+            </div>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg)' }}>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', borderBottom: '2px solid var(--border)', width: '25%' }}>Issue</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', borderBottom: '2px solid var(--border)', width: '30%' }}>Description</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', borderBottom: '2px solid var(--border)', width: '10%' }}>Priority</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', borderBottom: '2px solid var(--border)', width: '25%' }}>Fix</th>
+                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', borderBottom: '2px solid var(--border)', width: '10%' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {catIssues.map((iss, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '14px 16px', fontSize: 14, fontWeight: 600, color: 'var(--text1)', verticalAlign: 'top' }}>{iss.issue}</td>
+                      <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, verticalAlign: 'top' }}>{iss.description}</td>
+                      <td style={{ padding: '14px 16px', textAlign: 'center', verticalAlign: 'top' }}>{priBadge(iss.priority)}</td>
+                      <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text1)', lineHeight: 1.6, verticalAlign: 'top' }}>
+                        <div style={{ background: 'rgba(34,197,94,0.06)', borderLeft: '2px solid #22c55e', padding: '8px 12px', borderRadius: '0 6px 6px 0' }}>{iss.fix}</div>
+                      </td>
+                      <td style={{ padding: '14px 16px', textAlign: 'center', verticalAlign: 'top' }}>
+                        <button className="btn" style={{ fontSize: 12, padding: '6px 14px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
+        );
+      };
 
-          {loading && (
-            <div className="audit-loading-overlay">
-              <span className="spinner-large"></span>
-              <div className="audit-loading-text">External GBP Audit</div>
-              <div className="audit-loading-sub">Managed agent is researching your business across the web. This takes 1-3 minutes.</div>
-            </div>
-          )}
-          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
+      const renderSectionTab = (secIdx) => {
+        const sec = parsed.sections[secIdx];
+        if (!sec) return null;
+        return (
+          <div>
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)', marginBottom: 20 }}>{sec.title}</h3>
+            {sec.lines.map((line, li) => {
+              const clean = line.replace(/\*\*/g, '');
+              if (/^(Key Takeaway|Score Rationale|Health Score)/i.test(clean)) {
+                return <div key={li} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', lineHeight: 1.7, marginBottom: 10, padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>;
+              }
+              return <div key={li} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4 }}>{clean}</div>;
+            })}
+            {sec.tables.map((table, ti) => {
+              if (table.length < 2) return null;
+              const headers = table[0];
+              const rows = table.slice(1);
+              return (
+                <div key={ti} style={{ marginTop: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)' }}>
+                        {headers.map((hdr, hi) => (
+                          <th key={hi} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>{hdr}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, ri) => (
+                        <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
+                          {row.map((cell, ci) => (
+                            <td key={ci} style={{ padding: '12px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{cell}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+        );
+      };
 
-          {report && !loading && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '24px 28px' }}>
-              {renderReport(report)}
-            </div>
-          )}
+      // Count issues per category for badges
+      const catCounts = {};
+      parsed.issues.forEach(i => { catCounts[i.category] = (catCounts[i.category] || 0) + 1; });
 
-          {!report && !loading && (
-            <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 60, fontSize: 16, background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
-              <i className="fas fa-robot" style={{ fontSize: 40, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              No external audit yet. Click "Run External Audit" to have the managed agent research your business across the web.
+      // Count high-priority per category
+      const catHighCounts = {};
+      parsed.issues.forEach(i => { if (i.priority === 'high') catHighCounts[i.category] = (catHighCounts[i.category] || 0) + 1; });
+
+      return (
+        <div style={{ display: 'flex', gap: 0, minHeight: 500 }}>
+          {/* Left Tabs */}
+          <div style={{ width: 220, minWidth: 220, borderRight: '1px solid var(--border)', background: 'var(--bg)', borderRadius: '12px 0 0 12px', overflow: 'hidden' }}>
+            <div style={{ padding: '16px 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Categories</span>
+              <button className="btn" onClick={runAudit} style={{ fontSize: 10, padding: '3px 8px', background: 'rgba(99,102,241,0.1)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 4 }}>
+                <i className="fas fa-refresh" style={{ marginRight: 4 }} />Re-run
+              </button>
             </div>
-          )}
+            {tabs.map(tab => {
+              const isActive = activeTab === tab.key;
+              const isCategory = tab.key.startsWith('cat_');
+              const catName = isCategory ? tab.key.replace('cat_', '') : '';
+              const count = catCounts[catName] || 0;
+              const highCount = catHighCounts[catName] || 0;
+              return (
+                <div key={tab.key} onClick={() => setActiveTab(tab.key)}
+                  style={{
+                    padding: '10px 16px', cursor: 'pointer', fontSize: 13, fontWeight: isActive ? 700 : 500,
+                    color: isActive ? 'var(--accent)' : 'var(--text2)',
+                    background: isActive ? 'var(--card)' : 'transparent',
+                    borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
+                    display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.15s',
+                  }}>
+                  <i className={`fas ${tab.icon}`} style={{ fontSize: 12, width: 16, textAlign: 'center', opacity: 0.7 }} />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tab.label}</span>
+                  {isCategory && count > 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: highCount > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)', color: highCount > 0 ? '#ef4444' : '#f59e0b' }}>{count}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Right Content */}
+          <div style={{ flex: 1, padding: '20px 24px', overflow: 'auto' }}>
+            {activeTab === 'overview' && renderOverview()}
+            {activeTab.startsWith('cat_') && renderCategoryTab(activeTab.replace('cat_', ''))}
+            {activeTab.startsWith('sec_') && renderSectionTab(parseInt(activeTab.replace('sec_', '')))}
+          </div>
         </div>
       );
     }
