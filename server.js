@@ -2774,7 +2774,7 @@ Return ONLY the JSON object. No markdown, no commentary outside the JSON.`;
         model: 'claude-sonnet-4-6',
         max_tokens: 16000,
         system: agentSystemPrompt,
-        tools: [{ type: 'web_search_20250305' }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }],
         messages
       });
 
