@@ -2712,7 +2712,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
       method: 'POST',
       headers: agentHeaders,
-      body: JSON.stringify({ type: 'user', message: userPrompt }),
+      body: JSON.stringify({ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }),
     });
     if (!msgResp.ok) {
       const errBody = await msgResp.text();
