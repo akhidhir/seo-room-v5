@@ -1412,47 +1412,74 @@
               }
               const itemName = (row[0] || '').replace(/\*\*/g, '');
               const allText = row.join(' ').toLowerCase();
-              // Directory table — not listed = register
-              if (/not listed|not found/i.test(allText)) return 'Register business on ' + itemName;
-              if (/no.*profile|no.*listing|missing/i.test(allText)) return 'Create listing on ' + itemName;
-              if (/partial/i.test(allText)) return 'Complete listing on ' + itemName + ' — update NAP and add reviews';
-              if (/unverif/i.test(allText)) return 'Verify listing on ' + itemName;
-              // Competitor gap — significant/moderate gap
-              if (/significant/i.test(allText)) return 'Close critical gap: ' + itemName;
-              if (/moderate/i.test(allText)) return 'Improve: ' + itemName;
-              // Score table — low scores
-              const scoreCol = headers.findIndex(h => /score/i.test(h));
+              const clean = (s) => (s || '').replace(/\*\*/g, '').trim();
+              const notes = notesColIdx !== -1 ? clean(row[notesColIdx]) : '';
+              // Find your value column (usually col 1) and competitor columns
+              const yourCol = headers.findIndex(h => /houseworks|your|business|gbp value/i.test(h));
+              const yourVal = yourCol !== -1 ? clean(row[yourCol]) : clean(row[1] || '');
+
+              // NAP/Alignment tables — partial/mismatch: use notes for specifics
+              const matchCol = headers.findIndex(h => /match|status|alignment/i.test(h));
+              if (matchCol !== -1 && /partial|mismatch/i.test(clean(row[matchCol]))) {
+                if (notes) return 'Fix: ' + notes;
+                const gbpVal = clean(row[1] || '');
+                const webVal = clean(row[2] || '');
+                if (gbpVal && webVal) return 'Standardize ' + itemName + ': GBP says "' + gbpVal.substring(0, 40) + '" vs website "' + webVal.substring(0, 40) + '"';
+                return 'Fix ' + itemName + ' inconsistency';
+              }
+
+              // Directory table — not listed = register with specific context
+              if (/not listed|not found/i.test(allText)) {
+                return 'Register on ' + itemName + (notes ? ': ' + notes.substring(0, 80) : ' — create business profile with correct NAP');
+              }
+              if (/no.*profile|no.*listing|missing/i.test(allText)) return 'Create listing on ' + itemName + (notes ? ': ' + notes.substring(0, 80) : '');
+              if (/partial/i.test(allText) && /directory|listed/i.test(headers.join(' '))) {
+                return 'Update ' + itemName + ' listing — ' + (notes || 'verify NAP accuracy and add missing info');
+              }
+              if (/unverif/i.test(allText)) return 'Verify ' + itemName + ' listing — claim and confirm business details';
+
+              // Competitor gap — use YOUR value vs competitors to explain what to do
+              if (sevColIdx !== -1 && /significant|moderate/i.test(clean(row[sevColIdx]))) {
+                const gap = clean(row[sevColIdx]);
+                // Use your value to show the gap
+                if (yourVal) return itemName + ': currently "' + yourVal.substring(0, 50) + '" — match competitors to close ' + gap.toLowerCase() + ' gap';
+                return 'Close ' + gap.toLowerCase() + ' gap in ' + itemName;
+              }
+
+              // Suburb coverage — explain what "Partial" means using SOURCE column
+              const sourceCol = headers.findIndex(h => /source/i.test(h));
+              const coverageCol = headers.findIndex(h => /coverage|strength/i.test(h));
+              if (coverageCol !== -1 && /partial/i.test(clean(row[coverageCol]))) {
+                const source = sourceCol !== -1 ? clean(row[sourceCol]) : '';
+                if (/website/i.test(source) && !/review|gbp/i.test(source)) return 'Add ' + itemName + ' to GBP service areas — currently only on website';
+                if (/review/i.test(source) && !/website/i.test(source)) return 'Create landing page for ' + itemName + ' — only mentioned in reviews';
+                return 'Strengthen ' + itemName + ' coverage — add to both GBP service areas and website';
+              }
+
+              // Score table — use actual score vs max
+              const scoreCol = headers.findIndex(h => /^score$/i.test(h));
               const maxCol = headers.findIndex(h => /max/i.test(h));
               if (scoreCol !== -1 && maxCol !== -1) {
                 const score = parseInt(row[scoreCol]);
                 const max = parseInt(row[maxCol]);
                 if (!isNaN(score) && !isNaN(max) && score < max * 0.7) {
-                  const notes = notesColIdx !== -1 ? row[notesColIdx] || '' : '';
-                  return 'Improve ' + itemName + (notes ? ': ' + notes.replace(/\*\*/g, '').substring(0, 100) : '');
+                  return itemName + ' (' + score + '/' + max + '): ' + (notes || 'needs improvement');
                 }
               }
-              // Coverage — partial/weak
-              if (/weak|poor|low/i.test(allText) && !(/\bminimal\b/i.test(allText) && sevColIdx !== -1)) return 'Strengthen ' + itemName;
-              // Website alignment — fail/needs improvement
-              if (/fail/i.test(allText)) {
-                const notes = notesColIdx !== -1 ? row[notesColIdx] || '' : '';
-                return 'Fix: ' + itemName + (notes ? ' — ' + notes.replace(/\*\*/g, '').substring(0, 100) : '');
-              }
-              if (/needs improvement/i.test(allText)) {
-                const notes = notesColIdx !== -1 ? row[notesColIdx] || '' : '';
-                return 'Improve: ' + itemName + (notes ? ' — ' + notes.replace(/\*\*/g, '').substring(0, 100) : '');
-              }
-              // Services alignment — website only / gbp only / unclear
-              if (/website only/i.test(allText)) return 'Add ' + itemName + ' to GBP service categories';
-              if (/gbp only/i.test(allText)) return 'Add ' + itemName + ' page to website or verify GBP listing';
-              if (/unclear/i.test(allText)) return 'Clarify ' + itemName + ' — verify on both GBP and website';
-              // Generic issue from notes
-              if (notesColIdx !== -1 && row[notesColIdx] && row[notesColIdx].replace(/\*\*/g, '').length > 10) {
-                return row[notesColIdx].replace(/\*\*/g, '').substring(0, 120);
-              }
-              // Fallback — use all non-header text from the row
-              const desc = row.slice(1).join('; ').replace(/\*\*/g, '').substring(0, 120);
-              return desc || 'Review and fix: ' + itemName;
+
+              // Website audit — fail/needs improvement with notes
+              if (/fail/i.test(allText)) return 'Fix ' + itemName + (notes ? ': ' + notes.substring(0, 100) : '');
+              if (/needs improvement/i.test(allText)) return 'Improve ' + itemName + (notes ? ': ' + notes.substring(0, 100) : '');
+
+              // Services alignment — website only / gbp only
+              if (/website only/i.test(allText)) return 'Add "' + itemName + '" to GBP service menu — already on website but missing from GBP';
+              if (/gbp only/i.test(allText)) return 'Create ' + itemName + ' page on website — listed on GBP but no dedicated page';
+              if (/unclear/i.test(allText)) return 'Clarify ' + itemName + ' — verify service is listed on both GBP and website consistently';
+
+              // Fallback — use notes or row data
+              if (notes && notes.length > 10) return notes.substring(0, 120);
+              const desc = row.slice(1).map(c => clean(c)).filter(c => c.length > 3).join('; ').substring(0, 120);
+              return desc || 'Review: ' + itemName;
             };
 
             // Check if row needs action (has issues)
@@ -1541,7 +1568,7 @@
                             const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
                             if (!needsAction) return <React.Fragment><td style={{ padding: '8px 10px' }}></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
                             if (isIgnored) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
-                            if (isAdded) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Added</span></td></React.Fragment>;
+                            if (isAdded) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo"><i className="fas fa-check" style={{ marginRight: 3 }} />Added <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3, opacity: 0.5 }} /></span></td></React.Fragment>;
                             const actionBrief = brief || ('Review and fix: ' + itemName);
                             return (
                               <React.Fragment>
