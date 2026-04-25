@@ -2913,7 +2913,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
     const location = project.location || '';
     const industry = project.industry || '';
 
-    const websiteAgentId = process.env.WEBSITE_AGENT_ID;
+    const websiteAgentId = process.env.WEBSITE_AGENT_ID || process.env.WEBSITE_AUDIT_AGENT;
     const envId = process.env.GBP_ENVIRONMENT_ID; // shared environment
 
     if (!anthropic || !websiteAgentId || !envId) {
@@ -3067,7 +3067,7 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const gscProperty = project.gsc_property || '';
 
-    const gscAgentId = process.env.GSC_AGENT_ID;
+    const gscAgentId = process.env.GSC_AGENT_ID || process.env.GSC_AUDIT_AGENT;
     const envId = process.env.GBP_ENVIRONMENT_ID; // shared environment
 
     if (!anthropic || !gscAgentId || !envId) {
