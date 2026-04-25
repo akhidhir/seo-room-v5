@@ -1439,26 +1439,45 @@
       const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
 
-      useEffect(() => { if (project) loadExisting(); }, [project?.id]);
+      useEffect(() => { if (project) checkStatus(); }, [project?.id]);
 
-      const loadExisting = async () => {
-        const data = await api(`/projects/${project.id}/audit-findings`);
-        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gbp'));
+      const checkStatus = async () => {
         try {
-          const auditData = await api(`/projects/${project.id}/audits`);
-          const gbpAudit = (auditData.audits || []).find(a => a.pillar === 'gbp' && a.status === 'completed');
-          if (gbpAudit?.audit_data?.profileSummary) setProfileSummary(gbpAudit.audit_data.profileSummary);
+          const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+          if (data.status === 'running') {
+            setLoading(true);
+            startPolling();
+          } else if (data.status === 'completed' && data.report) {
+            setReport(data.report);
+          } else if (data.status === 'failed' && data.error) {
+            setError(data.error);
+          }
         } catch (e) {}
       };
 
+      const startPolling = () => {
+        const pollInterval = setInterval(async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+            if (data.status === 'completed') {
+              clearInterval(pollInterval);
+              if (data.report) setReport(data.report);
+              setLoading(false);
+            } else if (data.status === 'failed') {
+              clearInterval(pollInterval);
+              setError(data.error || 'Audit failed');
+              setLoading(false);
+            }
+          } catch (e) { clearInterval(pollInterval); setLoading(false); }
+        }, 5000);
+      };
+
       const runAudit = async () => {
-        setLoading(true); setError('');
+        setLoading(true); setError(''); setReport('');
         try {
-          const data = await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
-          setFindings(data.findings || []);
-          if (data.profileSummary) setProfileSummary(data.profileSummary);
-        } catch (err) { setError(err.message); }
-        finally { setLoading(false); }
+          await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
+          startPolling();
+        } catch (err) { setError(err.message); setLoading(false); }
       };
 
       const updateStatus = async (id, status) => {
