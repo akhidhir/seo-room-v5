@@ -2671,14 +2671,15 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) {}
 
-    if (!anthropic) {
+    const gbpAgentId = process.env.GBP_AGENT_ID;
+    const gbpEnvId = process.env.GBP_ENVIRONMENT_ID;
+
+    if (!anthropic || !gbpAgentId || !gbpEnvId) {
       await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
-      return res.status(500).json({ error: 'Anthropic API not configured' });
+      return res.status(500).json({ error: 'GBP Agent not configured. Set GBP_AGENT_ID and GBP_ENVIRONMENT_ID.' });
     }
 
     console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
-
-    const agentSystemPrompt = `You are a local SEO specialist who audits Google Business Profiles using only visible, publicly available information. When given a business name, location, or profile details, audit the following areas: business info, categories, images, reviews, posts, NAP (Name/Address/Phone) consistency, services, and description. For each issue found, return: Issue (what's wrong), Explanation (why it matters for local SEO), Priority (High/Medium/Low), and Fix (specific actionable step). After listing all issues, provide a summary with: Total Issues found and Top Quick Wins (the 3-5 highest-impact fixes the business can implement immediately). Be concise, specific, and actionable. If information for a section is not visible or unavailable, note it as unverifiable and flag it as a potential gap.`;
 
     const userPrompt = `Conduct a comprehensive external GBP audit for this business. Search the web to find all publicly available information — their Google Business Profile, website, directory listings, reviews on third-party platforms, social media, and any other online presence.
 
@@ -2761,58 +2762,42 @@ SECTIONS to audit (use these exact section titles):
 
 Return ONLY the JSON object. No markdown, no commentary outside the JSON.`;
 
-    // Run the managed agent with web search capability
-    let messages = [{ role: 'user', content: userPrompt }];
+    // Run the managed agent via Sessions API
+    console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
+
+    // Create a session
+    const session = await anthropic.beta.sessions.create({
+      agent_id: gbpAgentId,
+      environment_id: gbpEnvId,
+    });
+    console.log(`[gbp-external] Session created: ${session.id}`);
+
+    // Send the user message
+    await anthropic.beta.sessions.events.create(session.id, {
+      type: 'user',
+      message: userPrompt,
+    });
+    console.log(`[gbp-external] Message sent, streaming response...`);
+
+    // Stream events until session is idle
     let finalText = '';
     let totalTokens = 0;
-    const maxTurns = 25; // Safety limit for agent loop
+    const stream = await anthropic.beta.sessions.events.stream(session.id);
 
-    for (let turn = 0; turn < maxTurns; turn++) {
-      console.log(`[gbp-external] Agent turn ${turn + 1}...`);
-
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 16000,
-        system: agentSystemPrompt,
-        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }],
-        messages
-      });
-
-      totalTokens += (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
-
-      // Check if we have a final text response
-      const textBlocks = response.content.filter(b => b.type === 'text');
-      const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-
-      if (response.stop_reason === 'end_turn' || (textBlocks.length > 0 && toolUseBlocks.length === 0)) {
-        finalText = textBlocks.map(b => b.text).join('\n');
-        console.log(`[gbp-external] Agent finished after ${turn + 1} turns, ${totalTokens} tokens, ${finalText.length} chars`);
+    for await (const event of stream) {
+      if (event.type === 'agent.message') {
+        const textContent = (event.message?.content || []).filter(b => b.type === 'text');
+        finalText += textContent.map(b => b.text).join('\n');
+        totalTokens += (event.message?.usage?.input_tokens || 0) + (event.message?.usage?.output_tokens || 0);
+      } else if (event.type === 'agent.tool_use') {
+        console.log(`[gbp-external] Agent using tool: ${event.tool_use?.name || 'unknown'}`);
+      } else if (event.type === 'session.status_idle') {
+        console.log(`[gbp-external] Session idle — agent finished`);
         break;
       }
-
-      // Agent wants to use tools — add assistant response and continue
-      messages.push({ role: 'assistant', content: response.content });
-
-      // For server-side tools (web_search), we just need to send back empty tool results
-      // as the server handles execution. But if it's client-side, we'd handle here.
-      // With web_search_20250305, the API handles it server-side in most cases.
-      // If we get tool_use blocks back, it means we need to loop.
-      if (toolUseBlocks.length > 0 && response.stop_reason === 'tool_use') {
-        // Check if there are server_tool_use results already in the response
-        const serverResults = response.content.filter(b => b.type === 'web_search_tool_result');
-        if (serverResults.length > 0) {
-          // Server already handled the search, just continue
-          continue;
-        }
-        // Otherwise, acknowledge the tool use so the model continues
-        const toolResults = toolUseBlocks.map(b => ({
-          type: 'tool_result',
-          tool_use_id: b.id,
-          content: 'Search completed.'
-        }));
-        messages.push({ role: 'user', content: toolResults });
-      }
     }
+
+    console.log(`[gbp-external] Agent finished: ${totalTokens} tokens, ${finalText.length} chars`);
 
     // Parse the JSON response
     let findings = [];
