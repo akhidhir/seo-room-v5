@@ -2699,7 +2699,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const sessionResp = await fetch(`${apiBase}/sessions`, {
       method: 'POST',
       headers: agentHeaders,
-      body: JSON.stringify({ agent_id: gbpAgentId, environment_id: gbpEnvId }),
+      body: JSON.stringify({ agent: gbpAgentId, environment_id: gbpEnvId }),
     });
     if (!sessionResp.ok) {
       const errBody = await sessionResp.text();
