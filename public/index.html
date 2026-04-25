@@ -1333,7 +1333,7 @@
           const t = line.trim();
           if (!t) return false;
           if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|ImportError|SyntaxError|NameError|TypeError|ValueError|KeyError|IndexError|AttributeError)/i.test(t)) return true;
-          if (/^(I'll |Let me |Now let me |Perfect\.|Great\.|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created)/i.test(t)) return true;
+          if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:|# Houseworks|Houseworks Plumbing & Gas)/i.test(t)) return true;
           if (/^(data = |import |from |print\(|with open|json\.|os\.|sys\.|result|output|```)/i.test(t)) return true;
           if (/^\s*(def |class |if |for |while |try:|except|finally)/.test(t)) return true;
           return false;
@@ -1678,38 +1678,85 @@
             continue;
           }
 
-          // Skip agent chatter/tracebacks
-          if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|I'll |Let me |Now let me |Perfect\.|Great\.|OK,|I need to|First,|data = |import |print\(|```|File created)/i.test(trimmed)) continue;
+          // Skip agent chatter/tracebacks/processing noise
+          if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|I need to|First,|data = |import |print\(|```|File created|Here's |I've |I can see|I found|Looking at|I notice|I will|Now I|result|output =)/i.test(trimmed)) continue;
+          // Skip file metadata lines
+          if (/^(#{1,3}\s*(Files Included|\d+\.\s*\w+_\w+.*\.md|GSC_Audit|EXECUTIVE_SUMMARY|TACTICAL_PLAYBOOK|Houseworks.*Report Package))/i.test(trimmed)) continue;
+          if (/^(For:|Contents:|Length:)/i.test(trimmed)) continue;
 
           const clean = trimmed.replace(/\*\*/g, '');
 
           // Highlighted callout lines
-          if (/^(Key Takeaway|Score Rationale|Health Score|Strategic Rationale|Recommended Actions|Assessment|Impact|Priority|Critical|Warning)/i.test(clean)) {
-            elements.push(<div key={i} style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.7, marginBottom: 8, padding: '12px 16px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>);
+          if (/^(Key Takeaway|Score Rationale|Health Score|Strategic Rationale|Recommended Actions|Assessment|Impact|Priority|Critical Issue|Warning|Key Finding|Revenue Opportunity|Estimated Revenue)/i.test(clean)) {
+            const isRed = /critical|warning/i.test(clean);
+            const isGreen = /revenue|opportunity/i.test(clean);
+            const borderColor = isRed ? '#ef4444' : isGreen ? '#22c55e' : '#818cf8';
+            const bgColor = isRed ? 'rgba(239,68,68,0.06)' : isGreen ? 'rgba(34,197,94,0.06)' : 'rgba(99,102,241,0.06)';
+            elements.push(<div key={i} style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.7, marginBottom: 10, padding: '12px 16px', background: bgColor, borderLeft: '3px solid ' + borderColor, borderRadius: '0 8px 8px 0' }}>{clean}</div>);
             continue;
           }
 
-          // Key: Value metric lines — render as styled cards
-          const kvMatch = clean.match(/^([A-Z][A-Za-z\s\-\/&]+?):\s*(.+)$/);
-          if (kvMatch && kvMatch[1].length < 40 && kvMatch[1].length > 2) {
-            elements.push(
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', marginBottom: 4, background: 'rgba(255,255,255,0.02)', borderRadius: 6, borderLeft: '2px solid var(--border)' }}>
-                <span style={{ fontSize: 14, color: 'var(--text2)', fontWeight: 500 }}>{kvMatch[1]}</span>
-                <span style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600 }}>{kvMatch[2]}</span>
-              </div>
-            );
-            continue;
+          // Key: Value metric lines — collect consecutive ones for grid rendering
+          const kvMatch = clean.match(/^([A-Z][A-Za-z\s\-\/&()]+?):\s*(.+)$/);
+          if (kvMatch && kvMatch[1].length < 45 && kvMatch[1].length > 2 && !/^(For|Contents|Length|File|Note|Warning|http)/i.test(kvMatch[1])) {
+            // Look ahead to collect consecutive KV lines
+            const kvGroup = [{ key: kvMatch[1], value: kvMatch[2], idx: i }];
+            let j = i + 1;
+            while (j < lines.length) {
+              const nextTrimmed = lines[j].trim();
+              if (!nextTrimmed) { j++; continue; }
+              const nextKv = nextTrimmed.replace(/\*\*/g, '').match(/^([A-Z][A-Za-z\s\-\/&()]+?):\s*(.+)$/);
+              if (nextKv && nextKv[1].length < 45 && nextKv[1].length > 2 && !/^(For|Contents|Length|File|Note|Warning|http)/i.test(nextKv[1])) {
+                kvGroup.push({ key: nextKv[1], value: nextKv[2], idx: j });
+                j++;
+              } else break;
+            }
+
+            if (kvGroup.length >= 3) {
+              // Render as grid cards
+              const cols = kvGroup.length <= 3 ? kvGroup.length : kvGroup.length <= 6 ? 3 : 4;
+              const getColor = (val) => {
+                const v = val.toLowerCase();
+                if (/0[.\s]|^0$|^no |^none|^0%/.test(v)) return '#ef4444';
+                if (/%/.test(v)) {
+                  const pct = parseFloat(v);
+                  if (!isNaN(pct)) return pct < 1 ? '#ef4444' : pct < 5 ? '#f59e0b' : '#22c55e';
+                }
+                return '#818cf8';
+              };
+              elements.push(
+                <div key={`kvg${i}`} style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12, marginBottom: 16 }}>
+                  {kvGroup.map((kv, ki) => (
+                    <div key={ki} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 14px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: getColor(kv.value), marginBottom: 4 }}>{kv.value}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 600 }}>{kv.key}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+              i = j - 1; // skip processed lines
+              continue;
+            } else {
+              // Single/pair KV — render as styled row
+              elements.push(
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', marginBottom: 6, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 15, color: 'var(--text2)', fontWeight: 500 }}>{kvMatch[1]}</span>
+                  <span style={{ fontSize: 17, color: 'var(--text)', fontWeight: 700 }}>{kvMatch[2]}</span>
+                </div>
+              );
+              continue;
+            }
           }
 
           // URL lines — render as styled links
           if (/^https?:\/\//.test(clean)) {
             const urlParts = clean.match(/^(https?:\/\/\S+?)(?::?\s*(.+))?$/);
             if (urlParts) {
-              const shortUrl = urlParts[1].replace(/^https?:\/\/[^/]+/, '');
+              const shortUrl = urlParts[1].replace(/^https?:\/\/[^/]+/, '') || '/';
               elements.push(
-                <div key={i} style={{ padding: '6px 14px', marginBottom: 4, background: 'rgba(255,255,255,0.02)', borderRadius: 6, fontSize: 14 }}>
-                  <span style={{ color: '#818cf8', fontFamily: 'monospace', fontSize: 13 }}>{shortUrl || urlParts[1]}</span>
-                  {urlParts[2] && <span style={{ color: 'var(--text2)', marginLeft: 8 }}>{urlParts[2]}</span>}
+                <div key={i} style={{ padding: '8px 14px', marginBottom: 4, background: 'rgba(99,102,241,0.04)', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14 }}>
+                  <span style={{ color: '#818cf8', fontFamily: 'monospace', fontSize: 13 }}>{shortUrl}</span>
+                  {urlParts[2] && <span style={{ color: 'var(--text2)', marginLeft: 10 }}>{urlParts[2]}</span>}
                 </div>
               );
               continue;
@@ -1717,18 +1764,18 @@
           }
 
           // Bullet points
-          if (/^[\-\*]\s/.test(clean)) {
-            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4, paddingLeft: 16 }}>{'• ' + clean.replace(/^[\-\*]\s*/, '')}</div>);
+          if (/^[\-\*•]\s/.test(clean)) {
+            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, marginBottom: 4, paddingLeft: 16 }}>{'• ' + clean.replace(/^[\-\*•]\s*/, '')}</div>);
             continue;
           }
 
           // Numbered items
           if (/^\d+[\.\)]\s/.test(clean)) {
-            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4, paddingLeft: 16 }}>{clean}</div>);
+            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, marginBottom: 6, paddingLeft: 16 }}>{clean}</div>);
             continue;
           }
 
-          elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, marginBottom: 4 }}>{clean}</div>);
+          elements.push(<div key={i} style={{ fontSize: 15, color: 'var(--text2)', lineHeight: 1.8, marginBottom: 4 }}>{clean}</div>);
         }
         if (inTable) flushTable();
         return elements;
@@ -1863,7 +1910,7 @@
     }
 
     function GSCAgentAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i], mergeDirectories: false });
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i], mergeDirectories: false });
     }
 
     // Helper: get agent audit section names for sidebar (generic)
