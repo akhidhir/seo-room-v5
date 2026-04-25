@@ -2683,39 +2683,92 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}`;
 
-    // Run the managed agent via Sessions API
+    // Run the managed agent via Sessions API (raw fetch — SDK may not have beta.sessions)
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiBase = 'https://api.anthropic.com/v1';
+    const agentHeaders = {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'managed-agents-2026-04-01',
+    };
+
     console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
 
-    // Create a session
-    const session = await anthropic.beta.sessions.create({
-      agent_id: gbpAgentId,
-      environment_id: gbpEnvId,
+    // 1. Create session
+    const sessionResp = await fetch(`${apiBase}/sessions`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ agent_id: gbpAgentId, environment_id: gbpEnvId }),
     });
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
+    }
+    const session = await sessionResp.json();
     console.log(`[gbp-external] Session created: ${session.id}`);
 
-    // Send the user message
-    await anthropic.beta.sessions.events.create(session.id, {
-      type: 'user',
-      message: userPrompt,
+    // 2. Send user message
+    const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ type: 'user', message: userPrompt }),
     });
-    console.log(`[gbp-external] Message sent, streaming response...`);
+    if (!msgResp.ok) {
+      const errBody = await msgResp.text();
+      throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
+    }
+    console.log(`[gbp-external] Message sent, polling for response...`);
 
-    // Stream events until session is idle
+    // 3. Poll for events until session is idle (SSE streaming via fetch)
     let finalText = '';
     let totalTokens = 0;
-    const stream = await anthropic.beta.sessions.events.stream(session.id);
+    const maxPollTime = 5 * 60 * 1000; // 5 min timeout
+    const pollStart = Date.now();
 
-    for await (const event of stream) {
-      if (event.type === 'agent.message') {
-        const textContent = (event.message?.content || []).filter(b => b.type === 'text');
-        finalText += textContent.map(b => b.text).join('\n');
-        totalTokens += (event.message?.usage?.input_tokens || 0) + (event.message?.usage?.output_tokens || 0);
-      } else if (event.type === 'agent.tool_use') {
-        console.log(`[gbp-external] Agent using tool: ${event.tool_use?.name || 'unknown'}`);
-      } else if (event.type === 'session.status_idle') {
-        console.log(`[gbp-external] Session idle — agent finished`);
+    while (Date.now() - pollStart < maxPollTime) {
+      const eventsResp = await fetch(`${apiBase}/sessions/${session.id}/events?stream=false`, {
+        headers: agentHeaders,
+      });
+      if (!eventsResp.ok) {
+        const errBody = await eventsResp.text();
+        console.error(`[gbp-external] Events fetch failed: ${errBody}`);
         break;
       }
+      const eventsData = await eventsResp.json();
+      const events = eventsData.events || eventsData.data || (Array.isArray(eventsData) ? eventsData : []);
+
+      let sessionDone = false;
+      for (const event of events) {
+        if (event.type === 'agent.message' || event.type === 'message') {
+          const content = event.message?.content || event.content || [];
+          const textParts = (Array.isArray(content) ? content : []).filter(b => b.type === 'text');
+          const newText = textParts.map(b => b.text).join('\n');
+          if (newText && !finalText.includes(newText)) finalText += newText;
+          totalTokens += (event.message?.usage?.input_tokens || 0) + (event.message?.usage?.output_tokens || 0);
+        } else if (event.type === 'agent.tool_use') {
+          console.log(`[gbp-external] Agent using tool: ${event.tool_use?.name || event.name || 'unknown'}`);
+        }
+        if (event.type === 'session.status_idle' || event.type === 'session.completed' || event.type === 'done') {
+          sessionDone = true;
+        }
+      }
+
+      if (sessionDone || finalText.length > 0) {
+        // Check session status
+        const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { headers: agentHeaders });
+        if (statusResp.ok) {
+          const statusData = await statusResp.json();
+          if (statusData.status === 'idle' || statusData.status === 'completed') {
+            console.log(`[gbp-external] Session status: ${statusData.status}`);
+            break;
+          }
+        }
+        if (sessionDone) break;
+      }
+
+      // Wait before next poll
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     console.log(`[gbp-external] Agent finished: ${totalTokens} tokens, ${finalText.length} chars`);
