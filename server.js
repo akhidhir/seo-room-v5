@@ -2449,17 +2449,30 @@ The "profile_summary" should contain:
   "pillar_scores": { "proximity": 1-10, "relevance": 1-10, "prominence": 1-10 }
 }
 
-Each finding MUST have: gbp_pillar, category, title, description, recommendation, severity, current_value, recommended_value.
+CRITICAL: Each finding object MUST include ALL these fields:
+{
+  "gbp_pillar": "Proximity" or "Relevance" or "Prominence",
+  "category": "subcategory name",
+  "title": "action to take",
+  "description": "why this matters",
+  "recommendation": "one specific action",
+  "severity": "Critical" or "High" or "Medium" or "Low",
+  "current_value": "what it is now",
+  "recommended_value": "what it should be"
+}
 
-"gbp_pillar" MUST be one of: "Proximity", "Relevance", "Prominence"
-- PROXIMITY = service areas, address accuracy, geo-targeting, maps ranking position, distance-based issues
-- RELEVANCE = categories, description keywords, services listed, posts, attributes, business info completeness
-- PROMINENCE = reviews (count, rating, responses), photos, citations, social profiles, third-party reviews, brand signals
+EXAMPLE finding:
+{"gbp_pillar": "Prominence", "category": "Reviews", "title": "Respond to all Google reviews", "description": "With 105 reviews, responding shows engagement.", "recommendation": "Set up a weekly review response schedule.", "severity": "High", "current_value": "Unknown response rate", "recommended_value": "100% response rate"}
 
-"category" is a subcategory within the pillar. Must be one of:
-  Proximity: "Service Areas", "Maps Ranking", "Geo-Targeting"
-  Relevance: "Categories & Services", "Profile Completeness", "Posts & Updates", "Description"
-  Prominence: "Reviews", "Photos", "Citations", "Social Profiles"
+"gbp_pillar" assigns each finding to one of the THREE PILLARS — this field is REQUIRED:
+- "Proximity" = service areas, address, geo-targeting, maps ranking by suburb, distance issues
+- "Relevance" = categories, description keywords, services listed, posts, attributes, hours, business info
+- "Prominence" = reviews, photos, citations, social profiles, third-party reviews, brand signals
+
+"category" is the subcategory:
+  For Proximity: "Service Areas", "Maps Ranking", "Geo-Targeting"
+  For Relevance: "Categories & Services", "Profile Completeness", "Posts & Updates", "Description"
+  For Prominence: "Reviews", "Photos", "Citations", "Social Profiles"
 
 ORGANIZE findings by the THREE PILLARS:
 
@@ -2528,9 +2541,43 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
           }
           if (!parsed) throw new Error('Could not parse AI response as JSON');
           profileSummary = parsed.profile_summary || null;
+          // Smart fallback: infer pillar from category when AI doesn't include gbp_pillar
+          const categoryToPillar = {
+            'Reviews': 'Prominence', 'Review Management': 'Prominence', 'Review Response': 'Prominence',
+            'Photos': 'Prominence', 'Photo Optimization': 'Prominence',
+            'Citations': 'Prominence', 'Citation Building': 'Prominence', 'Directories': 'Prominence',
+            'Social Profiles': 'Prominence', 'Social Media': 'Prominence',
+            'Backlinks': 'Prominence', 'Online Presence': 'Prominence', 'Brand Mentions': 'Prominence',
+            'Third-Party Reviews': 'Prominence', 'Reputation': 'Prominence',
+            'Service Areas': 'Proximity', 'Service Area': 'Proximity',
+            'Maps Ranking': 'Proximity', 'Maps': 'Proximity', 'Map Pack': 'Proximity',
+            'Geo-Targeting': 'Proximity', 'Location': 'Proximity', 'Address': 'Proximity',
+            'NAP Consistency': 'Proximity', 'NAP': 'Proximity', 'Local Landing Pages': 'Proximity',
+            'Categories & Services': 'Relevance', 'Categories': 'Relevance', 'Services': 'Relevance',
+            'Profile Completeness': 'Relevance', 'Business Information': 'Relevance',
+            'Posts & Updates': 'Relevance', 'Posts': 'Relevance', 'Google Posts': 'Relevance',
+            'Description': 'Relevance', 'Business Description': 'Relevance',
+            'Website': 'Relevance', 'Website Optimization': 'Relevance',
+            'Keywords': 'Relevance', 'Keyword Optimization': 'Relevance',
+            'Q&A': 'Relevance', 'Products': 'Relevance', 'Attributes': 'Relevance',
+            'Hours': 'Relevance', 'Business Hours': 'Relevance',
+          };
+          function inferPillar(finding) {
+            if (['Proximity', 'Relevance', 'Prominence'].includes(finding.gbp_pillar)) return finding.gbp_pillar;
+            const cat = (finding.category || '').trim();
+            if (categoryToPillar[cat]) return categoryToPillar[cat];
+            const catLower = cat.toLowerCase();
+            for (const [key, pillar] of Object.entries(categoryToPillar)) {
+              if (catLower.includes(key.toLowerCase()) || key.toLowerCase().includes(catLower)) return pillar;
+            }
+            const text = `${finding.title || ''} ${finding.description || ''}`.toLowerCase();
+            if (/\b(review|rating|photo|citation|director|backlink|reputation|social|third.party)\b/.test(text)) return 'Prominence';
+            if (/\b(service area|proximity|geo|location|address|nap |local pack|map)\b/.test(text)) return 'Proximity';
+            return 'Relevance';
+          }
           if (parsed.findings && Array.isArray(parsed.findings)) {
             findings = parsed.findings.map(f => {
-              const gbpPillar = ['Proximity', 'Relevance', 'Prominence'].includes(f.gbp_pillar) ? f.gbp_pillar : 'Relevance';
+              const gbpPillar = inferPillar(f);
               return {
                 pillar: 'gbp', category: `${gbpPillar} > ${f.category || 'General'}`,
                 gbp_pillar: gbpPillar,
