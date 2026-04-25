@@ -1369,11 +1369,23 @@
         return filtered;
       };
 
-      // Render a section's content — tables rendered as HTML tables, text as-is
-      const renderSectionContent = (lines) => {
+      // Detect execution type from action text
+      const detectExecType = (text) => {
+        const t = text.toLowerCase();
+        if (/\b(gbp|google business|profile description|business description|categor|google posts?|q&a|owner.?seeded|service menu)\b/.test(t)) return { type: 'extension', label: 'Extension', icon: 'fas fa-puzzle-piece', color: '#8b5cf6' };
+        if (/\b(search console|gsc|api|pagespeed|indexing)\b/.test(t)) return { type: 'api', label: 'API', icon: 'fas fa-plug', color: '#3b82f6' };
+        if (/\b(schema|structured data|website|landing page|code|html|css|wordpress|elementor|refresh|implement|redesign)\b/.test(t)) return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
+        if (/\b(register|directory|listing|create.*account|sign.?up|claim|social media|facebook|instagram)\b/.test(t)) return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
+        return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
+      };
+
+      // Render a section's content — tables with optional inline action buttons
+      // actionMode: { onAdd, addedKeys, addingKey } — adds inline action buttons to table rows
+      const renderSectionContent = (lines, actionMode) => {
         const elements = [];
         let tableRows = [];
         let inTable = false;
+        let tableCounter = 0;
 
         const flushTable = () => {
           if (tableRows.length < 2) {
@@ -1383,6 +1395,14 @@
           } else {
             const headers = tableRows[0];
             const rows = tableRows.slice(1);
+            const tblIdx = tableCounter++;
+
+            // Detect action/fix column
+            const actionColIdx = headers.findIndex(h => /fix|action|recommend|resolution/i.test(h));
+            const sevColIdx = headers.findIndex(h => /priority|severity|gap|coverage/i.test(h));
+            const notesColIdx = headers.findIndex(h => /notes|explanation|details|status/i.test(h));
+            const hasActions = actionMode && actionColIdx !== -1;
+
             elements.push(
               <div key={`tbl${elements.length}`} style={{ marginBottom: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1391,24 +1411,91 @@
                       {headers.map((h, i) => (
                         <th key={i} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>{h}</th>
                       ))}
+                      {hasActions && (
+                        <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 120 }}>PLAN</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, ri) => (
-                      <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                        {row.map((cell, ci) => {
-                          // Color-code priority cells
-                          let cellStyle = { padding: '12px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 };
-                          const lower = cell.toLowerCase();
-                          if (lower.includes('high') || cell.includes('\u{1F534}')) cellStyle.color = '#ef4444';
-                          if (lower.includes('medium') || cell.includes('\u{1F7E0}')) cellStyle.color = '#f59e0b';
-                          if (lower.includes('low') || cell.includes('\u{1F7E1}') || cell.includes('\u{1F7E2}')) cellStyle.color = '#3b82f6';
-                          if (cell.includes('\u2705') || lower.includes('match')) cellStyle.color = '#22c55e';
-                          if (cell.includes('\u26A0') || lower.includes('partial')) cellStyle.color = '#f59e0b';
-                          return <td key={ci} style={cellStyle}>{cell}</td>;
-                        })}
-                      </tr>
-                    ))}
+                    {rows.map((row, ri) => {
+                      const actionKey = `t${tblIdx}_r${ri}`;
+                      const actionText = actionColIdx !== -1 ? (row[actionColIdx] || '').replace(/\*\*/g, '') : '';
+                      const itemName = (row[0] || '').replace(/\*\*/g, '');
+                      const execType = actionText ? detectExecType(actionText) : null;
+                      const isAdded = actionMode && actionMode.addedKeys[actionKey];
+                      const isAdding = actionMode && actionMode.addingKey === actionKey;
+
+                      // Determine severity from table data
+                      let severity = 'medium';
+                      if (sevColIdx !== -1) {
+                        const sv = (row[sevColIdx] || '').toLowerCase();
+                        if (/high|critical|significant/.test(sv)) severity = 'critical';
+                        else if (/medium|moderate/.test(sv)) severity = 'high';
+                        else if (/low|minimal/.test(sv)) severity = 'medium';
+                      }
+
+                      return (
+                        <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
+                          {row.map((cell, ci) => {
+                            let cellStyle = { padding: '12px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 };
+                            const lower = cell.toLowerCase();
+                            const cleanCell = cell.replace(/\*\*/g, '');
+                            if (/high|critical|significant/.test(lower) || cell.includes('\u{1F534}')) cellStyle.color = '#ef4444';
+                            else if (/medium|moderate/.test(lower) || cell.includes('\u{1F7E0}')) cellStyle.color = '#f59e0b';
+                            else if (/\blow\b|minimal/.test(lower) || cell.includes('\u{1F7E1}') || cell.includes('\u{1F7E2}')) cellStyle.color = '#3b82f6';
+                            if (cell.includes('\u2705') || /^yes$/i.test(lower) || /\bstrong\b/i.test(lower) || /\bmatch\b/i.test(lower)) cellStyle.color = '#22c55e';
+                            if (cell.includes('\u274C') || /^no$/i.test(lower) || /not listed|not found|missing/i.test(lower)) cellStyle.color = '#ef4444';
+                            if (cell.includes('\u26A0') || /\bpartial\b/i.test(lower) || /unverif/i.test(lower)) cellStyle.color = '#f59e0b';
+
+                            // Explain "Partial" inline with details from notes column
+                            if (/\bpartial\b/i.test(lower)) {
+                              const explanation = notesColIdx !== -1 && notesColIdx !== ci && row[notesColIdx]
+                                ? row[notesColIdx].replace(/\*\*/g, '') : '';
+                              return <td key={ci} style={cellStyle}>
+                                <span>{cleanCell}</span>
+                                {explanation && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, fontStyle: 'italic' }}>{explanation}</div>}
+                              </td>;
+                            }
+
+                            return <td key={ci} style={cellStyle}>{cleanCell}</td>;
+                          })}
+                          {hasActions && (
+                            <td style={{ padding: '8px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                              {actionText && actionText.length > 3 ? (
+                                isAdded ? (
+                                  <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600 }}>
+                                    <i className="fas fa-check" style={{ marginRight: 3 }} />Added
+                                  </span>
+                                ) : (
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                                    {execType && (
+                                      <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: execType.color + '20', color: execType.color, fontWeight: 700 }}>
+                                        <i className={execType.icon} style={{ fontSize: 8, marginRight: 2 }} />{execType.label}
+                                      </span>
+                                    )}
+                                    <button
+                                      className="btn btn-secondary"
+                                      onClick={() => actionMode.onAdd(actionKey, {
+                                        title: itemName,
+                                        description: actionText,
+                                        severity: severity,
+                                        execution_type: execType ? execType.type : 'manual'
+                                      })}
+                                      disabled={isAdding}
+                                      style={{ fontSize: 11, padding: '3px 8px' }}
+                                    >
+                                      {isAdding ? <i className="fas fa-spinner fa-spin" /> : <><i className="fas fa-plus" style={{ marginRight: 3 }} />Add</>}
+                                    </button>
+                                  </div>
+                                )
+                              ) : (
+                                <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1421,10 +1508,8 @@
           const line = lines[i];
           const trimmed = line.trim();
 
-          // Table separator — skip
           if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
 
-          // Table row
           if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
             const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
             if (cells.length >= 2) {
@@ -1434,26 +1519,28 @@
             }
           }
 
-          // Not a table row — flush pending table
           if (inTable) { flushTable(); inTable = false; }
 
-          // Horizontal rule
           if (trimmed === '---' || trimmed === '***') {
             elements.push(<hr key={`hr${i}`} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />);
             continue;
           }
 
-          // Empty line
           if (!trimmed) { elements.push(<div key={`e${i}`} style={{ height: 8 }} />); continue; }
 
-          // Bold/key takeaway lines
+          // Sub-headers (#### lines)
+          if (trimmed.startsWith('####')) {
+            const subTitle = trimmed.replace(/^#+\s*/, '').replace(/\*\*/g, '');
+            elements.push(<div key={`sh${i}`} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)', marginTop: 16, marginBottom: 8 }}>{subTitle}</div>);
+            continue;
+          }
+
           const clean = trimmed.replace(/\*\*/g, '');
-          if (/^(Key Takeaway|Score Rationale|Health Score)/i.test(clean)) {
+          if (/^(Key Takeaway|Score Rationale|Health Score|Strategic Rationale|Recommended Actions|Assessment)/i.test(clean)) {
             elements.push(<div key={i} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', lineHeight: 1.7, marginBottom: 8, padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>);
             continue;
           }
 
-          // Normal text
           elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 2 }}>{clean}</div>);
         }
         if (inTable) flushTable();
@@ -1497,186 +1584,19 @@
         );
       }
 
-      // Extract actionable items from section content
-      const extractActions = (sectionTitle, lines) => {
-        const actions = [];
-        const titleLower = sectionTitle.toLowerCase();
-
-        // Suburb Targeting — items marked Partial or Missing need action
-        if (titleLower.includes('suburb')) {
-          let inTable = false;
-          let headers = [];
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
-            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
-              if (!inTable) { headers = cells; inTable = true; continue; }
-              const lower = cells.join(' ').toLowerCase();
-              if (lower.includes('partial') || lower.includes('missing') || lower.includes('weak') || lower.includes('none') || lower.includes('high') || lower.includes('medium')) {
-                const suburb = cells[0] || '';
-                const priority = cells.find(c => /high|medium|critical/i.test(c)) || 'Medium';
-                const rationale = cells.find(c => c.length > 20) || '';
-                const action = cells[cells.length - 1] || '';
-                if (suburb && (lower.includes('partial') || lower.includes('missing') || lower.includes('weak') || lower.includes('high') || lower.includes('medium'))) {
-                  actions.push({
-                    title: 'Improve coverage: ' + suburb,
-                    description: rationale || action || ('Suburb has partial or no coverage — needs attention'),
-                    severity: /high|critical/i.test(priority) ? 'critical' : /medium/i.test(priority) ? 'high' : 'medium',
-                    type: 'suburb_targeting'
-                  });
-                }
-              }
-            } else { inTable = false; }
-          }
-          // Also check Recommended Suburbs table
-          return actions;
-        }
-
-        // Competitor Gap — items with Significant or Moderate gap
-        if (titleLower.includes('competitor')) {
-          let inTable = false;
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
-            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
-              if (!inTable) { inTable = true; continue; }
-              const lower = cells.join(' ').toLowerCase();
-              if (lower.includes('significant') || lower.includes('moderate')) {
-                const area = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
-                const yours = cells[1] || '';
-                const severity = lower.includes('significant') ? 'critical' : 'high';
-                actions.push({
-                  title: 'Close gap: ' + area,
-                  description: 'Your current: ' + yours + '. Competitors are ahead — see comparison above.',
-                  severity,
-                  type: 'competitor_gap',
-                  current_value: yours
-                });
-              }
-            } else { inTable = false; }
-          }
-          return actions;
-        }
-
-        // Directory Audit — not listed directories need registration
-        if (titleLower.includes('directory')) {
-          let inTable = false;
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
-            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
-              if (!inTable) { inTable = true; continue; }
-              const lower = cells.join(' ').toLowerCase();
-              if (lower.includes('not listed') || lower.includes('not found') || lower.includes('no') || lower.includes('missing') || lower.includes('register') || lower.includes('create')) {
-                const dir = cells[0] || '';
-                const status = cells.find(c => /not listed|not found|no|missing/i.test(c)) || '';
-                const priority = cells.find(c => /high|medium|low|critical/i.test(c)) || 'medium';
-                if (dir && dir.length > 2) {
-                  actions.push({
-                    title: 'Register on ' + dir,
-                    description: status ? ('Currently: ' + status) : 'Not currently listed — register business profile',
-                    severity: /high|critical/i.test(priority) ? 'critical' : /medium/i.test(priority) ? 'high' : 'medium',
-                    type: 'directory_registration'
-                  });
-                }
-              }
-            } else { inTable = false; }
-          }
-          return actions;
-        }
-
-        // Issue List — every item is an action
-        if (titleLower.includes('issue')) {
-          let inTable = false;
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
-            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
-              if (!inTable) { inTable = true; continue; }
-              const issue = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
-              const severity = cells.find(c => /high|critical|medium|low/i.test(c)) || 'medium';
-              const recommendation = cells.find(c => c.length > 30) || cells[cells.length - 1] || '';
-              if (issue && issue.length > 3) {
-                actions.push({
-                  title: issue,
-                  description: recommendation,
-                  severity: /high|critical/i.test(severity) ? 'critical' : /medium/i.test(severity) ? 'high' : 'medium',
-                  type: 'gbp_issue'
-                });
-              }
-            } else { inTable = false; }
-          }
-          // Also check bullet points
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
-              const text = trimmed.replace(/^[-*\d.]+\s+/, '').replace(/\*\*/g, '');
-              if (text.length > 10 && !text.toLowerCase().startsWith('note')) {
-                actions.push({
-                  title: text.substring(0, 80),
-                  description: text,
-                  severity: 'high',
-                  type: 'gbp_issue'
-                });
-              }
-            }
-          }
-          return actions;
-        }
-
-        // Website Alignment — mismatches are actions
-        if (titleLower.includes('website') || titleLower.includes('alignment')) {
-          let inTable = false;
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
-            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
-              if (!inTable) { inTable = true; continue; }
-              const lower = cells.join(' ').toLowerCase();
-              if (lower.includes('mismatch') || lower.includes('partial') || lower.includes('missing') || lower.includes('no match') || lower.includes('unclear') || lower.includes('not found')) {
-                const element = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
-                const current = cells[1] || '';
-                const target = cells[2] || '';
-                actions.push({
-                  title: 'Fix alignment: ' + element,
-                  description: 'GBP shows "' + current + '" but website shows "' + target + '"',
-                  severity: 'high',
-                  type: 'website_alignment',
-                  current_value: current,
-                  new_value: target
-                });
-              }
-            } else { inTable = false; }
-          }
-          return actions;
-        }
-
-        // Profile Health — just informational, no direct actions
-        // (actions come from issue list)
-
-        return actions;
-      };
-
-      // If section is specified, show just that section
+      // If section is specified, show just that section with inline actions
       if (section && section !== 'full') {
         const sections = parseReportSections(report);
         const sec = sections.find(s => s.title.toLowerCase().replace(/[^a-z0-9]/g, '') === section.toLowerCase().replace(/[^a-z0-9]/g, ''));
         if (sec) {
-          const actions = extractActions(sec.title, sec.content);
-
-          const handleAddAction = async (action, idx) => {
-            setAddingAction(idx);
+          const handleAddAction = async (key, action) => {
+            setAddingAction(key);
             try {
               await api('/projects/' + project.id + '/action-items', {
                 method: 'POST',
                 body: JSON.stringify({
                   pillar: 'gbp_external',
-                  type: action.type || 'external_audit',
+                  type: action.execution_type || 'manual',
                   title: action.title,
                   description: action.description,
                   severity: action.severity || 'medium',
@@ -1684,19 +1604,17 @@
                   new_value: action.new_value || null
                 })
               });
-              setAddedActions(prev => ({ ...prev, [idx]: true }));
+              setAddedActions(prev => ({ ...prev, [key]: true }));
             } catch (e) {
               console.error('Failed to add action:', e);
             }
             setAddingAction(null);
           };
 
-          const handleAddAll = async () => {
-            for (let i = 0; i < actions.length; i++) {
-              if (!addedActions[i]) {
-                await handleAddAction(actions[i], i);
-              }
-            }
+          const actionMode = {
+            onAdd: handleAddAction,
+            addedKeys: addedActions,
+            addingKey: addingAction
           };
 
           return (
@@ -1704,67 +1622,8 @@
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, color: 'var(--text1)' }}>
                 <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />{sec.title}
               </h2>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px', marginBottom: 20 }}>
-                {renderSectionContent(sec.content)}
-              </div>
-
-              {/* ACTION AREA */}
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>
-                    <i className="fas fa-tasks" style={{ marginRight: 8, color: '#818cf8' }} />Actions
-                  </h3>
-                  {actions.length > 0 && (
-                    <button className="btn btn-primary" onClick={handleAddAll} style={{ fontSize: 13, padding: '6px 14px' }}>
-                      <i className="fas fa-plus-circle" style={{ marginRight: 6 }} />Add All to Action Plan
-                    </button>
-                  )}
-                </div>
-
-                {actions.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--text3)', fontSize: 14 }}>
-                    <i className="fas fa-check-circle" style={{ fontSize: 28, marginBottom: 10, display: 'block', opacity: 0.3 }} />
-                    No actions at this time
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {actions.map((action, idx) => (
-                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                        <span style={{
-                          padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
-                          background: action.severity === 'critical' ? 'rgba(239,68,68,0.15)' : action.severity === 'high' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
-                          color: action.severity === 'critical' ? '#ef4444' : action.severity === 'high' ? '#f59e0b' : '#3b82f6'
-                        }}>
-                          {action.severity}
-                        </span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text1)', marginBottom: 2 }}>{action.title}</div>
-                          {action.description && (
-                            <div style={{ fontSize: 12, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{action.description}</div>
-                          )}
-                        </div>
-                        {addedActions[idx] ? (
-                          <span style={{ color: '#22c55e', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-check" style={{ marginRight: 4 }} />Added
-                          </span>
-                        ) : (
-                          <button
-                            className="btn btn-secondary"
-                            onClick={() => handleAddAction(action, idx)}
-                            disabled={addingAction === idx}
-                            style={{ fontSize: 12, padding: '5px 10px', whiteSpace: 'nowrap' }}
-                          >
-                            {addingAction === idx ? (
-                              <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding</>
-                            ) : (
-                              <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add to Plan</>
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {renderSectionContent(sec.content, actionMode)}
               </div>
             </div>
           );
