@@ -2695,24 +2695,35 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
 
-    // 1. Create session with initial message
+    // 1. Create session
     const sessionResp = await fetch(`${apiBase}/sessions`, {
       method: 'POST',
       headers: agentHeaders,
-      body: JSON.stringify({
-        agent: gbpAgentId,
-        environment_id: gbpEnvId,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
+      body: JSON.stringify({ agent: gbpAgentId, environment_id: gbpEnvId }),
     });
     if (!sessionResp.ok) {
       const errBody = await sessionResp.text();
       throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
     }
     const session = await sessionResp.json();
-    console.log(`[gbp-external] Session created: ${session.id}, status: ${session.status}`);
-    console.log(`[gbp-external] Session response keys: ${Object.keys(session).join(', ')}`);
-    console.log(`[gbp-external] Polling for response...`);
+    console.log(`[gbp-external] Session created: ${session.id}`);
+
+    // 2. Send user message (wrapped in events array)
+    const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({
+        events: [{
+          type: 'user.message',
+          content: [{ type: 'text', text: userPrompt }]
+        }]
+      }),
+    });
+    if (!msgResp.ok) {
+      const errBody = await msgResp.text();
+      throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
+    }
+    console.log(`[gbp-external] Message sent, polling for response...`);
 
     // 3. Poll for events until session is idle (SSE streaming via fetch)
     let finalText = '';
