@@ -2869,6 +2869,357 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
   }
 });
 
+// ==================== WEBSITE AGENT AUDIT (Managed Agent) ====================
+
+app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='website' ORDER BY started_at DESC LIMIT 1`,
+      [projectId]
+    );
+    if (result.rows.length === 0) return res.json({ status: 'none' });
+    const audit = result.rows[0];
+    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+    res.json({
+      status: audit.status,
+      report: data.report || null,
+      error: data.error || null,
+      startedAt: audit.started_at,
+      completedAt: audit.completed_at,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const businessName = project.business_name || project.name || '';
+    const location = project.location || '';
+    const industry = project.industry || '';
+
+    const websiteAgentId = process.env.WEBSITE_AGENT_ID;
+    const envId = process.env.GBP_ENVIRONMENT_ID; // shared environment
+
+    if (!anthropic || !websiteAgentId || !envId) {
+      await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
+      return res.status(500).json({ error: 'Website Agent not configured. Set WEBSITE_AGENT_ID env var.' });
+    }
+
+    console.log(`[website-agent] Starting audit for "${domain}"`);
+
+    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.`;
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiBase = 'https://api.anthropic.com/v1';
+    const agentHeaders = {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'managed-agents-2026-04-01',
+    };
+
+    const sessionResp = await fetch(`${apiBase}/sessions`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ agent: websiteAgentId, environment_id: envId }),
+    });
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
+    }
+    const session = await sessionResp.json();
+    console.log(`[website-agent] Session created: ${session.id}`);
+
+    res.json({ auditId, status: 'running', sessionId: session.id });
+
+    // Background polling
+    (async () => {
+      try {
+        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
+          method: 'POST',
+          headers: agentHeaders,
+          body: JSON.stringify({
+            events: [{ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }]
+          }),
+        });
+        if (!msgResp.ok) throw new Error(`Message send failed (${msgResp.status}): ${await msgResp.text()}`);
+        await msgResp.text();
+
+        const maxWait = 10 * 60 * 1000;
+        const pollMs = 5000;
+        const t0 = Date.now();
+
+        while (Date.now() - t0 < maxWait) {
+          await new Promise(r => setTimeout(r, pollMs));
+          const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { method: 'GET', headers: agentHeaders });
+          if (!statusResp.ok) continue;
+          const sess = await statusResp.json();
+          const st = sess.status || sess.state || '';
+          if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
+            const evResp = await fetch(`${apiBase}/sessions/${session.id}/events`, { method: 'GET', headers: agentHeaders });
+            if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
+            const evBody = await evResp.text();
+
+            let finalText = '';
+            try {
+              const evData = JSON.parse(evBody);
+              const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
+              for (const evt of evts) {
+                const role = evt.role || evt.type || '';
+                if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
+                  const content = evt.content || evt.message?.content || [];
+                  const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
+                  for (const p of parts) { if (p.type === 'text' && p.text) finalText += p.text + '\n'; }
+                }
+              }
+              if (!finalText) {
+                for (const evt of evts) {
+                  const role = evt.role || evt.type || '';
+                  if (role === 'user' || role === 'user.message') continue;
+                  const content = evt.content || evt.message?.content || [];
+                  const parts = Array.isArray(content) ? content : [];
+                  for (const p of parts) { if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n'; }
+                }
+              }
+            } catch (e) {
+              if (evBody.length > 200) finalText = evBody;
+            }
+
+            if (!finalText || finalText.length < 50) throw new Error(`No assistant text. Events: ${evBody.length} chars`);
+
+            finalText = finalText.trim();
+            await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+              ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
+            console.log(`[website-agent] Report stored (${finalText.length} chars)`);
+            return;
+          }
+        }
+        throw new Error('Agent timed out after 10 minutes');
+      } catch (bgErr) {
+        console.error('[website-agent] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
+      }
+    })();
+
+  } catch (e) {
+    console.error('[website-agent] Error:', e.message);
+    try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='website' AND status='running'`, [projectId]); } catch (e2) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== GSC AGENT AUDIT (Managed Agent) ====================
+
+app.get('/api/projects/:projectId/audits/gsc-agent/status', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='gsc_agent' ORDER BY started_at DESC LIMIT 1`,
+      [projectId]
+    );
+    if (result.rows.length === 0) return res.json({ status: 'none' });
+    const audit = result.rows[0];
+    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+    res.json({
+      status: audit.status,
+      report: data.report || null,
+      error: data.error || null,
+      startedAt: audit.started_at,
+      completedAt: audit.completed_at,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gsc_agent'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gsc_agent', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const gscProperty = project.gsc_property || '';
+
+    const gscAgentId = process.env.GSC_AGENT_ID;
+    const envId = process.env.GBP_ENVIRONMENT_ID; // shared environment
+
+    if (!anthropic || !gscAgentId || !envId) {
+      await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
+      return res.status(500).json({ error: 'GSC Agent not configured. Set GSC_AGENT_ID env var.' });
+    }
+
+    // Fetch GSC data to feed to agent
+    let gscData = null;
+    try {
+      const userId = 1; // TODO: get from auth
+      const accessToken = await getGscAccessToken(userId);
+      if (accessToken && gscProperty) {
+        const property = gscProperty;
+        // Fetch last 28 days of search analytics
+        const analyticsResp = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(property) + '/searchAnalytics/query', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            startDate: new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0],
+            endDate: new Date().toISOString().split('T')[0],
+            dimensions: ['query', 'page'],
+            rowLimit: 500,
+          }),
+        });
+        if (analyticsResp.ok) {
+          gscData = await analyticsResp.json();
+          console.log(`[gsc-agent] Fetched ${(gscData.rows || []).length} GSC rows`);
+        }
+      }
+    } catch (e) {
+      console.log(`[gsc-agent] Could not fetch GSC data: ${e.message}`);
+    }
+
+    console.log(`[gsc-agent] Starting audit for "${domain}"`);
+
+    let userPrompt = `Conduct a comprehensive Google Search Console audit for: ${domain}`;
+    if (gscData && gscData.rows && gscData.rows.length > 0) {
+      // Summarize top data for the agent
+      const topRows = gscData.rows.slice(0, 200).map(r => ({
+        query: r.keys[0],
+        page: r.keys[1],
+        clicks: r.clicks,
+        impressions: r.impressions,
+        ctr: (r.ctr * 100).toFixed(1) + '%',
+        position: r.position.toFixed(1),
+      }));
+      userPrompt += `\n\nHere is the GSC search analytics data (last 28 days, top 200 query+page combinations):\n\`\`\`json\n${JSON.stringify(topRows, null, 2)}\n\`\`\`\n\nAnalyze this data to find: Quick Wins (position 4-20 with good impressions), Low CTR pages, Keyword Cannibalization (same query ranking for multiple pages), Zero Click queries, Underperforming Pages, Brand Dependency. Use pipe-delimited markdown tables for all findings.`;
+    } else {
+      userPrompt += `\n\nNote: GSC API data was not available. Analyze the site externally — check indexing, keyword targeting, content gaps, and SERP presence. Use pipe-delimited markdown tables for all findings.`;
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiBase = 'https://api.anthropic.com/v1';
+    const agentHeaders = {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'managed-agents-2026-04-01',
+    };
+
+    const sessionResp = await fetch(`${apiBase}/sessions`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ agent: gscAgentId, environment_id: envId }),
+    });
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
+    }
+    const session = await sessionResp.json();
+    console.log(`[gsc-agent] Session created: ${session.id}`);
+
+    res.json({ auditId, status: 'running', sessionId: session.id });
+
+    // Background polling (same pattern as GBP/Website)
+    (async () => {
+      try {
+        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
+          method: 'POST',
+          headers: agentHeaders,
+          body: JSON.stringify({
+            events: [{ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }]
+          }),
+        });
+        if (!msgResp.ok) throw new Error(`Message send failed (${msgResp.status}): ${await msgResp.text()}`);
+        await msgResp.text();
+
+        const maxWait = 10 * 60 * 1000;
+        const pollMs = 5000;
+        const t0 = Date.now();
+
+        while (Date.now() - t0 < maxWait) {
+          await new Promise(r => setTimeout(r, pollMs));
+          const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { method: 'GET', headers: agentHeaders });
+          if (!statusResp.ok) continue;
+          const sess = await statusResp.json();
+          const st = sess.status || sess.state || '';
+          if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
+            const evResp = await fetch(`${apiBase}/sessions/${session.id}/events`, { method: 'GET', headers: agentHeaders });
+            if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
+            const evBody = await evResp.text();
+
+            let finalText = '';
+            try {
+              const evData = JSON.parse(evBody);
+              const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
+              for (const evt of evts) {
+                const role = evt.role || evt.type || '';
+                if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
+                  const content = evt.content || evt.message?.content || [];
+                  const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
+                  for (const p of parts) { if (p.type === 'text' && p.text) finalText += p.text + '\n'; }
+                }
+              }
+              if (!finalText) {
+                for (const evt of evts) {
+                  const role = evt.role || evt.type || '';
+                  if (role === 'user' || role === 'user.message') continue;
+                  const content = evt.content || evt.message?.content || [];
+                  const parts = Array.isArray(content) ? content : [];
+                  for (const p of parts) { if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n'; }
+                }
+              }
+            } catch (e) {
+              if (evBody.length > 200) finalText = evBody;
+            }
+
+            if (!finalText || finalText.length < 50) throw new Error(`No assistant text. Events: ${evBody.length} chars`);
+
+            finalText = finalText.trim();
+            await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+              ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
+            console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
+            return;
+          }
+        }
+        throw new Error('Agent timed out after 10 minutes');
+      } catch (bgErr) {
+        console.error('[gsc-agent] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
+      }
+    })();
+
+  } catch (e) {
+    console.error('[gsc-agent] Error:', e.message);
+    try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gsc_agent' AND status='running'`, [projectId]); } catch (e2) {}
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== TECHNICAL AUDIT (AI-Powered) ====================
 
 app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {

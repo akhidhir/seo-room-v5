@@ -1271,18 +1271,20 @@
     // ============ GBP AUDIT PAGE ============
     // ============ GBP AUDIT PAGE (v4-style table) ============
     // ============ EXTERNAL GBP AUDIT SUB-PAGE ============
-    function ExternalGBPAuditPage({ project, section }) {
+    function AgentAuditPage({ project, section, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true }) {
+      const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
+      const skip = skipPatterns || defaultSkip;
       const [report, setReport] = useState('');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [addedActions, setAddedActions] = useState({});
       const [addingAction, setAddingAction] = useState(null);
 
-      useEffect(() => { if (project) checkStatus(); }, [project?.id]);
+      useEffect(() => { if (project) checkStatus(); }, [project?.id, auditKey]);
 
       const checkStatus = async () => {
         try {
-          const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+          const data = await api(`/projects/${project.id}/audits/${auditKey}/status`);
           if (data.status === 'running') {
             setLoading(true);
             startPolling();
@@ -1297,7 +1299,7 @@
       const startPolling = () => {
         const pollInterval = setInterval(async () => {
           try {
-            const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+            const data = await api(`/projects/${project.id}/audits/${auditKey}/status`);
             if (data.status === 'completed') {
               clearInterval(pollInterval);
               if (data.report) setReport(data.report);
@@ -1314,7 +1316,7 @@
       const runAudit = async () => {
         setLoading(true); setError(''); setReport('');
         try {
-          await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
+          await api(`/projects/${project.id}/audits/${auditKey}/run`, { method: 'POST' });
           startPolling();
         } catch (err) { setError(err.message); setLoading(false); }
       };
@@ -1346,24 +1348,25 @@
         if (current) rawSections.push(current);
 
         // Filter out unwanted sections
-        const skipPatterns = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
-        const filtered = rawSections.filter(s => !skipPatterns.some(p => p.test(s.title)));
+        const filtered = rawSections.filter(s => !skip.some(p => p.test(s.title)));
 
-        // Merge directory sections
-        const presenceIdx = filtered.findIndex(s => /directory presence/i.test(s.title));
-        const registrationIdx = filtered.findIndex(s => /directory registration/i.test(s.title));
-        if (presenceIdx !== -1 && registrationIdx !== -1) {
-          filtered[presenceIdx].title = 'DIRECTORY AUDIT & ACTIONS';
-          filtered[presenceIdx].content = [
-            ...filtered[presenceIdx].content,
-            '',
-            '---',
-            '',
-            '#### Registration Recommendations',
-            '',
-            ...filtered[registrationIdx].content
-          ];
-          filtered.splice(registrationIdx, 1);
+        // Merge directory sections (GBP only)
+        if (mergeDirectories) {
+          const presenceIdx = filtered.findIndex(s => /directory presence/i.test(s.title));
+          const registrationIdx = filtered.findIndex(s => /directory registration/i.test(s.title));
+          if (presenceIdx !== -1 && registrationIdx !== -1) {
+            filtered[presenceIdx].title = 'DIRECTORY AUDIT & ACTIONS';
+            filtered[presenceIdx].content = [
+              ...filtered[presenceIdx].content,
+              '',
+              '---',
+              '',
+              '#### Registration Recommendations',
+              '',
+              ...filtered[registrationIdx].content
+            ];
+            filtered.splice(registrationIdx, 1);
+          }
         }
 
         return filtered;
@@ -1668,8 +1671,8 @@
         return (
           <div className="audit-loading-overlay">
             <span className="spinner-large"></span>
-            <div className="audit-loading-text">External GBP Audit</div>
-            <div className="audit-loading-sub">Managed agent is researching your business across the web. This takes 2-5 minutes.</div>
+            <div className="audit-loading-text">{title}</div>
+            <div className="audit-loading-sub">{loadingText}</div>
           </div>
         );
       }
@@ -1681,7 +1684,7 @@
               <i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}
             </div>
             <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 15, padding: '10px 20px' }}>
-              <i className="fas fa-robot" style={{ marginRight: 8 }} />Re-run External Audit
+              <i className="fas fa-robot" style={{ marginRight: 8 }} />Re-run {title}
             </button>
           </div>
         );
@@ -1691,10 +1694,10 @@
         return (
           <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 60, fontSize: 16, background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
             <i className="fas fa-robot" style={{ fontSize: 40, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-            No external audit yet.
+            No audit yet.
             <div style={{ marginTop: 16 }}>
               <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 15, padding: '10px 20px' }}>
-                <i className="fas fa-robot" style={{ marginRight: 8 }} />Run External Audit
+                <i className="fas fa-robot" style={{ marginRight: 8 }} />Run {title}
               </button>
             </div>
           </div>
@@ -1712,7 +1715,7 @@
               await api('/projects/' + project.id + '/action-items', {
                 method: 'POST',
                 body: {
-                  pillar: 'gbp_external',
+                  pillar: pillar,
                   type: action.execution_type || 'manual',
                   title: action.title,
                   description: action.description,
@@ -1753,7 +1756,7 @@
           return (
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, color: 'var(--text1)' }}>
-                <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />{sec.title}
+                <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{sec.title}
               </h2>
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px' }}>
                 {renderSectionContent(sec.content, actionMode)}
@@ -1768,7 +1771,7 @@
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>
-              <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />External GBP Audit — Full Report
+              <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{title} — Full Report
             </h2>
             <div style={{ marginLeft: 'auto' }}>
               <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 14, padding: '8px 16px' }}>
@@ -1783,9 +1786,24 @@
       );
     }
 
-    // Helper: get external audit section names for sidebar
-    function getExternalAuditSections(report) {
+    // Thin wrappers for each audit type
+    function ExternalGBPAuditPage({ project, section }) {
+      return React.createElement(AgentAuditPage, { project, section });
+    }
+
+    function WebsiteAuditPage({ project, section }) {
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i], mergeDirectories: false });
+    }
+
+    function GSCAgentAuditPage({ project, section }) {
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i], mergeDirectories: false });
+    }
+
+    // Helper: get agent audit section names for sidebar (generic)
+    function getAgentAuditSections(report, skipPats, mergeDirs) {
       if (!report) return [];
+      const defaultSkip = [/^summary$/i, /^audit conclusion$/i];
+      const skip = skipPats || defaultSkip;
       const raw = [];
       for (const line of report.split('\n')) {
         const trimmed = line.trim();
@@ -1795,23 +1813,28 @@
           if (title.length > 3) raw.push(title);
         }
       }
-      // Filter out unwanted sections
-      const skipPatterns = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
-      const filtered = raw.filter(s => !skipPatterns.some(p => p.test(s)));
-      // Combine directory sections
-      const hasPresence = filtered.some(s => /directory presence/i.test(s));
-      const hasRegistration = filtered.some(s => /directory registration/i.test(s));
-      const combined = [];
-      for (const s of filtered) {
-        if (/directory presence/i.test(s) && hasRegistration) {
-          combined.push('DIRECTORY AUDIT & ACTIONS');
-        } else if (/directory registration/i.test(s) && hasPresence) {
-          continue; // skip — merged into DIRECTORY AUDIT
-        } else {
-          combined.push(s);
+      const filtered = raw.filter(s => !skip.some(p => p.test(s)));
+      if (mergeDirs) {
+        const hasPresence = filtered.some(s => /directory presence/i.test(s));
+        const hasRegistration = filtered.some(s => /directory registration/i.test(s));
+        const combined = [];
+        for (const s of filtered) {
+          if (/directory presence/i.test(s) && hasRegistration) {
+            combined.push('DIRECTORY AUDIT & ACTIONS');
+          } else if (/directory registration/i.test(s) && hasPresence) {
+            continue;
+          } else {
+            combined.push(s);
+          }
         }
+        return combined;
       }
-      return combined;
+      return filtered;
+    }
+
+    // Legacy alias
+    function getExternalAuditSections(report) {
+      return getAgentAuditSections(report, [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i], true);
     }
 
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============
@@ -2192,181 +2215,12 @@
       );
     }
 
-    // ============ GSC AUDIT PAGE ============
-    function GSCAuditPage({ project }) {
-      const [findings, setFindings] = useState([]);
-      const [loading, setLoading] = useState(false);
-      const [error, setError] = useState('');
-      const [approvedIds, setApprovedIds] = useState(new Set());
-      const [expandedId, setExpandedId] = useState(null);
-      const [expandedCats, setExpandedCats] = useState(new Set());
-      const [summary, setSummary] = useState(null);
+    // ============ GSC AUDIT PAGE (Agent-Powered) ============
+    // GSCAuditPage is now a thin wrapper around AgentAuditPage (defined above)
 
-      // Load previous findings on mount
-      useEffect(() => {
-        if (project) loadExisting();
-      }, [project?.id]);
-
-      const loadExisting = async () => {
-        const data = await api(`/projects/${project.id}/audit-findings`);
-        if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'gsc'));
-      };
-
-      const runAudit = async () => {
-        setLoading(true);
-        setError('');
-        try {
-          const data = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST' });
-          setFindings(data.findings || []);
-          if (data.summary) setSummary(data.summary);
-          if (data.message && (!data.findings || data.findings.length === 0)) setError(data.message);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      const handleApprove = async (finding) => {
-        try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'approved' } });
-          setApprovedIds((prev) => new Set([...prev, finding.id]));
-        } catch (err) {
-          setError(err.message);
-        }
-      };
-
-      const handleReject = async (finding) => {
-        try {
-          await api(`/audit-findings/${finding.id}`, { method: 'PUT', body: { status: 'rejected' } });
-          setFindings((prev) => prev.filter((f) => f.id !== finding.id));
-        } catch (err) {
-          setError(err.message);
-        }
-      };
-
-      const stats = useMemo(() => {
-        const critical = findings.filter((f) => f.severity === 'Critical').length;
-        const medium = findings.filter((f) => f.severity === 'Medium').length;
-        const low = findings.filter((f) => f.severity === 'Low').length;
-        return { critical, medium, low };
-      }, [findings]);
-
-      return (
-        <>
-          <div className="page-header">
-            <div className="page-title">
-              <i className="fas fa-chart-line"></i> GSC Audit
-            </div>
-            <div className="page-subtitle">Google Search Console optimization — find quick wins, low CTR pages, and keyword cannibalization</div>
-          </div>
-
-          {loading && (
-            <div className="audit-loading-overlay">
-              <span className="spinner-large"></span>
-              <div className="audit-loading-text">Running GSC Audit</div>
-              <div className="audit-loading-sub">Fetching keywords, pages, and search performance data...</div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-            <button className="btn btn-primary" onClick={runAudit} disabled={loading}>
-              {loading ? <><span className="spinner"></span>Analyzing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }}></i>Run GSC Audit</>}
-            </button>
-            {summary && (
-              <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span><i className="fas fa-key" style={{ marginRight: 4 }} />{summary.keywords} keywords</span>
-                <span><i className="fas fa-file" style={{ marginRight: 4 }} />{summary.pages} pages</span>
-                <span><i className="fas fa-flag" style={{ marginRight: 4 }} />{summary.findings} findings</span>
-              </div>
-            )}
-          </div>
-
-          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
-
-          {!loading && findings.length > 0 && (() => {
-            const gscCategoryConfig = {
-              'Quick Win': { icon: 'fas fa-bolt', color: '#f59e0b' },
-              'Low CTR': { icon: 'fas fa-mouse-pointer', color: '#ef4444' },
-              'Zero Clicks': { icon: 'fas fa-ban', color: '#dc2626' },
-              'Cannibalization': { icon: 'fas fa-clone', color: '#8b5cf6' },
-              'Underperforming Page': { icon: 'fas fa-chart-line', color: '#6366f1' },
-              'Brand Dependency': { icon: 'fas fa-tag', color: '#ec4899' },
-              'Indexing Issues': { icon: 'fas fa-exclamation-triangle', color: '#f97316' },
-              'Mobile Usability': { icon: 'fas fa-mobile-alt', color: '#3b82f6' },
-            };
-            const categories = [...new Set(findings.map(f => f.category))];
-            return (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#ef4444' }}>{stats.critical}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Critical</div>
-                </div>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#f59e0b' }}>{stats.medium}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Medium</div>
-                </div>
-                <div style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 36, fontWeight: 800, color: '#3b82f6' }}>{stats.low}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Low</div>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, alignItems: 'start' }}>
-              {categories.map(cat => {
-                const cfg = gscCategoryConfig[cat] || { icon: 'fas fa-circle', color: '#64748b' };
-                const catFindings = findings.filter(f => f.category === cat);
-                const isOpen = expandedCats.has(cat);
-                const hasCritical = catFindings.some(f => f.severity === 'Critical');
-                return (
-                  <div key={cat} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                    <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat) ? s.delete(cat) : s.add(cat); return s; })}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: `${cfg.color}12`, borderBottom: isOpen ? `2px solid ${cfg.color}` : 'none', cursor: 'pointer' }}>
-                      <i className={cfg.icon} style={{ color: cfg.color, fontSize: 18 }} />
-                      <span style={{ fontSize: 15, fontWeight: 700, color: cfg.color }}>{cat}</span>
-                      {hasCritical && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>CRITICAL</span>}
-                      <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
-                        {catFindings.length}
-                      </span>
-                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
-                    </div>
-                    {isOpen && <div style={{ padding: 8 }}>
-                    {catFindings.map(finding => (
-                      <FindingCard
-                        key={finding.id}
-                        finding={finding}
-                        onApprove={handleApprove}
-                        onReject={handleReject}
-                        isApproved={approvedIds.has(finding.id)}
-                        expanded={expandedId === finding.id}
-                        onToggle={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
-                      />
-                    ))}
-                    </div>}
-                  </div>
-                );
-              })}
-              </div>
-            </>
-            );
-          })()}
-
-          {!loading && findings.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-state-icon">
-                <i className="fas fa-chart-line"></i>
-              </div>
-              <div className="empty-state-title">No GSC audit data</div>
-              <div>Connect Google Search Console and click "Run GSC Audit" to find optimization opportunities</div>
-            </div>
-          )}
-        </>
-      );
-    }
-
-    // ============ WEBSITE AUDIT PAGE ============
-    // ============ TECHNICAL AUDIT PAGE ============
+    // ============ WEBSITE AUDIT PAGE (Agent-Powered) ============
+    // WebsiteAuditPage is a thin wrapper around AgentAuditPage (defined above)
+    // ============ TECHNICAL AUDIT PAGE (Legacy Internal — kept for now) ============
     function TechnicalAuditPage({ project }) {
       const [tab, setTab] = useState('general');
       const [findings, setFindings] = useState([]);
@@ -5922,12 +5776,20 @@
       const [activeTab, setActiveTab] = useState('gbp-audit');
       const [expandedNav, setExpandedNav] = useState({ 'gbp-audit': true });
       const [extAuditReport, setExtAuditReport] = useState('');
+      const [websiteAuditReport, setWebsiteAuditReport] = useState('');
+      const [gscAuditReport, setGscAuditReport] = useState('');
 
-      // Load external audit report for sidebar sections
+      // Load agent audit reports for sidebar sections
       useEffect(() => {
         if (project) {
           api(`/projects/${project.id}/audits/gbp-external/status`).then(data => {
             if (data.status === 'completed' && data.report) setExtAuditReport(data.report);
+          }).catch(() => {});
+          api(`/projects/${project.id}/audits/website-agent/status`).then(data => {
+            if (data.status === 'completed' && data.report) setWebsiteAuditReport(data.report);
+          }).catch(() => {});
+          api(`/projects/${project.id}/audits/gsc-agent/status`).then(data => {
+            if (data.status === 'completed' && data.report) setGscAuditReport(data.report);
           }).catch(() => {});
         }
       }, [project?.id]);
@@ -6008,7 +5870,9 @@
           case 'gbp-audit-external':
             return <ExternalGBPAuditPage project={project} section="full" />;
           case 'gsc-audit':
-            return <GSCAuditPage project={project} />;
+            return <GSCAgentAuditPage project={project} section="full" />;
+          case 'website-audit':
+            return <WebsiteAuditPage project={project} section="full" />;
           case 'technical-audit':
             return <TechnicalAuditPage project={project} />;
           case 'onpage-audit':
@@ -6021,6 +5885,8 @@
             return <ActionPlanPage type="gbp" title="GBP Actions" icon="fas fa-map-marker-alt" project={project} />;
           case 'gsc-actions':
             return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" project={project} />;
+          case 'website-actions':
+            return <ActionPlanPage type="website" title="Website Actions" icon="fas fa-spider" project={project} />;
           case 'technical-actions':
             return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" project={project} />;
           case 'onpage-actions':
@@ -6050,6 +5916,14 @@
               const sectionName = activeTab.replace('ext-sec-', '').replace(/-/g, ' ');
               return <ExternalGBPAuditPage project={project} section={sectionName} />;
             }
+            if (activeTab.startsWith('web-sec-')) {
+              const sectionName = activeTab.replace('web-sec-', '').replace(/-/g, ' ');
+              return <WebsiteAuditPage project={project} section={sectionName} />;
+            }
+            if (activeTab.startsWith('gsc-sec-')) {
+              const sectionName = activeTab.replace('gsc-sec-', '').replace(/-/g, ' ');
+              return <GSCAgentAuditPage project={project} section={sectionName} />;
+            }
             return <InternalGBPAuditPage project={project} />;
         }
       };
@@ -6062,7 +5936,8 @@
             { id: 'gbp-audit-internal', label: 'Internal Audit', icon: 'fas fa-database' },
             { id: 'gbp-audit-external', label: 'External Audit', icon: 'fas fa-globe', expandable: true },
           ] },
-          { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line' },
+          { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true },
+          { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true },
           { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
           { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
@@ -6071,6 +5946,7 @@
         { section: 'ACTION PLAN', items: [
           { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
+          { id: 'website-actions', label: 'Website Actions', icon: 'fas fa-spider' },
           { id: 'technical-actions', label: 'Technical Actions', icon: 'fas fa-cogs' },
           { id: 'onpage-actions', label: 'On-Page Actions', icon: 'fas fa-file-alt' },
         ]},
@@ -6112,7 +5988,19 @@
                   <div className="sidebar-section-title">{group.section}</div>
                   {group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
-                    const isActive = activeTab === item.id || (item.children && item.children.some(c => activeTab === c.id || (activeTab.startsWith('ext-sec-') && c.id === 'gbp-audit-external')));
+                    const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
+                    const isActive = activeTab === item.id
+                      || (item.children && item.children.some(c => activeTab === c.id || (activeTab.startsWith('ext-sec-') && c.id === 'gbp-audit-external')))
+                      || (secPrefix && activeTab.startsWith(secPrefix));
+
+                    // Get sections for expandable items without children (GSC, Website)
+                    const getItemSections = () => {
+                      if (item.children) return [];
+                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, [/^summary$/i, /^audit conclusion$/i, /^overview$/i], false);
+                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i], false);
+                      return [];
+                    };
+                    const itemSections = item.expandable && !item.children ? getItemSections() : [];
 
                     return (
                       <React.Fragment key={item.id}>
@@ -6133,6 +6021,21 @@
                             <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.5 }}></i>
                           )}
                         </div>
+                        {/* Sections for expandable items WITHOUT children (GSC, Website) */}
+                        {item.expandable && isExpanded && !item.children && itemSections.map(sec => {
+                          const secId = secPrefix + sec.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+                          return (
+                            <div key={secId}
+                              className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
+                              style={{ paddingLeft: 36, fontSize: 12 }}
+                              onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
+                            >
+                              <i className="fas fa-angle-right" style={{ fontSize: 10 }}></i>
+                              <span>{sec.length > 24 ? sec.substring(0, 24) + '...' : sec}</span>
+                            </div>
+                          );
+                        })}
+                        {/* Children for expandable items WITH children (GBP) */}
                         {item.expandable && isExpanded && item.children && item.children.map(child => {
                           const childActive = activeTab === child.id || (activeTab.startsWith('ext-sec-') && child.id === 'gbp-audit-external');
                           const childExpanded = expandedNav[child.id];
