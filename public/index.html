@@ -1433,13 +1433,38 @@
               }
               // Coverage — partial/weak
               if (/weak|poor|low/i.test(allText) && !(/\bminimal\b/i.test(allText) && sevColIdx !== -1)) return 'Strengthen ' + itemName;
-              return '';
+              // Website alignment — fail/needs improvement
+              if (/fail/i.test(allText)) {
+                const notes = notesColIdx !== -1 ? row[notesColIdx] || '' : '';
+                return 'Fix: ' + itemName + (notes ? ' — ' + notes.replace(/\*\*/g, '').substring(0, 100) : '');
+              }
+              if (/needs improvement/i.test(allText)) {
+                const notes = notesColIdx !== -1 ? row[notesColIdx] || '' : '';
+                return 'Improve: ' + itemName + (notes ? ' — ' + notes.replace(/\*\*/g, '').substring(0, 100) : '');
+              }
+              // Services alignment — website only / gbp only / unclear
+              if (/website only/i.test(allText)) return 'Add ' + itemName + ' to GBP service categories';
+              if (/gbp only/i.test(allText)) return 'Add ' + itemName + ' page to website or verify GBP listing';
+              if (/unclear/i.test(allText)) return 'Clarify ' + itemName + ' — verify on both GBP and website';
+              // Generic issue from notes
+              if (notesColIdx !== -1 && row[notesColIdx] && row[notesColIdx].replace(/\*\*/g, '').length > 10) {
+                return row[notesColIdx].replace(/\*\*/g, '').substring(0, 120);
+              }
+              // Fallback — use all non-header text from the row
+              const desc = row.slice(1).join('; ').replace(/\*\*/g, '').substring(0, 120);
+              return desc || 'Review and fix: ' + itemName;
             };
 
             // Check if row needs action (has issues)
             const rowNeedsAction = (row) => {
               const allText = row.join(' ').toLowerCase();
-              if (/not listed|not found|missing|no\b|partial|unverif|significant|moderate|mismatch|weak|poor/i.test(allText)) return true;
+              // Catch all issue indicators
+              if (/not listed|not found|missing|partial|unverif|significant|moderate|mismatch|weak|poor|fail|needs improvement|unclear|likely|website only|gbp only|missed|credibility gap|inconsisten|limited|insufficient|outdated|minimal.*post|no evidence|no visible|no clear|not verified|low visibility/i.test(allText)) return true;
+              // Explicit "No" as a cell value (but not inside longer text)
+              for (const cell of row) {
+                const c = cell.replace(/\*\*/g, '').trim().toLowerCase();
+                if (c === 'no' || /^❌/.test(cell.trim())) return true;
+              }
               // Score below threshold
               const scoreCol = headers.findIndex(h => /score/i.test(h));
               const maxCol = headers.findIndex(h => /max/i.test(h));
@@ -1512,7 +1537,7 @@
                             const needsAction = rowNeedsAction(row);
                             const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
                             if (!needsAction) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td>;
-                            if (isIgnored) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11 }}>Ignored</span></td>;
+                            if (isIgnored) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td>;
                             if (isAdded) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Added</span></td>;
                             return (
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
@@ -1664,11 +1689,21 @@
             setAddedActions(prev => ({ ...prev, ['ign_' + key]: true }));
           };
 
+          const handleUndo = (key) => {
+            setAddedActions(prev => {
+              const next = { ...prev };
+              delete next['ign_' + key];
+              delete next[key];
+              return next;
+            });
+          };
+
           const actionMode = {
             onAdd: handleAddAction,
             addedKeys: addedActions,
             addingKey: addingAction,
             onIgnore: handleIgnore,
+            onUndo: handleUndo,
             ignoredKeys: Object.fromEntries(Object.entries(addedActions).filter(([k]) => k.startsWith('ign_')).map(([k, v]) => [k.replace('ign_', ''), v]))
           };
 
