@@ -1326,24 +1326,20 @@
 
         for (let i = 0; i < lines.length; i++) {
           const trimmed = lines[i].trim();
-          // Match "### N. SECTION NAME" or "N. SECTION NAME"
-          const numbered = trimmed.match(/^(?:#{1,3}\s+)?(\d+)\.\s+(.+)/);
-          if (numbered) {
-            const title = numbered[2].replace(/\*\*/g, '').trim();
+          // Only match "## TITLE" or "### N. TITLE" (markdown headers)
+          const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+          if (match) {
+            const title = match[1].replace(/\*\*/g, '').trim();
             if (title.length > 3) {
               if (current) sections.push(current);
               current = { title, content: [] };
               continue;
             }
           }
-          // Everything else is content
           if (current) {
             current.content.push(lines[i]);
           } else {
-            // Before first section — create an intro section
-            if (!current) {
-              current = { title: 'Overview', content: [lines[i]] };
-            }
+            current = { title: 'Overview', content: [lines[i]] };
           }
         }
         if (current) sections.push(current);
@@ -1522,11 +1518,10 @@
       const sections = [];
       for (const line of report.split('\n')) {
         const trimmed = line.trim();
-        // Only match "### N. SECTION NAME" or "N. SECTION NAME" (numbered, mostly uppercase)
-        const numbered = trimmed.match(/^(?:#{1,3}\s+)?(\d+)\.\s+(.+)/);
-        if (numbered) {
-          const title = numbered[2].replace(/\*\*/g, '').trim();
-          // Must be mostly uppercase or a clear section title
+        // Only match "## TITLE" or "### N. TITLE" (markdown headers with ##)
+        const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+        if (match) {
+          const title = match[1].replace(/\*\*/g, '').trim();
           if (title.length > 3) sections.push(title);
         }
       }
