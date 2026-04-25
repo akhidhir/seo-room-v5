@@ -1436,14 +1436,16 @@
               if (/partial/i.test(allText) && /directory|listed/i.test(headers.join(' '))) {
                 return 'Update ' + itemName + ' listing — ' + (notes || 'verify NAP accuracy and add missing info');
               }
-              if (/unverif/i.test(allText)) return 'Verify ' + itemName + ' listing — claim and confirm business details';
+              if (/unverif/i.test(allText) && /directory|listed|present/i.test(headers.join(' '))) return 'Verify ' + itemName + ' listing — claim and confirm business details';
 
               // Competitor gap — use YOUR value vs competitors to explain what to do
-              if (sevColIdx !== -1 && /significant|moderate/i.test(clean(row[sevColIdx]))) {
-                const gap = clean(row[sevColIdx]);
-                // Use your value to show the gap
-                if (yourVal) return itemName + ': currently "' + yourVal.substring(0, 50) + '" — match competitors to close ' + gap.toLowerCase() + ' gap';
-                return 'Close ' + gap.toLowerCase() + ' gap in ' + itemName;
+              if (sevColIdx !== -1) {
+                const gap = clean(row[sevColIdx]).toLowerCase();
+                if (/minimal/i.test(gap)) return ''; // no action needed
+                if (/significant|moderate/i.test(gap)) {
+                  if (yourVal) return itemName + ': currently "' + yourVal.substring(0, 50) + '" — match competitors to close ' + gap + ' gap';
+                  return 'Close ' + gap + ' gap in ' + itemName;
+                }
               }
 
               // Suburb coverage — explain what "Partial" means using SOURCE column
@@ -1485,8 +1487,15 @@
             // Check if row needs action (has issues)
             const rowNeedsAction = (row) => {
               const allText = row.join(' ').toLowerCase();
+              // If severity/gap column says Minimal — no action needed
+              if (sevColIdx !== -1) {
+                const sv = (row[sevColIdx] || '').replace(/\*\*/g, '').trim().toLowerCase();
+                if (/^.*minimal.*$/.test(sv)) return false;
+              }
               // Catch all issue indicators
-              if (/not listed|not found|missing|partial|unverif|significant|moderate|mismatch|weak|poor|fail|needs improvement|unclear|likely|website only|gbp only|missed|credibility gap|inconsisten|limited|insufficient|outdated|minimal.*post|no evidence|no visible|no clear|not verified|low visibility/i.test(allText)) return true;
+              if (/not listed|not found|missing|partial|significant|moderate|mismatch|weak|poor|fail|needs improvement|unclear|likely|website only|gbp only|missed|credibility gap|inconsisten|limited|insufficient|outdated|minimal.*post|no evidence|no visible|no clear|not verified|low visibility/i.test(allText)) return true;
+              // "unverifiable" only matters in directory tables
+              if (/unverif/i.test(allText) && /directory|listed|present/i.test(headers.join(' '))) return true;
               // Explicit "No" as a cell value (but not inside longer text)
               for (const cell of row) {
                 const c = cell.replace(/\*\*/g, '').trim().toLowerCase();
