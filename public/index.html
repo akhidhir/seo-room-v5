@@ -1328,11 +1328,29 @@
         const rawSections = [];
         let current = null;
 
+        // Filter out agent chatter, tracebacks, and processing noise
+        const isNoiseLine = (line) => {
+          const t = line.trim();
+          if (!t) return false;
+          if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|ImportError|SyntaxError|NameError|TypeError|ValueError|KeyError|IndexError|AttributeError)/i.test(t)) return true;
+          if (/^(I'll |Let me |Now let me |Perfect\.|Great\.|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created)/i.test(t)) return true;
+          if (/^(data = |import |from |print\(|with open|json\.|os\.|sys\.|result|output|```)/i.test(t)) return true;
+          if (/^\s*(def |class |if |for |while |try:|except|finally)/.test(t)) return true;
+          return false;
+        };
+
         for (let i = 0; i < lines.length; i++) {
           const trimmed = lines[i].trim();
-          const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
-          if (match) {
-            const title = match[1].replace(/\*\*/g, '').trim();
+          if (isNoiseLine(trimmed)) continue;
+
+          // Match ## or ### headers
+          const mdMatch = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+          // Match === TITLE === headers
+          const eqMatch = trimmed.match(/^={2,}\s*(.+?)\s*={2,}$/);
+          const headerMatch = mdMatch || eqMatch;
+
+          if (headerMatch) {
+            const title = headerMatch[1].replace(/\*\*/g, '').trim();
             if (title.length > 3) {
               if (current) rawSections.push(current);
               current = { title, content: [] };
@@ -1648,20 +1666,69 @@
 
           if (!trimmed) { elements.push(<div key={`e${i}`} style={{ height: 8 }} />); continue; }
 
-          // Sub-headers (#### lines)
+          // Sub-headers (#### lines or === TITLE === lines)
           if (trimmed.startsWith('####')) {
             const subTitle = trimmed.replace(/^#+\s*/, '').replace(/\*\*/g, '');
-            elements.push(<div key={`sh${i}`} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)', marginTop: 16, marginBottom: 8 }}>{subTitle}</div>);
+            elements.push(<div key={`sh${i}`} style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginTop: 20, marginBottom: 10 }}>{subTitle}</div>);
             continue;
           }
+          const eqHeader = trimmed.match(/^={2,}\s*(.+?)\s*={2,}$/);
+          if (eqHeader) {
+            elements.push(<div key={`sh${i}`} style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginTop: 20, marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>{eqHeader[1]}</div>);
+            continue;
+          }
+
+          // Skip agent chatter/tracebacks
+          if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|I'll |Let me |Now let me |Perfect\.|Great\.|OK,|I need to|First,|data = |import |print\(|```|File created)/i.test(trimmed)) continue;
 
           const clean = trimmed.replace(/\*\*/g, '');
-          if (/^(Key Takeaway|Score Rationale|Health Score|Strategic Rationale|Recommended Actions|Assessment)/i.test(clean)) {
-            elements.push(<div key={i} style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', lineHeight: 1.7, marginBottom: 8, padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>);
+
+          // Highlighted callout lines
+          if (/^(Key Takeaway|Score Rationale|Health Score|Strategic Rationale|Recommended Actions|Assessment|Impact|Priority|Critical|Warning)/i.test(clean)) {
+            elements.push(<div key={i} style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.7, marginBottom: 8, padding: '12px 16px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>{clean}</div>);
             continue;
           }
 
-          elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 2 }}>{clean}</div>);
+          // Key: Value metric lines — render as styled cards
+          const kvMatch = clean.match(/^([A-Z][A-Za-z\s\-\/&]+?):\s*(.+)$/);
+          if (kvMatch && kvMatch[1].length < 40 && kvMatch[1].length > 2) {
+            elements.push(
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', marginBottom: 4, background: 'rgba(255,255,255,0.02)', borderRadius: 6, borderLeft: '2px solid var(--border)' }}>
+                <span style={{ fontSize: 14, color: 'var(--text2)', fontWeight: 500 }}>{kvMatch[1]}</span>
+                <span style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600 }}>{kvMatch[2]}</span>
+              </div>
+            );
+            continue;
+          }
+
+          // URL lines — render as styled links
+          if (/^https?:\/\//.test(clean)) {
+            const urlParts = clean.match(/^(https?:\/\/\S+?)(?::?\s*(.+))?$/);
+            if (urlParts) {
+              const shortUrl = urlParts[1].replace(/^https?:\/\/[^/]+/, '');
+              elements.push(
+                <div key={i} style={{ padding: '6px 14px', marginBottom: 4, background: 'rgba(255,255,255,0.02)', borderRadius: 6, fontSize: 14 }}>
+                  <span style={{ color: '#818cf8', fontFamily: 'monospace', fontSize: 13 }}>{shortUrl || urlParts[1]}</span>
+                  {urlParts[2] && <span style={{ color: 'var(--text2)', marginLeft: 8 }}>{urlParts[2]}</span>}
+                </div>
+              );
+              continue;
+            }
+          }
+
+          // Bullet points
+          if (/^[\-\*]\s/.test(clean)) {
+            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4, paddingLeft: 16 }}>{'• ' + clean.replace(/^[\-\*]\s*/, '')}</div>);
+            continue;
+          }
+
+          // Numbered items
+          if (/^\d+[\.\)]\s/.test(clean)) {
+            elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 4, paddingLeft: 16 }}>{clean}</div>);
+            continue;
+          }
+
+          elements.push(<div key={i} style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, marginBottom: 4 }}>{clean}</div>);
         }
         if (inTable) flushTable();
         return elements;
@@ -1807,7 +1874,11 @@
       const raw = [];
       for (const line of report.split('\n')) {
         const trimmed = line.trim();
-        const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+        // Match ## or ### markdown headers
+        const mdMatch = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+        // Match === TITLE === headers
+        const eqMatch = trimmed.match(/^={2,}\s*(.+?)\s*={2,}$/);
+        const match = mdMatch || eqMatch;
         if (match) {
           const title = match[1].replace(/\*\*/g, '').trim();
           if (title.length > 3) raw.push(title);
