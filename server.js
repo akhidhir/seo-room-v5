@@ -2636,6 +2636,272 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
   }
 });
 
+// ==================== EXTERNAL GBP AUDIT (Managed Agent — Sonnet + Web Search) ====================
+
+app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Delete old external findings
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp_external'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gbp_external', 'running', NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const businessName = project.business_name || project.name || '';
+    const location = project.location || '';
+    const industry = project.industry || '';
+    const serviceAreas = project.service_areas || [];
+
+    // Get extension-scraped data if available (for context)
+    let extensionProfile = null;
+    try {
+      const extData = await pool.query(
+        `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [projectId]
+      );
+      if (extData.rows.length > 0) {
+        extensionProfile = typeof extData.rows[0].config === 'string' ? JSON.parse(extData.rows[0].config) : extData.rows[0].config;
+      }
+    } catch (e) {}
+
+    if (!anthropic) {
+      await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
+      return res.status(500).json({ error: 'Anthropic API not configured' });
+    }
+
+    console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
+
+    const agentSystemPrompt = `You are a local SEO specialist who audits Google Business Profiles using only visible, publicly available information. When given a business name, location, or profile details, audit the following areas: business info, categories, images, reviews, posts, NAP (Name/Address/Phone) consistency, services, and description. For each issue found, return: Issue (what's wrong), Explanation (why it matters for local SEO), Priority (High/Medium/Low), and Fix (specific actionable step). After listing all issues, provide a summary with: Total Issues found and Top Quick Wins (the 3-5 highest-impact fixes the business can implement immediately). Be concise, specific, and actionable. If information for a section is not visible or unavailable, note it as unverifiable and flag it as a potential gap.`;
+
+    const userPrompt = `Conduct a comprehensive external GBP audit for this business. Search the web to find all publicly available information — their Google Business Profile, website, directory listings, reviews on third-party platforms, social media, and any other online presence.
+
+BUSINESS: ${businessName}
+DOMAIN: ${domain}
+LOCATION: ${location}
+INDUSTRY: ${industry || 'trades/services'}
+SERVICE AREAS: ${JSON.stringify(serviceAreas).substring(0, 500)}
+
+${extensionProfile ? `CURRENT GBP DATA (from our extension scrape — use as baseline):
+${JSON.stringify({
+  name: extensionProfile.business?.name,
+  rating: extensionProfile.reviews?.averageRating,
+  reviewCount: extensionProfile.reviews?.totalCount,
+  categories: extensionProfile.categories,
+  phone: extensionProfile.phone,
+  address: extensionProfile.address,
+  website: extensionProfile.website,
+  description: extensionProfile.description ? extensionProfile.description.substring(0, 200) : null,
+  hours: extensionProfile.hours,
+  thirdPartyReviews: extensionProfile.thirdPartyReviews,
+  socialProfiles: extensionProfile.socialProfiles
+}, null, 1)}` : 'No extension data available — research everything from scratch.'}
+
+RESEARCH THESE AREAS:
+1. Google the business name and check their GBP panel
+2. Visit their website for NAP consistency, service pages, schema markup
+3. Check directory listings (Yellow Pages, True Local, Hipages, Facebook, Yelp, Houzz, etc.)
+4. Check for NAP inconsistencies across platforms
+5. Look at their review presence across Google and third-party sites
+6. Check for duplicate/conflicting web presences
+7. Verify business hours consistency
+8. Check social media presence
+
+After your research, return your findings as JSON in this EXACT format:
+{
+  "audit_sections": [
+    {
+      "section_number": 1,
+      "section_icon": "🏷️",
+      "section_title": "BUSINESS INFO",
+      "issues": [
+        {
+          "issue_number": 1,
+          "title": "Short descriptive title",
+          "issue": "What's wrong — be specific with examples and data",
+          "explanation": "Why this matters for local SEO — cite industry data or best practices",
+          "priority": "High" or "Medium" or "Low",
+          "fix": "Specific actionable fix steps"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_issues": number,
+    "high_priority": number,
+    "medium_priority": number,
+    "low_priority": number,
+    "quick_wins": [
+      {
+        "rank": 1,
+        "title": "Short action title",
+        "description": "Why this is high-impact and how to do it"
+      }
+    ]
+  }
+}
+
+SECTIONS to audit (use these exact section titles):
+1. 🏷️ BUSINESS INFO — name consistency, hours, location accuracy
+2. 📂 CATEGORIES — primary + secondary categories completeness
+3. 🖼️ IMAGES — photo quantity, quality, types, geo-tagging
+4. ⭐ REVIEWS — count, rating, response strategy, third-party reviews
+5. 📝 POSTS — Google Posts frequency and content
+6. 📍 NAP CONSISTENCY — name/address/phone across all platforms
+7. 🛠️ SERVICES — GBP service list completeness
+8. 📄 DESCRIPTION — keyword optimization, length, differentiators
+9. ❓ Q&A SECTION — populated or empty
+10. 🔖 ATTRIBUTES — business attributes set in GBP
+
+Return ONLY the JSON object. No markdown, no commentary outside the JSON.`;
+
+    // Run the managed agent with web search capability
+    let messages = [{ role: 'user', content: userPrompt }];
+    let finalText = '';
+    let totalTokens = 0;
+    const maxTurns = 25; // Safety limit for agent loop
+
+    for (let turn = 0; turn < maxTurns; turn++) {
+      console.log(`[gbp-external] Agent turn ${turn + 1}...`);
+
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 16000,
+        system: agentSystemPrompt,
+        tools: [{ type: 'web_search_20250305' }],
+        messages
+      });
+
+      totalTokens += (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
+
+      // Check if we have a final text response
+      const textBlocks = response.content.filter(b => b.type === 'text');
+      const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+
+      if (response.stop_reason === 'end_turn' || (textBlocks.length > 0 && toolUseBlocks.length === 0)) {
+        finalText = textBlocks.map(b => b.text).join('\n');
+        console.log(`[gbp-external] Agent finished after ${turn + 1} turns, ${totalTokens} tokens, ${finalText.length} chars`);
+        break;
+      }
+
+      // Agent wants to use tools — add assistant response and continue
+      messages.push({ role: 'assistant', content: response.content });
+
+      // For server-side tools (web_search), we just need to send back empty tool results
+      // as the server handles execution. But if it's client-side, we'd handle here.
+      // With web_search_20250305, the API handles it server-side in most cases.
+      // If we get tool_use blocks back, it means we need to loop.
+      if (toolUseBlocks.length > 0 && response.stop_reason === 'tool_use') {
+        // Check if there are server_tool_use results already in the response
+        const serverResults = response.content.filter(b => b.type === 'web_search_tool_result');
+        if (serverResults.length > 0) {
+          // Server already handled the search, just continue
+          continue;
+        }
+        // Otherwise, acknowledge the tool use so the model continues
+        const toolResults = toolUseBlocks.map(b => ({
+          type: 'tool_result',
+          tool_use_id: b.id,
+          content: 'Search completed.'
+        }));
+        messages.push({ role: 'user', content: toolResults });
+      }
+    }
+
+    // Parse the JSON response
+    let findings = [];
+    let auditSections = [];
+    let auditSummary = null;
+
+    if (finalText) {
+      try {
+        const jsonMatch = finalText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          let jsonStr = jsonMatch[0]
+            .replace(/,\s*}/g, '}')
+            .replace(/,\s*]/g, ']')
+            .replace(/[\x00-\x1f]/g, ' ');
+          const parsed = JSON.parse(jsonStr);
+
+          auditSections = parsed.audit_sections || [];
+          auditSummary = parsed.summary || null;
+
+          // Convert sections into findings for the DB
+          for (const section of auditSections) {
+            for (const issue of (section.issues || [])) {
+              const pillarMap = {
+                'BUSINESS INFO': 'Relevance', 'CATEGORIES': 'Relevance', 'DESCRIPTION': 'Relevance',
+                'SERVICES': 'Relevance', 'Q&A SECTION': 'Relevance', 'ATTRIBUTES': 'Relevance',
+                'POSTS': 'Relevance', 'IMAGES': 'Prominence', 'REVIEWS': 'Prominence',
+                'NAP CONSISTENCY': 'Proximity',
+              };
+              const sectionKey = (section.section_title || '').toUpperCase();
+              const gbpPillar = pillarMap[sectionKey] || 'Relevance';
+
+              findings.push({
+                pillar: 'gbp_external',
+                category: `${gbpPillar} > ${section.section_title || 'General'}`,
+                title: issue.title || '',
+                description: issue.issue || '',
+                recommendation: issue.fix || '',
+                severity: issue.priority || 'Medium',
+                current_value: issue.explanation || '',
+                recommended_value: '',
+                section_number: section.section_number,
+                section_icon: section.section_icon,
+                section_title: section.section_title,
+                issue_number: issue.issue_number
+              });
+            }
+          }
+        }
+      } catch (parseErr) {
+        console.error('[gbp-external] JSON parse failed:', parseErr.message);
+        // Store raw text as a single finding
+        findings.push({
+          pillar: 'gbp_external', category: 'Audit Report',
+          title: 'External GBP Audit Complete',
+          description: finalText.substring(0, 5000),
+          recommendation: 'Review the full audit report above.',
+          severity: 'Medium', current_value: '', recommended_value: ''
+        });
+      }
+    }
+
+    // Save findings
+    for (const f of findings) {
+      const r = await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+      f.id = r.rows[0].id; f.status = 'new';
+    }
+
+    // Save audit with sections data for rich rendering
+    await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+      ['completed', JSON.stringify({
+        findingsCount: findings.length,
+        auditSections,
+        auditSummary,
+        totalTokens,
+        model: 'claude-sonnet-4-6'
+      }), auditId]);
+
+    console.log(`[gbp-external] Project ${projectId}: ${findings.length} findings, ${auditSections.length} sections`);
+    res.json({ findings, auditSections, auditSummary });
+  } catch (e) {
+    console.error('[gbp-external] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== TECHNICAL AUDIT (AI-Powered) ====================
 
 app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
