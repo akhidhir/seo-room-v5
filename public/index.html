@@ -1275,6 +1275,8 @@
       const [report, setReport] = useState('');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
+      const [addedActions, setAddedActions] = useState({});
+      const [addingAction, setAddingAction] = useState(null);
 
       useEffect(() => { if (project) checkStatus(); }, [project?.id]);
 
@@ -1321,17 +1323,16 @@
       const parseReportSections = (text) => {
         if (!text) return [];
         const lines = text.split('\n');
-        const sections = [];
+        const rawSections = [];
         let current = null;
 
         for (let i = 0; i < lines.length; i++) {
           const trimmed = lines[i].trim();
-          // Only match "## TITLE" or "### N. TITLE" (markdown headers)
           const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
           if (match) {
             const title = match[1].replace(/\*\*/g, '').trim();
             if (title.length > 3) {
-              if (current) sections.push(current);
+              if (current) rawSections.push(current);
               current = { title, content: [] };
               continue;
             }
@@ -1342,8 +1343,30 @@
             current = { title: 'Overview', content: [lines[i]] };
           }
         }
-        if (current) sections.push(current);
-        return sections;
+        if (current) rawSections.push(current);
+
+        // Filter out unwanted sections
+        const skipPatterns = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
+        const filtered = rawSections.filter(s => !skipPatterns.some(p => p.test(s.title)));
+
+        // Merge directory sections
+        const presenceIdx = filtered.findIndex(s => /directory presence/i.test(s.title));
+        const registrationIdx = filtered.findIndex(s => /directory registration/i.test(s.title));
+        if (presenceIdx !== -1 && registrationIdx !== -1) {
+          filtered[presenceIdx].title = 'DIRECTORY AUDIT & ACTIONS';
+          filtered[presenceIdx].content = [
+            ...filtered[presenceIdx].content,
+            '',
+            '---',
+            '',
+            '#### Registration Recommendations',
+            '',
+            ...filtered[registrationIdx].content
+          ];
+          filtered.splice(registrationIdx, 1);
+        }
+
+        return filtered;
       };
 
       // Render a section's content — tables rendered as HTML tables, text as-is
@@ -1474,18 +1497,274 @@
         );
       }
 
+      // Extract actionable items from section content
+      const extractActions = (sectionTitle, lines) => {
+        const actions = [];
+        const titleLower = sectionTitle.toLowerCase();
+
+        // Suburb Targeting — items marked Partial or Missing need action
+        if (titleLower.includes('suburb')) {
+          let inTable = false;
+          let headers = [];
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+              if (!inTable) { headers = cells; inTable = true; continue; }
+              const lower = cells.join(' ').toLowerCase();
+              if (lower.includes('partial') || lower.includes('missing') || lower.includes('weak') || lower.includes('none') || lower.includes('high') || lower.includes('medium')) {
+                const suburb = cells[0] || '';
+                const priority = cells.find(c => /high|medium|critical/i.test(c)) || 'Medium';
+                const rationale = cells.find(c => c.length > 20) || '';
+                const action = cells[cells.length - 1] || '';
+                if (suburb && (lower.includes('partial') || lower.includes('missing') || lower.includes('weak') || lower.includes('high') || lower.includes('medium'))) {
+                  actions.push({
+                    title: 'Improve coverage: ' + suburb,
+                    description: rationale || action || ('Suburb has partial or no coverage — needs attention'),
+                    severity: /high|critical/i.test(priority) ? 'critical' : /medium/i.test(priority) ? 'high' : 'medium',
+                    type: 'suburb_targeting'
+                  });
+                }
+              }
+            } else { inTable = false; }
+          }
+          // Also check Recommended Suburbs table
+          return actions;
+        }
+
+        // Competitor Gap — items with Significant or Moderate gap
+        if (titleLower.includes('competitor')) {
+          let inTable = false;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+              if (!inTable) { inTable = true; continue; }
+              const lower = cells.join(' ').toLowerCase();
+              if (lower.includes('significant') || lower.includes('moderate')) {
+                const area = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
+                const yours = cells[1] || '';
+                const severity = lower.includes('significant') ? 'critical' : 'high';
+                actions.push({
+                  title: 'Close gap: ' + area,
+                  description: 'Your current: ' + yours + '. Competitors are ahead — see comparison above.',
+                  severity,
+                  type: 'competitor_gap',
+                  current_value: yours
+                });
+              }
+            } else { inTable = false; }
+          }
+          return actions;
+        }
+
+        // Directory Audit — not listed directories need registration
+        if (titleLower.includes('directory')) {
+          let inTable = false;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+              if (!inTable) { inTable = true; continue; }
+              const lower = cells.join(' ').toLowerCase();
+              if (lower.includes('not listed') || lower.includes('not found') || lower.includes('no') || lower.includes('missing') || lower.includes('register') || lower.includes('create')) {
+                const dir = cells[0] || '';
+                const status = cells.find(c => /not listed|not found|no|missing/i.test(c)) || '';
+                const priority = cells.find(c => /high|medium|low|critical/i.test(c)) || 'medium';
+                if (dir && dir.length > 2) {
+                  actions.push({
+                    title: 'Register on ' + dir,
+                    description: status ? ('Currently: ' + status) : 'Not currently listed — register business profile',
+                    severity: /high|critical/i.test(priority) ? 'critical' : /medium/i.test(priority) ? 'high' : 'medium',
+                    type: 'directory_registration'
+                  });
+                }
+              }
+            } else { inTable = false; }
+          }
+          return actions;
+        }
+
+        // Issue List — every item is an action
+        if (titleLower.includes('issue')) {
+          let inTable = false;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+              if (!inTable) { inTable = true; continue; }
+              const issue = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
+              const severity = cells.find(c => /high|critical|medium|low/i.test(c)) || 'medium';
+              const recommendation = cells.find(c => c.length > 30) || cells[cells.length - 1] || '';
+              if (issue && issue.length > 3) {
+                actions.push({
+                  title: issue,
+                  description: recommendation,
+                  severity: /high|critical/i.test(severity) ? 'critical' : /medium/i.test(severity) ? 'high' : 'medium',
+                  type: 'gbp_issue'
+                });
+              }
+            } else { inTable = false; }
+          }
+          // Also check bullet points
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+              const text = trimmed.replace(/^[-*\d.]+\s+/, '').replace(/\*\*/g, '');
+              if (text.length > 10 && !text.toLowerCase().startsWith('note')) {
+                actions.push({
+                  title: text.substring(0, 80),
+                  description: text,
+                  severity: 'high',
+                  type: 'gbp_issue'
+                });
+              }
+            }
+          }
+          return actions;
+        }
+
+        // Website Alignment — mismatches are actions
+        if (titleLower.includes('website') || titleLower.includes('alignment')) {
+          let inTable = false;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+            if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+              const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+              if (!inTable) { inTable = true; continue; }
+              const lower = cells.join(' ').toLowerCase();
+              if (lower.includes('mismatch') || lower.includes('partial') || lower.includes('missing') || lower.includes('no match') || lower.includes('unclear') || lower.includes('not found')) {
+                const element = cells[0] ? cells[0].replace(/\*\*/g, '') : '';
+                const current = cells[1] || '';
+                const target = cells[2] || '';
+                actions.push({
+                  title: 'Fix alignment: ' + element,
+                  description: 'GBP shows "' + current + '" but website shows "' + target + '"',
+                  severity: 'high',
+                  type: 'website_alignment',
+                  current_value: current,
+                  new_value: target
+                });
+              }
+            } else { inTable = false; }
+          }
+          return actions;
+        }
+
+        // Profile Health — just informational, no direct actions
+        // (actions come from issue list)
+
+        return actions;
+      };
+
       // If section is specified, show just that section
       if (section && section !== 'full') {
         const sections = parseReportSections(report);
         const sec = sections.find(s => s.title.toLowerCase().replace(/[^a-z0-9]/g, '') === section.toLowerCase().replace(/[^a-z0-9]/g, ''));
         if (sec) {
+          const actions = extractActions(sec.title, sec.content);
+
+          const handleAddAction = async (action, idx) => {
+            setAddingAction(idx);
+            try {
+              await api('/projects/' + project.id + '/action-items', {
+                method: 'POST',
+                body: JSON.stringify({
+                  pillar: 'gbp_external',
+                  type: action.type || 'external_audit',
+                  title: action.title,
+                  description: action.description,
+                  severity: action.severity || 'medium',
+                  current_value: action.current_value || null,
+                  new_value: action.new_value || null
+                })
+              });
+              setAddedActions(prev => ({ ...prev, [idx]: true }));
+            } catch (e) {
+              console.error('Failed to add action:', e);
+            }
+            setAddingAction(null);
+          };
+
+          const handleAddAll = async () => {
+            for (let i = 0; i < actions.length; i++) {
+              if (!addedActions[i]) {
+                await handleAddAction(actions[i], i);
+              }
+            }
+          };
+
           return (
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, color: 'var(--text1)' }}>
                 <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />{sec.title}
               </h2>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px' }}>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px', marginBottom: 20 }}>
                 {renderSectionContent(sec.content)}
+              </div>
+
+              {/* ACTION AREA */}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>
+                    <i className="fas fa-tasks" style={{ marginRight: 8, color: '#818cf8' }} />Actions
+                  </h3>
+                  {actions.length > 0 && (
+                    <button className="btn btn-primary" onClick={handleAddAll} style={{ fontSize: 13, padding: '6px 14px' }}>
+                      <i className="fas fa-plus-circle" style={{ marginRight: 6 }} />Add All to Action Plan
+                    </button>
+                  )}
+                </div>
+
+                {actions.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--text3)', fontSize: 14 }}>
+                    <i className="fas fa-check-circle" style={{ fontSize: 28, marginBottom: 10, display: 'block', opacity: 0.3 }} />
+                    No actions at this time
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {actions.map((action, idx) => (
+                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+                          background: action.severity === 'critical' ? 'rgba(239,68,68,0.15)' : action.severity === 'high' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
+                          color: action.severity === 'critical' ? '#ef4444' : action.severity === 'high' ? '#f59e0b' : '#3b82f6'
+                        }}>
+                          {action.severity}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text1)', marginBottom: 2 }}>{action.title}</div>
+                          {action.description && (
+                            <div style={{ fontSize: 12, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{action.description}</div>
+                          )}
+                        </div>
+                        {addedActions[idx] ? (
+                          <span style={{ color: '#22c55e', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-check" style={{ marginRight: 4 }} />Added
+                          </span>
+                        ) : (
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => handleAddAction(action, idx)}
+                            disabled={addingAction === idx}
+                            style={{ fontSize: 12, padding: '5px 10px', whiteSpace: 'nowrap' }}
+                          >
+                            {addingAction === idx ? (
+                              <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding</>
+                            ) : (
+                              <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add to Plan</>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -1515,17 +1794,32 @@
     // Helper: get external audit section names for sidebar
     function getExternalAuditSections(report) {
       if (!report) return [];
-      const sections = [];
+      const raw = [];
       for (const line of report.split('\n')) {
         const trimmed = line.trim();
-        // Only match "## TITLE" or "### N. TITLE" (markdown headers with ##)
         const match = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
         if (match) {
           const title = match[1].replace(/\*\*/g, '').trim();
-          if (title.length > 3) sections.push(title);
+          if (title.length > 3) raw.push(title);
         }
       }
-      return sections;
+      // Filter out unwanted sections
+      const skipPatterns = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
+      const filtered = raw.filter(s => !skipPatterns.some(p => p.test(s)));
+      // Combine directory sections
+      const hasPresence = filtered.some(s => /directory presence/i.test(s));
+      const hasRegistration = filtered.some(s => /directory registration/i.test(s));
+      const combined = [];
+      for (const s of filtered) {
+        if (/directory presence/i.test(s) && hasRegistration) {
+          combined.push('DIRECTORY AUDIT & ACTIONS');
+        } else if (/directory registration/i.test(s) && hasPresence) {
+          continue; // skip — merged into DIRECTORY AUDIT
+        } else {
+          combined.push(s);
+        }
+      }
+      return combined;
     }
 
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============

@@ -697,6 +697,21 @@ app.get('/api/projects/:id/action-items', async (req, res) => {
   }
 });
 
+// Create action item directly (from external audit)
+app.post('/api/projects/:id/action-items', async (req, res) => {
+  const { pillar, type, title, description, severity, current_value, new_value } = req.body;
+  try {
+    const result = await pool.query(
+      `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, status, execution_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'manual') RETURNING *`,
+      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null]
+    );
+    res.json({ action_item: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Update action item (approve/skip/mark done)
 app.put('/api/action-items/:id', async (req, res) => {
   const { status, approved_at } = req.body;
