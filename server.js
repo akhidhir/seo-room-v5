@@ -2681,86 +2681,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
 
-    const userPrompt = `Conduct a comprehensive external GBP audit for this business. Search the web to find all publicly available information — their Google Business Profile, website, directory listings, reviews on third-party platforms, social media, and any other online presence.
-
-BUSINESS: ${businessName}
-DOMAIN: ${domain}
-LOCATION: ${location}
-INDUSTRY: ${industry || 'trades/services'}
-SERVICE AREAS: ${JSON.stringify(serviceAreas).substring(0, 500)}
-
-${extensionProfile ? `CURRENT GBP DATA (from our extension scrape — use as baseline):
-${JSON.stringify({
-  name: extensionProfile.business?.name,
-  rating: extensionProfile.reviews?.averageRating,
-  reviewCount: extensionProfile.reviews?.totalCount,
-  categories: extensionProfile.categories,
-  phone: extensionProfile.phone,
-  address: extensionProfile.address,
-  website: extensionProfile.website,
-  description: extensionProfile.description ? extensionProfile.description.substring(0, 200) : null,
-  hours: extensionProfile.hours,
-  thirdPartyReviews: extensionProfile.thirdPartyReviews,
-  socialProfiles: extensionProfile.socialProfiles
-}, null, 1)}` : 'No extension data available — research everything from scratch.'}
-
-RESEARCH THESE AREAS:
-1. Google the business name and check their GBP panel
-2. Visit their website for NAP consistency, service pages, schema markup
-3. Check directory listings (Yellow Pages, True Local, Hipages, Facebook, Yelp, Houzz, etc.)
-4. Check for NAP inconsistencies across platforms
-5. Look at their review presence across Google and third-party sites
-6. Check for duplicate/conflicting web presences
-7. Verify business hours consistency
-8. Check social media presence
-
-After your research, return your findings as JSON in this EXACT format:
-{
-  "audit_sections": [
-    {
-      "section_number": 1,
-      "section_icon": "🏷️",
-      "section_title": "BUSINESS INFO",
-      "issues": [
-        {
-          "issue_number": 1,
-          "title": "Short descriptive title",
-          "issue": "What's wrong — be specific with examples and data",
-          "explanation": "Why this matters for local SEO — cite industry data or best practices",
-          "priority": "High" or "Medium" or "Low",
-          "fix": "Specific actionable fix steps"
-        }
-      ]
-    }
-  ],
-  "summary": {
-    "total_issues": number,
-    "high_priority": number,
-    "medium_priority": number,
-    "low_priority": number,
-    "quick_wins": [
-      {
-        "rank": 1,
-        "title": "Short action title",
-        "description": "Why this is high-impact and how to do it"
-      }
-    ]
-  }
-}
-
-SECTIONS to audit (use these exact section titles):
-1. 🏷️ BUSINESS INFO — name consistency, hours, location accuracy
-2. 📂 CATEGORIES — primary + secondary categories completeness
-3. 🖼️ IMAGES — photo quantity, quality, types, geo-tagging
-4. ⭐ REVIEWS — count, rating, response strategy, third-party reviews
-5. 📝 POSTS — Google Posts frequency and content
-6. 📍 NAP CONSISTENCY — name/address/phone across all platforms
-7. 🛠️ SERVICES — GBP service list completeness
-8. 📄 DESCRIPTION — keyword optimization, length, differentiators
-9. ❓ Q&A SECTION — populated or empty
-10. 🔖 ATTRIBUTES — business attributes set in GBP
-
-Return ONLY the JSON object. No markdown, no commentary outside the JSON.`;
+    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}`;
 
     // Run the managed agent via Sessions API
     console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
@@ -2799,88 +2720,12 @@ Return ONLY the JSON object. No markdown, no commentary outside the JSON.`;
 
     console.log(`[gbp-external] Agent finished: ${totalTokens} tokens, ${finalText.length} chars`);
 
-    // Parse the JSON response
-    let findings = [];
-    let auditSections = [];
-    let auditSummary = null;
-
-    if (finalText) {
-      try {
-        const jsonMatch = finalText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          let jsonStr = jsonMatch[0]
-            .replace(/,\s*}/g, '}')
-            .replace(/,\s*]/g, ']')
-            .replace(/[\x00-\x1f]/g, ' ');
-          const parsed = JSON.parse(jsonStr);
-
-          auditSections = parsed.audit_sections || [];
-          auditSummary = parsed.summary || null;
-
-          // Convert sections into findings for the DB
-          for (const section of auditSections) {
-            for (const issue of (section.issues || [])) {
-              const pillarMap = {
-                'BUSINESS INFO': 'Relevance', 'CATEGORIES': 'Relevance', 'DESCRIPTION': 'Relevance',
-                'SERVICES': 'Relevance', 'Q&A SECTION': 'Relevance', 'ATTRIBUTES': 'Relevance',
-                'POSTS': 'Relevance', 'IMAGES': 'Prominence', 'REVIEWS': 'Prominence',
-                'NAP CONSISTENCY': 'Proximity',
-              };
-              const sectionKey = (section.section_title || '').toUpperCase();
-              const gbpPillar = pillarMap[sectionKey] || 'Relevance';
-
-              findings.push({
-                pillar: 'gbp_external',
-                category: `${gbpPillar} > ${section.section_title || 'General'}`,
-                title: issue.title || '',
-                description: issue.issue || '',
-                recommendation: issue.fix || '',
-                severity: issue.priority || 'Medium',
-                current_value: issue.explanation || '',
-                recommended_value: '',
-                section_number: section.section_number,
-                section_icon: section.section_icon,
-                section_title: section.section_title,
-                issue_number: issue.issue_number
-              });
-            }
-          }
-        }
-      } catch (parseErr) {
-        console.error('[gbp-external] JSON parse failed:', parseErr.message);
-        // Store raw text as a single finding
-        findings.push({
-          pillar: 'gbp_external', category: 'Audit Report',
-          title: 'External GBP Audit Complete',
-          description: finalText.substring(0, 5000),
-          recommendation: 'Review the full audit report above.',
-          severity: 'Medium', current_value: '', recommended_value: ''
-        });
-      }
-    }
-
-    // Save findings
-    for (const f of findings) {
-      const r = await pool.query(
-        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
-      );
-      f.id = r.rows[0].id; f.status = 'new';
-    }
-
-    // Save audit with sections data for rich rendering
+    // Store the raw agent report — no parsing, no restructuring
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-      ['completed', JSON.stringify({
-        findingsCount: findings.length,
-        auditSections,
-        auditSummary,
-        totalTokens,
-        model: 'claude-sonnet-4-6'
-      }), auditId]);
+      ['completed', JSON.stringify({ report: finalText, totalTokens, model: 'claude-sonnet-4-6' }), auditId]);
 
-    console.log(`[gbp-external] Project ${projectId}: ${findings.length} findings, ${auditSections.length} sections`);
-    res.json({ findings, auditSections, auditSummary });
+    console.log(`[gbp-external] Project ${projectId}: report stored (${finalText.length} chars)`);
+    res.json({ report: finalText });
   } catch (e) {
     console.error('[gbp-external] Error:', e.message);
     res.status(500).json({ error: e.message });

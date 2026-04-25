@@ -1272,27 +1272,17 @@
     // ============ GBP AUDIT PAGE (v4-style table) ============
     // ============ EXTERNAL GBP AUDIT SUB-PAGE ============
     function ExternalGBPAuditPage({ project }) {
-      const [findings, setFindings] = useState([]);
-      const [sections, setSections] = useState([]);
-      const [summary, setSummary] = useState(null);
+      const [report, setReport] = useState('');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
-      const [expandedSections, setExpandedSections] = useState(new Set());
-      const [reviewFinding, setReviewFinding] = useState(null);
 
       useEffect(() => { if (project) loadExisting(); }, [project?.id]);
 
       const loadExisting = async () => {
         try {
-          const data = await api(`/projects/${project.id}/audit-findings`);
-          if (data.findings) {
-            const ext = data.findings.filter(f => f.pillar === 'gbp_external');
-            setFindings(ext);
-          }
           const auditData = await api(`/projects/${project.id}/audits`);
           const extAudit = (auditData.audits || []).find(a => a.pillar === 'gbp_external' && a.status === 'completed');
-          if (extAudit?.audit_data?.auditSections) setSections(extAudit.audit_data.auditSections);
-          if (extAudit?.audit_data?.auditSummary) setSummary(extAudit.audit_data.auditSummary);
+          if (extAudit?.audit_data?.report) setReport(extAudit.audit_data.report);
         } catch (e) {}
       };
 
@@ -1300,78 +1290,57 @@
         setLoading(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
-          setFindings(data.findings || []);
-          if (data.auditSections) setSections(data.auditSections);
-          if (data.auditSummary) setSummary(data.auditSummary);
+          if (data.report) setReport(data.report);
         } catch (err) { setError(err.message); }
         finally { setLoading(false); }
       };
 
-      const updateStatus = async (id, status) => {
-        try {
-          await api(`/audit-findings/${id}`, { method: 'PUT', body: { status } });
-          setFindings(prev => prev.map(f => f.id === id ? { ...f, status } : f));
-        } catch (err) { setError(err.message); }
+      // Simple markdown-ish renderer for the agent's output
+      const renderReport = (text) => {
+        return text.split('\n').map((line, i) => {
+          // Section headers (e.g., "1. 🏷️ BUSINESS INFO")
+          if (/^\d+\.\s*[🏷📂🖼⭐📝📍🛠📄❓🔖]/.test(line) || /^#+\s/.test(line) || /^[🏷📂🖼⭐📝📍🛠📄❓🔖🔍📊⚡]/.test(line)) {
+            const clean = line.replace(/^#+\s*/, '');
+            return <h3 key={i} style={{ fontSize: 20, fontWeight: 800, marginTop: 28, marginBottom: 12, color: 'var(--accent)', borderBottom: '2px solid var(--border)', paddingBottom: 8 }}>{clean}</h3>;
+          }
+          // Issue headers (e.g., "Issue 1 —")
+          if (/^Issue\s*\d+/i.test(line)) {
+            return <h4 key={i} style={{ fontSize: 17, fontWeight: 700, marginTop: 20, marginBottom: 6, color: 'var(--text1)' }}>{line}</h4>;
+          }
+          // Priority badges
+          if (/^Priority:\s*(🔴|High)/i.test(line)) {
+            return <div key={i} style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 4, fontSize: 13, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444', marginBottom: 8 }}>{line}</div>;
+          }
+          if (/^Priority:\s*(🟠|Medium)/i.test(line)) {
+            return <div key={i} style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 4, fontSize: 13, fontWeight: 700, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', marginBottom: 8 }}>{line}</div>;
+          }
+          if (/^Priority:\s*(🟡|Low)/i.test(line)) {
+            return <div key={i} style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 4, fontSize: 13, fontWeight: 700, background: 'rgba(59,130,246,0.15)', color: '#3b82f6', marginBottom: 8 }}>{line}</div>;
+          }
+          // Fix lines
+          if (/^Fix:/i.test(line)) {
+            return <div key={i} style={{ padding: '10px 14px', background: 'rgba(34,197,94,0.06)', borderLeft: '3px solid #22c55e', borderRadius: '0 6px 6px 0', fontSize: 14, lineHeight: 1.6, color: 'var(--text1)', marginBottom: 10 }}><strong style={{ color: '#22c55e' }}>Fix:</strong> {line.replace(/^Fix:\s*/i, '')}</div>;
+          }
+          // Explanation lines
+          if (/^Explanation:/i.test(line)) {
+            return <div key={i} style={{ padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0', fontSize: 14, lineHeight: 1.6, color: 'var(--text2)', marginBottom: 8, fontStyle: 'italic' }}>{line}</div>;
+          }
+          // Bold text
+          if (/^\*\*/.test(line) || /^Issue:/.test(line)) {
+            return <div key={i} style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.6, color: 'var(--text1)', marginBottom: 4 }}>{line.replace(/\*\*/g, '')}</div>;
+          }
+          // Empty lines
+          if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
+          // Normal text
+          return <div key={i} style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text2)', marginBottom: 2 }}>{line}</div>;
+        });
       };
-
-      const toggleSection = (title) => {
-        setExpandedSections(prev => { const s = new Set(prev); s.has(title) ? s.delete(title) : s.add(title); return s; });
-      };
-
-      const sevColor = { High: '#ef4444', Medium: '#f59e0b', Low: '#3b82f6' };
-      const sevBg = { High: 'rgba(239,68,68,0.1)', Medium: 'rgba(245,158,11,0.1)', Low: 'rgba(59,130,246,0.1)' };
-      const sectionIcons = { 'BUSINESS INFO': '🏷️', 'CATEGORIES': '📂', 'IMAGES': '🖼️', 'REVIEWS': '⭐', 'POSTS': '📝', 'NAP CONSISTENCY': '📍', 'SERVICES': '🛠️', 'DESCRIPTION': '📄', 'Q&A SECTION': '❓', 'ATTRIBUTES': '🔖' };
-
-      if (reviewFinding) {
-        const f = reviewFinding;
-        return (
-          <div>
-            <button className="btn btn-secondary" onClick={() => setReviewFinding(null)} style={{ marginBottom: 16, fontSize: 15, padding: '8px 16px' }}>
-              <i className="fas fa-arrow-left" style={{ marginRight: 8 }} /> Back to Audit
-            </button>
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 28 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-                <div><div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
-                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2></div>
-                <span style={{ padding: '6px 16px', borderRadius: 6, fontSize: 14, fontWeight: 700, background: sevBg[f.severity] || sevBg.Medium, color: sevColor[f.severity] || sevColor.Medium }}>{f.severity}</span>
-              </div>
-              {f.description && (
-                <div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>Issue</div>
-                  <div style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text1)' }}>{f.description}</div>
-                </div>
-              )}
-              {f.current_value && (
-                <div style={{ marginBottom: 20, padding: 20, background: 'rgba(99,102,241,0.06)', borderRadius: 10, border: '1px solid rgba(99,102,241,0.15)' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', marginBottom: 10 }}><i className="fas fa-info-circle" style={{ marginRight: 6 }} />Why This Matters</div>
-                  <div style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text1)' }}>{f.current_value}</div>
-                </div>
-              )}
-              {f.recommendation && (
-                <div style={{ marginBottom: 20, padding: 20, background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 10 }}><i className="fas fa-wrench" style={{ marginRight: 6 }} />How to Fix</div>
-                  <div style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text1)' }}>{f.recommendation}</div>
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 14, marginTop: 24 }}>
-                <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
-                  <i className="fas fa-check" style={{ marginRight: 8 }} /> Move to Action Plan
-                </button>
-                <button className="btn btn-secondary" onClick={() => { updateStatus(f.id, 'rejected'); setReviewFinding(null); }} style={{ fontSize: 16, padding: '12px 28px' }}>
-                  <i className="fas fa-eye-slash" style={{ marginRight: 8 }} /> Ignore
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      }
 
       return (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
               <i className="fas fa-globe" style={{ marginRight: 10, color: '#818cf8' }} />External GBP Audit
-              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} issues</span>
             </h2>
             <div style={{ marginLeft: 'auto' }}>
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
@@ -1384,106 +1353,18 @@
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
               <div className="audit-loading-text">External GBP Audit</div>
-              <div className="audit-loading-sub">Managed agent is researching your business across the web — Google, directories, reviews, social media... This takes 1-3 minutes.</div>
+              <div className="audit-loading-sub">Managed agent is researching your business across the web. This takes 1-3 minutes.</div>
             </div>
           )}
           {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
 
-          {summary && !loading && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 20, marginBottom: 20 }}>
-              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
-                {[
-                  { val: summary.total_issues || findings.length, label: 'Total Issues', color: 'var(--text1)', bg: 'var(--bg)' },
-                  { val: summary.high_priority || 0, label: 'High Priority', color: '#ef4444', bg: 'rgba(239,68,68,0.08)' },
-                  { val: summary.medium_priority || 0, label: 'Medium', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)' },
-                  { val: summary.low_priority || 0, label: 'Low', color: '#3b82f6', bg: 'rgba(59,130,246,0.08)' },
-                ].map((s, i) => (
-                  <div key={i} style={{ textAlign: 'center', padding: '12px 20px', background: s.bg, borderRadius: 8, minWidth: 100 }}>
-                    <div style={{ fontSize: 32, fontWeight: 800, color: s.color }}>{s.val}</div>
-                    <div style={{ fontSize: 12, color: s.color, textTransform: 'uppercase', opacity: 0.8 }}>{s.label}</div>
-                  </div>
-                ))}
-              </div>
-              {summary.quick_wins && summary.quick_wins.length > 0 && (
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}><i className="fas fa-bolt" style={{ marginRight: 8, color: '#f59e0b' }} />Top Quick Wins</div>
-                  {summary.quick_wins.map((qw, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 12, padding: '10px 14px', background: i % 2 === 0 ? 'var(--bg)' : 'transparent', borderRadius: 6, marginBottom: 4 }}>
-                      <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent)', minWidth: 28 }}>{qw.rank || i + 1}.</span>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 700 }}>{qw.title}</div>
-                        <div style={{ fontSize: 14, color: 'var(--text2)', marginTop: 2 }}>{qw.description}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+          {report && !loading && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '24px 28px' }}>
+              {renderReport(report)}
             </div>
           )}
 
-          {sections.length > 0 && !loading && sections.map((section, si) => {
-            const sTitle = section.section_title || 'General';
-            const icon = section.section_icon || sectionIcons[sTitle.toUpperCase()] || '📋';
-            const issues = section.issues || [];
-            const sectionFindings = findings.filter(f => {
-              const cat = f.category?.includes(' > ') ? f.category.split(' > ')[1] : f.category;
-              return cat === sTitle || cat === sTitle.toUpperCase();
-            });
-            const isExpanded = !expandedSections.has(sTitle); // default open
-            const highCount = issues.filter(i => (i.priority || i.severity) === 'High').length;
-
-            return (
-              <div key={si} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-                <div onClick={() => toggleSection(sTitle)}
-                  style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', cursor: 'pointer', background: 'var(--bg)', borderBottom: isExpanded ? '1px solid var(--border)' : 'none' }}>
-                  <span style={{ fontSize: 22, marginRight: 12 }}>{icon}</span>
-                  <span style={{ fontSize: 17, fontWeight: 700, flex: 1 }}>{section.section_number ? `${section.section_number}. ` : ''}{sTitle}</span>
-                  <span style={{ fontSize: 14, color: 'var(--text3)', marginRight: 12 }}>{issues.length} issue{issues.length !== 1 ? 's' : ''}</span>
-                  {highCount > 0 && <span style={{ padding: '3px 10px', borderRadius: 4, fontSize: 12, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444', marginRight: 12 }}>{highCount} HIGH</span>}
-                  <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 14 }} />
-                </div>
-                {isExpanded && (
-                  <div style={{ padding: '4px 0' }}>
-                    {(sectionFindings.length > 0 ? sectionFindings : issues).map((item, ii) => {
-                      const f = sectionFindings[ii] || {};
-                      const priority = f.severity || item.priority || 'Medium';
-                      const pColor = sevColor[priority] || sevColor.Medium;
-                      const title = f.title || item.title || '';
-                      const desc = f.description || item.issue || '';
-                      const fix = f.recommendation || item.fix || '';
-                      const status = f.status || 'new';
-
-                      return (
-                        <div key={ii} style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', cursor: f.id ? 'pointer' : 'default' }}
-                          onClick={() => f.id ? setReviewFinding(f) : null}>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-                            <span style={{ display: 'inline-block', width: 4, minHeight: 40, borderRadius: 2, background: pColor, marginTop: 2 }} />
-                            <div style={{ flex: 1 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                                <span style={{ fontSize: 16, fontWeight: 700 }}>{title}</span>
-                                <span style={{ padding: '3px 10px', borderRadius: 4, fontSize: 12, fontWeight: 700, background: sevBg[priority], color: pColor }}>{priority}</span>
-                                {status === 'approved' && <span style={{ padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>approved</span>}
-                              </div>
-                              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 4 }}>{desc.substring(0, 250)}{desc.length > 250 ? '...' : ''}</div>
-                              {fix && <div style={{ fontSize: 13, color: '#22c55e', marginTop: 4 }}><i className="fas fa-wrench" style={{ marginRight: 6, fontSize: 11 }} />{fix.substring(0, 200)}{fix.length > 200 ? '...' : ''}</div>}
-                            </div>
-                            {f.id && status === 'new' && (
-                              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                                <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); updateStatus(f.id, 'approved'); }} style={{ fontSize: 12, padding: '4px 10px', color: '#22c55e' }}><i className="fas fa-check" /></button>
-                                <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); updateStatus(f.id, 'rejected'); }} style={{ fontSize: 12, padding: '4px 10px', color: '#94a3b8' }}><i className="fas fa-times" /></button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {findings.length === 0 && !loading && sections.length === 0 && (
+          {!report && !loading && (
             <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 60, fontSize: 16, background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
               <i className="fas fa-robot" style={{ fontSize: 40, marginBottom: 16, display: 'block', opacity: 0.3 }} />
               No external audit yet. Click "Run External Audit" to have the managed agent research your business across the web.
