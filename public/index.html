@@ -5747,12 +5747,6 @@
             return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" project={project} />;
           case 'onpage-actions':
             return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" project={project} />;
-          default:
-            if (activeTab.startsWith('ext-sec-')) {
-              const sectionName = activeTab.replace('ext-sec-', '').replace(/-/g, ' ');
-              return <ExternalGBPAuditPage project={project} section={sectionName} />;
-            }
-            break;
           case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
@@ -5774,7 +5768,11 @@
           case 'projects':
             return <ProjectsPage onProjectSwitch={handleProjectSwitch} />;
           default:
-            return <GBPAuditPage project={project} />;
+            if (activeTab.startsWith('ext-sec-')) {
+              const sectionName = activeTab.replace('ext-sec-', '').replace(/-/g, ' ');
+              return <ExternalGBPAuditPage project={project} section={sectionName} />;
+            }
+            return <InternalGBPAuditPage project={project} />;
         }
       };
 
