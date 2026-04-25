@@ -1276,43 +1276,46 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
 
-      useEffect(() => { if (project) loadExisting(); }, [project?.id]);
+      useEffect(() => { if (project) checkStatus(); }, [project?.id]);
 
-      const loadExisting = async () => {
+      const checkStatus = async () => {
         try {
-          const auditData = await api(`/projects/${project.id}/audits`);
-          const audits = auditData.audits || [];
-          // Check if an audit is currently running
-          const runningAudit = audits.find(a => a.pillar === 'gbp_external' && a.status === 'running');
-          if (runningAudit) {
+          const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+          if (data.status === 'running') {
             setLoading(true);
-            // Poll until it completes
-            const pollInterval = setInterval(async () => {
-              try {
-                const pollData = await api(`/projects/${project.id}/audits`);
-                const stillRunning = (pollData.audits || []).find(a => a.pillar === 'gbp_external' && a.status === 'running');
-                if (!stillRunning) {
-                  clearInterval(pollInterval);
-                  const completed = (pollData.audits || []).find(a => a.pillar === 'gbp_external' && a.status === 'completed');
-                  if (completed?.audit_data?.report) setReport(completed.audit_data.report);
-                  setLoading(false);
-                }
-              } catch (e) { clearInterval(pollInterval); setLoading(false); }
-            }, 5000);
-            return;
+            startPolling();
+          } else if (data.status === 'completed' && data.report) {
+            setReport(data.report);
+          } else if (data.status === 'failed' && data.error) {
+            setError(data.error);
           }
-          const extAudit = audits.find(a => a.pillar === 'gbp_external' && a.status === 'completed');
-          if (extAudit?.audit_data?.report) setReport(extAudit.audit_data.report);
         } catch (e) {}
       };
 
+      const startPolling = () => {
+        const pollInterval = setInterval(async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
+            if (data.status === 'completed') {
+              clearInterval(pollInterval);
+              if (data.report) setReport(data.report);
+              setLoading(false);
+            } else if (data.status === 'failed') {
+              clearInterval(pollInterval);
+              setError(data.error || 'Audit failed');
+              setLoading(false);
+            }
+          } catch (e) { clearInterval(pollInterval); setLoading(false); }
+        }, 5000);
+      };
+
       const runAudit = async () => {
-        setLoading(true); setError('');
+        setLoading(true); setError(''); setReport('');
         try {
-          const data = await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
-          if (data.report) setReport(data.report);
-        } catch (err) { setError(err.message); }
-        finally { setLoading(false); }
+          await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
+          // POST returns immediately, start polling for result
+          startPolling();
+        } catch (err) { setError(err.message); setLoading(false); }
       };
 
       // Simple markdown-ish renderer for the agent's output

@@ -2638,6 +2638,28 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
 
 // ==================== EXTERNAL GBP AUDIT (Managed Agent — Sonnet + Web Search) ====================
 
+app.get('/api/projects/:projectId/audits/gbp-external/status', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='gbp_external' ORDER BY started_at DESC LIMIT 1`,
+      [projectId]
+    );
+    if (result.rows.length === 0) return res.json({ status: 'none' });
+    const audit = result.rows[0];
+    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+    res.json({
+      status: audit.status,
+      report: data.report || null,
+      error: data.error || null,
+      startedAt: audit.started_at,
+      completedAt: audit.completed_at,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) => {
   const { projectId } = req.params;
   try {
@@ -2708,84 +2730,116 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const session = await sessionResp.json();
     console.log(`[gbp-external] Session created: ${session.id}`);
 
-    // 2. Send user message (wrapped in events array)
-    const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
-      method: 'POST',
-      headers: agentHeaders,
-      body: JSON.stringify({
-        events: [{
-          type: 'user.message',
-          content: [{ type: 'text', text: userPrompt }]
-        }]
-      }),
-    });
-    if (!msgResp.ok) {
-      const errBody = await msgResp.text();
-      throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
-    }
-    console.log(`[gbp-external] Message sent, polling for response...`);
+    // 2. Send user message — respond to browser immediately, process in background
+    res.json({ auditId, status: 'running', sessionId: session.id });
 
-    // 3. Poll for events until session is idle (SSE streaming via fetch)
-    let finalText = '';
-    let totalTokens = 0;
-    const maxPollTime = 5 * 60 * 1000; // 5 min timeout
-    const pollStart = Date.now();
+    // Background: send message and read SSE stream
+    (async () => {
+      try {
+        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
+          method: 'POST',
+          headers: { ...agentHeaders, 'Accept': 'text/event-stream' },
+          body: JSON.stringify({
+            events: [{
+              type: 'user.message',
+              content: [{ type: 'text', text: userPrompt }]
+            }]
+          }),
+        });
 
-    while (Date.now() - pollStart < maxPollTime) {
-      const eventsResp = await fetch(`${apiBase}/sessions/${session.id}/events?stream=false`, {
-        headers: agentHeaders,
-      });
-      if (!eventsResp.ok) {
-        const errBody = await eventsResp.text();
-        console.error(`[gbp-external] Events fetch failed: ${errBody}`);
-        break;
-      }
-      const eventsData = await eventsResp.json();
-      const events = eventsData.events || eventsData.data || (Array.isArray(eventsData) ? eventsData : []);
-
-      let sessionDone = false;
-      for (const event of events) {
-        if (event.type === 'agent.message' || event.type === 'message') {
-          const content = event.message?.content || event.content || [];
-          const textParts = (Array.isArray(content) ? content : []).filter(b => b.type === 'text');
-          const newText = textParts.map(b => b.text).join('\n');
-          if (newText && !finalText.includes(newText)) finalText += newText;
-          totalTokens += (event.message?.usage?.input_tokens || 0) + (event.message?.usage?.output_tokens || 0);
-        } else if (event.type === 'agent.tool_use') {
-          console.log(`[gbp-external] Agent using tool: ${event.tool_use?.name || event.name || 'unknown'}`);
+        if (!msgResp.ok) {
+          const errBody = await msgResp.text();
+          throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
         }
-        if (event.type === 'session.status_idle' || event.type === 'session.completed' || event.type === 'done') {
-          sessionDone = true;
-        }
-      }
 
-      if (sessionDone || finalText.length > 0) {
-        // Check session status
-        const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { headers: agentHeaders });
-        if (statusResp.ok) {
-          const statusData = await statusResp.json();
-          if (statusData.status === 'idle' || statusData.status === 'completed') {
-            console.log(`[gbp-external] Session status: ${statusData.status}`);
-            break;
+        // Read the full SSE stream (blocks until agent finishes)
+        const responseBody = await msgResp.text();
+        console.log(`[gbp-external] Response length: ${responseBody.length} chars`);
+        console.log(`[gbp-external] Response preview: ${responseBody.substring(0, 1000)}`);
+
+        // Extract text from response — try multiple formats
+        let finalText = '';
+
+        // Try SSE format (data: {...}\n lines)
+        if (responseBody.includes('data: ')) {
+          const textParts = [];
+          for (const line of responseBody.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const d = JSON.parse(payload);
+              // Messages API streaming format
+              if (d.type === 'content_block_delta' && d.delta?.type === 'text_delta') {
+                textParts.push(d.delta.text);
+              }
+              // Managed agent event formats
+              if (d.type === 'agent.response' || d.type === 'assistant.message') {
+                const content = d.message?.content || d.content || [];
+                const parts = Array.isArray(content) ? content : [];
+                for (const p of parts) {
+                  if (p.type === 'text' && p.text) textParts.push(p.text);
+                }
+              }
+              // Generic content extraction
+              if (d.content && Array.isArray(d.content)) {
+                for (const p of d.content) {
+                  if (p.type === 'text' && p.text) textParts.push(p.text);
+                }
+              }
+              if (d.message?.content && Array.isArray(d.message.content)) {
+                for (const p of d.message.content) {
+                  if (p.type === 'text' && p.text) textParts.push(p.text);
+                }
+              }
+              if (d.delta?.text) textParts.push(d.delta.text);
+            } catch (e) {}
+          }
+          // Deduplicate (some formats may double-count)
+          finalText = textParts.join('');
+        }
+
+        // Try plain JSON fallback
+        if (!finalText) {
+          try {
+            const data = JSON.parse(responseBody);
+            const items = data.events || data.messages || (Array.isArray(data) ? data : [data]);
+            for (const item of items) {
+              const content = item.message?.content || item.content || [];
+              const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
+              for (const p of parts) {
+                if (p.type === 'text' && p.text) finalText += p.text + '\n';
+              }
+            }
+          } catch (e) {
+            // Raw text fallback — if it's a long enough string, use it
+            if (responseBody.length > 100) finalText = responseBody;
           }
         }
-        if (sessionDone) break;
+
+        console.log(`[gbp-external] Extracted text: ${finalText.length} chars`);
+
+        if (!finalText || finalText.length < 50) {
+          // Log full response for debugging if extraction failed
+          console.log(`[gbp-external] FULL RESPONSE DUMP:\n${responseBody.substring(0, 3000)}`);
+          throw new Error(`Failed to extract report text. Response was ${responseBody.length} chars. Preview: ${responseBody.substring(0, 200)}`);
+        }
+
+        // Store the raw agent report
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['completed', JSON.stringify({ report: finalText, model: 'claude-sonnet-4-6', sessionId: session.id }), auditId]);
+        console.log(`[gbp-external] Project ${projectId}: report stored (${finalText.length} chars)`);
+
+      } catch (bgErr) {
+        console.error('[gbp-external] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
       }
+    })();
 
-      // Wait before next poll
-      await new Promise(r => setTimeout(r, 3000));
-    }
-
-    console.log(`[gbp-external] Agent finished: ${totalTokens} tokens, ${finalText.length} chars`);
-
-    // Store the raw agent report — no parsing, no restructuring
-    await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-      ['completed', JSON.stringify({ report: finalText, totalTokens, model: 'claude-sonnet-4-6' }), auditId]);
-
-    console.log(`[gbp-external] Project ${projectId}: report stored (${finalText.length} chars)`);
-    res.json({ report: finalText });
   } catch (e) {
     console.error('[gbp-external] Error:', e.message);
+    try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gbp_external' AND status='running'`, [projectId]); } catch (e2) {}
     res.status(500).json({ error: e.message });
   }
 });
