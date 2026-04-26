@@ -6423,10 +6423,10 @@
                           return (
                             <div key={secId}
                               className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                              style={{ paddingLeft: 36, fontSize: 12 }}
+                              style={{ paddingLeft: 40, fontSize: 12 }}
                               onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                             >
-                              <i className="fas fa-angle-right" style={{ fontSize: 10 }}></i>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? 'var(--accent)' : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
                               <span>{sec.length > 24 ? sec.substring(0, 24) + '...' : sec}</span>
                             </div>
                           );
@@ -6459,10 +6459,10 @@
                                 return (
                                   <div key={secId}
                                     className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                                    style={{ paddingLeft: 52, fontSize: 12 }}
+                                    style={{ paddingLeft: 56, fontSize: 12 }}
                                     onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                                   >
-                                    <i className="fas fa-angle-right" style={{ fontSize: 10 }}></i>
+                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? 'var(--accent)' : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
                                     <span>{sec.length > 22 ? sec.substring(0, 22) + '...' : sec}</span>
                                   </div>
                                 );
