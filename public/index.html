@@ -1450,7 +1450,7 @@
               <tbody>
                 {sortedRows.map((row, ri) => (
                   <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                    {row.map((cell, ci) => renderCell(cell, ci, row))}
+                    {row.slice(0, headers.length).map((cell, ci) => renderCell(cell, ci, row))}
                     {renderActionCells(row, ri)}
                   </tr>
                 ))}
@@ -1775,7 +1775,26 @@
           if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
 
           if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-            const cells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+            // Smart split: rejoin cells split by pipes inside backtick-quoted values
+            const rawCells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+            const cells = [];
+            let pending = null;
+            for (const c of rawCells) {
+              if (pending !== null) {
+                pending += ' | ' + c;
+                // Count backticks — if even, the quote is closed
+                if ((pending.split('`').length - 1) % 2 === 0) {
+                  cells.push(pending);
+                  pending = null;
+                }
+              } else if ((c.split('`').length - 1) % 2 === 1) {
+                // Odd number of backticks — unclosed quote, start merging
+                pending = c;
+              } else {
+                cells.push(c);
+              }
+            }
+            if (pending !== null) cells.push(pending);
             if (cells.length >= 2) {
               tableRows.push(cells);
               inTable = true;
