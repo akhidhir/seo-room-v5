@@ -1406,13 +1406,14 @@
         const brief = getActionBrief(row);
         const needsAction = rowNeedsAction(row);
         const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
-        if (!needsAction) return <React.Fragment><td style={{ padding: '8px 10px' }}></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
-        if (isIgnored) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
-        if (isAdded) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo"><i className="fas fa-check" style={{ marginRight: 3 }} />Added <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3, opacity: 0.5 }} /></span></td></React.Fragment>;
+        const showBriefCol = actionColIdx === -1;
+        if (!needsAction) return <React.Fragment>{showBriefCol && <td style={{ padding: '8px 10px' }}></td>}<td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
+        if (isIgnored) return <React.Fragment>{showBriefCol && <td></td>}<td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
+        if (isAdded) return <React.Fragment>{showBriefCol && <td></td>}<td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo"><i className="fas fa-check" style={{ marginRight: 3 }} />Added <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3, opacity: 0.5 }} /></span></td></React.Fragment>;
         const actionBrief = brief || ('Review and fix: ' + itemName);
         return (
           <React.Fragment>
-            <td style={{ padding: '8px 12px', fontSize: 12, color: '#818cf8', lineHeight: 1.5, maxWidth: 250 }}>{actionBrief}</td>
+            {showBriefCol && <td style={{ padding: '8px 12px', fontSize: 12, color: '#818cf8', lineHeight: 1.5, maxWidth: 250 }}>{actionBrief}</td>}
             <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
               <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                 <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 7px' }}>
@@ -1440,7 +1441,7 @@
                   ))}
                   {hasActions && (
                     <React.Fragment>
-                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 250, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>WHAT TO DO</th>
+                      {actionColIdx === -1 && <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 250, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>WHAT TO DO</th>}
                       <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 90, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
                     </React.Fragment>
                   )}
