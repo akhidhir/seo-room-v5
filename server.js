@@ -2651,6 +2651,137 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
   }
 });
 
+// ==================== MANAGED AGENT HELPERS ====================
+
+// Wait for a managed agent session to be ready for user input
+async function waitForSessionReady(apiBase, agentHeaders, sessionId, label, maxWaitMs = 60000) {
+  const pollMs = 2000;
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWaitMs) {
+    const statusResp = await fetch(`${apiBase}/sessions/${sessionId}`, { method: 'GET', headers: agentHeaders });
+    if (statusResp.ok) {
+      const sess = await statusResp.json();
+      const st = sess.status || sess.state || '';
+      if (st === 'awaiting_input' || st === 'idle') {
+        console.log(`[${label}] Session ready (${st})`);
+        return true;
+      }
+      if (st === 'completed' || st === 'ended' || st === 'failed') {
+        console.log(`[${label}] Session terminated before ready: ${st}`);
+        return false;
+      }
+      console.log(`[${label}] Waiting for session ready... status: ${st}`);
+    }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  console.log(`[${label}] Session readiness timeout after ${maxWaitMs}ms`);
+  return true; // proceed anyway, let the POST fail with a clear error
+}
+
+// Send user message to a managed agent session with retry on tool_use/tool_result errors
+async function sendAgentMessage(apiBase, agentHeaders, sessionId, userPrompt, label, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const msgResp = await fetch(`${apiBase}/sessions/${sessionId}/events`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({
+        events: [{ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }]
+      }),
+    });
+
+    if (msgResp.ok) {
+      const ack = await msgResp.text();
+      console.log(`[${label}] Message sent (attempt ${attempt}): ${ack.substring(0, 200)}`);
+      return true;
+    }
+
+    const errBody = await msgResp.text();
+    console.log(`[${label}] Message send attempt ${attempt} failed (${msgResp.status}): ${errBody.substring(0, 500)}`);
+
+    // If it's a tool_use/tool_result mismatch, wait for the environment to process tools then retry
+    if (errBody.includes('tool_use') && errBody.includes('tool_result') && attempt < maxRetries) {
+      console.log(`[${label}] Waiting for environment to process pending tool calls...`);
+      await new Promise(r => setTimeout(r, 5000 * attempt)); // exponential backoff
+      // Wait for session to become ready again
+      await waitForSessionReady(apiBase, agentHeaders, sessionId, label, 30000);
+      continue;
+    }
+
+    throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
+  }
+  throw new Error('Message send exhausted retries');
+}
+
+// Poll a managed agent session until complete, extract report text
+async function pollAgentSession(apiBase, agentHeaders, sessionId, label, maxWaitMs = 600000) {
+  const pollMs = 5000;
+  const t0 = Date.now();
+
+  while (Date.now() - t0 < maxWaitMs) {
+    await new Promise(r => setTimeout(r, pollMs));
+
+    const statusResp = await fetch(`${apiBase}/sessions/${sessionId}`, { method: 'GET', headers: agentHeaders });
+    if (!statusResp.ok) {
+      console.log(`[${label}] Status check failed: ${statusResp.status}`);
+      continue;
+    }
+
+    const sess = await statusResp.json();
+    const st = sess.status || sess.state || '';
+
+    if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
+      console.log(`[${label}] Agent finished: ${st}`);
+
+      const evResp = await fetch(`${apiBase}/sessions/${sessionId}/events`, { method: 'GET', headers: agentHeaders });
+      if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
+      const evBody = await evResp.text();
+      console.log(`[${label}] Events length: ${evBody.length}`);
+
+      let finalText = '';
+      try {
+        const evData = JSON.parse(evBody);
+        const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
+
+        // First pass: get assistant text from clearly-labeled assistant events
+        for (const evt of evts) {
+          const role = evt.role || evt.type || '';
+          if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
+            const content = evt.content || evt.message?.content || [];
+            const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
+            for (const p of parts) {
+              if (p.type === 'text' && p.text) finalText += p.text + '\n';
+            }
+          }
+        }
+
+        // Fallback: get any non-user text blocks > 50 chars
+        if (!finalText) {
+          for (const evt of evts) {
+            const role = evt.role || evt.type || '';
+            if (role === 'user' || role === 'user.message') continue;
+            const content = evt.content || evt.message?.content || [];
+            const parts = Array.isArray(content) ? content : [];
+            for (const p of parts) {
+              if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n';
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[${label}] Parse error: ${e.message}`);
+        if (evBody.length > 200) finalText = evBody;
+      }
+
+      if (!finalText || finalText.length < 50) {
+        throw new Error(`No assistant text. Events: ${evBody.length} chars`);
+      }
+
+      return finalText.trim();
+    }
+  }
+
+  throw new Error('Agent timed out after 10 minutes');
+}
+
 // ==================== EXTERNAL GBP AUDIT (Managed Agent — Sonnet + Web Search) ====================
 
 app.get('/api/projects/:projectId/audits/gbp-external/status', async (req, res) => {
@@ -2732,7 +2863,6 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
 
-    // 1. Create session
     const sessionResp = await fetch(`${apiBase}/sessions`, {
       method: 'POST',
       headers: agentHeaders,
@@ -2745,116 +2875,17 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const session = await sessionResp.json();
     console.log(`[gbp-external] Session created: ${session.id}`);
 
-    // 2. Send user message — respond to browser immediately, process in background
     res.json({ auditId, status: 'running', sessionId: session.id });
 
-    // Background: send message, then poll for agent response
     (async () => {
       try {
-        // Send the user message
-        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
-          method: 'POST',
-          headers: agentHeaders,
-          body: JSON.stringify({
-            events: [{
-              type: 'user.message',
-              content: [{ type: 'text', text: userPrompt }]
-            }]
-          }),
-        });
+        await waitForSessionReady(apiBase, agentHeaders, session.id, 'gbp-external');
+        await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gbp-external');
+        const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gbp-external');
 
-        if (!msgResp.ok) {
-          const errBody = await msgResp.text();
-          throw new Error(`Message send failed (${msgResp.status}): ${errBody}`);
-        }
-
-        const ack = await msgResp.text();
-        console.log(`[gbp-external] Message acknowledged: ${ack.substring(0, 200)}`);
-
-        // Poll GET /sessions/{id} until agent is done, then GET events
-        const maxWait = 10 * 60 * 1000;
-        const pollMs = 5000;
-        const t0 = Date.now();
-
-        while (Date.now() - t0 < maxWait) {
-          await new Promise(r => setTimeout(r, pollMs));
-
-          const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, {
-            method: 'GET',
-            headers: agentHeaders,
-          });
-
-          if (!statusResp.ok) {
-            console.log(`[gbp-external] Status check failed: ${statusResp.status}`);
-            continue;
-          }
-
-          const sess = await statusResp.json();
-          console.log(`[gbp-external] Session status: ${JSON.stringify(sess).substring(0, 300)}`);
-
-          const st = sess.status || sess.state || '';
-          if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
-            console.log(`[gbp-external] Agent finished: ${st}`);
-
-            // GET all events
-            const evResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
-              method: 'GET',
-              headers: agentHeaders,
-            });
-
-            if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
-
-            const evBody = await evResp.text();
-            console.log(`[gbp-external] Events length: ${evBody.length}`);
-            console.log(`[gbp-external] Events preview: ${evBody.substring(0, 2000)}`);
-
-            let finalText = '';
-            try {
-              const evData = JSON.parse(evBody);
-              const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
-
-              for (const evt of evts) {
-                const role = evt.role || evt.type || '';
-                if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
-                  for (const p of parts) {
-                    if (p.type === 'text' && p.text) finalText += p.text + '\n';
-                  }
-                }
-              }
-
-              if (!finalText) {
-                for (const evt of evts) {
-                  const role = evt.role || evt.type || '';
-                  if (role === 'user' || role === 'user.message') continue;
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : [];
-                  for (const p of parts) {
-                    if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n';
-                  }
-                }
-              }
-            } catch (e) {
-              console.log(`[gbp-external] Parse error: ${e.message}`);
-              if (evBody.length > 200) finalText = evBody;
-            }
-
-            if (!finalText || finalText.length < 50) {
-              console.log(`[gbp-external] EVENTS DUMP:\n${evBody.substring(0, 5000)}`);
-              throw new Error(`No assistant text. Events: ${evBody.length} chars`);
-            }
-
-            finalText = finalText.trim();
-            await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-              ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-            console.log(`[gbp-external] Report stored (${finalText.length} chars)`);
-            return;
-          }
-        }
-
-        throw new Error('Agent timed out after 10 minutes');
-
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
+        console.log(`[gbp-external] Report stored (${finalText.length} chars)`);
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -2948,69 +2979,15 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
 
     res.json({ auditId, status: 'running', sessionId: session.id });
 
-    // Background polling
     (async () => {
       try {
-        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
-          method: 'POST',
-          headers: agentHeaders,
-          body: JSON.stringify({
-            events: [{ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }]
-          }),
-        });
-        if (!msgResp.ok) throw new Error(`Message send failed (${msgResp.status}): ${await msgResp.text()}`);
-        await msgResp.text();
+        await waitForSessionReady(apiBase, agentHeaders, session.id, 'website-agent');
+        await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'website-agent');
+        const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'website-agent');
 
-        const maxWait = 10 * 60 * 1000;
-        const pollMs = 5000;
-        const t0 = Date.now();
-
-        while (Date.now() - t0 < maxWait) {
-          await new Promise(r => setTimeout(r, pollMs));
-          const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { method: 'GET', headers: agentHeaders });
-          if (!statusResp.ok) continue;
-          const sess = await statusResp.json();
-          const st = sess.status || sess.state || '';
-          if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
-            const evResp = await fetch(`${apiBase}/sessions/${session.id}/events`, { method: 'GET', headers: agentHeaders });
-            if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
-            const evBody = await evResp.text();
-
-            let finalText = '';
-            try {
-              const evData = JSON.parse(evBody);
-              const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
-              for (const evt of evts) {
-                const role = evt.role || evt.type || '';
-                if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
-                  for (const p of parts) { if (p.type === 'text' && p.text) finalText += p.text + '\n'; }
-                }
-              }
-              if (!finalText) {
-                for (const evt of evts) {
-                  const role = evt.role || evt.type || '';
-                  if (role === 'user' || role === 'user.message') continue;
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : [];
-                  for (const p of parts) { if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n'; }
-                }
-              }
-            } catch (e) {
-              if (evBody.length > 200) finalText = evBody;
-            }
-
-            if (!finalText || finalText.length < 50) throw new Error(`No assistant text. Events: ${evBody.length} chars`);
-
-            finalText = finalText.trim();
-            await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-              ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-            console.log(`[website-agent] Report stored (${finalText.length} chars)`);
-            return;
-          }
-        }
-        throw new Error('Agent timed out after 10 minutes');
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
+        console.log(`[website-agent] Report stored (${finalText.length} chars)`);
       } catch (bgErr) {
         console.error('[website-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -3143,69 +3120,15 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
     res.json({ auditId, status: 'running', sessionId: session.id });
 
-    // Background polling (same pattern as GBP/Website)
     (async () => {
       try {
-        const msgResp = await fetch(`${apiBase}/sessions/${session.id}/events`, {
-          method: 'POST',
-          headers: agentHeaders,
-          body: JSON.stringify({
-            events: [{ type: 'user.message', content: [{ type: 'text', text: userPrompt }] }]
-          }),
-        });
-        if (!msgResp.ok) throw new Error(`Message send failed (${msgResp.status}): ${await msgResp.text()}`);
-        await msgResp.text();
+        await waitForSessionReady(apiBase, agentHeaders, session.id, 'gsc-agent');
+        await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gsc-agent');
+        const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gsc-agent');
 
-        const maxWait = 10 * 60 * 1000;
-        const pollMs = 5000;
-        const t0 = Date.now();
-
-        while (Date.now() - t0 < maxWait) {
-          await new Promise(r => setTimeout(r, pollMs));
-          const statusResp = await fetch(`${apiBase}/sessions/${session.id}`, { method: 'GET', headers: agentHeaders });
-          if (!statusResp.ok) continue;
-          const sess = await statusResp.json();
-          const st = sess.status || sess.state || '';
-          if (st === 'awaiting_input' || st === 'idle' || st === 'completed' || st === 'ended') {
-            const evResp = await fetch(`${apiBase}/sessions/${session.id}/events`, { method: 'GET', headers: agentHeaders });
-            if (!evResp.ok) throw new Error(`GET events failed: ${evResp.status}`);
-            const evBody = await evResp.text();
-
-            let finalText = '';
-            try {
-              const evData = JSON.parse(evBody);
-              const evts = evData.data || evData.events || (Array.isArray(evData) ? evData : []);
-              for (const evt of evts) {
-                const role = evt.role || evt.type || '';
-                if (role === 'assistant' || role === 'assistant.message' || role === 'agent.response') {
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : (typeof content === 'string' ? [{ type: 'text', text: content }] : []);
-                  for (const p of parts) { if (p.type === 'text' && p.text) finalText += p.text + '\n'; }
-                }
-              }
-              if (!finalText) {
-                for (const evt of evts) {
-                  const role = evt.role || evt.type || '';
-                  if (role === 'user' || role === 'user.message') continue;
-                  const content = evt.content || evt.message?.content || [];
-                  const parts = Array.isArray(content) ? content : [];
-                  for (const p of parts) { if (p.type === 'text' && p.text && p.text.length > 50) finalText += p.text + '\n'; }
-                }
-              }
-            } catch (e) {
-              if (evBody.length > 200) finalText = evBody;
-            }
-
-            if (!finalText || finalText.length < 50) throw new Error(`No assistant text. Events: ${evBody.length} chars`);
-
-            finalText = finalText.trim();
-            await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-              ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-            console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
-            return;
-          }
-        }
-        throw new Error('Agent timed out after 10 minutes');
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
+        console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
