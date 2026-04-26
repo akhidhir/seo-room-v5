@@ -1268,9 +1268,47 @@
       );
     }
 
-    // ============ GBP AUDIT PAGE ============
-    // ============ GBP AUDIT PAGE (v4-style table) ============
-    // ============ EXTERNAL GBP AUDIT SUB-PAGE ============
+    // ============ SHARED AGENT AUDIT HELPERS ============
+    // Shared skip patterns for agent audit pages — filters junk sections from agent output
+    const AGENT_SKIP_PATTERNS = [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i, /^assumptions/i, /^data quality/i, /^methodology/i, /^appendix/i, /^notes$/i, /^conclusion$/i, /^introduction$/i, /^executive/i, /^recommendations$/i];
+
+    // Normalize messy agent section names into clean sidebar labels
+    function normalizeAgentSection(name) {
+      const n = name.replace(/\s*\(.*?\)\s*/g, '').trim(); // strip parenthetical like "(Unbranded)"
+      const map = {
+        'quick wins': 'Quick Wins',
+        'quick win': 'Quick Wins',
+        'quick-win opportunities': 'Quick Wins',
+        'low ctr pages': 'Low CTR Pages',
+        'low ctr': 'Low CTR Pages',
+        'cannibalization': 'Cannibalization',
+        'keyword cannibalization': 'Cannibalization',
+        'zero-click pages': 'Zero-Click Pages',
+        'zero click pages': 'Zero-Click Pages',
+        'zero clicks': 'Zero-Click Pages',
+        'underperforming pages': 'Underperforming Pages',
+        'underperforming': 'Underperforming Pages',
+        'action plan': 'Action Plan',
+        'site health': 'Site Health',
+        'site health overview': 'Site Health',
+        'crawlability': 'Crawlability',
+        'crawlability & indexing': 'Crawlability',
+        'crawlability and indexing': 'Crawlability',
+        'on-page issues': 'On-Page Issues',
+        'on-page seo issues': 'On-Page Issues',
+        'on page issues': 'On-Page Issues',
+        'content quality': 'Content Quality',
+        'core web vitals': 'Core Web Vitals',
+        'cwv': 'Core Web Vitals',
+        'schema & structured data': 'Schema & Data',
+        'schema and structured data': 'Schema & Data',
+        'structured data': 'Schema & Data',
+        'schema': 'Schema & Data',
+      };
+      return map[n.toLowerCase()] || name;
+    }
+
+    // ============ GENERIC AGENT AUDIT PAGE ============
     function AgentAuditPage({ project, section, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true }) {
       const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
       const skip = skipPatterns || defaultSkip;
@@ -1333,8 +1371,9 @@
           const t = line.trim();
           if (!t) return false;
           if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|ImportError|SyntaxError|NameError|TypeError|ValueError|KeyError|IndexError|AttributeError)/i.test(t)) return true;
-          if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:|# Houseworks|Houseworks Plumbing & Gas)/i.test(t)) return true;
+          if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:|# Houseworks|Houseworks Plumbing & Gas|> Assumptions:|> Data quality|> Note:|Assumptions:)/i.test(t)) return true;
           if (/^(data = |import |from |print\(|with open|json\.|os\.|sys\.|result|output|```)/i.test(t)) return true;
+          if (/^>\s*(Assumptions|Data quality|Note:|Data cap|CTR benchmark|Local plumbing|Brand|Strong brand)/i.test(t)) return true;
           if (/^\s*(def |class |if |for |while |try:|except|finally)/.test(t)) return true;
           return false;
         };
@@ -1367,6 +1406,13 @@
 
         // Filter out unwanted sections
         const filtered = rawSections.filter(s => !skip.some(p => p.test(s.title)));
+
+        // Normalize section titles for clean display
+        filtered.forEach(s => {
+          if (typeof normalizeAgentSection === 'function') {
+            s.title = normalizeAgentSection(s.title);
+          }
+        });
 
         // Merge directory sections (GBP only)
         if (mergeDirectories) {
@@ -1894,7 +1940,13 @@
             </div>
           </div>
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '24px 28px' }}>
-            {renderSectionContent(report.split('\n'))}
+            {renderSectionContent(report.split('\n').filter(l => {
+              const t = l.trim();
+              // Filter preamble blockquotes and agent chatter from full report view
+              if (/^>\s*(Assumptions|Data quality|Note:|Data cap|CTR benchmark|Local plumbing|Brand|Strong brand)/i.test(t)) return false;
+              if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|Based on|> Assumptions)/i.test(t)) return false;
+              return true;
+            }))}
           </div>
         </div>
       );
@@ -1906,17 +1958,17 @@
     }
 
     function WebsiteAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i], mergeDirectories: false });
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false });
     }
 
     function GSCAgentAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i], mergeDirectories: false });
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false });
     }
 
     // Helper: get agent audit section names for sidebar (generic)
     function getAgentAuditSections(report, skipPats, mergeDirs) {
       if (!report) return [];
-      const defaultSkip = [/^summary$/i, /^audit conclusion$/i];
+      const defaultSkip = AGENT_SKIP_PATTERNS || [/^summary$/i, /^audit conclusion$/i];
       const skip = skipPats || defaultSkip;
       const raw = [];
       for (const line of report.split('\n')) {
@@ -1931,12 +1983,16 @@
           if (title.length > 3) raw.push(title);
         }
       }
+      // Apply skip filters, then normalize names
       const filtered = raw.filter(s => !skip.some(p => p.test(s)));
+      const normalized = filtered.map(s => typeof normalizeAgentSection === 'function' ? normalizeAgentSection(s) : s);
+      // Deduplicate (normalization may collapse variants)
+      const deduped = [...new Set(normalized)];
       if (mergeDirs) {
-        const hasPresence = filtered.some(s => /directory presence/i.test(s));
-        const hasRegistration = filtered.some(s => /directory registration/i.test(s));
+        const hasPresence = deduped.some(s => /directory presence/i.test(s));
+        const hasRegistration = deduped.some(s => /directory registration/i.test(s));
         const combined = [];
-        for (const s of filtered) {
+        for (const s of deduped) {
           if (/directory presence/i.test(s) && hasRegistration) {
             combined.push('DIRECTORY AUDIT & ACTIONS');
           } else if (/directory registration/i.test(s) && hasPresence) {
@@ -1947,7 +2003,7 @@
         }
         return combined;
       }
-      return filtered;
+      return deduped;
     }
 
     // Legacy alias
@@ -6114,8 +6170,8 @@
                     // Get sections for expandable items without children (GSC, Website)
                     const getItemSections = () => {
                       if (item.children) return [];
-                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, [/^summary$/i, /^audit conclusion$/i, /^overview$/i], false);
-                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i], false);
+                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, AGENT_SKIP_PATTERNS, false);
+                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false);
                       return [];
                     };
                     const itemSections = item.expandable && !item.children ? getItemSections() : [];
