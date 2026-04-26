@@ -1331,7 +1331,7 @@
     }
 
     // ============ GENERIC AGENT AUDIT PAGE ============
-    function AgentAuditPage({ project, section, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
+    function AgentAuditPage({ project, section, setActiveTab, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
       const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
       const skip = skipPatterns || defaultSkip;
       const [report, setReport] = useState('');
@@ -2001,7 +2001,7 @@
         }
       }
 
-      // Full report view — rendered as category boxes per section
+      // Executive summary view — overview cards for each section
       const allSections = parseReportSections(report);
       const sectionMeta = {
         'Quick Wins': { icon: 'fas fa-bolt', color: '#22c55e', desc: 'Pages close to page 1 — easiest ranking gains' },
@@ -2017,10 +2017,35 @@
         'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
         'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
       };
+
+      // Count items and severity per section
+      const sectionStats = allSections.map(sec => {
+        const dataRows = sec.content.filter(l => {
+          const t = l.trim();
+          return t.startsWith('|') && !t.startsWith('|--') && !t.startsWith('| --');
+        });
+        const rowCount = Math.max(0, dataRows.length - 1); // minus header
+        const criticalCount = sec.content.filter(l => /critical|high/i.test(l) && l.includes('|')).length;
+        const mediumCount = sec.content.filter(l => /medium|moderate/i.test(l) && l.includes('|')).length;
+        return { ...sec, rowCount, criticalCount, mediumCount };
+      });
+
+      const totalIssues = sectionStats.reduce((sum, s) => sum + (s.title !== 'Action Plan' ? s.rowCount : 0), 0);
+      const totalCritical = sectionStats.reduce((sum, s) => sum + s.criticalCount, 0);
+
+      // Navigate to section in sidebar
+      const goToSection = (sectionTitle) => {
+        const slug = sectionTitle.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const prefix = auditKey === 'gsc-agent' ? 'gsc-sec-' : auditKey === 'website-agent' ? 'web-sec-' : 'ext-sec-';
+        if (typeof setActiveTab === 'function') {
+          setActiveTab(prefix + slug);
+        }
+      };
+
       return (
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
               <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{title}
             </h2>
             <div style={{ marginLeft: 'auto' }}>
@@ -2030,37 +2055,59 @@
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            {allSections.map((sec, idx) => {
-              const meta = sectionMeta[sec.title] || { icon: 'fas fa-folder', color: '#818cf8', desc: '' };
-              const isExpanded = expandedCats[idx];
-              const rowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
-              const hasCritical = sec.content.some(l => /critical|high|fail/i.test(l) && l.includes('|'));
+          {/* Stats cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: 36, fontWeight: 800, color: '#818cf8' }}>{allSections.length}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Categories</div>
+            </div>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: 36, fontWeight: 800, color: '#f59e0b' }}>{totalIssues}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Total Issues</div>
+            </div>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: 36, fontWeight: 800, color: '#ef4444' }}>{totalCritical}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Critical</div>
+            </div>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: 36, fontWeight: 800, color: '#22c55e' }}>{sectionStats.find(s => s.title === 'Quick Wins')?.rowCount || 0}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Quick Wins</div>
+            </div>
+          </div>
 
+          {/* Section overview cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            {sectionStats.map((sec, idx) => {
+              const meta = sectionMeta[sec.title] || { icon: 'fas fa-folder', color: '#818cf8', desc: '' };
               return (
-                <div key={idx} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', gridColumn: (sec.title === 'Action Plan' || allSections.length <= 3) ? '1 / -1' : undefined }}>
-                  <div
-                    onClick={() => setExpandedCats(prev => ({ ...prev, [idx]: !prev[idx] }))}
-                    style={{
-                      padding: '14px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12,
-                      background: `linear-gradient(135deg, ${meta.color}15, ${meta.color}08)`,
-                      borderBottom: isExpanded ? '1px solid var(--border)' : 'none'
-                    }}
-                  >
-                    <i className={meta.icon} style={{ fontSize: 18, color: meta.color }} />
+                <div key={idx}
+                  onClick={() => goToSection(sec.title)}
+                  style={{
+                    background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', cursor: 'pointer',
+                    transition: 'border-color 0.2s',
+                    gridColumn: sec.title === 'Action Plan' ? '1 / -1' : undefined
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = meta.color}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
+                >
+                  <div style={{
+                    padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
+                    background: `linear-gradient(135deg, ${meta.color}15, ${meta.color}08)`
+                  }}>
+                    <i className={meta.icon} style={{ fontSize: 20, color: meta.color }} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sec.title}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)' }}>{sec.title}</div>
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{meta.desc}</div>
                     </div>
-                    {hasCritical && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>Critical</span>}
-                    {rowCount > 0 && <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{rowCount} items</span>}
-                    <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--text3)' }} />
-                  </div>
-                  {isExpanded && (
-                    <div style={{ padding: '16px 18px' }}>
-                      {renderSectionContent(sec.content)}
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: meta.color }}>{sec.rowCount}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>items</div>
                     </div>
-                  )}
+                    {sec.criticalCount > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>{sec.criticalCount} critical</span>
+                    )}
+                    <i className="fas fa-chevron-right" style={{ fontSize: 12, color: 'var(--text3)' }} />
+                  </div>
                 </div>
               );
             })}
@@ -2070,16 +2117,16 @@
     }
 
     // Thin wrappers for each audit type
-    function ExternalGBPAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section });
+    function ExternalGBPAuditPage({ project, section, setActiveTab }) {
+      return React.createElement(AgentAuditPage, { project, section, setActiveTab });
     }
 
-    function WebsiteAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: WEBSITE_ALLOWED_SECTIONS });
+    function WebsiteAuditPage({ project, section, setActiveTab }) {
+      return React.createElement(AgentAuditPage, { project, section, setActiveTab, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: WEBSITE_ALLOWED_SECTIONS });
     }
 
-    function GSCAgentAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: GSC_ALLOWED_SECTIONS });
+    function GSCAgentAuditPage({ project, section, setActiveTab }) {
+      return React.createElement(AgentAuditPage, { project, section, setActiveTab, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: GSC_ALLOWED_SECTIONS });
     }
 
     // Helper: get agent audit section names for sidebar (generic)
@@ -6163,11 +6210,11 @@
           case 'gbp-audit-internal':
             return <InternalGBPAuditPage project={project} />;
           case 'gbp-audit-external':
-            return <ExternalGBPAuditPage project={project} section="full" />;
+            return <ExternalGBPAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
           case 'gsc-audit':
-            return <GSCAgentAuditPage project={project} section="full" />;
+            return <GSCAgentAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
           case 'website-audit':
-            return <WebsiteAuditPage project={project} section="full" />;
+            return <WebsiteAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
           case 'technical-audit':
             return <TechnicalAuditPage project={project} />;
           case 'onpage-audit':
@@ -6209,15 +6256,15 @@
           default:
             if (activeTab.startsWith('ext-sec-')) {
               const sectionName = activeTab.replace('ext-sec-', '').replace(/-/g, ' ');
-              return <ExternalGBPAuditPage project={project} section={sectionName} />;
+              return <ExternalGBPAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
             }
             if (activeTab.startsWith('web-sec-')) {
               const sectionName = activeTab.replace('web-sec-', '').replace(/-/g, ' ');
-              return <WebsiteAuditPage project={project} section={sectionName} />;
+              return <WebsiteAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
             }
             if (activeTab.startsWith('gsc-sec-')) {
               const sectionName = activeTab.replace('gsc-sec-', '').replace(/-/g, ' ');
-              return <GSCAgentAuditPage project={project} section={sectionName} />;
+              return <GSCAgentAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
             }
             return <InternalGBPAuditPage project={project} />;
         }
