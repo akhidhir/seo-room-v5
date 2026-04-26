@@ -1640,7 +1640,7 @@
             const tblIdx = tableCounter++;
 
             // Detect columns
-            const actionColIdx = headers.findIndex(h => /fix|action|recommend|resolution/i.test(h));
+            const actionColIdx = headers.findIndex(h => /fix|action|recommend|resolution|what.?to.?do|implementation/i.test(h));
             const sevColIdx = headers.findIndex(h => /priority|severity|gap|coverage/i.test(h));
             const notesColIdx = headers.findIndex(h => /notes|explanation|details|status/i.test(h));
             const listedColIdx = headers.findIndex(h => /listed|present|status/i.test(h));
