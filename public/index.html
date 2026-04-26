@@ -1339,6 +1339,7 @@
       const [error, setError] = useState('');
       const [addedActions, setAddedActions] = useState({});
       const [addingAction, setAddingAction] = useState(null);
+      const [expandedCats, setExpandedCats] = useState({0: true});
 
       useEffect(() => { if (project) checkStatus(); }, [project?.id, auditKey]);
 
@@ -1631,7 +1632,7 @@
                   <thead>
                     <tr style={{ background: 'var(--bg)' }}>
                       {headers.map((h, i) => (
-                        <th key={i} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>{h}</th>
+                        <th key={i} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>{h}</th>
                       ))}
                       {hasActions && (
                         <React.Fragment>
@@ -1660,7 +1661,7 @@
                       return (
                         <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
                           {row.map((cell, ci) => {
-                            let cellStyle = { padding: '12px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 };
+                            let cellStyle = { padding: '12px 16px', fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 };
                             const lower = cell.toLowerCase();
                             const cleanCell = cell.replace(/\*\*/g, '');
                             if (/high|critical|significant/.test(lower) || cell.includes('\u{1F534}')) cellStyle.color = '#ef4444';
@@ -1970,12 +1971,27 @@
         }
       }
 
-      // Full report view — raw agent output rendered with table support
+      // Full report view — rendered as category boxes per section
+      const allSections = parseReportSections(report);
+      const sectionMeta = {
+        'Quick Wins': { icon: 'fas fa-bolt', color: '#22c55e', desc: 'Pages close to page 1 — easiest ranking gains' },
+        'Low CTR Pages': { icon: 'fas fa-mouse-pointer', color: '#f59e0b', desc: 'High impressions but low clicks — fix titles & metas' },
+        'Cannibalization': { icon: 'fas fa-clone', color: '#ef4444', desc: 'Multiple pages competing for same query' },
+        'Zero-Click Pages': { icon: 'fas fa-eye-slash', color: '#8b5cf6', desc: 'Impressions but zero clicks — fix or deindex' },
+        'Underperforming Pages': { icon: 'fas fa-chart-line', color: '#3b82f6', desc: 'Should rank higher but stuck' },
+        'Action Plan': { icon: 'fas fa-tasks', color: '#818cf8', desc: 'Prioritized fixes by impact' },
+        'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
+        'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
+        'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
+        'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
+        'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
+        'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
+      };
       return (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>
-              <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{title} — Full Report
+              <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{title}
             </h2>
             <div style={{ marginLeft: 'auto' }}>
               <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 14, padding: '8px 16px' }}>
@@ -1983,14 +1999,41 @@
               </button>
             </div>
           </div>
-          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '24px 28px' }}>
-            {renderSectionContent(report.split('\n').filter(l => {
-              const t = l.trim();
-              // Filter preamble blockquotes and agent chatter from full report view
-              if (/^>\s*(Assumptions|Data quality|Note:|Data cap|CTR benchmark|Local plumbing|Brand|Strong brand)/i.test(t)) return false;
-              if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|Based on|> Assumptions)/i.test(t)) return false;
-              return true;
-            }))}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {allSections.map((sec, idx) => {
+              const meta = sectionMeta[sec.title] || { icon: 'fas fa-folder', color: '#818cf8', desc: '' };
+              const isExpanded = expandedCats[idx];
+              const rowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
+              const hasCritical = sec.content.some(l => /critical|high|fail/i.test(l) && l.includes('|'));
+
+              return (
+                <div key={idx} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', gridColumn: (sec.title === 'Action Plan' || allSections.length <= 3) ? '1 / -1' : undefined }}>
+                  <div
+                    onClick={() => setExpandedCats(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                    style={{
+                      padding: '14px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12,
+                      background: `linear-gradient(135deg, ${meta.color}15, ${meta.color}08)`,
+                      borderBottom: isExpanded ? '1px solid var(--border)' : 'none'
+                    }}
+                  >
+                    <i className={meta.icon} style={{ fontSize: 18, color: meta.color }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sec.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{meta.desc}</div>
+                    </div>
+                    {hasCritical && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>Critical</span>}
+                    {rowCount > 0 && <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{rowCount} items</span>}
+                    <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--text3)' }} />
+                  </div>
+                  {isExpanded && (
+                    <div style={{ padding: '16px 18px' }}>
+                      {renderSectionContent(sec.content)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       );
