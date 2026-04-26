@@ -1330,6 +1330,136 @@
       return name;
     }
 
+    // ============ SORTABLE TABLE FOR AGENT AUDITS ============
+    function AgentSortableTable({ headers, rows, tblIdx, actionColIdx, sevColIdx, notesColIdx, listedColIdx, hasActions, actionMode, getActionBrief, rowNeedsAction }) {
+      const [sortCol, setSortCol] = useState(null);
+      const [sortDir, setSortDir] = useState('asc');
+
+      const toggleSort = (colIdx) => {
+        if (sortCol === colIdx) {
+          setSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+          setSortCol(colIdx);
+          setSortDir('asc');
+        }
+      };
+
+      const sortedRows = React.useMemo(() => {
+        if (sortCol === null) return rows;
+        return [...rows].sort((a, b) => {
+          const av = (a[sortCol] || '').replace(/\*\*/g, '').trim();
+          const bv = (b[sortCol] || '').replace(/\*\*/g, '').trim();
+          // Try numeric sort first
+          const an = parseFloat(av.replace(/[^0-9.-]/g, ''));
+          const bn = parseFloat(bv.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(an) && !isNaN(bn)) return sortDir === 'asc' ? an - bn : bn - an;
+          // Severity sort
+          const sevOrder = { critical: 0, high: 1, significant: 1, medium: 2, moderate: 2, low: 3, minimal: 3 };
+          const sa = sevOrder[av.toLowerCase()];
+          const sb = sevOrder[bv.toLowerCase()];
+          if (sa !== undefined && sb !== undefined) return sortDir === 'asc' ? sa - sb : sb - sa;
+          // String sort
+          const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
+          return sortDir === 'asc' ? cmp : -cmp;
+        });
+      }, [rows, sortCol, sortDir]);
+
+      const SortIcon = ({ col }) => {
+        if (sortCol !== col) return <i className="fas fa-sort" style={{ marginLeft: 5, fontSize: 10, opacity: 0.3 }} />;
+        return <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10, color: 'var(--accent)' }} />;
+      };
+
+      const renderCell = (cell, ci, row) => {
+        let cellStyle = { padding: '12px 16px', fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 };
+        const lower = cell.toLowerCase();
+        const cleanCell = cell.replace(/\*\*/g, '');
+        if (/high|critical|significant/.test(lower)) cellStyle.color = '#ef4444';
+        else if (/medium|moderate/.test(lower)) cellStyle.color = '#f59e0b';
+        else if (/\blow\b|minimal/.test(lower)) cellStyle.color = '#3b82f6';
+        if (/^yes$/i.test(lower) || /\bstrong\b/i.test(lower) || /\bmatch\b/i.test(lower)) cellStyle.color = '#22c55e';
+        if (/^no$/i.test(lower) || /not listed|not found|missing/i.test(lower)) cellStyle.color = '#ef4444';
+        if (/\bpartial\b/i.test(lower) || /unverif/i.test(lower)) cellStyle.color = '#f59e0b';
+        if (/\bpartial\b/i.test(lower)) {
+          const explanation = notesColIdx !== -1 && notesColIdx !== ci && row[notesColIdx]
+            ? row[notesColIdx].replace(/\*\*/g, '') : '';
+          return <td key={ci} style={cellStyle}>
+            <span>{cleanCell}</span>
+            {explanation && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, fontStyle: 'italic' }}>{explanation}</div>}
+          </td>;
+        }
+        return <td key={ci} style={cellStyle}>{cleanCell}</td>;
+      };
+
+      const renderActionCells = (row, ri) => {
+        if (!hasActions) return null;
+        const actionKey = `t${tblIdx}_r${ri}`;
+        const itemName = (row[0] || '').replace(/\*\*/g, '');
+        const isAdded = actionMode && actionMode.addedKeys[actionKey];
+        const isAdding = actionMode && actionMode.addingKey === actionKey;
+        let severity = 'medium';
+        if (sevColIdx !== -1) {
+          const sv = (row[sevColIdx] || '').toLowerCase();
+          if (/high|critical|significant/.test(sv)) severity = 'critical';
+          else if (/medium|moderate/.test(sv)) severity = 'high';
+          else if (/low|minimal/.test(sv)) severity = 'medium';
+        }
+        const brief = getActionBrief(row);
+        const needsAction = rowNeedsAction(row);
+        const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
+        if (!needsAction) return <React.Fragment><td style={{ padding: '8px 10px' }}></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
+        if (isIgnored) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
+        if (isAdded) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo"><i className="fas fa-check" style={{ marginRight: 3 }} />Added <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3, opacity: 0.5 }} /></span></td></React.Fragment>;
+        const actionBrief = brief || ('Review and fix: ' + itemName);
+        return (
+          <React.Fragment>
+            <td style={{ padding: '8px 12px', fontSize: 12, color: '#818cf8', lineHeight: 1.5, maxWidth: 250 }}>{actionBrief}</td>
+            <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+              <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 7px' }}>
+                  {isAdding ? <i className="fas fa-spinner fa-spin" /> : <><i className="fas fa-plus" style={{ marginRight: 2 }} />Add</>}
+                </button>
+                <button className="btn btn-secondary" onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)} style={{ fontSize: 10, padding: '3px 7px', opacity: 0.7 }}>
+                  <i className="fas fa-times" />
+                </button>
+              </div>
+            </td>
+          </React.Fragment>
+        );
+      };
+
+      return (
+        <div style={{ marginBottom: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>
+                  {headers.map((h, i) => (
+                    <th key={i} onClick={() => toggleSort(i)} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 700, color: sortCol === i ? 'var(--accent)' : 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', cursor: 'pointer', userSelect: 'none', background: 'var(--bg)' }}>
+                      {h}<SortIcon col={i} />
+                    </th>
+                  ))}
+                  {hasActions && (
+                    <React.Fragment>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 250, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>WHAT TO DO</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 90, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
+                    </React.Fragment>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedRows.map((row, ri) => (
+                  <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
+                    {row.map((cell, ci) => renderCell(cell, ci, row))}
+                    {renderActionCells(row, ri)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
     // ============ GENERIC AGENT AUDIT PAGE ============
     function AgentAuditPage({ project, section, setActiveTab, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
       const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
@@ -1626,108 +1756,12 @@
               return false;
             };
 
+            const tblKey = `tbl${elements.length}`;
             elements.push(
-              <div key={`tbl${elements.length}`} style={{ marginBottom: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ background: 'var(--bg)' }}>
-                      {headers.map((h, i) => (
-                        <th key={i} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)' }}>{h}</th>
-                      ))}
-                      {hasActions && (
-                        <React.Fragment>
-                          <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 250 }}>WHAT TO DO</th>
-                          <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 90 }}></th>
-                        </React.Fragment>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row, ri) => {
-                      const actionKey = `t${tblIdx}_r${ri}`;
-                      const itemName = (row[0] || '').replace(/\*\*/g, '');
-                      const isAdded = actionMode && actionMode.addedKeys[actionKey];
-                      const isAdding = actionMode && actionMode.addingKey === actionKey;
-
-                      // Determine severity from table data
-                      let severity = 'medium';
-                      if (sevColIdx !== -1) {
-                        const sv = (row[sevColIdx] || '').toLowerCase();
-                        if (/high|critical|significant/.test(sv)) severity = 'critical';
-                        else if (/medium|moderate/.test(sv)) severity = 'high';
-                        else if (/low|minimal/.test(sv)) severity = 'medium';
-                      }
-
-                      return (
-                        <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                          {row.map((cell, ci) => {
-                            let cellStyle = { padding: '12px 16px', fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 };
-                            const lower = cell.toLowerCase();
-                            const cleanCell = cell.replace(/\*\*/g, '');
-                            if (/high|critical|significant/.test(lower) || cell.includes('\u{1F534}')) cellStyle.color = '#ef4444';
-                            else if (/medium|moderate/.test(lower) || cell.includes('\u{1F7E0}')) cellStyle.color = '#f59e0b';
-                            else if (/\blow\b|minimal/.test(lower) || cell.includes('\u{1F7E1}') || cell.includes('\u{1F7E2}')) cellStyle.color = '#3b82f6';
-                            if (cell.includes('\u2705') || /^yes$/i.test(lower) || /\bstrong\b/i.test(lower) || /\bmatch\b/i.test(lower)) cellStyle.color = '#22c55e';
-                            if (cell.includes('\u274C') || /^no$/i.test(lower) || /not listed|not found|missing/i.test(lower)) cellStyle.color = '#ef4444';
-                            if (cell.includes('\u26A0') || /\bpartial\b/i.test(lower) || /unverif/i.test(lower)) cellStyle.color = '#f59e0b';
-
-                            // Explain "Partial" inline with details from notes column
-                            if (/\bpartial\b/i.test(lower)) {
-                              const explanation = notesColIdx !== -1 && notesColIdx !== ci && row[notesColIdx]
-                                ? row[notesColIdx].replace(/\*\*/g, '') : '';
-                              return <td key={ci} style={cellStyle}>
-                                <span>{cleanCell}</span>
-                                {explanation && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, fontStyle: 'italic' }}>{explanation}</div>}
-                              </td>;
-                            }
-
-                            return <td key={ci} style={cellStyle}>{cleanCell}</td>;
-                          })}
-                          {hasActions && (() => {
-                            const brief = getActionBrief(row);
-                            const needsAction = rowNeedsAction(row);
-                            const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
-                            if (!needsAction) return <React.Fragment><td style={{ padding: '8px 10px' }}></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
-                            if (isIgnored) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
-                            if (isAdded) return <React.Fragment><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo"><i className="fas fa-check" style={{ marginRight: 3 }} />Added <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3, opacity: 0.5 }} /></span></td></React.Fragment>;
-                            const actionBrief = brief || ('Review and fix: ' + itemName);
-                            return (
-                              <React.Fragment>
-                                <td style={{ padding: '8px 12px', fontSize: 12, color: '#818cf8', lineHeight: 1.5, maxWidth: 250 }}>
-                                  {actionBrief}
-                                </td>
-                                <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                                  <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                                    <button
-                                      className="btn btn-primary"
-                                      onClick={() => actionMode.onAdd(actionKey, {
-                                        title: itemName,
-                                        description: actionBrief,
-                                        severity: severity
-                                      })}
-                                      disabled={isAdding}
-                                      style={{ fontSize: 10, padding: '3px 7px' }}
-                                    >
-                                      {isAdding ? <i className="fas fa-spinner fa-spin" /> : <><i className="fas fa-plus" style={{ marginRight: 2 }} />Add</>}
-                                    </button>
-                                    <button
-                                      className="btn btn-secondary"
-                                      onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)}
-                                      style={{ fontSize: 10, padding: '3px 7px', opacity: 0.7 }}
-                                    >
-                                      <i className="fas fa-times" />
-                                    </button>
-                                  </div>
-                                </td>
-                              </React.Fragment>
-                            );
-                          })()}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <AgentSortableTable key={tblKey} headers={headers} rows={rows} tblIdx={tblIdx}
+                actionColIdx={actionColIdx} sevColIdx={sevColIdx} notesColIdx={notesColIdx} listedColIdx={listedColIdx}
+                hasActions={hasActions} actionMode={actionMode}
+                getActionBrief={getActionBrief} rowNeedsAction={rowNeedsAction} />
             );
           }
           tableRows = [];
