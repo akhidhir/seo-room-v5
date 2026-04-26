@@ -1272,10 +1272,17 @@
     // Shared skip patterns for agent audit pages — filters junk sections from agent output
     const AGENT_SKIP_PATTERNS = [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i, /^assumptions/i, /^data quality/i, /^methodology/i, /^appendix/i, /^notes$/i, /^conclusion$/i, /^introduction$/i, /^executive/i, /^recommendations$/i];
 
+    // Allowed sections per audit type (whitelist)
+    const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages', 'Action Plan'];
+    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Action Plan'];
+
     // Normalize messy agent section names into clean sidebar labels
+    // Uses exact map first, then fuzzy keyword matching as fallback
     function normalizeAgentSection(name) {
-      const n = name.replace(/\s*\(.*?\)\s*/g, '').trim(); // strip parenthetical like "(Unbranded)"
-      const map = {
+      const n = name.replace(/\s*\(.*?\)\s*/g, '').trim();
+      const lower = n.toLowerCase();
+      // Exact matches first
+      const exactMap = {
         'quick wins': 'Quick Wins',
         'quick win': 'Quick Wins',
         'quick-win opportunities': 'Quick Wins',
@@ -1289,6 +1296,7 @@
         'underperforming pages': 'Underperforming Pages',
         'underperforming': 'Underperforming Pages',
         'action plan': 'Action Plan',
+        'priority action plan': 'Action Plan',
         'site health': 'Site Health',
         'site health overview': 'Site Health',
         'crawlability': 'Crawlability',
@@ -1305,11 +1313,25 @@
         'structured data': 'Schema & Data',
         'schema': 'Schema & Data',
       };
-      return map[n.toLowerCase()] || name;
+      if (exactMap[lower]) return exactMap[lower];
+      // Fuzzy keyword matching for creative renames
+      if (/quick.?win|striking.?distance|page.?2|position.?[4-9]|position.?1[0-9]|position.?20|keyword.?opportunit/i.test(n)) return 'Quick Wins';
+      if (/low.?ctr|poor.?ctr|ctr.?below|click.?through.?rate/i.test(n)) return 'Low CTR Pages';
+      if (/cannibal|competing.?pages|duplicate.?rank/i.test(n)) return 'Cannibalization';
+      if (/zero.?click|no.?click|0.?click/i.test(n)) return 'Zero-Click Pages';
+      if (/underperform|stuck|should.?rank|declining/i.test(n)) return 'Underperforming Pages';
+      if (/action.?plan|priority.?action|next.?action|implementation/i.test(n)) return 'Action Plan';
+      if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
+      if (/crawl|index|robot|sitemap/i.test(n)) return 'Crawlability';
+      if (/on.?page|title|meta|h1|heading/i.test(n)) return 'On-Page Issues';
+      if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
+      if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
+      if (/schema|structured.?data|rich.?result|json.?ld/i.test(n)) return 'Schema & Data';
+      return name;
     }
 
     // ============ GENERIC AGENT AUDIT PAGE ============
-    function AgentAuditPage({ project, section, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true }) {
+    function AgentAuditPage({ project, section, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
       const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
       const skip = skipPatterns || defaultSkip;
       const [report, setReport] = useState('');
@@ -1413,6 +1435,28 @@
             s.title = normalizeAgentSection(s.title);
           }
         });
+
+        // Deduplicate: if multiple sections normalize to same title, merge their content
+        const seenTitles = {};
+        const deduped = [];
+        for (const s of filtered) {
+          if (seenTitles[s.title]) {
+            seenTitles[s.title].content.push('', ...s.content);
+          } else {
+            seenTitles[s.title] = s;
+            deduped.push(s);
+          }
+        }
+
+        // Whitelist filter: only keep allowed sections, in allowed order
+        if (allowedSections && allowedSections.length > 0) {
+          const allowed = [];
+          for (const name of allowedSections) {
+            const found = deduped.find(s => s.title === name);
+            if (found) allowed.push(found);
+          }
+          return allowed;
+        }
 
         // Merge directory sections (GBP only)
         if (mergeDirectories) {
@@ -1958,15 +2002,15 @@
     }
 
     function WebsiteAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false });
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'website-agent', title: 'Website Audit', iconClass: 'fas fa-spider', pillar: 'website', loadingText: 'Managed agent is simulating Googlebot crawling your site. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: WEBSITE_ALLOWED_SECTIONS });
     }
 
     function GSCAgentAuditPage({ project, section }) {
-      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false });
+      return React.createElement(AgentAuditPage, { project, section, auditKey: 'gsc-agent', title: 'GSC Audit', iconClass: 'fas fa-chart-line', pillar: 'gsc', loadingText: 'Managed agent is analyzing your Search Console data. This takes 2-5 minutes.', skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false, allowedSections: GSC_ALLOWED_SECTIONS });
     }
 
     // Helper: get agent audit section names for sidebar (generic)
-    function getAgentAuditSections(report, skipPats, mergeDirs) {
+    function getAgentAuditSections(report, skipPats, mergeDirs, allowedSections) {
       if (!report) return [];
       const defaultSkip = AGENT_SKIP_PATTERNS || [/^summary$/i, /^audit conclusion$/i];
       const skip = skipPats || defaultSkip;
@@ -1988,6 +2032,10 @@
       const normalized = filtered.map(s => typeof normalizeAgentSection === 'function' ? normalizeAgentSection(s) : s);
       // Deduplicate (normalization may collapse variants)
       const deduped = [...new Set(normalized)];
+      // Whitelist filter: if allowedSections provided, only keep those (in allowed order)
+      if (allowedSections && allowedSections.length > 0) {
+        return allowedSections.filter(s => deduped.includes(s));
+      }
       if (mergeDirs) {
         const hasPresence = deduped.some(s => /directory presence/i.test(s));
         const hasRegistration = deduped.some(s => /directory registration/i.test(s));
@@ -6170,8 +6218,8 @@
                     // Get sections for expandable items without children (GSC, Website)
                     const getItemSections = () => {
                       if (item.children) return [];
-                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, AGENT_SKIP_PATTERNS, false);
-                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false);
+                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, AGENT_SKIP_PATTERNS, false, GSC_ALLOWED_SECTIONS);
+                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false, WEBSITE_ALLOWED_SECTIONS);
                       return [];
                     };
                     const itemSections = item.expandable && !item.children ? getItemSections() : [];
