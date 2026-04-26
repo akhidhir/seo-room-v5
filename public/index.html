@@ -2068,6 +2068,7 @@
             'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
             'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
             'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
+            'Speed & Images': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'PageSpeed scores and image optimization' },
           };
           const sm = secMeta[sec.title] || { icon: iconClass, color: '#818cf8', desc: '' };
           const secRowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
@@ -2121,6 +2122,7 @@
         'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
         'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
         'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
+        'Speed & Images': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'PageSpeed scores and image optimization' },
       };
 
       // Count items and severity per section
@@ -3096,6 +3098,232 @@
               </div>
             )}
           </>}
+        </div>
+      );
+    }
+
+    // ============ SPEED & IMAGES PAGE (standalone, moved from Technical Audit) ============
+    function SpeedAuditPage({ project }) {
+      const [speedResults, setSpeedResults] = useState([]);
+      const [speedLoading, setSpeedLoading] = useState(false);
+      const [speedError, setSpeedError] = useState('');
+      const [optimizingPages, setOptimizingPages] = useState(new Set());
+      const [expandedSpeedPage, setExpandedSpeedPage] = useState(null);
+      const [pageSpeedData, setPageSpeedData] = useState({});
+      const [psLoading, setPsLoading] = useState(null);
+
+      useEffect(() => {
+        if (project?.id) loadExisting();
+      }, [project?.id]);
+
+      const loadExisting = async () => {
+        try {
+          const data = await api(`/projects/${project.id}/audits/speed/latest`);
+          if (data.results) {
+            setSpeedResults(data.results);
+            const cwvMap = {};
+            data.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+            setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+          }
+        } catch (e) { /* no previous speed audit */ }
+      };
+
+      const runSpeedAudit = async () => {
+        setSpeedLoading(true); setSpeedError('');
+        try {
+          const data = await api(`/speed-audit/${project?.id || 1}/run`, { method: 'POST' });
+          setSpeedResults(data.results || []);
+          const cwvMap = {};
+          (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+          setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+        } catch (err) { setSpeedError(err.message); }
+        finally { setSpeedLoading(false); }
+      };
+
+      const optimizePage = async (pageId) => {
+        setOptimizingPages(prev => new Set([...prev, pageId]));
+        try {
+          await api(`/speed-audit/${project?.id || 1}/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
+          const updated = await api(`/speed-audit/${project?.id || 1}/page/${pageId}`);
+          setSpeedResults(prev => prev.map(r => r.page_id === pageId ? { ...r, ...updated } : r));
+        } catch (err) { setSpeedError(err.message); }
+        finally { setOptimizingPages(prev => { const s = new Set(prev); s.delete(pageId); return s; }); }
+      };
+
+      const runPageSpeed = async (url, pageId) => {
+        setPsLoading(pageId);
+        try {
+          const data = await api(`/speed-audit/${project?.id || 1}/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
+          setPageSpeedData(prev => ({ ...prev, [pageId]: data.cwv }));
+        } catch (err) { setSpeedError(err.message); }
+        finally { setPsLoading(null); }
+      };
+
+      const issueLabel = (issue) => ({
+        missing_width: 'Missing width attribute',
+        missing_height: 'Missing height attribute',
+        no_lazy_load: 'No lazy loading',
+        missing_alt: 'Missing alt text',
+        too_large: 'File too large (>200KB)',
+        oversized: 'Image oversized (>1920px)',
+        no_webp: 'No WebP version',
+      }[issue] || issue);
+
+      const issueSeverity = (issue) => {
+        if (['too_large', 'oversized', 'missing_alt'].includes(issue)) return 'critical';
+        if (['no_webp', 'missing_width', 'missing_height'].includes(issue)) return 'medium';
+        return 'low';
+      };
+
+      const speedStats = useMemo(() => {
+        if (!speedResults.length) return null;
+        const totalImages = speedResults.reduce((s, r) => s + (r.image_count || 0), 0);
+        const totalIssues = speedResults.reduce((s, r) => s + (r.total_issues || 0), 0);
+        const pagesWithIssues = speedResults.filter(r => (r.total_issues || 0) > 0).length;
+        return { totalImages, totalIssues, pagesWithIssues, totalPages: speedResults.length };
+      }, [speedResults]);
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-tachometer-alt" style={{ marginRight: 10, color: '#ef4444' }} />Speed & Images
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>PageSpeed scores, image optimization, Core Web Vitals per page</p>
+            </div>
+            <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 13 }}>
+              {speedLoading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Speed Audit</>}
+            </button>
+          </div>
+
+          {speedLoading && (
+            <div className="audit-loading-overlay">
+              <span className="spinner-large"></span>
+              <div className="audit-loading-text">Running Speed Audit</div>
+              <div className="audit-loading-sub">Scanning pages for image issues, WebP, lazy loading, Core Web Vitals...</div>
+            </div>
+          )}
+
+          {speedError && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{speedError}</div>}
+
+          {speedStats && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { label: 'Pages Scanned', value: speedStats.totalPages, color: 'var(--primary)' },
+                { label: 'Total Images', value: speedStats.totalImages, color: '#3b82f6' },
+                { label: 'Issues Found', value: speedStats.totalIssues, color: speedStats.totalIssues > 0 ? '#ef4444' : '#22c55e' },
+                { label: 'Pages With Issues', value: speedStats.pagesWithIssues, color: speedStats.pagesWithIssues > 0 ? '#f59e0b' : '#22c55e' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {speedResults.length > 0 && speedResults.map(page => {
+            const isExpanded = expandedSpeedPage === page.page_id;
+            const hasIssues = (page.total_issues || 0) > 0;
+            const cwv = pageSpeedData[page.page_id];
+            return (
+              <div key={page.page_id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 8, overflow: 'hidden' }}>
+                <div onClick={() => setExpandedSpeedPage(isExpanded ? null : page.page_id)}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{page.title || page.slug}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>/{page.slug}</div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>{page.image_count || 0} images</span>
+                    {hasIssues ? (
+                      <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, fontWeight: 600, background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>{page.total_issues} issues</span>
+                    ) : (
+                      <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>All good</span>
+                    )}
+                    <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
+                  </div>
+                </div>
+                {isExpanded && (
+                  <div style={{ borderTop: '1px solid var(--border)', padding: 16 }}>
+                    <div style={{ marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: cwv ? 10 : 0 }}>
+                        <strong style={{ fontSize: 13 }}><i className="fas fa-tachometer-alt" style={{ marginRight: 6, color: 'var(--primary)' }} />Core Web Vitals (Google PageSpeed)</strong>
+                        <button className="btn btn-secondary" onClick={() => runPageSpeed(page.url, page.page_id)} disabled={psLoading === page.page_id} style={{ fontSize: 11, padding: '4px 10px' }}>
+                          {psLoading === page.page_id ? <><span className="spinner" style={{ width: 12, height: 12, marginRight: 4 }}></span>Testing...</> : <><i className="fas fa-bolt" style={{ marginRight: 4 }} />Run PageSpeed</>}
+                        </button>
+                      </div>
+                      {cwv && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                          {[
+                            { label: 'Performance', value: Math.round(cwv.score), color: cwv.score >= 90 ? '#22c55e' : cwv.score >= 50 ? '#f59e0b' : '#ef4444' },
+                            { label: 'LCP', value: cwv.lcp, color: parseFloat(cwv.lcp) <= 2.5 ? '#22c55e' : parseFloat(cwv.lcp) <= 4 ? '#f59e0b' : '#ef4444' },
+                            { label: 'CLS', value: cwv.cls, color: parseFloat(cwv.cls) <= 0.1 ? '#22c55e' : parseFloat(cwv.cls) <= 0.25 ? '#f59e0b' : '#ef4444' },
+                            { label: 'TBT', value: cwv.tbt, color: '#3b82f6' },
+                          ].map(m => (
+                            <div key={m.label} style={{ textAlign: 'center', padding: 8, background: 'var(--card)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: m.color }}>{m.value}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text3)' }}>{m.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {page.images && page.images.length > 0 ? (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                          <strong style={{ fontSize: 13 }}><i className="fas fa-images" style={{ marginRight: 6, color: '#3b82f6' }} />Images ({page.images.length})</strong>
+                          {hasIssues && (
+                            <button className="btn btn-primary" onClick={() => optimizePage(page.page_id)} disabled={optimizingPages.has(page.page_id)} style={{ fontSize: 11, padding: '4px 12px' }}>
+                              {optimizingPages.has(page.page_id) ? <><span className="spinner" style={{ width: 12, height: 12, marginRight: 4 }}></span>Optimizing...</> : <><i className="fas fa-magic" style={{ marginRight: 4 }} />Optimize All</>}
+                            </button>
+                          )}
+                        </div>
+                        {page.images.map((img, idx) => (
+                          <div key={idx} style={{ padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, marginBottom: 6, fontSize: 12 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 600, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.src.split('/').pop()}</div>
+                                <div style={{ display: 'flex', gap: 12, color: 'var(--text3)', fontSize: 11 }}>
+                                  {img.file_size_kb && <span>{img.file_size_kb}KB</span>}
+                                  {img.width && <span>{img.width}x{img.height}px</span>}
+                                  {img.has_webp !== undefined && <span style={{ color: img.has_webp ? '#22c55e' : '#f59e0b' }}>{img.has_webp ? 'WebP exists' : 'No WebP'}</span>}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end', marginLeft: 12 }}>
+                                {img.issues && img.issues.map((issue, i) => (
+                                  <span key={i} style={{
+                                    fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 600,
+                                    background: issueSeverity(issue) === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                                    color: issueSeverity(issue) === 'critical' ? '#ef4444' : '#f59e0b',
+                                  }}>{issueLabel(issue)}</span>
+                                ))}
+                                {(!img.issues || img.issues.length === 0) && (
+                                  <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>OK</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'center', padding: 20 }}>No images on this page</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {!speedLoading && speedResults.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-tachometer-alt" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No speed audit run yet</div>
+              <div style={{ fontSize: 13 }}>Click "Run Speed Audit" to scan all pages for image issues, missing WebP, lazy loading, and Core Web Vitals.</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Uses Google PageSpeed Insights API. Discovers pages via sitemap.xml or WordPress REST API.</div>
+            </div>
+          )}
         </div>
       );
     }
@@ -6320,8 +6548,8 @@
             return <GSCAgentAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
           case 'website-audit':
             return <WebsiteAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
-          case 'technical-audit':
-            return <TechnicalAuditPage project={project} />;
+          case 'web-sec-speed-images':
+            return <SpeedAuditPage project={project} />;
           case 'onpage-audit':
             return <OnPageAuditPage project={project} />;
           case 'indexing':
@@ -6334,8 +6562,6 @@
             return <ActionPlanPage type="gsc" title="GSC Actions" icon="fas fa-chart-line" project={project} />;
           case 'website-actions':
             return <ActionPlanPage type="website" title="Website Actions" icon="fas fa-spider" project={project} />;
-          case 'technical-actions':
-            return <ActionPlanPage type="technical" title="Technical Actions" icon="fas fa-cogs" project={project} />;
           case 'onpage-actions':
             return <ActionPlanPage type="onpage" title="On-Page Actions" icon="fas fa-file-alt" project={project} />;
           case 'content-queue':
@@ -6385,7 +6611,6 @@
           ] },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true },
           { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true },
-          { id: 'technical-audit', label: 'Technical Audit', icon: 'fas fa-cogs' },
           { id: 'onpage-audit', label: 'On-Page Audit', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
@@ -6394,7 +6619,6 @@
           { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
           { id: 'website-actions', label: 'Website Actions', icon: 'fas fa-spider' },
-          { id: 'technical-actions', label: 'Technical Actions', icon: 'fas fa-cogs' },
           { id: 'onpage-actions', label: 'On-Page Actions', icon: 'fas fa-file-alt' },
         ]},
         { section: 'COPYWRITER', items: [
@@ -6444,7 +6668,7 @@
                     const getItemSections = () => {
                       if (item.children) return [];
                       if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, AGENT_SKIP_PATTERNS, false, GSC_ALLOWED_SECTIONS);
-                      if (item.id === 'website-audit') return getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false, WEBSITE_ALLOWED_SECTIONS);
+                      if (item.id === 'website-audit') { const secs = getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false, WEBSITE_ALLOWED_SECTIONS); if (!secs.includes('Speed & Images')) secs.push('Speed & Images'); return secs; }
                       return [];
                     };
                     const itemSections = item.expandable && !item.children ? getItemSections() : [];
