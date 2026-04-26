@@ -1275,6 +1275,7 @@
     // Allowed sections per audit type (whitelist)
     const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages', 'Action Plan'];
     const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Action Plan'];
+    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Action Plan'];
 
     // Normalize messy agent section names into clean sidebar labels
     // Uses exact map first, then fuzzy keyword matching as fallback
@@ -1312,6 +1313,32 @@
         'schema and structured data': 'Schema & Data',
         'structured data': 'Schema & Data',
         'schema': 'Schema & Data',
+        // GBP sections
+        'profile completeness': 'Profile Completeness',
+        'gbp profile completeness': 'Profile Completeness',
+        'profile optimization': 'Profile Completeness',
+        'nap consistency': 'NAP Consistency',
+        'nap': 'NAP Consistency',
+        'name address phone': 'NAP Consistency',
+        'reviews & reputation': 'Reviews & Reputation',
+        'reviews and reputation': 'Reviews & Reputation',
+        'reviews': 'Reviews & Reputation',
+        'review analysis': 'Reviews & Reputation',
+        'competitor analysis': 'Competitor Analysis',
+        'competitors': 'Competitor Analysis',
+        'competitive analysis': 'Competitor Analysis',
+        'directory & citations': 'Directory & Citations',
+        'directory and citations': 'Directory & Citations',
+        'directories & citations': 'Directory & Citations',
+        'citations': 'Directory & Citations',
+        'directories': 'Directory & Citations',
+        'photos & media': 'Photos & Media',
+        'photos and media': 'Photos & Media',
+        'photos': 'Photos & Media',
+        'photo analysis': 'Photos & Media',
+        'suburb coverage': 'Suburb Coverage',
+        'service area coverage': 'Suburb Coverage',
+        'suburb targeting': 'Suburb Coverage',
       };
       if (exactMap[lower]) return exactMap[lower];
       // Fuzzy keyword matching for creative renames
@@ -1327,6 +1354,14 @@
       if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
       if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
       if (/schema|structured.?data|rich.?result|json.?ld/i.test(n)) return 'Schema & Data';
+      // GBP fuzzy
+      if (/profile.?complete|gbp.?profile|listing.?complete/i.test(n)) return 'Profile Completeness';
+      if (/nap|name.?address.?phone/i.test(n)) return 'NAP Consistency';
+      if (/review|reputation|rating/i.test(n)) return 'Reviews & Reputation';
+      if (/competitor|competitive|competing/i.test(n)) return 'Competitor Analysis';
+      if (/director|citation|local.?listing/i.test(n)) return 'Directory & Citations';
+      if (/photo|media|image.?quality/i.test(n)) return 'Photos & Media';
+      if (/suburb|service.?area|coverage|geo/i.test(n)) return 'Suburb Coverage';
       return name;
     }
 
@@ -2025,6 +2060,14 @@
             'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
             'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
             'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
+            // GBP sections
+            'Profile Completeness': { icon: 'fas fa-id-card', color: '#22c55e', desc: 'How complete and optimized is the GBP listing' },
+            'NAP Consistency': { icon: 'fas fa-map-marker-alt', color: '#ef4444', desc: 'Name, Address, Phone consistency across web' },
+            'Reviews & Reputation': { icon: 'fas fa-star', color: '#f59e0b', desc: 'Review quantity, quality, and response rate' },
+            'Competitor Analysis': { icon: 'fas fa-users', color: '#8b5cf6', desc: 'Top local competitors and what they do better' },
+            'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
+            'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
+            'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
           };
           const sm = secMeta[sec.title] || { icon: iconClass, color: '#818cf8', desc: '' };
           const secRowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
@@ -2070,6 +2113,14 @@
         'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
         'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
         'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
+        // GBP sections
+        'Profile Completeness': { icon: 'fas fa-id-card', color: '#22c55e', desc: 'How complete and optimized is the GBP listing' },
+        'NAP Consistency': { icon: 'fas fa-map-marker-alt', color: '#ef4444', desc: 'Name, Address, Phone consistency across web' },
+        'Reviews & Reputation': { icon: 'fas fa-star', color: '#f59e0b', desc: 'Review quantity, quality, and response rate' },
+        'Competitor Analysis': { icon: 'fas fa-users', color: '#8b5cf6', desc: 'Top local competitors and what they do better' },
+        'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
+        'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
+        'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
       };
 
       // Count items and severity per section
@@ -2172,7 +2223,7 @@
 
     // Thin wrappers for each audit type
     function ExternalGBPAuditPage({ project, section, setActiveTab }) {
-      return React.createElement(AgentAuditPage, { project, section, setActiveTab });
+      return React.createElement(AgentAuditPage, { project, section, setActiveTab, allowedSections: GBP_ALLOWED_SECTIONS, skipPatterns: AGENT_SKIP_PATTERNS, mergeDirectories: false });
     }
 
     function WebsiteAuditPage({ project, section, setActiveTab }) {
@@ -2230,7 +2281,7 @@
 
     // Legacy alias
     function getExternalAuditSections(report) {
-      return getAgentAuditSections(report, [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i], true);
+      return getAgentAuditSections(report, AGENT_SKIP_PATTERNS, false, GBP_ALLOWED_SECTIONS);
     }
 
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============

@@ -35,9 +35,9 @@ Should rank higher but stuck. Diagnose why.
 Max 10 rows.
 
 ## Action Plan
-Top fixes by impact. Be specific.
-| Priority | Action | Pages Affected | Effort | Expected Impact |
-Priority: Critical, High, Medium. STOP HERE. Do not add any more sections.
+Consolidate the top fixes from ALL sections above into one prioritized list. Every section must be represented. Quick wins first.
+| Priority | Action | Section | Pages Affected | Effort | Expected Impact |
+Priority: Critical, High, Medium. Include at least one action from each section above. STOP HERE. Do not add any more sections.
 
 ## Fix Rules
 Every fix MUST be specific. BAD: "Improve title". GOOD: "Rewrite title from 'Services' to 'Plumber Perth — 24/7 Emergency Plumbing'". Include current value and recommended new value. Use short page paths like `/burst-pipes/`.

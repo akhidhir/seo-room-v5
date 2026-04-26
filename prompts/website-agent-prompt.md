@@ -41,9 +41,9 @@ Missing schema that could trigger rich results.
 Include what markup to add and where.
 
 ## Action Plan
-Top fixes by ranking impact. Quick wins first.
-| Priority | Action | Pages Affected | Effort | Expected Impact |
-Priority: Critical, High, Medium. STOP HERE. Do not add any more sections.
+Consolidate the top fixes from ALL sections above into one prioritized list. Every section must be represented. Quick wins first.
+| Priority | Action | Section | Pages Affected | Effort | Expected Impact |
+Priority: Critical, High, Medium. Include at least one action from each section above. STOP HERE. Do not add any more sections.
 
 ## Fix Rules
 Every fix MUST be specific. BAD: "Add H1". GOOD: "Add H1: 'Plumber Perth — Licensed Plumbing Services'". Include what to change, where, and the exact recommended value. Use short page paths. Status: Pass, Warning, Fail.

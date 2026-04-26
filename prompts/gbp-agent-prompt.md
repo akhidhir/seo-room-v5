@@ -46,9 +46,9 @@ Service area suburb presence across GBP, website, and reviews.
 Show which suburbs need better targeting.
 
 ## Action Plan
-Top fixes by ranking impact. Quick wins first.
-| Priority | Action | Category | Effort | Expected Impact |
-Priority: Critical, High, Medium. STOP HERE. Do not add any more sections.
+Consolidate the top fixes from ALL sections above into one prioritized list. Every section must be represented. Quick wins first.
+| Priority | Action | Section | Effort | Expected Impact |
+Priority: Critical, High, Medium. Include at least one action from each section above. STOP HERE. Do not add any more sections.
 
 ## Fix Rules
 Every fix MUST be specific. BAD: "Add photos". GOOD: "Add 5 exterior photos showing storefront signage and branded vehicle". Include what to change, where, and the exact recommended value.
