@@ -1958,13 +1958,43 @@
             ignoredKeys: Object.fromEntries(Object.entries(addedActions).filter(([k]) => k.startsWith('ign_')).map(([k, v]) => [k.replace('ign_', ''), v]))
           };
 
+          const secMeta = {
+            'Quick Wins': { icon: 'fas fa-bolt', color: '#22c55e', desc: 'Pages close to page 1 — easiest ranking gains' },
+            'Low CTR Pages': { icon: 'fas fa-mouse-pointer', color: '#f59e0b', desc: 'High impressions but low clicks — fix titles & metas' },
+            'Cannibalization': { icon: 'fas fa-clone', color: '#ef4444', desc: 'Multiple pages competing for same query' },
+            'Zero-Click Pages': { icon: 'fas fa-eye-slash', color: '#8b5cf6', desc: 'Impressions but zero clicks — fix or deindex' },
+            'Underperforming Pages': { icon: 'fas fa-chart-line', color: '#3b82f6', desc: 'Should rank higher but stuck' },
+            'Action Plan': { icon: 'fas fa-tasks', color: '#818cf8', desc: 'Prioritized fixes by impact' },
+            'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
+            'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
+            'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
+            'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
+            'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
+            'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
+          };
+          const sm = secMeta[sec.title] || { icon: iconClass, color: '#818cf8', desc: '' };
+          const secRowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
+          const secHasCritical = sec.content.some(l => /critical|high|fail/i.test(l) && l.includes('|'));
+
           return (
             <div>
-              <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 20, color: 'var(--text1)' }}>
-                <i className={iconClass} style={{ marginRight: 10, color: '#818cf8' }} />{sec.title}
-              </h2>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 24px' }}>
-                {renderSectionContent(sec.content, actionMode)}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{
+                  padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
+                  background: `linear-gradient(135deg, ${sm.color}15, ${sm.color}08)`,
+                  borderBottom: '1px solid var(--border)'
+                }}>
+                  <i className={sm.icon} style={{ fontSize: 22, color: sm.color }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{sec.title}</div>
+                    <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{sm.desc}</div>
+                  </div>
+                  {secHasCritical && <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>Critical</span>}
+                  {secRowCount > 0 && <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{secRowCount} items</span>}
+                </div>
+                <div style={{ padding: '20px 24px' }}>
+                  {renderSectionContent(sec.content, actionMode)}
+                </div>
               </div>
             </div>
           );
