@@ -4355,11 +4355,7 @@
         } catch (e) { setError(e.message); }
       };
 
-      const sources = useMemo(() => {
-        const s = new Set();
-        allItems.forEach(i => s.add(i._source));
-        return ['all', ...Array.from(s)];
-      }, [allItems]);
+      const sources = ['all', 'GBP', 'GSC', 'Website'];
 
       const categories = useMemo(() => {
         const cats = new Set();
@@ -4419,7 +4415,7 @@
                 <i className="fas fa-tasks" style={{ marginRight: 10, color: '#3b82f6' }} />Action Plan
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
-                All audit findings deduplicated and scored. {stats.total} tasks across {sources.length - 1} sources.
+                All audit findings deduplicated and scored. {stats.total} tasks across GBP, GSC & Website.
               </p>
             </div>
             <button className="btn btn-primary" onClick={syncAll} disabled={syncing} style={{ fontSize: 13 }}>
