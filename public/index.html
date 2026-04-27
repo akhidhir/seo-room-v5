@@ -1273,9 +1273,9 @@
     const AGENT_SKIP_PATTERNS = [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i, /^assumptions/i, /^data quality/i, /^methodology/i, /^appendix/i, /^notes$/i, /^conclusion$/i, /^introduction$/i, /^executive/i, /^recommendations$/i];
 
     // Allowed sections per audit type (whitelist)
-    const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages', 'Action Plan'];
-    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Action Plan'];
-    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Action Plan'];
+    const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages', 'Summary'];
+    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Summary'];
+    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Summary'];
 
     // Normalize messy agent section names into clean sidebar labels
     // Uses exact map first, then fuzzy keyword matching as fallback
@@ -1296,8 +1296,9 @@
         'zero clicks': 'Zero-Click Pages',
         'underperforming pages': 'Underperforming Pages',
         'underperforming': 'Underperforming Pages',
-        'action plan': 'Action Plan',
-        'priority action plan': 'Action Plan',
+        'action plan': 'Summary',
+        'priority action plan': 'Summary',
+        'summary': 'Summary',
         'site health': 'Site Health',
         'site health overview': 'Site Health',
         'crawlability': 'Crawlability',
@@ -1347,7 +1348,7 @@
       if (/cannibal|competing.?pages|duplicate.?rank/i.test(n)) return 'Cannibalization';
       if (/zero.?click|no.?click|0.?click/i.test(n)) return 'Zero-Click Pages';
       if (/underperform|stuck|should.?rank|declining/i.test(n)) return 'Underperforming Pages';
-      if (/action.?plan|priority.?action|next.?action|implementation/i.test(n)) return 'Action Plan';
+      if (/action.?plan|priority.?action|next.?action|implementation|summary/i.test(n)) return 'Summary';
       if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
       if (/crawl|index|robot|sitemap/i.test(n)) return 'Crawlability';
       if (/on.?page|title|meta|h1|heading/i.test(n)) return 'On-Page Issues';
@@ -2053,7 +2054,7 @@
             'Cannibalization': { icon: 'fas fa-clone', color: '#ef4444', desc: 'Multiple pages competing for same query' },
             'Zero-Click Pages': { icon: 'fas fa-eye-slash', color: '#8b5cf6', desc: 'Impressions but zero clicks — fix or deindex' },
             'Underperforming Pages': { icon: 'fas fa-chart-line', color: '#3b82f6', desc: 'Should rank higher but stuck' },
-            'Action Plan': { icon: 'fas fa-tasks', color: '#818cf8', desc: 'Prioritized fixes by impact' },
+            'Summary': { icon: 'fas fa-clipboard-list', color: '#818cf8', desc: 'Agent summary of key findings and priorities' },
             'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
             'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
             'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
@@ -2107,7 +2108,7 @@
         'Cannibalization': { icon: 'fas fa-clone', color: '#ef4444', desc: 'Multiple pages competing for same query' },
         'Zero-Click Pages': { icon: 'fas fa-eye-slash', color: '#8b5cf6', desc: 'Impressions but zero clicks — fix or deindex' },
         'Underperforming Pages': { icon: 'fas fa-chart-line', color: '#3b82f6', desc: 'Should rank higher but stuck' },
-        'Action Plan': { icon: 'fas fa-tasks', color: '#818cf8', desc: 'Prioritized fixes by impact' },
+        'Summary': { icon: 'fas fa-clipboard-list', color: '#818cf8', desc: 'Agent summary of key findings and priorities' },
         'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
         'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
         'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
@@ -2137,7 +2138,7 @@
         return { ...sec, rowCount, criticalCount, mediumCount };
       });
 
-      const totalIssues = sectionStats.reduce((sum, s) => sum + (s.title !== 'Action Plan' ? s.rowCount : 0), 0);
+      const totalIssues = sectionStats.reduce((sum, s) => sum + (s.title !== 'Summary' ? s.rowCount : 0), 0);
       const totalCritical = sectionStats.reduce((sum, s) => sum + s.criticalCount, 0);
 
       // Navigate to section in sidebar
@@ -2192,7 +2193,7 @@
                   style={{
                     background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', cursor: 'pointer',
                     transition: 'border-color 0.2s',
-                    gridColumn: sec.title === 'Action Plan' ? '1 / -1' : undefined
+                    gridColumn: sec.title === 'Summary' ? '1 / -1' : undefined
                   }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = meta.color}
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
