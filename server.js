@@ -3336,21 +3336,16 @@ RULES — follow exactly:
 6. Severity must be one of: Critical, High, Medium, Low
 7. Include current_value and recommended_value when the report states them (numbers, text, or status). Use empty string if not stated.
 8. The title should be a short actionable statement (e.g. "Add missing business description" not "Business Description Analysis")
-9. pages_affected: list the specific page URLs or page types affected (e.g. "/plumber-fremantle/, /plumber-cockburn/" or "All service pages" or "Homepage"). Use empty string if not clear.
-10. effort: estimate implementation effort as "Low", "Medium", or "High" with a brief note (e.g. "Low — edit Elementor section" or "High — content writing required per page")
-11. expected_impact: describe the expected SEO impact if fixed (e.g. "Enables star ratings in SERP; reinforces local pack" or "Recover 400+ impressions from positions 69-94 back to page 1-3")
 
 Return a JSON array — ONLY valid JSON, no explanation:
 [{
   "category": "<one of the valid categories>",
   "title": "<short actionable title>",
-  "description": "<what's wrong and specific fix steps>",
+  "description": "<what's wrong, from the report>",
+  "recommendation": "<specific fix action, from the report>",
   "severity": "<Critical|High|Medium|Low>",
   "current_value": "<current state if stated>",
-  "recommended_value": "<target state if stated>",
-  "pages_affected": "<specific pages/URLs affected>",
-  "effort": "<Low|Medium|High — brief how>",
-  "expected_impact": "<what improves if fixed>"
+  "recommended_value": "<target state if stated>"
 }]
 
 REPORT:
@@ -3390,9 +3385,6 @@ ${reportText}`
         severity: sev,
         current_value: (f.current_value || '').slice(0, 500),
         recommended_value: (f.recommended_value || '').slice(0, 500),
-        pages_affected: (f.pages_affected || '').slice(0, 500),
-        effort: (f.effort || '').slice(0, 200),
-        expected_impact: (f.expected_impact || '').slice(0, 500),
       });
     }
 
@@ -3413,9 +3405,9 @@ ${reportText}`
 
         // Auto-create action item (agent findings are the truth — no manual approval needed)
         await pool.query(
-          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, pages_affected, effort, expected_impact)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual', $11, $12, $13)`,
-          [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity, f.pages_affected || '', f.effort || '', f.expected_impact || '']
+          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
+          [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
         );
       }
       console.log(`[findings-extractor] Saved ${validFindings.length} findings + action items for ${pillar} (project ${projectId})`);

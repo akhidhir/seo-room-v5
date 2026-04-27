@@ -4394,17 +4394,14 @@
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
                     <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PRIORITY</th>
                     <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>ACTION</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 180 }}>PAGES AFFECTED</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 160 }}>EFFORT</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 200 }}>EXPECTED IMPACT</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 40 }}></th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>CATEGORY</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 90 }}>STATUS</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
-                    const effortColor = /^high/i.test(item.effort || '') ? '#ef4444' : /^low/i.test(item.effort || '') ? '#22c55e' : '#f59e0b';
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -4420,22 +4417,17 @@
                               {item.new_value && <span style={{ color: '#22c55e' }}>{item.new_value}</span>}
                             </div>
                           )}
-                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, fontStyle: 'italic' }}>{item._category}</div>
                         </td>
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)', lineHeight: 1.4 }}>
-                          {item.pages_affected || '—'}
-                        </td>
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, lineHeight: 1.4 }}>
-                          <span style={{ color: effortColor }}>{item.effort || '—'}</span>
-                        </td>
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)', lineHeight: 1.4 }}>
-                          {item.expected_impact || '—'}
+                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>
+                          {item._category}
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
-                          <button onClick={() => handleStatusChange(item.id, item.status === 'done' ? 'pending' : 'done')}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: item.status === 'done' ? '#22c55e' : 'var(--text3)' }}>
-                            <i className={item.status === 'done' ? 'fas fa-check-circle' : 'far fa-circle'} />
-                          </button>
+                          <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
+                            style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)' }}>
+                            <option value="pending">Pending</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="done">Done</option>
+                          </select>
                         </td>
                       </tr>
                     );
