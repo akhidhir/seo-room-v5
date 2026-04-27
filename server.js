@@ -796,6 +796,13 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
 
     const items = result.rows;
 
+    // Count how many times each title appears (source count for trust scoring)
+    const titleCounts = {};
+    for (const item of items) {
+      const key = (item.title || '').toLowerCase().trim();
+      titleCounts[key] = (titleCounts[key] || 0) + 1;
+    }
+
     // Deduplicate: same title + same pillar = duplicate, keep newest
     const seen = new Map();
     const deduped = [];
@@ -807,6 +814,34 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       }
     }
 
+    // Trust scoring
+    const HIGH_IMPACT_KEYWORDS = /ranking|position|index|crawl|canonical|redirect|404|broken|duplicate|title|meta|h1|schema|speed|lcp|cls|conversion|ctr|traffic/i;
+    function computeTrustScore(item) {
+      let score = 0;
+      // Severity weight
+      const sev = (item.severity || '').toLowerCase();
+      if (sev === 'critical') score += 10;
+      else if (sev === 'medium') score += 5;
+      else if (sev === 'low') score += 2;
+      else score += 3;
+      // Source count: flagged by multiple audits = higher trust
+      const sources = titleCounts[(item.title || '').toLowerCase().trim()] || 1;
+      score += Math.min(sources - 1, 3) * 2; // +2 per extra source, max +6
+      // Impact keywords in title or description
+      const text = `${item.title || ''} ${item.description || ''}`;
+      if (HIGH_IMPACT_KEYWORDS.test(text)) score += 3;
+      // Quick win bonus: has both current and target values (actionable)
+      if (item.current_value && item.new_value) score += 2;
+      // Has a linked finding (agent-sourced = more trustworthy)
+      if (item.finding_id) score += 1;
+      return score;
+    }
+
+    // Score all items and sort within groups
+    for (const item of deduped) {
+      item.trust_score = computeTrustScore(item);
+    }
+
     // Normalize pillar names for grouping display
     const pillarDisplayMap = {
       gbp: 'GBP', gbp_external: 'GBP',
@@ -814,7 +849,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       website: 'Website', technical: 'Website',
     };
 
-    // Group by display pillar → category
+    // Group by display pillar → category, sorted by trust score desc
     const grouped = {};
     for (const item of deduped) {
       const displayPillar = pillarDisplayMap[item.pillar] || item.pillar;
@@ -823,8 +858,15 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       if (!grouped[displayPillar][category]) grouped[displayPillar][category] = [];
       grouped[displayPillar][category].push(item);
     }
+    // Sort each category by trust_score descending
+    for (const pillar of Object.values(grouped)) {
+      for (const cat of Object.keys(pillar)) {
+        pillar[cat].sort((a, b) => (b.trust_score || 0) - (a.trust_score || 0));
+      }
+    }
 
     // Stats
+    const allScores = deduped.map(i => i.trust_score || 0);
     const stats = {
       total: deduped.length,
       pending: deduped.filter(i => i.status === 'pending').length,
@@ -834,6 +876,8 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       medium: deduped.filter(i => (i.severity || '').toLowerCase() === 'medium').length,
       low: deduped.filter(i => (i.severity || '').toLowerCase() === 'low').length,
       duplicates_removed: items.length - deduped.length,
+      avg_score: allScores.length ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0,
+      max_score: allScores.length ? Math.max(...allScores) : 0,
     };
 
     res.json({ grouped, stats, total_raw: items.length, total_deduped: deduped.length });

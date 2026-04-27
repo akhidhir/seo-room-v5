@@ -4508,9 +4508,9 @@
                       {catExpanded && filtered.map(item => {
                         const sev = (item.severity || 'medium').toLowerCase();
                         return (
-                          <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 18px 10px 60px', borderTop: '1px solid var(--border)' }}>
-                            {/* Severity dot */}
-                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: severityColors[sev] || '#6b7280', marginTop: 5, flexShrink: 0 }} />
+                          <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 18px 10px 60px', borderTop: '1px solid var(--border)' }}>
+                            {/* Trust score */}
+                            <div style={{ width: 32, height: 32, borderRadius: '50%', border: `2px solid ${(item.trust_score || 0) >= 12 ? '#ef4444' : (item.trust_score || 0) >= 8 ? '#f59e0b' : '#22c55e'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: (item.trust_score || 0) >= 12 ? '#ef4444' : (item.trust_score || 0) >= 8 ? '#f59e0b' : '#22c55e', flexShrink: 0, marginTop: 2 }}>{item.trust_score || 0}</div>
 
                             {/* Task content */}
                             <div style={{ flex: 1, minWidth: 0 }}>
