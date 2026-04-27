@@ -4340,6 +4340,7 @@
     function ActionPlanPage({ type, title, icon, project }) {
       const [actions, setActions] = useState([]);
       const [loading, setLoading] = useState(false);
+      const [syncing, setSyncing] = useState(false);
       const [error, setError] = useState('');
       const [statusFilter, setStatusFilter] = useState('all');
       const [severityFilter, setSeverityFilter] = useState('all');
@@ -4403,6 +4404,24 @@
         }
       };
 
+      // Sync findings from existing agent audit reports (backfill)
+      const syncFindings = async () => {
+        setSyncing(true); setError('');
+        try {
+          const pillarMap = { gbp: 'gbp_external', gsc: 'gsc_agent', website: 'website' };
+          const agentPillar = pillarMap[type];
+          if (!agentPillar) { setError('No agent audit for this type'); setSyncing(false); return; }
+          const data = await api(`/projects/${project.id}/audits/${agentPillar}/extract-findings`, { method: 'POST' });
+          if (data?.extracted > 0) {
+            alert(`Extracted ${data.extracted} action items from ${type} audit.`);
+            loadActions();
+          } else {
+            alert('No findings extracted. Run the audit first.');
+          }
+        } catch (e) { setError('Sync failed: ' + e.message); }
+        setSyncing(false);
+      };
+
       const statuses = ['pending', 'approved', 'in-progress', 'done'];
 
       const filteredActions = useMemo(() => {
@@ -4422,11 +4441,16 @@
 
       return (
         <>
-          <div className="page-header">
-            <div className="page-title">
-              <i className={icon}></i> {title}
+          <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div className="page-title">
+                <i className={icon}></i> {title}
+              </div>
+              <div className="page-subtitle">Manage your action plan with Kanban board view</div>
             </div>
-            <div className="page-subtitle">Manage your action plan with Kanban board view</div>
+            <button className="btn" onClick={syncFindings} disabled={syncing} style={{ fontSize: 12, padding: '6px 14px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+              {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 4 }} />Sync from Audit</>}
+            </button>
           </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
