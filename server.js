@@ -310,6 +310,8 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
+    await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
     console.log('[boot] Database schema initialized');
@@ -723,12 +725,12 @@ app.get('/api/projects/:id/action-items', async (req, res) => {
 
 // Create action item directly (from external audit)
 app.post('/api/projects/:id/action-items', async (req, res) => {
-  const { pillar, type, title, description, severity, current_value, new_value } = req.body;
+  const { pillar, type, title, description, severity, current_value, new_value, category } = req.body;
   try {
     const result = await pool.query(
-      `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, status, execution_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'manual') RETURNING *`,
-      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null]
+      `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 'manual') RETURNING *`,
+      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null, category || type || 'general']
     );
     res.json({ action_item: result.rows[0] });
   } catch (e) {
@@ -775,6 +777,105 @@ app.post('/api/action-items/:id/execute', async (req, res) => {
   }
 });
 
+
+// ==================== ORCHESTRATOR ====================
+
+// Get all action items grouped by pillar + category, with deduplication
+app.get('/api/projects/:id/orchestrator', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ai.*, af.recommendation as finding_recommendation, af.audit_id
+       FROM action_items ai
+       LEFT JOIN audit_findings af ON ai.finding_id = af.id
+       WHERE ai.project_id = $1
+       ORDER BY
+         CASE ai.severity WHEN 'Critical' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END,
+         ai.created_at DESC`,
+      [req.params.id]
+    );
+
+    const items = result.rows;
+
+    // Deduplicate: same title + same pillar = duplicate, keep newest
+    const seen = new Map();
+    const deduped = [];
+    for (const item of items) {
+      const key = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
+      if (!seen.has(key)) {
+        seen.set(key, true);
+        deduped.push(item);
+      }
+    }
+
+    // Normalize pillar names for grouping display
+    const pillarDisplayMap = {
+      gbp: 'GBP', gbp_external: 'GBP',
+      gsc: 'GSC', gsc_agent: 'GSC',
+      website: 'Website', technical: 'Website',
+    };
+
+    // Group by display pillar → category
+    const grouped = {};
+    for (const item of deduped) {
+      const displayPillar = pillarDisplayMap[item.pillar] || item.pillar;
+      const category = item.category || item.type || 'General';
+      if (!grouped[displayPillar]) grouped[displayPillar] = {};
+      if (!grouped[displayPillar][category]) grouped[displayPillar][category] = [];
+      grouped[displayPillar][category].push(item);
+    }
+
+    // Stats
+    const stats = {
+      total: deduped.length,
+      pending: deduped.filter(i => i.status === 'pending').length,
+      in_progress: deduped.filter(i => i.status === 'in-progress' || i.status === 'in_progress' || i.status === 'approved').length,
+      done: deduped.filter(i => i.status === 'done' || i.status === 'completed').length,
+      critical: deduped.filter(i => (i.severity || '').toLowerCase() === 'critical').length,
+      medium: deduped.filter(i => (i.severity || '').toLowerCase() === 'medium').length,
+      low: deduped.filter(i => (i.severity || '').toLowerCase() === 'low').length,
+      duplicates_removed: items.length - deduped.length,
+    };
+
+    res.json({ grouped, stats, total_raw: items.length, total_deduped: deduped.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sync all pillars at once (for orchestrator)
+app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
+  const { projectId } = req.params;
+  const pillars = ['gbp_external', 'gsc_agent', 'website'];
+  const results = {};
+  for (const pillar of pillars) {
+    try {
+      const auditRes = await pool.query(
+        `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [projectId, pillar]
+      );
+      if (auditRes.rows.length > 0) {
+        const auditData = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
+        const reportText = auditData?.report || auditData?.final_report || '';
+        if (reportText) {
+          const auditIdRes = await pool.query(
+            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+            [projectId, pillar]
+          );
+          const auditId = auditIdRes.rows[0]?.id;
+          const count = await extractFindingsFromReport(reportText, pillar, parseInt(projectId), auditId);
+          results[pillar] = { extracted: count };
+        } else {
+          results[pillar] = { extracted: 0, reason: 'no report text' };
+        }
+      } else {
+        results[pillar] = { extracted: 0, reason: 'no completed audit' };
+      }
+    } catch (e) {
+      results[pillar] = { error: e.message };
+    }
+  }
+  res.json({ results });
+});
 
 // ==================== SERPAPI HELPER ====================
 
@@ -3230,9 +3331,9 @@ ${reportText}`
 
         // Auto-create action item (agent findings are the truth — no manual approval needed)
         await pool.query(
-          `INSERT INTO action_items (project_id, finding_id, pillar, type, title, description, current_value, new_value, severity, status, execution_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 'manual')`,
-          [projectId, findingId, f.pillar, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
+          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
+          [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
         );
       }
       console.log(`[findings-extractor] Saved ${validFindings.length} findings + action items for ${pillar} (project ${projectId})`);
