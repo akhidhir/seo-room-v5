@@ -4309,42 +4309,34 @@
     }
 
     // ============ ACTION PLAN PAGES ============
-    function OrchestratorPage({ project }) {
-      const [data, setData] = useState(null);
+    function ActionPlanPage({ pillar, agentPillar, title, icon, color, project }) {
+      const [items, setItems] = useState([]);
       const [loading, setLoading] = useState(false);
       const [syncing, setSyncing] = useState(false);
       const [error, setError] = useState('');
-      const [expandedPillars, setExpandedPillars] = useState({ GBP: true, GSC: true, Website: true });
-      const [expandedCats, setExpandedCats] = useState({});
+      const [catFilter, setCatFilter] = useState('all');
       const [statusFilter, setStatusFilter] = useState('all');
-      const [severityFilter, setSeverityFilter] = useState('all');
 
       useEffect(() => {
         if (project?.id) loadData();
-      }, [project?.id]);
+      }, [project?.id, pillar]);
 
       const loadData = async () => {
         setLoading(true); setError('');
         try {
           const d = await api(`/projects/${project.id}/orchestrator`);
-          setData(d);
-          // Auto-expand all categories
-          const cats = {};
-          Object.entries(d.grouped || {}).forEach(([pillar, categories]) => {
-            Object.keys(categories).forEach(cat => { cats[`${pillar}:${cat}`] = true; });
-          });
-          setExpandedCats(cats);
+          const pillarItems = Object.entries(d.grouped?.[pillar] || {}).flatMap(([cat, tasks]) => tasks.map(t => ({ ...t, _category: cat })));
+          setItems(pillarItems);
         } catch (e) { setError(e.message); }
         setLoading(false);
       };
 
-      const syncAll = async () => {
+      const syncFindings = async () => {
         setSyncing(true); setError('');
         try {
-          const res = await api(`/projects/${project.id}/orchestrator/sync-all`, { method: 'POST' });
-          const total = Object.values(res.results || {}).reduce((s, r) => s + (r.extracted || 0), 0);
-          if (total > 0) loadData();
-          else setError('No new findings extracted. Run audits first.');
+          const data = await api(`/projects/${project.id}/audits/${agentPillar}/extract-findings`, { method: 'POST' });
+          if (data?.extracted > 0) loadData();
+          else setError('No findings extracted. Run the audit first.');
         } catch (e) { setError('Sync failed: ' + e.message); }
         setSyncing(false);
       };
@@ -4352,72 +4344,69 @@
       const handleStatusChange = async (actionId, newStatus) => {
         try {
           await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
-          setData(prev => {
-            if (!prev) return prev;
-            const updated = JSON.parse(JSON.stringify(prev));
-            Object.values(updated.grouped).forEach(cats => {
-              Object.values(cats).forEach(items => {
-                const item = items.find(i => i.id === actionId);
-                if (item) item.status = newStatus;
-              });
-            });
-            // Recalc stats
-            const all = Object.values(updated.grouped).flatMap(cats => Object.values(cats).flat());
-            updated.stats.pending = all.filter(i => i.status === 'pending').length;
-            updated.stats.in_progress = all.filter(i => ['in-progress', 'in_progress', 'approved'].includes(i.status)).length;
-            updated.stats.done = all.filter(i => i.status === 'done' || i.status === 'completed').length;
-            return updated;
-          });
+          setItems(prev => prev.map(i => i.id === actionId ? { ...i, status: newStatus } : i));
         } catch (e) { setError(e.message); }
       };
 
-      const pillarIcons = { GBP: 'fas fa-map-marker-alt', GSC: 'fas fa-chart-line', Website: 'fas fa-spider' };
-      const pillarColors = { GBP: '#f59e0b', GSC: '#3b82f6', Website: '#8b5cf6' };
-      const severityColors = { critical: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
-      const severityBg = { critical: 'rgba(239,68,68,0.12)', medium: 'rgba(245,158,11,0.12)', low: 'rgba(34,197,94,0.12)' };
-      const statusColors = { pending: '#6b7280', approved: '#3b82f6', 'in-progress': '#f59e0b', done: '#22c55e', completed: '#22c55e' };
+      const categories = useMemo(() => {
+        const cats = new Set();
+        items.forEach(i => cats.add(i._category || 'General'));
+        return ['all', ...Array.from(cats)];
+      }, [items]);
 
-      const filterItem = (item) => {
-        if (statusFilter !== 'all' && item.status !== statusFilter) return false;
-        if (severityFilter !== 'all' && (item.severity || '').toLowerCase() !== severityFilter.toLowerCase()) return false;
-        return true;
+      const filtered = useMemo(() => {
+        return items.filter(i => {
+          if (catFilter !== 'all' && i._category !== catFilter) return false;
+          if (statusFilter !== 'all' && i.status !== statusFilter) return false;
+          return true;
+        });
+      }, [items, catFilter, statusFilter]);
+
+      const stats = useMemo(() => {
+        const total = items.length;
+        const pending = items.filter(i => i.status === 'pending').length;
+        const inProgress = items.filter(i => ['in-progress', 'in_progress', 'approved'].includes(i.status)).length;
+        const done = items.filter(i => i.status === 'done' || i.status === 'completed').length;
+        const p1 = items.filter(i => (i.trust_score || 0) >= 12).length;
+        return { total, pending, inProgress, done, p1 };
+      }, [items]);
+
+      const getPriority = (ts) => {
+        if (ts >= 12) return { label: 'P1', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+        if (ts >= 8) return { label: 'P2', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
+        return { label: 'P3', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
       };
-
-      const stats = data?.stats;
-      const pillarOrder = ['GBP', 'GSC', 'Website'];
 
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
-                <i className="fas fa-tasks" style={{ marginRight: 10, color: 'var(--primary)' }} />Action Plan
+                <i className={icon} style={{ marginRight: 10, color }} />{title}
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
-                Unified task list from all audits — grouped by pillar and category
-                {data?.stats?.duplicates_removed > 0 && <span style={{ marginLeft: 8, color: '#f59e0b' }}>({data.stats.duplicates_removed} duplicates removed)</span>}
+                {stats.total} tasks — {stats.pending} pending, {stats.inProgress} in progress, {stats.done} done
               </p>
             </div>
-            <button className="btn btn-primary" onClick={syncAll} disabled={syncing} style={{ fontSize: 13 }}>
-              {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync All Audits</>}
+            <button className="btn btn-primary" onClick={syncFindings} disabled={syncing} style={{ fontSize: 13 }}>
+              {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audit</>}
             </button>
           </div>
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
-          {/* Stats cards */}
-          {stats && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 20 }}>
+          {/* Stats */}
+          {items.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
               {[
-                { label: 'Total Tasks', value: stats.total, color: 'var(--primary)' },
-                { label: 'Pending', value: stats.pending, color: '#6b7280' },
-                { label: 'In Progress', value: stats.in_progress, color: '#f59e0b' },
-                { label: 'Done', value: stats.done, color: '#22c55e' },
-                { label: 'Critical', value: stats.critical, color: '#ef4444' },
-                { label: 'Medium', value: stats.medium, color: '#f59e0b' },
+                { label: 'Total', value: stats.total, clr: color },
+                { label: 'P1 Priority', value: stats.p1, clr: '#ef4444' },
+                { label: 'Pending', value: stats.pending, clr: '#6b7280' },
+                { label: 'In Progress', value: stats.inProgress, clr: '#f59e0b' },
+                { label: 'Done', value: stats.done, clr: '#22c55e' },
               ].map(s => (
                 <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 12, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: s.clr }}>{s.value}</div>
                   <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, textTransform: 'uppercase', fontWeight: 600 }}>{s.label}</div>
                 </div>
               ))}
@@ -4425,20 +4414,16 @@
           )}
 
           {/* Filters */}
-          {stats && (
-            <div style={{ display: 'flex', gap: 12, marginBottom: 20, fontSize: 13 }}>
+          {items.length > 0 && (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text1)', fontSize: 12 }}>
+                {categories.map(c => <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>)}
+              </select>
               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text1)', fontSize: 12 }}>
                 <option value="all">All Status</option>
                 <option value="pending">Pending</option>
-                <option value="approved">Approved</option>
                 <option value="in-progress">In Progress</option>
                 <option value="done">Done</option>
-              </select>
-              <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text1)', fontSize: 12 }}>
-                <option value="all">All Severity</option>
-                <option value="critical">Critical</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
               </select>
             </div>
           )}
@@ -4446,140 +4431,70 @@
           {loading && (
             <div style={{ textAlign: 'center', padding: 40 }}>
               <span className="spinner-large"></span>
-              <div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading action plan...</div>
+              <div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading...</div>
             </div>
           )}
 
-          {/* Pillar sections */}
-          {data && pillarOrder.filter(p => data.grouped[p]).map(pillar => {
-            const categories = data.grouped[pillar];
-            const pillarExpanded = expandedPillars[pillar];
-            const allItems = Object.values(categories).flat();
-            const filteredAll = allItems.filter(filterItem);
-            const pillarPending = filteredAll.filter(i => i.status === 'pending').length;
-            const pillarDone = filteredAll.filter(i => i.status === 'done' || i.status === 'completed').length;
-            const pillarCritical = filteredAll.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
-
-            if (filteredAll.length === 0 && statusFilter !== 'all') return null;
-
-            return (
-              <div key={pillar} style={{ marginBottom: 16, background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                {/* Pillar header */}
-                <div onClick={() => setExpandedPillars(p => ({ ...p, [pillar]: !p[pillar] }))}
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', cursor: 'pointer', background: `linear-gradient(135deg, ${pillarColors[pillar]}15, ${pillarColors[pillar]}08)` }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <i className={pillarIcons[pillar]} style={{ color: pillarColors[pillar], fontSize: 16 }} />
-                    <span style={{ fontSize: 16, fontWeight: 700 }}>{pillar}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 500 }}>{filteredAll.length} tasks</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {pillarCritical > 0 && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>{pillarCritical} CRITICAL</span>}
-                    <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>{pillarDone}/{filteredAll.length} done</span>
-                    <i className={`fas fa-chevron-${pillarExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
-                  </div>
-                </div>
-
-                {/* Categories within pillar */}
-                {pillarExpanded && Object.entries(categories).map(([category, items]) => {
-                  const catKey = `${pillar}:${category}`;
-                  const catExpanded = expandedCats[catKey] !== false;
-                  const filtered = items.filter(filterItem);
-                  if (filtered.length === 0 && statusFilter !== 'all') return null;
-                  const catCritical = filtered.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
-                  const catDone = filtered.filter(i => i.status === 'done' || i.status === 'completed').length;
-
-                  return (
-                    <div key={catKey} style={{ borderTop: '1px solid var(--border)' }}>
-                      {/* Category header */}
-                      <div onClick={() => setExpandedCats(c => ({ ...c, [catKey]: !catExpanded }))}
-                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 18px 10px 36px', cursor: 'pointer', background: 'var(--bg)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <i className={`fas fa-chevron-${catExpanded ? 'down' : 'right'}`} style={{ color: 'var(--text3)', fontSize: 10, width: 12 }} />
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>{category}</span>
-                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>({filtered.length})</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          {catCritical > 0 && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>CRITICAL</span>}
-                          <span style={{ fontSize: 10, color: '#22c55e' }}>{catDone}/{filtered.length}</span>
-                        </div>
-                      </div>
-
-                      {/* Tasks within category */}
-                      {catExpanded && filtered.map(item => {
-                        const sev = (item.severity || 'medium').toLowerCase();
-                        return (
-                          <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 18px 10px 60px', borderTop: '1px solid var(--border)' }}>
-                            {/* Trust score */}
-                            <div style={{ width: 32, height: 32, borderRadius: '50%', border: `2px solid ${(item.trust_score || 0) >= 12 ? '#ef4444' : (item.trust_score || 0) >= 8 ? '#f59e0b' : '#22c55e'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: (item.trust_score || 0) >= 12 ? '#ef4444' : (item.trust_score || 0) >= 8 ? '#f59e0b' : '#22c55e', flexShrink: 0, marginTop: 2 }}>{item.trust_score || 0}</div>
-
-                            {/* Task content */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{item.title}</div>
-                              {item.description && <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.4, marginBottom: 4 }}>{item.description.length > 200 ? item.description.slice(0, 200) + '...' : item.description}</div>}
-                              {(item.current_value || item.new_value) && (
-                                <div style={{ fontSize: 11, marginBottom: 4 }}>
-                                  {item.current_value && <span style={{ color: '#ef4444' }}>{item.current_value}</span>}
-                                  {item.current_value && item.new_value && <span style={{ color: 'var(--text3)', margin: '0 6px' }}>→</span>}
-                                  {item.new_value && <span style={{ color: '#22c55e' }}>{item.new_value}</span>}
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, fontWeight: 600, background: severityBg[sev], color: severityColors[sev] }}>{item.severity || 'Medium'}</span>
-                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, fontWeight: 600, background: `${statusColors[item.status] || '#6b7280'}18`, color: statusColors[item.status] || '#6b7280' }}>
-                                  {item.status === 'in-progress' ? 'In Progress' : (item.status || 'pending').charAt(0).toUpperCase() + (item.status || 'pending').slice(1)}
-                                </span>
-                              </div>
+          {/* Table */}
+          {filtered.length > 0 && (
+            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 50 }}>PRI</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>TASK</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 160 }}>CATEGORY</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>SEVERITY</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 110 }}>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((item, idx) => {
+                    const pri = getPriority(item.trust_score || 0);
+                    const sev = (item.severity || 'medium').toLowerCase();
+                    const sevColors = { critical: '#ef4444', medium: '#f59e0b', low: '#22c55e', high: '#ef4444' };
+                    const sevBg = { critical: 'rgba(239,68,68,0.12)', medium: 'rgba(245,158,11,0.12)', low: 'rgba(34,197,94,0.12)', high: 'rgba(239,68,68,0.12)' };
+                    return (
+                      <tr key={item.id} style={{ borderBottom: '1px solid var(--border)', background: idx % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
+                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: pri.bg, color: pri.color }}>{pri.label}</span>
+                        </td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{item.title}</div>
+                          {item.description && <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.3 }}>{item.description.length > 120 ? item.description.slice(0, 120) + '...' : item.description}</div>}
+                          {(item.current_value || item.new_value) && (
+                            <div style={{ fontSize: 11, marginTop: 3 }}>
+                              {item.current_value && <span style={{ color: '#ef4444' }}>{item.current_value}</span>}
+                              {item.current_value && item.new_value && <span style={{ color: 'var(--text3)', margin: '0 4px' }}>→</span>}
+                              {item.new_value && <span style={{ color: '#22c55e' }}>{item.new_value}</span>}
                             </div>
-
-                            {/* Status control */}
-                            <select
-                              value={item.status || 'pending'}
-                              onChange={e => handleStatusChange(item.id, e.target.value)}
-                              style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)', flexShrink: 0 }}>
-                              <option value="pending">Pending</option>
-                              <option value="in-progress">In Progress</option>
-                              <option value="done">Done</option>
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-
-          {/* Handle other pillars not in the standard order */}
-          {data && Object.keys(data.grouped).filter(p => !pillarOrder.includes(p)).map(pillar => {
-            const categories = data.grouped[pillar];
-            const allItems = Object.values(categories).flat().filter(filterItem);
-            if (allItems.length === 0) return null;
-            return (
-              <div key={pillar} style={{ marginBottom: 16, background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: 16 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>{pillar}</div>
-                {allItems.map(item => (
-                  <div key={item.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
-                    {item.title}
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-
-          {!loading && !data && (
-            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              <i className="fas fa-tasks" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div style={{ fontSize: 16, marginBottom: 8 }}>No action items yet</div>
-              <div style={{ fontSize: 13 }}>Run audits first, then click "Sync All Audits" to extract findings into actionable tasks.</div>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text2)' }}>{item._category}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: sevBg[sev] || sevBg.medium, color: sevColors[sev] || sevColors.medium }}>{item.severity || 'Medium'}</span>
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
+                            style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)' }}>
+                            <option value="pending">Pending</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="done">Done</option>
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
 
-          {data && Object.keys(data.grouped).length === 0 && (
+          {!loading && items.length === 0 && (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              <i className="fas fa-tasks" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div style={{ fontSize: 16, marginBottom: 8 }}>No action items found</div>
-              <div style={{ fontSize: 13 }}>Click "Sync All Audits" to extract findings from completed audits, or run new audits first.</div>
+              <i className={icon} style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No action items yet</div>
+              <div style={{ fontSize: 13 }}>Run the {pillar} audit first, then click "Sync from Audit" to extract tasks.</div>
             </div>
           )}
         </div>
@@ -6887,8 +6802,12 @@
             return <IndexingPage project={project} />;
           case 'citations':
             return <CitationsPage project={project} />;
-          case 'orchestrator':
-            return <OrchestratorPage project={project} />;
+          case 'gbp-actions':
+            return <ActionPlanPage pillar="GBP" agentPillar="gbp_external" title="GBP Actions" icon="fas fa-map-marker-alt" color="#f59e0b" project={project} />;
+          case 'gsc-actions':
+            return <ActionPlanPage pillar="GSC" agentPillar="gsc_agent" title="GSC Actions" icon="fas fa-chart-line" color="#3b82f6" project={project} />;
+          case 'website-actions':
+            return <ActionPlanPage pillar="Website" agentPillar="website" title="Website Actions" icon="fas fa-spider" color="#8b5cf6" project={project} />;
 case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
@@ -6941,7 +6860,9 @@ case 'content-queue':
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
         ]},
         { section: 'ACTION PLAN', items: [
-          { id: 'orchestrator', label: 'Action Plan', icon: 'fas fa-tasks' },
+          { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
+          { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
+          { id: 'website-actions', label: 'Website Actions', icon: 'fas fa-spider' },
         ]},
         { section: 'COPYWRITER', items: [
           { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
