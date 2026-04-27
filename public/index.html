@@ -6750,12 +6750,6 @@
             return <IndexingPage project={project} />;
           case 'citations':
             return <CitationsPage project={project} />;
-          case 'gbp-actions':
-            return <ActionPlanPage pillar="GBP" agentPillar="gbp_external" title="GBP Actions" icon="fas fa-map-marker-alt" color="#f59e0b" project={project} />;
-          case 'gsc-actions':
-            return <ActionPlanPage pillar="GSC" agentPillar="gsc_agent" title="GSC Actions" icon="fas fa-chart-line" color="#3b82f6" project={project} />;
-          case 'website-actions':
-            return <ActionPlanPage pillar="Website" agentPillar="website" title="Website Actions" icon="fas fa-spider" color="#8b5cf6" project={project} />;
 case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
@@ -6806,11 +6800,6 @@ case 'content-queue':
           { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
-        ]},
-        { section: 'ACTION PLAN', items: [
-          { id: 'gbp-actions', label: 'GBP Actions', icon: 'fas fa-map-marker-alt', localOnly: true },
-          { id: 'gsc-actions', label: 'GSC Actions', icon: 'fas fa-chart-line' },
-          { id: 'website-actions', label: 'Website Actions', icon: 'fas fa-spider' },
         ]},
         { section: 'COPYWRITER', items: [
           { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
