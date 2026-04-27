@@ -891,7 +891,7 @@ async function discoverPages(projectUrl, wpUrl) {
     if (sitemapResp.ok) {
       const xml = await sitemapResp.text();
       const urlMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
-      for (const match of urlMatches.slice(0, 10)) {
+      for (const match of urlMatches.slice(0, 50)) {
         const url = match.replace(/<\/?loc>/g, '');
         if (url.endsWith('.xml') || url.endsWith('.pdf') || url.match(/\.(jpg|png|gif|svg)$/i)) continue;
         const slug = url.replace(baseUrl, '').replace(/^\/|\/$/g, '') || 'home';
@@ -903,7 +903,7 @@ async function discoverPages(projectUrl, wpUrl) {
   // Try WP REST API if available and no sitemap pages
   if (pages.length === 0 && wpUrl) {
     try {
-      const wpPages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=10&status=publish&_fields=id,title,slug,link');
+      const wpPages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link');
       for (const p of wpPages) {
         pages.push({ page_id: String(p.id), title: p.title.rendered, slug: p.slug, url: p.link });
       }
