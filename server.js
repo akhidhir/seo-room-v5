@@ -889,7 +889,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
 // Sync all pillars at once (for orchestrator)
 app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
   const { projectId } = req.params;
-  const pillars = ['gbp_external', 'gsc_agent', 'website'];
+  const pillars = ['gbp_external', 'gsc_agent', 'gsc', 'website'];
   const results = {};
   for (const pillar of pillars) {
     try {
@@ -909,7 +909,33 @@ app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
           const count = await extractFindingsFromReport(reportText, pillar, parseInt(projectId), auditId);
           results[pillar] = { extracted: count };
         } else {
-          results[pillar] = { extracted: 0, reason: 'no report text' };
+          // No report text — old-style audit that saves findings directly. Create action_items from audit_findings.
+          const auditIdRes = await pool.query(
+            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+            [projectId, pillar]
+          );
+          const auditId = auditIdRes.rows[0]?.id;
+          if (auditId) {
+            const existingFindings = await pool.query(
+              `SELECT * FROM audit_findings WHERE project_id=$1 AND audit_id=$2`, [parseInt(projectId), auditId]
+            );
+            if (existingFindings.rows.length > 0) {
+              // Clear old action_items for this pillar, then create from findings
+              await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [parseInt(projectId), pillar]);
+              for (const f of existingFindings.rows) {
+                await pool.query(
+                  `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
+                  [parseInt(projectId), f.id, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
+                );
+              }
+              results[pillar] = { extracted: existingFindings.rows.length, source: 'audit_findings' };
+            } else {
+              results[pillar] = { extracted: 0, reason: 'no findings in DB' };
+            }
+          } else {
+            results[pillar] = { extracted: 0, reason: 'no report text' };
+          }
         }
       } else {
         results[pillar] = { extracted: 0, reason: 'no completed audit' };
@@ -3279,6 +3305,7 @@ const PILLAR_CATEGORIES = {
   gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
   website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
   gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+  gsc: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
 };
 
 // Extract structured findings from an agent's markdown report using Haiku
