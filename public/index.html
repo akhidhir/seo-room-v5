@@ -3419,29 +3419,76 @@
       };
 
       const [expandedRow, setExpandedRow] = useState(null);
-      const [fixingPages, setFixingPages] = useState(new Set());
+      const [actionItems, setActionItems] = useState({});
+      const [addingAction, setAddingAction] = useState(null);
 
-      const createFixAction = async (page) => {
-        setFixingPages(prev => new Set([...prev, page.path]));
+      // Detect fix type + assignee for indexing issues
+      const getIndexingFixType = (page) => {
+        const state = (page.coverageState || '').toLowerCase();
+        const robots = (page.robotsTxtState || '').toLowerCase();
+        const indexing = (page.indexingState || '').toLowerCase();
+        // Blocked by robots.txt → Manual (Cloudflare/hosting)
+        if (robots === 'disallowed' || /blocked.*robot/i.test(state))
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+            steps: ['Log into Cloudflare or hosting panel', 'Find robots.txt rules', 'Remove or modify the Disallow rule for this path', 'Save and verify at /robots.txt', 'Request indexing in Google Search Console', 'Re-check in 1 week'] };
+        // Noindex tag → Plugin (Yoast)
+        if (/noindex/i.test(indexing) || /noindex/i.test(state))
+          return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b', assignee: 'WordPress Plugin', assigneeIcon: 'fas fa-wrench',
+            steps: ['Open page in WordPress editor', 'Go to Yoast SEO → Advanced tab', 'Change "Allow search engines to show this page" to Yes', 'Update the page', 'Request indexing in GSC'] };
+        // Redirect → Manual
+        if (/redirect/i.test(state))
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+            steps: ['Check if redirect is intentional (301 to new URL)', 'If unintentional: remove redirect in WordPress → Redirection plugin', 'If redirect chain (A→B→C): update to direct A→C', 'Verify the final destination page exists and is indexable', 'Request indexing of correct URL in GSC'] };
+        // 404 / Soft 404 → Manual
+        if (/404|not.?found/i.test(state))
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+            steps: ['Decide: restore the page OR set up 301 redirect to relevant page', 'If restoring: recreate content with 500+ words', 'If redirecting: add 301 in WordPress → Redirection plugin', 'Update internal links pointing to this URL', 'Request indexing in GSC'] };
+        // Crawled but not indexed → Plugin (content improvement)
+        if (/crawled/i.test(state))
+          return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b', assignee: 'WordPress Plugin', assigneeIcon: 'fas fa-wrench',
+            steps: ['Add at least 500+ unique, valuable words to the page', 'Add 3-5 internal links from your highest-traffic indexed pages', 'Add structured data (FAQ schema, LocalBusiness schema)', 'Ensure meta title and description are unique and keyword-optimized', 'Request indexing in Google Search Console', 'Re-check in 2 weeks'] };
+        // Discovered but not crawled → API (request crawl)
+        if (/discovered/i.test(state))
+          return { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6', assignee: 'SEO Room (Auto)', assigneeIcon: 'fas fa-robot',
+            steps: ['Add internal links from homepage and main service pages', 'Verify page is in sitemap.xml', 'Check robots.txt is not blocking', 'Submit URL for indexing via Search Console API', 'Re-check in 1 week'] };
+        // Default → Manual
+        return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+          steps: ['Investigate the specific indexing issue', 'Check Google Search Console for details', 'Fix the root cause', 'Request indexing', 'Re-check in 1-2 weeks'] };
+      };
+
+      const addIndexingAction = async (page, idx) => {
+        setAddingAction(idx);
+        const fix = getIndexingFixType(page);
         try {
-          const isCrawled = page.coverageState?.includes('Crawled');
-          const isDiscovered = page.coverageState?.includes('Discovered');
-          await api(`/projects/${project.id}/action-items`, {
+          const resp = await api(`/projects/${project.id}/action-items`, {
             method: 'POST',
             body: {
-              pillar: 'technical',
+              pillar: 'website',
               category: 'indexing',
               title: `Fix indexing: ${page.path}`,
-              description: `Page "${page.path}" is ${page.coverageState}. ${isCrawled ? 'Google crawled it but found the content insufficient.' : 'Google discovered it but hasn\'t fully crawled it yet.'}`,
-              recommendation: isCrawled
-                ? `1) Improve content quality — add 500+ unique words\n2) Add 3-5 internal links from indexed pages\n3) Add FAQ or LocalBusiness schema\n4) Request indexing in GSC\n5) Re-check in 2 weeks`
-                : `1) Add internal links from homepage and service pages\n2) Ensure page is in sitemap.xml\n3) Check robots.txt isn't blocking\n4) Request indexing in GSC\n5) Re-check in 1 week`,
-              severity: isCrawled ? 'Medium' : 'Critical',
+              description: `${page.coverageState || 'Not indexed'} — ${fix.steps.join('; ')}`,
+              severity: /crawled/i.test(page.coverageState || '') ? 'medium' : 'critical',
               status: 'pending',
+              execution_type: fix.type,
             }
           });
+          const item = resp.action_item || {};
+          setActionItems(prev => ({ ...prev, [idx]: { id: item.id, ...fix, status: 'pending' } }));
         } catch (err) { setError(err.message); }
-        finally { setFixingPages(prev => { const s = new Set(prev); s.delete(page.path); return s; }); }
+        setAddingAction(null);
+      };
+
+      const updateIndexingStatus = async (idx, newStatus) => {
+        const item = actionItems[idx];
+        if (!item?.id) return;
+        try {
+          await api('/action-items/' + item.id, { method: 'PUT', body: { status: newStatus } });
+          setActionItems(prev => ({ ...prev, [idx]: { ...prev[idx], status: newStatus } }));
+        } catch (e) { console.error('Failed to update:', e); }
+      };
+
+      const resetIndexingAction = (idx) => {
+        setActionItems(prev => { const next = { ...prev }; delete next[idx]; return next; });
       };
 
       const filtered = filter === 'all' ? results
@@ -3605,9 +3652,45 @@
                           </ol>
                         )}
                       </div>
-                      <button className="btn btn-primary" onClick={() => createFixAction(r)} disabled={fixingPages.has(r.path)} style={{ fontSize: 12 }}>
-                        {fixingPages.has(r.path) ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Creating...</> : <><i className="fas fa-wrench" style={{ marginRight: 6 }} />Create Fix Action Item</>}
-                      </button>
+                      {/* Inline action controls */}
+                      {actionItems[idx] ? (() => {
+                        const ai = actionItems[idx];
+                        const st = ai.status || 'pending';
+                        const statusOptions = ai.type === 'manual'
+                          ? [{ value: 'pending', label: 'Not Started' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]
+                          : [{ value: 'pending', label: 'Ready' }, { value: 'in_progress', label: 'Running' }, { value: 'done', label: 'Done' }];
+                        const statusColors = { pending: '#6b7280', in_progress: '#f59e0b', done: '#22c55e' };
+                        return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '8px 0' }}>
+                            <button onClick={() => resetIndexingAction(idx)} style={{ fontSize: 10, padding: '4px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset">
+                              <i className="fas fa-undo" />
+                            </button>
+                            <div style={{ fontSize: 12, color: ai.color || '#6b7280', whiteSpace: 'nowrap' }}>
+                              <i className={ai.assigneeIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{ai.assignee || 'SEO Specialist'}
+                            </div>
+                            <select value={st} onChange={e => updateIndexingStatus(idx, e.target.value)} style={{
+                              fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
+                              border: '1px solid ' + statusColors[st] + '50',
+                              background: statusColors[st] + '15', color: statusColors[st],
+                              cursor: 'pointer', outline: 'none'
+                            }}>
+                              {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                            {ai.type !== 'manual' && st === 'pending' && (
+                              <button onClick={() => updateIndexingStatus(idx, 'in_progress')} style={{
+                                fontSize: 11, fontWeight: 700, padding: '4px 14px', borderRadius: 5, border: 'none',
+                                background: ai.color || '#3b82f6', color: '#fff', cursor: 'pointer'
+                              }}>
+                                <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Start
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })() : (
+                        <button className="btn btn-primary" onClick={() => addIndexingAction(r, idx)} disabled={addingAction === idx} style={{ fontSize: 12 }}>
+                          {addingAction === idx ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 6 }} />Add to Actions</>}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
