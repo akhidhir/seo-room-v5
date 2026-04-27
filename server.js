@@ -884,19 +884,50 @@ function extractImageIssues(lighthouseData) {
 async function discoverPages(projectUrl, wpUrl) {
   const pages = [];
   const baseUrl = projectUrl.replace(/\/$/, '');
+  const seenUrls = new Set();
+
+  // Helper: extract page URLs from a single sitemap XML
+  function extractPagesFromSitemap(xml) {
+    const urlMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
+    for (const match of urlMatches) {
+      const url = match.replace(/<\/?loc>/g, '');
+      if (url.endsWith('.pdf') || url.match(/\.(jpg|png|gif|svg)$/i)) continue;
+      if (url.endsWith('.xml')) continue; // skip sub-sitemap refs (handled separately)
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      const slug = url.replace(baseUrl, '').replace(/^\/|\/$/g, '') || 'home';
+      pages.push({ page_id: slug, title: slug === 'home' ? 'Homepage' : slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), slug, url });
+    }
+  }
 
   // Try sitemap.xml first
   try {
     const sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
     if (sitemapResp.ok) {
       const xml = await sitemapResp.text();
-      const urlMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
-      for (const match of urlMatches.slice(0, 50)) {
-        const url = match.replace(/<\/?loc>/g, '');
-        if (url.endsWith('.xml') || url.endsWith('.pdf') || url.match(/\.(jpg|png|gif|svg)$/i)) continue;
-        const slug = url.replace(baseUrl, '').replace(/^\/|\/$/g, '') || 'home';
-        pages.push({ page_id: slug, title: slug === 'home' ? 'Homepage' : slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), slug, url });
+
+      // Check if this is a sitemap index (contains sub-sitemaps like post-sitemap.xml)
+      const subSitemapMatches = xml.match(/<loc>([^<]+\.xml)<\/loc>/g) || [];
+      if (subSitemapMatches.length > 0) {
+        // It's a sitemap index — fetch each sub-sitemap
+        for (const subMatch of subSitemapMatches) {
+          const subUrl = subMatch.replace(/<\/?loc>/g, '');
+          try {
+            const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+            if (subResp.ok) {
+              const subXml = await subResp.text();
+              extractPagesFromSitemap(subXml);
+            }
+          } catch (e) { /* skip failed sub-sitemap */ }
+          if (pages.length >= 50) break;
+        }
+      } else {
+        // It's a regular sitemap — extract pages directly
+        extractPagesFromSitemap(xml);
       }
+
+      // Cap at 50
+      if (pages.length > 50) pages.length = 50;
     }
   } catch (e) { /* sitemap not available */ }
 
