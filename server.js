@@ -728,12 +728,12 @@ app.get('/api/projects/:id/action-items', async (req, res) => {
 
 // Create action item directly (from external audit)
 app.post('/api/projects/:id/action-items', async (req, res) => {
-  const { pillar, type, title, description, severity, current_value, new_value, category } = req.body;
+  const { pillar, type, title, description, severity, current_value, new_value, category, execution_type } = req.body;
   try {
     const result = await pool.query(
       `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 'manual') RETURNING *`,
-      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null, category || type || 'general']
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10) RETURNING *`,
+      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null, category || type || 'general', execution_type || 'manual']
     );
     res.json({ action_item: result.rows[0] });
   } catch (e) {
@@ -741,15 +741,15 @@ app.post('/api/projects/:id/action-items', async (req, res) => {
   }
 });
 
-// Update action item (approve/skip/mark done)
+// Update action item (status, execution_type)
 app.put('/api/action-items/:id', async (req, res) => {
-  const { status, approved_at } = req.body;
+  const { status, approved_at, execution_type } = req.body;
   try {
     const result = await pool.query(
       `UPDATE action_items
-       SET status=$1, approved_at=COALESCE($2, approved_at)
-       WHERE id=$3 RETURNING *`,
-      [status, approved_at || null, req.params.id]
+       SET status=COALESCE($1, status), approved_at=COALESCE($2, approved_at), execution_type=COALESCE($3, execution_type)
+       WHERE id=$4 RETURNING *`,
+      [status || null, approved_at || null, execution_type || null, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Action item not found' });
     res.json({ action_item: result.rows[0] });
