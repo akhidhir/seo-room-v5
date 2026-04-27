@@ -4354,7 +4354,14 @@
         try {
           // Load approved audit findings as action items for this pillar
           const data = await api(`/projects/${project.id}/action-items`);
-          const items = (data.action_items || []).filter(a => !type || a.pillar === type);
+          // Match both old and new pillar names (e.g. 'gbp' + 'gbp_external', 'gsc' + 'gsc_agent')
+          const pillarMap = {
+            gbp: ['gbp', 'gbp_external'],
+            gsc: ['gsc', 'gsc_agent'],
+            website: ['website', 'technical'],
+          };
+          const matchPillars = pillarMap[type] || [type];
+          const items = (data.action_items || []).filter(a => !type || matchPillars.includes(a.pillar));
           setActions(items);
         } catch (err) {
           setError(err.message);
