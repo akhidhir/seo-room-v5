@@ -1426,6 +1426,10 @@
         return <td key={ci} style={cellStyle}>{cleanCell}</td>;
       };
 
+      // Assignee auto-mapping from exec type
+      const execAssignee = { extension: 'Chrome Extension', api: 'SEO Room (Auto)', plugin: 'WordPress Plugin', manual: 'SEO Specialist' };
+      const execAssigneeIcon = { extension: 'fas fa-puzzle-piece', api: 'fas fa-robot', plugin: 'fas fa-wrench', manual: 'fas fa-user' };
+
       const renderActionCells = (row, ri) => {
         if (!hasActions) return null;
         const actionKey = `t${tblIdx}_r${ri}`;
@@ -1444,59 +1448,54 @@
         const needsAction = rowNeedsAction(row);
         const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
         const showBriefCol = actionColIdx === -1;
+        const emptyCols = <React.Fragment>{showBriefCol && <td style={{ padding: '8px 10px' }}></td>}<td></td><td></td><td></td></React.Fragment>;
 
-        if (!needsAction) return <React.Fragment>{showBriefCol && <td style={{ padding: '8px 10px' }}></td>}<td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td></React.Fragment>;
-        if (isIgnored) return <React.Fragment>{showBriefCol && <td></td>}<td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored <i className="fas fa-undo" style={{ fontSize: 9, marginLeft: 3 }} /></span></td></React.Fragment>;
+        if (!needsAction) return <React.Fragment>{showBriefCol && <td style={{ padding: '8px 10px' }}></td>}<td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td><td></td></React.Fragment>;
+        if (isIgnored) return <React.Fragment>{showBriefCol && <td></td>}<td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored</span></td><td><button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{ fontSize: 10, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset"><i className="fas fa-undo" /></button></td></React.Fragment>;
 
-        // After adding — show exec type badge + status controls
+        // After adding — show Assignee + Status dropdown + Reset
         if (isAdded) {
           const item = addedItem;
           const st = item.status || 'pending';
-          const manualStatuses = ['pending', 'in_progress', 'done'];
-          const manualLabels = { pending: 'Not Started', in_progress: 'In Progress', done: 'Done' };
-          const manualColors = { pending: '#6b7280', in_progress: '#f59e0b', done: '#22c55e' };
-          const manualIcons = { pending: 'fas fa-circle', in_progress: 'fas fa-spinner', done: 'fas fa-check-circle' };
-
-          const isManual = item.execType === 'manual';
-          const isExtension = item.execType === 'extension';
-          const isApi = item.execType === 'api';
-
-          const cycleStatus = () => {
-            if (!actionMode.onStatusChange) return;
-            const idx = manualStatuses.indexOf(st);
-            const next = manualStatuses[(idx + 1) % manualStatuses.length];
-            actionMode.onStatusChange(actionKey, next);
-          };
+          const assignee = execAssignee[item.execType] || 'SEO Specialist';
+          const assigneeIcon = execAssigneeIcon[item.execType] || 'fas fa-user';
+          const statusOptions = item.execType === 'manual'
+            ? [{ value: 'pending', label: 'Not Started' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]
+            : [{ value: 'pending', label: 'Ready' }, { value: 'in_progress', label: 'Running' }, { value: 'done', label: 'Done' }];
+          const statusColors = { pending: '#6b7280', in_progress: '#f59e0b', done: '#22c55e' };
 
           return (
             <React.Fragment>
-              {showBriefCol && <td style={{ padding: '8px 12px' }}>
-                <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: (item.execColor || '#6b7280') + '20', color: item.execColor || '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  <i className={item.execIcon || 'fas fa-user'} style={{ marginRight: 4, fontSize: 9 }} />{item.execLabel || 'Manual'}
-                </span>
+              {showBriefCol && <td style={{ padding: '8px 12px', fontSize: 12, color: item.execColor || '#6b7280', whiteSpace: 'nowrap' }}>
+                <i className={assigneeIcon} style={{ marginRight: 5, fontSize: 11 }} />{assignee}
               </td>}
-              <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                {isManual ? (
-                  <button onClick={cycleStatus} style={{
-                    fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 6, border: '1px solid ' + manualColors[st] + '40',
-                    background: manualColors[st] + '15', color: manualColors[st], cursor: 'pointer', transition: 'all 0.2s'
+              <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                <select value={st} onChange={e => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, e.target.value)} style={{
+                  fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
+                  border: '1px solid ' + statusColors[st] + '50',
+                  background: statusColors[st] + '15', color: statusColors[st],
+                  cursor: 'pointer', outline: 'none', appearance: 'auto'
+                }}>
+                  {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </td>
+              {(item.execType !== 'manual' && st === 'pending') ? (
+                <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                  <button onClick={() => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, 'in_progress')} style={{
+                    fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 5, border: 'none',
+                    background: item.execColor || '#8b5cf6', color: '#fff', cursor: 'pointer'
                   }}>
-                    <i className={manualIcons[st]} style={{ marginRight: 5, fontSize: 10 }} />{manualLabels[st]}
+                    <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Start
                   </button>
-                ) : (
-                  st === 'done' ? (
-                    <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 600 }}><i className="fas fa-check-circle" style={{ marginRight: 4 }} />Done</span>
-                  ) : st === 'in_progress' ? (
-                    <span style={{ color: '#f59e0b', fontSize: 12, fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Running...</span>
-                  ) : (
-                    <button onClick={() => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, 'in_progress')} style={{
-                      fontSize: 11, fontWeight: 700, padding: '4px 14px', borderRadius: 6, border: 'none',
-                      background: (item.execColor || '#8b5cf6'), color: '#fff', cursor: 'pointer', transition: 'all 0.2s'
-                    }}>
-                      <i className="fas fa-play" style={{ marginRight: 5, fontSize: 9 }} />Start
-                    </button>
-                  )
-                )}
+                </td>
+              ) : <td></td>}
+              <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                <button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{
+                  fontSize: 10, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)',
+                  borderRadius: 4, color: 'var(--text3)', cursor: 'pointer', opacity: 0.6
+                }} title="Reset">
+                  <i className="fas fa-undo" />
+                </button>
               </td>
             </React.Fragment>
           );
@@ -1506,7 +1505,7 @@
         return (
           <React.Fragment>
             {showBriefCol && <td style={{ padding: '8px 12px', fontSize: 12, color: '#818cf8', lineHeight: 1.5, maxWidth: 250 }}>{actionBrief}</td>}
-            <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+            <td colSpan="2" style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
               <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                 <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 7px' }}>
                   {isAdding ? <i className="fas fa-spinner fa-spin" /> : <><i className="fas fa-plus" style={{ marginRight: 2 }} />Add</>}
@@ -1516,6 +1515,7 @@
                 </button>
               </div>
             </td>
+            <td></td>
           </React.Fragment>
         );
       };
@@ -1533,8 +1533,10 @@
                   ))}
                   {hasActions && (
                     <React.Fragment>
-                      {actionColIdx === -1 && <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 250, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>WHAT TO DO</th>}
-                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 120, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>ACTION</th>
+                      {actionColIdx === -1 && <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 160, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>ASSIGNEE</th>}
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 110, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>STATUS</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 70, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
+                      <th style={{ padding: '12px 8px', textAlign: 'center', borderBottom: '2px solid var(--border)', width: 40, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
                     </React.Fragment>
                   )}
                 </tr>
