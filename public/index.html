@@ -2183,9 +2183,9 @@
             </div>
           </div>
 
-          {/* Section overview cards */}
+          {/* Section overview cards — exclude Summary (accessible via sidebar) */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            {sectionStats.map((sec, idx) => {
+            {sectionStats.filter(s => s.title !== 'Summary').map((sec, idx) => {
               const meta = sectionMeta[sec.title] || { icon: 'fas fa-folder', color: '#818cf8', desc: '' };
               return (
                 <div key={idx}
@@ -2193,7 +2193,7 @@
                   style={{
                     background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', cursor: 'pointer',
                     transition: 'border-color 0.2s',
-                    gridColumn: sec.title === 'Summary' ? '1 / -1' : undefined
+                    gridColumn: undefined
                   }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = meta.color}
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
@@ -2282,9 +2282,10 @@
       return deduped;
     }
 
-    // Legacy alias
+    // Return hardcoded sections when report exists — header parsing is fragile
     function getExternalAuditSections(report) {
-      return getAgentAuditSections(report, AGENT_SKIP_PATTERNS, false, GBP_ALLOWED_SECTIONS);
+      if (!report) return [];
+      return [...GBP_ALLOWED_SECTIONS];
     }
 
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============
@@ -6855,10 +6856,16 @@ case 'content-queue':
                       || (secPrefix && activeTab.startsWith(secPrefix));
 
                     // Get sections for expandable items without children (GSC, Website)
+                    // Use hardcoded allowed sections when report exists — header parsing is fragile
                     const getItemSections = () => {
                       if (item.children) return [];
-                      if (item.id === 'gsc-audit') return getAgentAuditSections(gscAuditReport, AGENT_SKIP_PATTERNS, false, GSC_ALLOWED_SECTIONS);
-                      if (item.id === 'website-audit') { const secs = getAgentAuditSections(websiteAuditReport, AGENT_SKIP_PATTERNS, false, WEBSITE_ALLOWED_SECTIONS); if (!secs.includes('PageSpeed Scores')) { const summaryIdx = secs.indexOf('Summary'); if (summaryIdx >= 0) secs.splice(summaryIdx, 0, 'PageSpeed Scores'); else secs.push('PageSpeed Scores'); } return secs; }
+                      if (item.id === 'gsc-audit') return gscAuditReport ? [...GSC_ALLOWED_SECTIONS] : [];
+                      if (item.id === 'website-audit') {
+                        if (!websiteAuditReport) return [];
+                        const secs = [...WEBSITE_ALLOWED_SECTIONS];
+                        if (!secs.includes('PageSpeed Scores')) { const summaryIdx = secs.indexOf('Summary'); if (summaryIdx >= 0) secs.splice(summaryIdx, 0, 'PageSpeed Scores'); else secs.push('PageSpeed Scores'); }
+                        return secs;
+                      }
                       return [];
                     };
                     const itemSections = item.expandable && !item.children ? getItemSections() : [];
