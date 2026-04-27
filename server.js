@@ -960,23 +960,20 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
 
     const pages = await discoverPages(siteUrl, project.wordpress_url);
 
+    // Process pages in parallel batches of 5
+    const BATCH_SIZE = 5;
     const results = [];
-    for (const page of pages) {
+
+    async function processPage(page) {
       try {
         const psData = await runPageSpeedAudit(page.url, 'mobile');
-        const images = extractImageIssues(psData);
-        const totalIssues = images.reduce((sum, img) => sum + img.issues.length, 0);
         const metrics = psData.lighthouseResult?.audits || {};
         const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
-
-        results.push({
+        return {
           page_id: page.page_id,
           title: page.title,
           slug: page.slug,
           url: page.url,
-          image_count: images.length,
-          images,
-          total_issues: totalIssues,
           performance_score: score,
           cwv: {
             lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
@@ -987,13 +984,19 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
             score,
           },
-        });
+        };
       } catch (err) {
-        results.push({
+        return {
           page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
-          error: err.message, image_count: 0, images: [], total_issues: 0,
-        });
+          error: err.message,
+        };
       }
+    }
+
+    for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+      const batch = pages.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(processPage));
+      results.push(...batchResults);
     }
 
     // Save audit to DB
@@ -1007,8 +1010,6 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
     res.json({
       audit_id: auditResult.rows[0].id,
       total_pages: results.length,
-      total_images: results.reduce((sum, r) => sum + (r.image_count || 0), 0),
-      total_issues: results.reduce((sum, r) => sum + (r.total_issues || 0), 0),
       results,
     });
   } catch (e) {
