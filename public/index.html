@@ -2208,7 +2208,7 @@
             const item = addedActions[key];
             if (!item || !item.id) return;
             try {
-              await api('/action-items/' + item.id, { method: 'PUT', body: { status: newStatus } });
+              await api('/action-items/' + item.id, { method: 'PUT', body: { status: newStatus, execution_type: item.execType } });
               setAddedActions(prev => ({ ...prev, [key]: { ...prev[key], status: newStatus } }));
               // If starting an extension task, trigger Chrome extension via dashboard bridge
               if (newStatus === 'in_progress' && item.execType === 'extension') {
