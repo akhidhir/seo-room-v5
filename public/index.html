@@ -1642,7 +1642,9 @@
                   execLabel: execInfo.label,
                   execIcon: execInfo.icon,
                   execColor: execInfo.color,
-                  status: match.status || 'pending'
+                  status: match.status || 'pending',
+                  actionTitle: match.title,
+                  actionDesc: match.description
                 };
               }
             });
@@ -2197,7 +2199,7 @@
                 }
               });
               const item = resp.action_item || {};
-              setAddedActions(prev => ({ ...prev, [key]: { id: item.id, execType: execInfo.type, execLabel: execInfo.label, execIcon: execInfo.icon, execColor: execInfo.color, status: 'pending' } }));
+              setAddedActions(prev => ({ ...prev, [key]: { id: item.id, execType: execInfo.type, execLabel: execInfo.label, execIcon: execInfo.icon, execColor: execInfo.color, status: 'pending', actionTitle: action.title, actionDesc: action.description } }));
             } catch (e) {
               console.error('Failed to add action:', e);
             }
@@ -2217,8 +2219,14 @@
                   type: 'EXECUTE_GBP_TASK',
                   payload: {
                     taskId: item.id,
-                    title: key,
-                    projectId: project?.id
+                    projectId: project?.id,
+                    taskData: {
+                      id: item.id,
+                      title: item.actionTitle || '',
+                      description: item.actionDesc || '',
+                      business_name: project?.business_name || '',
+                      domain: project?.domain || ''
+                    }
                   }
                 }, '*');
               }

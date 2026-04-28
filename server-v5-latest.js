@@ -317,6 +317,13 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
+    // One-time migration: fix execution_type for GBP action items that were saved as 'manual'
+    await client.query(`
+      UPDATE action_items SET execution_type = 'extension'
+      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'manual'
+        AND description !~* '(photo|picture|image|shoot|camera|testimonial|in.person|physically|visit|call |phone call|print|brochure|flyer|sign.up|create.*account|register on|claim.*listing|directory|directories|listing|yelp|yellow.pages|true.local|hotfrog|word.of.mouth)'
+    `).catch(() => {});
+
     console.log('[boot] Database schema initialized');
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
@@ -713,13 +720,18 @@ app.put('/api/audit-findings/:id', async (req, res) => {
 
 // ==================== 7. ACTION PLAN ====================
 
-// Get action items for a project
+// Get action items for a project (optional ?pillar= filter)
 app.get('/api/projects/:id/action-items', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM action_items WHERE project_id=$1 ORDER BY created_at DESC',
-      [req.params.id]
-    );
+    const { pillar } = req.query;
+    let query = 'SELECT * FROM action_items WHERE project_id=$1';
+    const params = [req.params.id];
+    if (pillar) {
+      query += ' AND pillar=$2';
+      params.push(pillar);
+    }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
     res.json({ action_items: result.rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -780,6 +792,84 @@ app.post('/api/action-items/:id/execute', async (req, res) => {
   }
 });
 
+
+// ==================== EXTENSION TASK QUEUE ====================
+
+// Get pending extension tasks (polled by Chrome extension every 30s)
+app.get('/api/extension/tasks', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ai.*, p.domain, p.business_name, p.gbp_location_id, p.gbp_location_name
+       FROM action_items ai
+       JOIN projects p ON p.id = ai.project_id
+       WHERE ai.execution_type = 'extension' AND ai.status = 'in_progress'
+       ORDER BY ai.created_at ASC LIMIT 5`
+    );
+    res.json({ tasks: result.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Claim a task (extension marks it as being worked on)
+app.post('/api/extension/tasks/:id/claim', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE action_items
+       SET execution_log = COALESCE(execution_log, '{}'::jsonb) || jsonb_build_object('claimed_at', to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'claimed_by', 'chrome_extension')
+       WHERE id = $1 AND execution_type = 'extension' AND status = 'in_progress'
+       RETURNING *`,
+      [req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Task not found or not claimable' });
+    res.json({ task: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Report task result (extension reports success/failure)
+app.post('/api/extension/tasks/:id/result', async (req, res) => {
+  const { success, before_state, after_state, error: taskError } = req.body;
+  try {
+    const newStatus = success ? 'done' : 'failed';
+    const logEntry = {
+      completed_at: new Date().toISOString(),
+      success,
+      before_state: before_state || null,
+      after_state: after_state || null,
+      error: taskError || null
+    };
+    const result = await pool.query(
+      `UPDATE action_items
+       SET status = $1,
+           execution_log = COALESCE(execution_log, '{}'::jsonb) || $2::jsonb
+       WHERE id = $3 RETURNING *`,
+      [newStatus, JSON.stringify(logEntry), req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Task not found' });
+    res.json({ task: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Report task progress (extension sends step updates)
+app.post('/api/extension/tasks/:id/progress', async (req, res) => {
+  const { step, total, description } = req.body;
+  try {
+    const logEntry = { progress: { step, total, description, updated_at: new Date().toISOString() } };
+    const result = await pool.query(
+      `UPDATE action_items
+       SET execution_log = COALESCE(execution_log, '{}'::jsonb) || $1::jsonb
+       WHERE id = $2 RETURNING *`,
+      [JSON.stringify(logEntry), req.params.id]
+    );
+    res.json({ task: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ==================== ORCHESTRATOR ====================
 
