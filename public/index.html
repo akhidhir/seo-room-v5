@@ -1305,8 +1305,8 @@
       if (pillar === 'website' || pillar === 'technical') {
         if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
         if (/\b(core.?web.?vitals|cwv|lcp|cls|tbt|fid|inp|page.?speed|minif|cache|lazy.?load|render.?block|server|hosting|cdn|gzip|compress(?!.*image)|brotli)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(crawl|robots\.txt|ssl|https|security|certificate|redirect.?chain|301|302|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(meta.?title|meta.?desc|title.?tag|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|content|thin.?content|word.?count|duplicate)\b/.test(t)) return WP_PLUGIN;
+        if (/\b(crawl.?error|crawl.?budget|robots\.txt|ssl.?cert|ssl.?issue|mixed.?content|security.?header|certificate|redirect.?chain|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(canonical|meta.?title|meta.?desc|title.?tag|title|meta|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|link|href|anchor|content|thin.?content|word.?count|duplicate|redirect|301|302|rewrite|cta|intro|snippet)\b/.test(t)) return WP_PLUGIN;
         return WP_PLUGIN;
       }
 
