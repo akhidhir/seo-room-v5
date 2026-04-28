@@ -713,13 +713,18 @@ app.put('/api/audit-findings/:id', async (req, res) => {
 
 // ==================== 7. ACTION PLAN ====================
 
-// Get action items for a project
+// Get action items for a project (optional ?pillar= filter)
 app.get('/api/projects/:id/action-items', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM action_items WHERE project_id=$1 ORDER BY created_at DESC',
-      [req.params.id]
-    );
+    const { pillar } = req.query;
+    let query = 'SELECT * FROM action_items WHERE project_id=$1';
+    const params = [req.params.id];
+    if (pillar) {
+      query += ' AND pillar=$2';
+      params.push(pillar);
+    }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
     res.json({ action_items: result.rows });
   } catch (e) {
     res.status(500).json({ error: e.message });

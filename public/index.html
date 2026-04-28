@@ -1563,6 +1563,94 @@
       const [addedActions, setAddedActions] = useState({});
       const [addingAction, setAddingAction] = useState(null);
       const [expandedCats, setExpandedCats] = useState({0: true});
+      const [savedActionItems, setSavedActionItems] = useState([]);
+      const removedKeysRef = React.useRef(new Set());
+
+      // Reset addedActions when section changes (different section = different table keys)
+      useEffect(() => {
+        setAddedActions({});
+        removedKeysRef.current.clear();
+      }, [section]);
+
+      // Load existing action items from DB for this pillar
+      useEffect(() => {
+        if (!project?.id || !pillar) return;
+        (async () => {
+          try {
+            const data = await api(`/projects/${project.id}/action-items?pillar=${encodeURIComponent(pillar)}`);
+            setSavedActionItems(data.action_items || []);
+          } catch (e) { console.error('Failed to load action items:', e); }
+        })();
+      }, [project?.id, pillar]);
+
+      // When report + savedActionItems are both ready, map saved items to table row keys
+      useEffect(() => {
+        if (!report || savedActionItems.length === 0 || !section || section === 'full') return;
+        const sections = parseReportSections(report);
+        const sec = sections.find(s => s.title.toLowerCase().replace(/[^a-z0-9]/g, '') === section.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        if (!sec) return;
+
+        // Build a title→action_item map from saved items
+        const titleMap = {};
+        savedActionItems.forEach(ai => {
+          if (ai.title) titleMap[ai.title.toLowerCase().trim()] = ai;
+        });
+
+        // Parse the section's tables to find matching rows
+        const restored = {};
+        const lines = sec.content;
+        let tableRows = [];
+        let inTable = false;
+        let tableCounter = 0;
+
+        const flushRestore = () => {
+          if (tableRows.length >= 2) {
+            const rows = tableRows.slice(1); // skip header
+            rows.forEach((row, ri) => {
+              const itemName = (row[0] || '').replace(/\*\*/g, '').trim();
+              const match = titleMap[itemName.toLowerCase()];
+              if (match) {
+                const execInfo = detectExecType(match.description || match.title);
+                const key = `t${tableCounter}_r${ri}`;
+                restored[key] = {
+                  id: match.id,
+                  execType: match.execution_type || execInfo.type,
+                  execLabel: execInfo.label,
+                  execIcon: execInfo.icon,
+                  execColor: execInfo.color,
+                  status: match.status || 'pending'
+                };
+              }
+            });
+            tableCounter++;
+          }
+          tableRows = [];
+        };
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('|') && !trimmed.startsWith('|--') && !trimmed.startsWith('| --')) {
+            const cells = trimmed.split('|').slice(1, -1).map(c => c.trim());
+            if (cells.length > 0) {
+              if (!inTable) inTable = true;
+              // Skip separator rows
+              if (!cells.every(c => /^[\s:-]+$/.test(c))) {
+                tableRows.push(cells);
+              }
+            }
+          } else {
+            if (inTable) { flushRestore(); inTable = false; }
+          }
+        }
+        if (inTable) flushRestore();
+
+        // Filter out keys the user has manually removed this session
+        const removedSet = removedKeysRef.current;
+        Object.keys(restored).forEach(k => { if (removedSet.has(k)) delete restored[k]; });
+        if (Object.keys(restored).length > 0) {
+          setAddedActions(prev => ({ ...restored, ...prev }));
+        }
+      }, [report, savedActionItems, section]);
 
       useEffect(() => { if (project) checkStatus(); }, [project?.id, auditKey]);
 
@@ -2106,6 +2194,7 @@
           };
 
           const handleUndo = (key) => {
+            removedKeysRef.current.add(key);
             setAddedActions(prev => {
               const next = { ...prev };
               delete next['ign_' + key];
