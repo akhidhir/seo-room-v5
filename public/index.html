@@ -1286,12 +1286,19 @@
       const WP_PLUGIN = { type: 'plugin', label: 'WP Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
 
       if (pillar === 'gbp_external' || pillar === 'gbp') {
+        // 1. WP Plugin — check first so "create landing page" wins over incidental "review" mentions
+        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|wordpress|wp|meta.?title|meta.?desc|schema|web.?page|website.?content|blog.?post|web.?content|about.?us.?page)\b/.test(t)) return WP_PLUGIN;
+        // 2. Photos — physical action
         if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
-        if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(review|testimonial|ask.*customer|collect.*review|request.*review|share.*review)\b/.test(t)) return MANUAL;
+        // 3. Social media — SEO Specialist manages
         if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter|x\.com)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|wordpress|wp|meta.?title|meta.?desc|schema|web.?page|website.?content|blog.?post|web.?content)\b/.test(t)) return WP_PLUGIN;
+        // 4. Directories — business owner registers/claims
+        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
+        // 5. Review responses — SEO Specialist
+        if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
+        // 6. Getting reviews — business owner action (only action-oriented phrases)
+        if (/\b(ask.*review|collect.*review|request.*review|share.*review|get.*review|more.*review|review.*campaign|review.*request|ask.*customer|ask.*client)\b/.test(t)) return MANUAL;
+        // 7. Everything else in GBP — SEO Specialist
         return SEO_SPECIALIST;
       }
       if (pillar === 'gsc_agent' || pillar === 'gsc') {
