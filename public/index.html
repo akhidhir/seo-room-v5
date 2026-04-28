@@ -4723,10 +4723,6 @@
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
                     const execInfo = detectExecType(item.description || item.title, item.pillar || pillar);
-                    const assigneeLabels = { api: 'Automated', plugin: 'WP Plugin', manual: 'SEO Specialist', extension: 'Extension' };
-                    const assigneeIcons = { api: 'fas fa-robot', plugin: 'fas fa-wrench', manual: 'fas fa-user-tie', extension: 'fas fa-puzzle-piece' };
-                    const assigneeColors = { api: '#3b82f6', plugin: '#f59e0b', manual: '#10b981', extension: '#8b5cf6' };
-                    const eType = item.execution_type || execInfo.type;
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -4747,9 +4743,9 @@
                           {item._category}
                         </td>
                         <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, whiteSpace: 'nowrap' }}>
-                          <span style={{ color: assigneeColors[eType] || '#6b7280' }}>
-                            <i className={assigneeIcons[eType] || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />
-                            {assigneeLabels[eType] || 'SEO Specialist'}
+                          <span style={{ color: execInfo.color }}>
+                            <i className={execInfo.icon} style={{ marginRight: 5, fontSize: 11 }} />
+                            {execInfo.label}
                           </span>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
