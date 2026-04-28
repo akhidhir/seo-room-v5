@@ -317,11 +317,10 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
-    // One-time migration: fix execution_type for GBP action items that were saved as 'manual'
+    // GBP tasks are manual (SEO Specialist) — no extension automation
     await client.query(`
-      UPDATE action_items SET execution_type = 'extension'
-      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'manual'
-        AND description !~* '(photo|picture|image|shoot|camera|testimonial|in.person|physically|visit|call |phone call|print|brochure|flyer|sign.up|create.*account|register on|claim.*listing|directory|directories|listing|yelp|yellow.pages|true.local|hotfrog|word.of.mouth)'
+      UPDATE action_items SET execution_type = 'manual'
+      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'extension'
     `).catch(() => {});
 
     console.log('[boot] Database schema initialized');
@@ -3426,6 +3425,7 @@ RULES — follow exactly:
 6. Severity must be one of: Critical, High, Medium, Low
 7. Include current_value and recommended_value when the report states them (numbers, text, or status). Use empty string if not stated.
 8. The title should be a short actionable statement (e.g. "Add missing business description" not "Business Description Analysis")
+9. The recommendation MUST include step-by-step instructions for a human to execute. For GBP profile changes, always include: (a) Go to business.google.com → select the business, (b) Click "Edit profile" in the sidebar, (c) Navigate to the specific section (e.g. "Business information", "Contact", "Hours"), (d) The exact field to change and what to enter, (e) Click Save. Be specific — name the exact menu items and fields.
 
 Return a JSON array — ONLY valid JSON, no explanation:
 [{

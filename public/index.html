@@ -1821,18 +1821,18 @@
       // Detect execution type from action text
       const detectExecType = (text) => {
         const t = text.toLowerCase();
-        // Manual FIRST — only truly physical/human tasks
+        // Manual FIRST — physical/human tasks + photos
         if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-        // Chrome Extension — anything that edits GBP profile, responds to reviews, posts, Q&A
-        if (/\b(gbp|google business|profile|business description|business name|categor|attributes?|service area|service menu|hours|opening|google posts?|q&a|owner.?seeded|review.*respon|respond.*review|rewrite.*description|update.*description|add.*categor|expand.*gbp|optimize.*listing|nap|name.?address|consistency|formatting|formatted|verify.*match|ensure.*match|standardize|maintain)\b/.test(t)) return { type: 'extension', label: 'Extension', icon: 'fas fa-puzzle-piece', color: '#8b5cf6' };
+        // SEO Specialist — GBP profile edits (manual via business.google.com)
+        if (/\b(gbp|google business|profile|business description|business name|categor|attributes?|service area|service menu|hours|opening|google posts?|q&a|owner.?seeded|review.*respon|respond.*review|rewrite.*description|update.*description|add.*categor|expand.*gbp|optimize.*listing|nap|name.?address|consistency|formatting|formatted|verify.*match|ensure.*match|standardize|maintain)\b/.test(t)) return { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
         // API/Automated — GSC, indexing, PageSpeed, sitemap
         if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
         // WordPress Plugin — on-page changes, meta, schema, content, code
         if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
         // Directory registrations — manual (human signs up on external sites)
         if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-        // Default: extension for GBP audit context, plugin for website context
-        return { type: 'extension', label: 'Extension', icon: 'fas fa-puzzle-piece', color: '#8b5cf6' };
+        // Default: SEO Specialist
+        return { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
       };
 
       // Render a section's content — tables with optional inline action buttons
