@@ -4796,6 +4796,204 @@
       );
     }
 
+    // ============ UNIFIED ACTION PLAN ============
+    function UnifiedActionPlanPage({ project }) {
+      const [activePillar, setActivePillar] = useState('all');
+      const [items, setItems] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [syncing, setSyncing] = useState(false);
+      const [error, setError] = useState('');
+
+      useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
+
+      const loadData = async () => {
+        setLoading(true); setError('');
+        try {
+          const d = await api(`/projects/${project.id}/orchestrator`);
+          const grouped = d.grouped || {};
+          const all = [];
+          for (const [pillar, cats] of Object.entries(grouped)) {
+            for (const [cat, tasks] of Object.entries(cats)) {
+              tasks.forEach(t => all.push({ ...t, _category: cat, _pillar: pillar }));
+            }
+          }
+          setItems(all);
+        } catch (e) { setError(e.message); }
+        setLoading(false);
+      };
+
+      const runOrchestrator = async () => {
+        setSyncing(true); setError('');
+        try {
+          const data = await api(`/projects/${project.id}/orchestrator/run`, { method: 'POST' });
+          if (data?.status === 'running') {
+            setTimeout(() => loadData(), 8000);
+            setTimeout(() => loadData(), 15000);
+            setTimeout(() => { loadData(); setSyncing(false); }, 25000);
+            return;
+          }
+          loadData();
+        } catch (e) { setError('Orchestrator failed: ' + e.message); }
+        setSyncing(false);
+      };
+
+      const handleStatusChange = async (actionId, newStatus) => {
+        try {
+          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
+          setItems(prev => prev.map(i => i.id === actionId ? { ...i, status: newStatus } : i));
+        } catch (e) { setError(e.message); }
+      };
+
+      const pillars = [
+        { id: 'all', label: 'All', icon: 'fas fa-layer-group', color: 'var(--accent)' },
+        { id: 'gbp_external', label: 'GBP', icon: 'fas fa-store', color: '#ef4444' },
+        { id: 'gsc_agent', label: 'GSC', icon: 'fas fa-chart-line', color: '#3b82f6' },
+        { id: 'website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
+      ];
+
+      const filtered = activePillar === 'all' ? items : items.filter(i => i._pillar === activePillar || i.pillar === activePillar);
+
+      const stats = useMemo(() => {
+        const total = filtered.length;
+        const critical = filtered.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
+        const high = filtered.filter(i => (i.severity || '').toLowerCase() === 'high').length;
+        const pending = filtered.filter(i => i.status === 'pending').length;
+        const done = filtered.filter(i => i.status === 'done' || i.status === 'completed').length;
+        const inProgress = filtered.filter(i => i.status === 'in-progress').length;
+        return { total, critical, high, pending, done, inProgress };
+      }, [filtered]);
+
+      const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
+      const pillarLabels = { gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website', gbp: 'GBP', gsc: 'GSC', technical: 'Website' };
+      const pillarColors = { gbp_external: '#ef4444', gsc_agent: '#3b82f6', website: '#8b5cf6', gbp: '#ef4444', gsc: '#3b82f6', technical: '#8b5cf6' };
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className="fas fa-tasks" style={{ marginRight: 10, color: 'var(--accent)' }} />Action Plan
+              </h2>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
+                AI-orchestrated tasks from all audits — deduplicated and prioritized
+              </p>
+            </div>
+            <button className="btn btn-primary" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13 }}>
+              {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
+            </button>
+          </div>
+
+          {/* Stats cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+            {[
+              { label: 'TOTAL', value: stats.total, color: 'var(--text1)' },
+              { label: 'CRITICAL', value: stats.critical + stats.high, color: '#ef4444' },
+              { label: 'PENDING', value: stats.pending, color: '#f59e0b' },
+              { label: 'DONE', value: stats.done, color: '#22c55e' },
+            ].map(s => (
+              <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: '16px 20px', textAlign: 'center' }}>
+                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 4 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Pillar tabs */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+            {pillars.map(p => (
+              <button key={p.id} onClick={() => setActivePillar(p.id)}
+                style={{ padding: '8px 16px', borderRadius: 8, border: activePillar === p.id ? `2px solid ${p.color}` : '1px solid var(--border)',
+                  background: activePillar === p.id ? `${p.color}15` : 'var(--card)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  color: activePillar === p.id ? p.color : 'var(--text2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <i className={p.icon} style={{ fontSize: 12 }} />{p.label}
+                <span style={{ fontSize: 11, opacity: 0.7 }}>
+                  ({p.id === 'all' ? items.length : items.filter(i => (i._pillar || i.pillar) === p.id).length})
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {loading && (
+            <div style={{ textAlign: 'center', padding: 40 }}>
+              <span className="spinner-large"></span>
+              <div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading action items...</div>
+            </div>
+          )}
+
+          {!loading && filtered.length > 0 && (
+            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PRIORITY</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>ACTION</th>
+                    {activePillar === 'all' && <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PILLAR</th>}
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>CATEGORY</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>ASSIGNEE</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 90 }}>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((item) => {
+                    const sev = (item.severity || 'medium').toLowerCase();
+                    const sevColor = sevColors[sev] || '#f59e0b';
+                    const aiLabel = item.assignee_label;
+                    const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item._pillar || item.pillar);
+                    const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
+                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
+                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
+                    const aColor = assigneeColorMap[assigneeLabel] || '#6b7280';
+                    const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-user';
+                    const itemPillar = item._pillar || item.pillar;
+                    return (
+                      <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 12, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
+                        </td>
+                        <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.5, color: 'var(--text1)' }}>{item.title}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginTop: 2 }}>{item.description}</div>
+                        </td>
+                        {activePillar === 'all' && (
+                          <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '3px 8px', borderRadius: 4 }}>
+                              {pillarLabels[itemPillar] || itemPillar}
+                            </span>
+                          </td>
+                        )}
+                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>{item._category || item.category}</td>
+                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, whiteSpace: 'nowrap' }}>
+                          <span style={{ color: aColor }}><i className={aIcon} style={{ marginRight: 5, fontSize: 11 }} />{assigneeLabel}</span>
+                        </td>
+                        <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
+                          <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
+                            style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)' }}>
+                            <option value="pending">Pending</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="done">Done</option>
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!loading && filtered.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-tasks" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No action items yet</div>
+              <div style={{ fontSize: 13 }}>Run your audits first, then click "Run Orchestrator" to generate a unified action plan.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ COPYWRITER PAGE ============
     function CopywriterPage({ stage }) {
       const stageConfig = {
@@ -7097,7 +7295,9 @@
             return <IndexingPage project={project} />;
           case 'citations':
             return <CitationsPage project={project} />;
-case 'content-queue':
+case 'action-plan':
+            return <UnifiedActionPlanPage project={project} />;
+          case 'content-queue':
             return <CopywriterPage stage="queue" />;
           case 'drafts':
             return <CopywriterPage stage="drafts" />;
@@ -7147,6 +7347,9 @@ case 'content-queue':
           { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
+        ]},
+        { section: 'ACTION PLAN', items: [
+          { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
         ]},
         { section: 'COPYWRITER', items: [
           { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
