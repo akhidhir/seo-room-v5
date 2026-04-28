@@ -1290,7 +1290,8 @@
         if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
         if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
         if (/\b(review|testimonial|ask.*customer|collect.*review|request.*review|share.*review)\b/.test(t)) return MANUAL;
-        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|content|blog|wordpress|wp|meta.?title|meta.?desc|schema|web.?page)\b/.test(t)) return WP_PLUGIN;
+        if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter|x\.com)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|wordpress|wp|meta.?title|meta.?desc|schema|web.?page|website.?content|blog.?post|web.?content)\b/.test(t)) return WP_PLUGIN;
         return SEO_SPECIALIST;
       }
       if (pillar === 'gsc_agent' || pillar === 'gsc') {
@@ -1494,8 +1495,6 @@
         if (isAdded) {
           const item = addedItem;
           const st = item.status || 'pending';
-          const assignee = execAssignee[item.execType] || 'SEO Specialist';
-          const assigneeIcon = execAssigneeIcon[item.execType] || 'fas fa-user';
           const statusOptions = item.execType === 'manual'
             ? [{ value: 'pending', label: 'Not Started' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]
             : [{ value: 'pending', label: 'Ready' }, { value: 'in_progress', label: 'Running' }, { value: 'done', label: 'Done' }];
@@ -1504,7 +1503,7 @@
           return (
             <React.Fragment>
               <td style={{ padding: '8px 12px', fontSize: 12, color: item.execColor || '#6b7280', whiteSpace: 'nowrap' }}>
-                <i className={assigneeIcon} style={{ marginRight: 5, fontSize: 11 }} />{assignee}
+                <i className={item.execIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{item.execLabel || 'SEO Specialist'}
               </td>
               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                 <select value={st} onChange={e => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, e.target.value)} style={{
