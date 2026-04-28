@@ -315,6 +315,7 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS effort TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS assignee_label TEXT`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
     // GBP tasks are manual (SEO Specialist) — no extension automation
@@ -979,6 +980,179 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
 });
 
 // Sync all pillars at once (for orchestrator)
+// ==================== AI ORCHESTRATOR — intelligent cross-audit action plan ====================
+app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
+  const { projectId } = req.params;
+  if (!anthropic) return res.status(500).json({ error: 'Anthropic API not configured' });
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Gather all completed audit reports
+    const auditPillars = ['gbp_external', 'gsc_agent', 'website'];
+    const reports = {};
+    for (const pillar of auditPillars) {
+      const auditRes = await pool.query(
+        `SELECT id, audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [projectId, pillar]
+      );
+      if (auditRes.rows.length > 0) {
+        const data = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
+        const reportText = data?.report || data?.final_report || '';
+        if (reportText) {
+          reports[pillar] = { text: reportText.slice(0, 15000), auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
+        }
+      }
+    }
+
+    if (Object.keys(reports).length === 0) {
+      return res.status(400).json({ error: 'No completed audits found. Run at least one audit first.' });
+    }
+
+    console.log(`[orchestrator] Running AI orchestrator for project ${projectId} with ${Object.keys(reports).length} audit reports`);
+    res.json({ status: 'running', pillars: Object.keys(reports) });
+
+    // Run async
+    (async () => {
+      try {
+        const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const serviceAreas = project.service_areas || [];
+        const hasWordPress = !!(project.wordpress_url && project.wp_username && project.wp_app_password);
+
+        // Build the orchestrator prompt
+        let reportSection = '';
+        for (const [pillar, r] of Object.entries(reports)) {
+          const label = { gbp_external: 'GBP External Audit', gsc_agent: 'GSC Audit', website: 'Website Audit' }[pillar] || pillar;
+          reportSection += `\n\n=== ${label} (completed ${new Date(r.completedAt).toLocaleDateString()}) ===\n${r.text}`;
+        }
+
+        const orchestratorPrompt = `You are the SEO Orchestrator for "${project.business_name || project.name}" (${domain}).
+Service areas: ${serviceAreas.map(a => a.name).join(', ') || 'not set'}
+WordPress connected: ${hasWordPress ? 'YES — can auto-fix meta titles, descriptions, content via API' : 'NO — content changes need manual WordPress editing'}
+
+You have ${Object.keys(reports).length} audit reports below. Your job:
+
+1. EXTRACT every actionable finding from ALL reports into a unified action plan
+2. DEDUPLICATE — if the same page or issue appears in multiple audits, merge into ONE item. Prefer the most specific recommendation.
+3. CATCH CONTRADICTIONS — if one audit says a page/feature exists but another recommends creating it, resolve the contradiction. Always trust factual data (e.g. "Website Page: Yes") over recommendations.
+4. ASSIGN execution_type for each item based on WHO/WHAT executes it:
+   - "plugin" (WP Plugin) — any WordPress content change: meta titles, descriptions, headings, schema, content edits, creating pages, internal links, canonical tags, redirects. These are automated via WordPress REST API + Yoast.
+   - "manual" with assignee_label "Manual" — business owner physical actions: taking photos, asking customers for reviews, registering on directories (Yelp, TrueLocal, etc.), claiming listings, in-person tasks.
+   - "manual" with assignee_label "SEO Specialist" — GBP profile edits (description, categories, hours, posts, responding to reviews), strategic decisions (cannibalization resolution), server/theme configs (Core Web Vitals, page speed, SSL, crawl errors, mobile usability), social media management.
+   - "api" (Automated) — API-driven tasks: submitting URLs for indexing, sitemap submission.
+5. PRIORITIZE — order by business impact. Quick wins (pages close to page 1) first, then critical fixes, then optimizations.
+6. SEVERITY — Critical (blocking revenue/visibility), High (significant impact), Medium (improvement), Low (nice-to-have)
+
+CRITICAL RULES:
+- Do NOT invent findings. Only extract what's in the reports.
+- Do NOT recommend creating a page that already exists — recommend optimizing it instead.
+- The "recommendation" field must have specific, actionable instructions (not vague advice).
+- For WP Plugin items: specify the exact page URL/path and what to change.
+- For SEO Specialist items: include step-by-step instructions.
+- For Manual items: explain exactly what the business owner needs to do.
+
+Return ONLY a JSON array, no explanation:
+[{
+  "pillar": "<gbp_external|gsc_agent|website>",
+  "category": "<section name from the report>",
+  "title": "<short actionable title>",
+  "description": "<what's wrong>",
+  "recommendation": "<specific fix with steps>",
+  "severity": "<Critical|High|Medium|Low>",
+  "execution_type": "<plugin|manual|api>",
+  "assignee_label": "<WP Plugin|SEO Specialist|Manual|Automated>",
+  "current_value": "<current state if known>",
+  "new_value": "<target state>",
+  "page_url": "<specific page path if applicable, e.g. /burst-pipes-perth/>",
+  "duplicate_of": "<title of another item if this is a cross-audit duplicate — set to empty string if unique>"
+}]
+
+AUDIT REPORTS:
+${reportSection}`;
+
+        const resp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 16000,
+          messages: [{ role: 'user', content: orchestratorPrompt }]
+        });
+
+        const text = resp.content[0].text.trim();
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          console.error('[orchestrator] No JSON array found in response');
+          return;
+        }
+
+        const items = JSON.parse(jsonMatch[0]);
+        console.log(`[orchestrator] AI returned ${items.length} action items`);
+
+        // Filter out duplicates flagged by AI
+        const uniqueItems = items.filter(i => !i.duplicate_of);
+        console.log(`[orchestrator] After dedup: ${uniqueItems.length} items (${items.length - uniqueItems.length} duplicates removed)`);
+
+        // Validate
+        const validExecTypes = ['plugin', 'manual', 'api'];
+        const validSeverities = ['Critical', 'High', 'Medium', 'Low'];
+        const PILLAR_CATEGORIES = {
+          gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+          website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+          gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+        };
+
+        // Clear old action items and findings for all pillars
+        for (const pillar of auditPillars) {
+          await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
+          await pool.query('DELETE FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
+        }
+
+        let savedCount = 0;
+        for (const item of uniqueItems) {
+          const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
+          const validCats = PILLAR_CATEGORIES[pillar] || [];
+          const category = validCats.find(c => c.toLowerCase() === (item.category || '').toLowerCase())
+            || validCats.find(c => (item.category || '').toLowerCase().includes(c.toLowerCase().split(' ')[0]))
+            || validCats[0] || 'General';
+          const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
+          const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
+          const assigneeLabel = item.assignee_label || (execType === 'plugin' ? 'WP Plugin' : execType === 'api' ? 'Automated' : 'SEO Specialist');
+
+          if (!item.title) continue;
+
+          const auditId = reports[pillar]?.auditId || null;
+
+          // Save finding
+          const fRes = await pool.query(
+            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+            [projectId, auditId, pillar, category, item.title.slice(0, 200), (item.description || '').slice(0, 1000),
+             (item.recommendation || '').slice(0, 1000), severity, (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500)]
+          );
+
+          // Save action item with AI-assigned execution_type and assignee_label
+          await pool.query(
+            `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+            [projectId, fRes.rows[0].id, pillar, category, category, item.title.slice(0, 200),
+             (item.recommendation || item.description || '').slice(0, 1000),
+             (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500),
+             severity, execType, assigneeLabel]
+          );
+          savedCount++;
+        }
+
+        console.log(`[orchestrator] Saved ${savedCount} action items for project ${projectId}`);
+      } catch (e) {
+        console.error('[orchestrator] Error:', e.message);
+      }
+    })();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Legacy sync-all (kept for backward compatibility)
 app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
   const { projectId } = req.params;
   const pillars = ['gbp_external', 'gsc_agent', 'gsc', 'website'];

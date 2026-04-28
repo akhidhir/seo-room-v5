@@ -4659,9 +4659,15 @@
       const syncFindings = async () => {
         setSyncing(true); setError('');
         try {
-          const data = await api(`/projects/${project.id}/audits/${agentPillar}/extract-findings`, { method: 'POST' });
-          if (data?.extracted > 0 || (data?.length && data.length > 0)) loadData();
-          else setError('No findings extracted. Run the audit first.');
+          const data = await api(`/projects/${project.id}/orchestrator/run`, { method: 'POST' });
+          if (data?.status === 'running') {
+            // Orchestrator runs async — poll for results
+            setTimeout(() => loadData(), 8000);
+            setTimeout(() => loadData(), 15000);
+            setTimeout(() => { loadData(); setSyncing(false); }, 25000);
+            return;
+          }
+          loadData();
         } catch (e) { setError('Sync failed: ' + e.message); }
         setSyncing(false);
       };
@@ -4695,7 +4701,7 @@
               </p>
             </div>
             <button className="btn btn-primary" onClick={syncFindings} disabled={syncing} style={{ fontSize: 13 }}>
-              {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audit</>}
+              {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
             </button>
           </div>
 
@@ -4730,7 +4736,14 @@
                   {items.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
-                    const execInfo = detectExecType(item.description || item.title, item.pillar || pillar);
+                    // Use AI-assigned label from DB if available, fall back to detectExecType
+                    const aiLabel = item.assignee_label;
+                    const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item.pillar || pillar);
+                    const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
+                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
+                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
+                    const aColor = assigneeColorMap[assigneeLabel] || (execInfo && execInfo.color) || '#6b7280';
+                    const aIcon = assigneeIconMap[assigneeLabel] || (execInfo && execInfo.icon) || 'fas fa-user';
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -4751,9 +4764,9 @@
                           {item._category}
                         </td>
                         <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, whiteSpace: 'nowrap' }}>
-                          <span style={{ color: execInfo.color }}>
-                            <i className={execInfo.icon} style={{ marginRight: 5, fontSize: 11 }} />
-                            {execInfo.label}
+                          <span style={{ color: aColor }}>
+                            <i className={aIcon} style={{ marginRight: 5, fontSize: 11 }} />
+                            {assigneeLabel}
                           </span>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
