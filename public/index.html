@@ -1829,17 +1829,24 @@
         // Pillar-based defaults — the audit type determines the assignee
         if (pillar === 'gbp_external' || pillar === 'gbp') {
           if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
+          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
+          if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
+          if (/\b(review|testimonial|ask.*customer|collect.*review|request.*review|share.*review)\b/.test(t)) return MANUAL;
+          if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|content|blog|wordpress|wp|meta.?title|meta.?desc|schema|web.?page)\b/.test(t)) return WP_PLUGIN;
           return SEO_SPECIALIST;
         }
         if (pillar === 'gsc_agent' || pillar === 'gsc') {
           if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
-          if (/\b(content|landing page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast)\b/.test(t)) return WP_PLUGIN;
+          if (/\b(cannibal|consolidat|merge.*page|redirect.*competing|duplicate.*target)\b/.test(t)) return SEO_SPECIALIST;
+          if (/\b(content|landing.?page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link)\b/.test(t)) return WP_PLUGIN;
           return SEO_SPECIALIST;
         }
         if (pillar === 'website' || pillar === 'technical') {
           if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-          return AUTOMATED;
+          if (/\b(core.?web.?vitals|cwv|lcp|cls|tbt|fid|inp|page.?speed|minif|cache|lazy.?load|render.?block|server|hosting|cdn|gzip|compress(?!.*image)|brotli)\b/.test(t)) return SEO_SPECIALIST;
+          if (/\b(crawl|robots\.txt|ssl|https|security|certificate|redirect.?chain|301|302|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
+          if (/\b(meta.?title|meta.?desc|title.?tag|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|content|thin.?content|word.?count|duplicate)\b/.test(t)) return WP_PLUGIN;
+          return WP_PLUGIN;
         }
 
         // No pillar context — fall back to text-based detection
