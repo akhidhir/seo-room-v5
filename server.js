@@ -317,6 +317,13 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
 
+    // One-time migration: fix execution_type for GBP action items that were saved as 'manual'
+    await client.query(`
+      UPDATE action_items SET execution_type = 'extension'
+      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'manual'
+        AND description !~* '(photo|picture|image|shoot|camera|testimonial|in.person|physically|visit|call |phone call|print|brochure|flyer|sign.up|create.*account|register on|claim.*listing|directory|directories|listing|yelp|yellow.pages|true.local|hotfrog|word.of.mouth)'
+    `).catch(() => {});
+
     console.log('[boot] Database schema initialized');
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);

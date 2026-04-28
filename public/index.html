@@ -1614,7 +1614,7 @@
                 const key = `t${tableCounter}_r${ri}`;
                 restored[key] = {
                   id: match.id,
-                  execType: match.execution_type || execInfo.type,
+                  execType: execInfo.type,
                   execLabel: execInfo.label,
                   execIcon: execInfo.icon,
                   execColor: execInfo.color,
