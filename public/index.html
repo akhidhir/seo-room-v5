@@ -1572,6 +1572,30 @@
         removedKeysRef.current.clear();
       }, [section]);
 
+      // Listen for extension task completion messages via dashboard bridge
+      useEffect(() => {
+        const handler = (event) => {
+          if (event.data?.source !== 'seo-room-extension') return;
+          // Bridge response format: { source, requestId, response: { success, taskId } }
+          const resp = event.data.response || event.data.payload || {};
+          const taskId = resp.taskId;
+          if (!taskId) return;
+          // Find the key for this task ID and update status
+          setAddedActions(prev => {
+            const next = { ...prev };
+            for (const [key, val] of Object.entries(next)) {
+              if (val && val.id === taskId) {
+                next[key] = { ...val, status: resp.success ? 'done' : 'pending' };
+                break;
+              }
+            }
+            return next;
+          });
+        };
+        window.addEventListener('message', handler);
+        return () => window.removeEventListener('message', handler);
+      }, []);
+
       // Load existing action items from DB for this pillar
       useEffect(() => {
         if (!project?.id || !pillar) return;
@@ -2186,6 +2210,18 @@
             try {
               await api('/action-items/' + item.id, { method: 'PUT', body: { status: newStatus } });
               setAddedActions(prev => ({ ...prev, [key]: { ...prev[key], status: newStatus } }));
+              // If starting an extension task, trigger Chrome extension via dashboard bridge
+              if (newStatus === 'in_progress' && item.execType === 'extension') {
+                window.postMessage({
+                  source: 'seo-room-dashboard',
+                  type: 'EXECUTE_GBP_TASK',
+                  payload: {
+                    taskId: item.id,
+                    title: key,
+                    projectId: project?.id
+                  }
+                }, '*');
+              }
             } catch (e) { console.error('Failed to update status:', e); }
           };
 
