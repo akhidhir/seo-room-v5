@@ -1297,7 +1297,9 @@
       if (pillar === 'gsc_agent' || pillar === 'gsc') {
         if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
         if (/\b(cannibal|consolidat|merge.*page|redirect.*competing|duplicate.*target)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(content|landing.?page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link)\b/.test(t)) return WP_PLUGIN;
+        if (/\b(backlink|link.?build|off.?page|directory.?link|guest.?post|outreach)\b/.test(t) && !/\b(title|meta|h1|heading|rewrite|content)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(page.?speed|speed|server|hosting|cache|minif|render.?block)\b/.test(t) && !/\b(title|meta|h1|heading|rewrite|content)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(title|meta|rewrite|heading|h1|h2|schema|content|landing.?page|web.?page|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link|intro|snippet|description|keyword|cta|call.?to.?action|above.?fold)\b/.test(t)) return WP_PLUGIN;
         return SEO_SPECIALIST;
       }
       if (pillar === 'website' || pillar === 'technical') {
