@@ -1634,7 +1634,7 @@
               const itemName = (row[0] || '').replace(/\*\*/g, '').trim();
               const match = titleMap[itemName.toLowerCase()];
               if (match) {
-                const execInfo = detectExecType(match.description || match.title);
+                const execInfo = detectExecType(match.description || match.title, match.pillar || auditType);
                 const key = `t${tableCounter}_r${ri}`;
                 restored[key] = {
                   id: match.id,
@@ -1819,20 +1819,36 @@
       };
 
       // Detect execution type from action text
-      const detectExecType = (text) => {
+      const detectExecType = (text, pillar) => {
         const t = text.toLowerCase();
-        // Manual FIRST — physical/human tasks + photos
-        if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-        // SEO Specialist — GBP profile edits (manual via business.google.com)
-        if (/\b(gbp|google business|profile|business description|business name|categor|attributes?|service area|service menu|hours|opening|google posts?|q&a|owner.?seeded|review.*respon|respond.*review|rewrite.*description|update.*description|add.*categor|expand.*gbp|optimize.*listing|nap|name.?address|consistency|formatting|formatted|verify.*match|ensure.*match|standardize|maintain)\b/.test(t)) return { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
-        // API/Automated — GSC, indexing, PageSpeed, sitemap
-        if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
-        // WordPress Plugin — on-page changes, meta, schema, content, code
-        if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
-        // Directory registrations — manual (human signs up on external sites)
-        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-        // Default: SEO Specialist
-        return { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
+        const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
+        const SEO_SPECIALIST = { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
+        const AUTOMATED = { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
+        const WP_PLUGIN = { type: 'plugin', label: 'WP Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
+
+        // Pillar-based defaults — the audit type determines the assignee
+        if (pillar === 'gbp_external' || pillar === 'gbp') {
+          if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
+          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
+          return SEO_SPECIALIST;
+        }
+        if (pillar === 'gsc_agent' || pillar === 'gsc') {
+          if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
+          if (/\b(content|landing page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast)\b/.test(t)) return WP_PLUGIN;
+          return SEO_SPECIALIST;
+        }
+        if (pillar === 'website' || pillar === 'technical') {
+          if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
+          return AUTOMATED;
+        }
+
+        // No pillar context — fall back to text-based detection
+        if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return MANUAL;
+        if (/\b(gbp|google business|business description|business name|categor|service area|hours|opening|google posts?|review.*respon|respond.*review|nap|name.?address|consistency|maintain)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return AUTOMATED;
+        if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return WP_PLUGIN;
+        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
+        return SEO_SPECIALIST;
       };
 
       // Render a section's content — tables with optional inline action buttons
@@ -2184,7 +2200,7 @@
           const handleAddAction = async (key, action) => {
             setAddingAction(key);
             try {
-              const execInfo = detectExecType(action.description || action.title);
+              const execInfo = detectExecType(action.description || action.title, auditType);
               const resp = await api('/projects/' + project.id + '/action-items', {
                 method: 'POST',
                 body: {
