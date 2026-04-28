@@ -3632,65 +3632,66 @@
                           </div>
                         </div>
                       </div>
-                      <div style={{ background: 'rgba(34,197,94,0.08)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid rgba(34,197,94,0.2)' }}>
-                        <div style={{ fontSize: 11, color: '#22c55e', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}><i className="fas fa-lightbulb" style={{ marginRight: 4 }} />How to fix</div>
-                        {isCrawled ? (
-                          <ol style={{ fontSize: 13, margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <li>Improve content quality — add at least 500+ unique, valuable words</li>
-                            <li>Add 3-5 internal links from your highest-traffic indexed pages</li>
-                            <li>Add structured data (FAQ schema, LocalBusiness schema)</li>
-                            <li>Ensure meta title and description are unique and keyword-optimized</li>
-                            <li>Request indexing in Google Search Console after changes</li>
-                          </ol>
-                        ) : (
-                          <ol style={{ fontSize: 13, margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <li>Add internal links from homepage and main service pages to this URL</li>
-                            <li>Verify the page is included in sitemap.xml</li>
-                            <li>Check robots.txt isn't blocking crawling</li>
-                            <li>Add unique, valuable content (500+ words minimum)</li>
-                            <li>Submit URL for indexing in Google Search Console</li>
-                          </ol>
-                        )}
-                      </div>
-                      {/* Inline action controls */}
-                      {actionItems[idx] ? (() => {
+                      {(() => {
+                        const fix = getIndexingFixType(r);
                         const ai = actionItems[idx];
-                        const st = ai.status || 'pending';
-                        const statusOptions = ai.type === 'manual'
+                        const st = ai?.status || 'pending';
+                        const statusOptions = (ai?.type || fix.type) === 'manual'
                           ? [{ value: 'pending', label: 'Not Started' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]
                           : [{ value: 'pending', label: 'Ready' }, { value: 'in_progress', label: 'Running' }, { value: 'done', label: 'Done' }];
                         const statusColors = { pending: '#6b7280', in_progress: '#f59e0b', done: '#22c55e' };
                         return (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '8px 0' }}>
-                            <button onClick={() => resetIndexingAction(idx)} style={{ fontSize: 10, padding: '4px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset">
-                              <i className="fas fa-undo" />
-                            </button>
-                            <div style={{ fontSize: 12, color: ai.color || '#6b7280', whiteSpace: 'nowrap' }}>
-                              <i className={ai.assigneeIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{ai.assignee || 'SEO Specialist'}
+                          <>
+                            {/* Steps + Assignee + Action in one block */}
+                            <div style={{ background: 'rgba(34,197,94,0.08)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid rgba(34,197,94,0.2)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                <div style={{ fontSize: 11, color: '#22c55e', textTransform: 'uppercase', fontWeight: 700 }}>
+                                  <i className="fas fa-lightbulb" style={{ marginRight: 4 }} />How to fix
+                                </div>
+                                <div style={{ fontSize: 12, color: fix.color, fontWeight: 600 }}>
+                                  <i className={fix.assigneeIcon} style={{ marginRight: 5, fontSize: 11 }} />{fix.assignee}
+                                </div>
+                              </div>
+                              <ol style={{ fontSize: 13, margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {fix.steps.map((step, si) => <li key={si}>{step}</li>)}
+                              </ol>
                             </div>
-                            <select value={st} onChange={e => updateIndexingStatus(idx, e.target.value)} style={{
-                              fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
-                              border: '1px solid ' + statusColors[st] + '50',
-                              background: statusColors[st] + '15', color: statusColors[st],
-                              cursor: 'pointer', outline: 'none'
-                            }}>
-                              {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                            {ai.type !== 'manual' && st === 'pending' && (
-                              <button onClick={() => updateIndexingStatus(idx, 'in_progress')} style={{
-                                fontSize: 11, fontWeight: 700, padding: '4px 14px', borderRadius: 5, border: 'none',
-                                background: ai.color || '#3b82f6', color: '#fff', cursor: 'pointer'
-                              }}>
-                                <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Start
-                              </button>
-                            )}
-                          </div>
+                            {/* Action controls */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                              {ai ? (
+                                <>
+                                  <button onClick={() => resetIndexingAction(idx)} style={{ fontSize: 10, padding: '4px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset">
+                                    <i className="fas fa-undo" />
+                                  </button>
+                                  <div style={{ fontSize: 12, color: ai.color || '#6b7280', fontWeight: 600 }}>
+                                    <i className={ai.assigneeIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{ai.assignee}
+                                  </div>
+                                  <select value={st} onChange={e => updateIndexingStatus(idx, e.target.value)} style={{
+                                    fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
+                                    border: '1px solid ' + statusColors[st] + '50',
+                                    background: statusColors[st] + '15', color: statusColors[st],
+                                    cursor: 'pointer', outline: 'none'
+                                  }}>
+                                    {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                  </select>
+                                  {ai.type !== 'manual' && st === 'pending' && (
+                                    <button onClick={() => updateIndexingStatus(idx, 'in_progress')} style={{
+                                      fontSize: 11, fontWeight: 700, padding: '4px 14px', borderRadius: 5, border: 'none',
+                                      background: ai.color || '#3b82f6', color: '#fff', cursor: 'pointer'
+                                    }}>
+                                      <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Start
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <button className="btn btn-primary" onClick={() => addIndexingAction(r, idx)} disabled={addingAction === idx} style={{ fontSize: 12 }}>
+                                  {addingAction === idx ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 6 }} />Add to Actions</>}
+                                </button>
+                              )}
+                            </div>
+                          </>
                         );
-                      })() : (
-                        <button className="btn btn-primary" onClick={() => addIndexingAction(r, idx)} disabled={addingAction === idx} style={{ fontSize: 12 }}>
-                          {addingAction === idx ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 6 }} />Add to Actions</>}
-                        </button>
-                      )}
+                      })()}
                     </div>
                   )}
                 </div>
