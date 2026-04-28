@@ -1277,6 +1277,45 @@
     const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Summary'];
     const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Summary'];
 
+    // Detect execution type / assignee from action text + pillar context
+    const detectExecType = (text, pillar) => {
+      const t = (text || '').toLowerCase();
+      const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
+      const SEO_SPECIALIST = { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
+      const AUTOMATED = { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
+      const WP_PLUGIN = { type: 'plugin', label: 'WP Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
+
+      if (pillar === 'gbp_external' || pillar === 'gbp') {
+        if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
+        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
+        if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(review|testimonial|ask.*customer|collect.*review|request.*review|share.*review)\b/.test(t)) return MANUAL;
+        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|content|blog|wordpress|wp|meta.?title|meta.?desc|schema|web.?page)\b/.test(t)) return WP_PLUGIN;
+        return SEO_SPECIALIST;
+      }
+      if (pillar === 'gsc_agent' || pillar === 'gsc') {
+        if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
+        if (/\b(cannibal|consolidat|merge.*page|redirect.*competing|duplicate.*target)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(content|landing.?page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link)\b/.test(t)) return WP_PLUGIN;
+        return SEO_SPECIALIST;
+      }
+      if (pillar === 'website' || pillar === 'technical') {
+        if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
+        if (/\b(core.?web.?vitals|cwv|lcp|cls|tbt|fid|inp|page.?speed|minif|cache|lazy.?load|render.?block|server|hosting|cdn|gzip|compress(?!.*image)|brotli)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(crawl|robots\.txt|ssl|https|security|certificate|redirect.?chain|301|302|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
+        if (/\b(meta.?title|meta.?desc|title.?tag|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|content|thin.?content|word.?count|duplicate)\b/.test(t)) return WP_PLUGIN;
+        return WP_PLUGIN;
+      }
+
+      // No pillar context — fall back to text-based detection
+      if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return MANUAL;
+      if (/\b(gbp|google business|business description|business name|categor|service area|hours|opening|google posts?|review.*respon|respond.*review|nap|name.?address|consistency|maintain)\b/.test(t)) return SEO_SPECIALIST;
+      if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return AUTOMATED;
+      if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return WP_PLUGIN;
+      if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
+      return SEO_SPECIALIST;
+    };
+
     // Normalize messy agent section names into clean sidebar labels
     // Uses exact map first, then fuzzy keyword matching as fallback
     function normalizeAgentSection(name) {
@@ -1634,7 +1673,7 @@
               const itemName = (row[0] || '').replace(/\*\*/g, '').trim();
               const match = titleMap[itemName.toLowerCase()];
               if (match) {
-                const execInfo = detectExecType(match.description || match.title, match.pillar || auditType);
+                const execInfo = detectExecType(match.description || match.title, match.pillar || pillar);
                 const key = `t${tableCounter}_r${ri}`;
                 restored[key] = {
                   id: match.id,
@@ -1818,45 +1857,6 @@
         return filtered;
       };
 
-      // Detect execution type from action text
-      const detectExecType = (text, pillar) => {
-        const t = text.toLowerCase();
-        const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-        const SEO_SPECIALIST = { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
-        const AUTOMATED = { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
-        const WP_PLUGIN = { type: 'plugin', label: 'WP Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
-
-        // Pillar-based defaults — the audit type determines the assignee
-        if (pillar === 'gbp_external' || pillar === 'gbp') {
-          if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
-          if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
-          if (/\b(review|testimonial|ask.*customer|collect.*review|request.*review|share.*review)\b/.test(t)) return MANUAL;
-          if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|content|blog|wordpress|wp|meta.?title|meta.?desc|schema|web.?page)\b/.test(t)) return WP_PLUGIN;
-          return SEO_SPECIALIST;
-        }
-        if (pillar === 'gsc_agent' || pillar === 'gsc') {
-          if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
-          if (/\b(cannibal|consolidat|merge.*page|redirect.*competing|duplicate.*target)\b/.test(t)) return SEO_SPECIALIST;
-          if (/\b(content|landing.?page|web.?page|meta.?title|meta.?desc|heading|h1|schema|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link)\b/.test(t)) return WP_PLUGIN;
-          return SEO_SPECIALIST;
-        }
-        if (pillar === 'website' || pillar === 'technical') {
-          if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-          if (/\b(core.?web.?vitals|cwv|lcp|cls|tbt|fid|inp|page.?speed|minif|cache|lazy.?load|render.?block|server|hosting|cdn|gzip|compress(?!.*image)|brotli)\b/.test(t)) return SEO_SPECIALIST;
-          if (/\b(crawl|robots\.txt|ssl|https|security|certificate|redirect.?chain|301|302|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
-          if (/\b(meta.?title|meta.?desc|title.?tag|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|content|thin.?content|word.?count|duplicate)\b/.test(t)) return WP_PLUGIN;
-          return WP_PLUGIN;
-        }
-
-        // No pillar context — fall back to text-based detection
-        if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return MANUAL;
-        if (/\b(gbp|google business|business description|business name|categor|service area|hours|opening|google posts?|review.*respon|respond.*review|nap|name.?address|consistency|maintain)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return AUTOMATED;
-        if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return WP_PLUGIN;
-        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
-        return SEO_SPECIALIST;
-      };
 
       // Render a section's content — tables with optional inline action buttons
       // actionMode: { onAdd, addedKeys, addingKey } — adds inline action buttons to table rows
@@ -2207,7 +2207,7 @@
           const handleAddAction = async (key, action) => {
             setAddingAction(key);
             try {
-              const execInfo = detectExecType(action.description || action.title, auditType);
+              const execInfo = detectExecType(action.description || action.title, pillar);
               const resp = await api('/projects/' + project.id + '/action-items', {
                 method: 'POST',
                 body: {
@@ -4714,6 +4714,7 @@
                     <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PRIORITY</th>
                     <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>ACTION</th>
                     <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>CATEGORY</th>
+                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>ASSIGNEE</th>
                     <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 90 }}>STATUS</th>
                   </tr>
                 </thead>
@@ -4721,6 +4722,11 @@
                   {items.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
+                    const execInfo = detectExecType(item.description || item.title, item.pillar || pillar);
+                    const assigneeLabels = { api: 'Automated', plugin: 'WP Plugin', manual: 'SEO Specialist', extension: 'Extension' };
+                    const assigneeIcons = { api: 'fas fa-robot', plugin: 'fas fa-wrench', manual: 'fas fa-user-tie', extension: 'fas fa-puzzle-piece' };
+                    const assigneeColors = { api: '#3b82f6', plugin: '#f59e0b', manual: '#10b981', extension: '#8b5cf6' };
+                    const eType = item.execution_type || execInfo.type;
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -4739,6 +4745,12 @@
                         </td>
                         <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>
                           {item._category}
+                        </td>
+                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, whiteSpace: 'nowrap' }}>
+                          <span style={{ color: assigneeColors[eType] || '#6b7280' }}>
+                            <i className={assigneeIcons[eType] || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />
+                            {assigneeLabels[eType] || 'SEO Specialist'}
+                          </span>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
                           <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
