@@ -5751,16 +5751,27 @@
 
       const buildCombos = (svcs, svcSel, subs, subSel) => {
         const activeSvcs = svcs.filter(s => svcSel[s]);
-        const activeSubs = subs.filter(s => subSel[s.name]);
+        const activeSubs = subs.filter(s => subSel[s.name]).sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
         const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
+        // Interleave: each row is a different service + different suburb
+        // Pattern: svc[0]+sub[0], svc[1]+sub[1], svc[2]+sub[2], ...
+        // This gives max variety in the first N rows
         const combos = [];
-        for (const svc of activeSvcs) {
-          for (const s of activeSubs) {
-            combos.push({ service: svc, location: s.name, distance: s.distance });
-          }
+        const total = activeSvcs.length * activeSubs.length;
+        for (let i = 0; i < total; i++) {
+          const svc = activeSvcs[i % activeSvcs.length];
+          const sub = activeSubs[i % activeSubs.length];
+          combos.push({ service: svc, location: sub.name, distance: sub.distance });
         }
-        return combos.filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
-          .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
+        // Deduplicate (interleaving can create dupes when list sizes align)
+        const seen = new Set();
+        const unique = combos.filter(c => {
+          const k = `${c.service}|${c.location}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        return unique.filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`));
       };
 
       const checkAll = (combos, limit) => {
