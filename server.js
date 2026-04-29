@@ -4982,6 +4982,79 @@ Return ONLY a JSON array of strings, no duplicates, no explanation. Example: ["s
   }
 });
 
+// AI generate smart keyword combos
+app.post('/api/projects/:projectId/rank-tracking/generate-combos', async (req, res) => {
+  const { projectId } = req.params;
+  const { services, suburbs, count, mode } = req.body; // mode: '1:1' or 'many'
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const p = projRes.rows[0];
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: `You are a local SEO expert generating Google Maps keyword combinations.
+
+Business: ${p.business_name || p.name}
+Industry: ${p.industry || 'general'}
+Location: ${p.location || 'Australia'}
+
+Services: ${services.join(', ')}
+Suburbs: ${suburbs.join(', ')}
+Target count: ${count} keywords
+Mode: ${mode === '1:1' ? 'One service per suburb (spread evenly)' : 'Multiple services per suburb (full coverage)'}
+
+Generate exactly ${count} keyword combinations pairing services with suburbs. Each combo is a service keyword that will be searched in a specific suburb on Google Maps.
+
+Strategy:
+- Prioritize high-intent, high-volume service keywords with closest/most relevant suburbs
+- For "1:1" mode: spread services across different suburbs for maximum coverage
+- For "many" mode: pair top services with multiple suburbs, prioritize closest suburbs
+- Put the most impactful combos first (highest expected search volume)
+- Each combo should be a realistic search someone would do on Google Maps
+
+Return ONLY a JSON array of objects with "service" and "suburb" keys. No explanation.
+Example: [{"service": "auto locksmith", "suburb": "Vincent"}, ...]` }]
+    });
+    const text = msg.content[0].text.trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    let combos = match ? JSON.parse(match[0]) : [];
+
+    // Estimate volumes via DataForSEO if available
+    if (DATAFORSEO_AUTH && combos.length > 0) {
+      try {
+        const keywords = combos.map(c => `${c.service} ${c.suburb}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords, location_name: 'Australia', language_name: 'English' }]),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (dfsRes.ok) {
+          const dfsData = await dfsRes.json();
+          const volResults = dfsData?.tasks?.[0]?.result || [];
+          const volMap = {};
+          for (const r of volResults) {
+            if (r.keyword && r.search_volume != null) volMap[r.keyword.toLowerCase()] = r.search_volume;
+          }
+          combos = combos.map(c => ({
+            ...c,
+            volume: volMap[`${c.service} ${c.suburb}`.toLowerCase()] ?? null
+          }));
+        }
+      } catch (volErr) { console.log(`[generate-combos] Volume error: ${volErr.message}`); }
+    }
+
+    res.json({ combos });
+  } catch (e) {
+    console.error('[generate-combos] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Add keywords to track
 app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   const { projectId } = req.params;

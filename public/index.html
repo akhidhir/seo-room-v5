@@ -5723,9 +5723,18 @@
 
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
-      // --- Services state (checkbox-based like suburbs) ---
+      // --- Generator state ---
+      const [genStep, setGenStep] = useState('input'); // 'input' or 'results'
+      const [genServicesText, setGenServicesText] = useState('');
+      const [genSuburbsText, setGenSuburbsText] = useState('');
+      const [mapsLimit, setMapsLimit] = useState(20);
+      const [comboMode, setComboMode] = useState('1:1');
+      const [generating, setGenerating] = useState(false);
+      const [suggestingServices, setSuggestingServices] = useState(false);
+      const [manualService, setManualService] = useState('');
+      const [manualSuburb, setManualSuburb] = useState('');
+
       const cleanServiceName = (s) => {
-        // Strip city/suburb names from service keywords
         let cleaned = s.trim();
         for (const city of cityNames) {
           const re = new RegExp('\\s+' + city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
@@ -5733,213 +5742,84 @@
         }
         return cleaned.trim();
       };
-      const [servicesList, setServicesList] = useState(() => {
-        const saved = project.map_services || '';
-        return saved ? [...new Set(saved.split('\n').filter(s => s.trim()).map(s => cleanServiceName(s)).filter(Boolean))] : [];
-      });
-      const [selectedServices, setSelectedServices] = useState({});
-      const [customServiceInput, setCustomServiceInput] = useState('');
-      const [suggestingServices, setSuggestingServices] = useState(false);
-
-      // --- Suburbs state ---
-      const [customSuburbs, setCustomSuburbs] = useState(project.map_custom_suburbs || '');
-      const [mapsLimit, setMapsLimit] = useState(20);
-      const [comboMode, setComboMode] = useState('1:1'); // '1:1' or 'many'
-      const [selectedSubs, setSelectedSubs] = useState({});
-      const [availSubs, setAvailSubs] = useState([]);
-
-      const cityNames2 = cityNames; // reuse existing set
-
-      const getAvailSubs = (areas, dist, customText) => {
-        const fromAreas = areas.filter(a => (a.distance || 0) <= dist && !cityNames2.has(a.name.toLowerCase()));
-        const extras = (customText || '').split(/[,\n]/).map(s => s.trim()).filter(s => s && !fromAreas.find(a => a.name.toLowerCase() === s.toLowerCase()));
-        return [
-          ...fromAreas.map(a => ({ name: a.name, distance: a.distance })),
-          ...extras.map(s => ({ name: s, distance: null }))
-        ];
-      };
-
-      const buildCombos = (svcs, svcSel, subs, subSel, mode) => {
-        const activeSvcs = svcs.filter(s => svcSel[s]);
-        const activeSubs = subs.filter(s => subSel[s.name]).sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
-        const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
-        const m = mode || comboMode;
-        const combos = [];
-        if (m === '1:1') {
-          // One-to-one: pair each service with one suburb, cycling through both
-          const len = Math.max(activeSvcs.length, activeSubs.length);
-          for (let i = 0; i < len; i++) {
-            const svc = activeSvcs[i % activeSvcs.length];
-            const sub = activeSubs[i % activeSubs.length];
-            combos.push({ service: svc, location: sub.name, distance: sub.distance });
-          }
-        } else {
-          // Many-to-many: full cross-product, interleaved for variety
-          const total = activeSvcs.length * activeSubs.length;
-          for (let i = 0; i < total; i++) {
-            const svc = activeSvcs[i % activeSvcs.length];
-            const sub = activeSubs[Math.floor(i / activeSvcs.length) % activeSubs.length];
-            combos.push({ service: svc, location: sub.name, distance: sub.distance });
-          }
-        }
-        // Deduplicate
-        const seen = new Set();
-        const unique = combos.filter(c => {
-          const k = `${c.service}|${c.location}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-        return unique.filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`));
-      };
-
-      const checkAll = (combos, limit) => {
-        const obj = {};
-        for (let i = 0; i < Math.min(combos.length, limit); i++) obj[i] = true;
-        return obj;
-      };
-
-      const refreshCombos = (svcs, svcSel, subs, subSel, mode) => {
-        const combos = buildCombos(svcs || servicesList, svcSel || selectedServices, subs || availSubs, subSel || selectedSubs, mode);
-        setGenCombos(combos);
-        setGenChecked(checkAll(combos, mapsLimit));
-      };
 
       const openGenerator = async () => {
+        setGenStep('input');
+        setGenCombos([]);
+        setGenChecked({});
+        // Pre-fill suburbs from service areas
         const resp = await api(`/projects/${project.id}/service-areas`);
         const areas = resp.service_areas || resp;
         const areasArr = Array.isArray(areas) ? areas : [];
         setGenAreas(areasArr);
-        const subs = getAvailSubs(areasArr, maxDistance, customSuburbs);
-        setAvailSubs(subs);
-        const subSel = {};
-        subs.forEach(s => subSel[s.name] = true);
-        setSelectedSubs(subSel);
-        // Auto-select all existing services
-        const svcSel = {};
-        servicesList.forEach(s => svcSel[s] = true);
-        setSelectedServices(svcSel);
-        const combos = buildCombos(servicesList, svcSel, subs, subSel);
-        setGenCombos(combos);
-        setGenChecked(checkAll(combos, mapsLimit));
+        const filtered = areasArr.filter(a => (a.distance || 0) <= maxDistance && !cityNames.has(a.name.toLowerCase()));
+        if (filtered.length > 0 && !genSuburbsText.trim()) {
+          setGenSuburbsText(filtered.sort((a, b) => (a.distance || 99) - (b.distance || 99)).map(a => a.name).join('\n'));
+        }
         setShowGenerator(true);
-      };
-
-      const regenerateCombos = (overrideDist) => {
-        const dist = overrideDist != null ? overrideDist : maxDistance;
-        const subs = getAvailSubs(genAreas, dist, customSuburbs);
-        setAvailSubs(subs);
-        const subSel = {};
-        subs.forEach(s => subSel[s.name] = s.name in selectedSubs ? selectedSubs[s.name] : true);
-        setSelectedSubs(subSel);
-        // Also refresh service selections
-        const svcSel = { ...selectedServices };
-        servicesList.forEach(s => { if (!(s in svcSel)) svcSel[s] = true; });
-        setSelectedServices(svcSel);
-        refreshCombos(servicesList, svcSel, subs, subSel);
-      };
-
-      const resetGenerator = () => {
-        setServicesList([]);
-        setSelectedServices({});
-        setCustomServiceInput('');
-        setCustomSuburbs('');
-        const subs = getAvailSubs(genAreas, maxDistance, '');
-        setAvailSubs(subs);
-        const subSel = {};
-        subs.forEach(s => subSel[s.name] = true);
-        setSelectedSubs(subSel);
-        setGenCombos([]);
-        setGenChecked({});
-      };
-
-      const toggleSuburb = (name) => {
-        const newSel = { ...selectedSubs, [name]: !selectedSubs[name] };
-        setSelectedSubs(newSel);
-        refreshCombos(servicesList, selectedServices, availSubs, newSel);
-      };
-
-      const setAllSubs = (val) => {
-        const newSel = {};
-        Object.keys(selectedSubs).forEach(k => newSel[k] = val);
-        setSelectedSubs(newSel);
-        refreshCombos(servicesList, selectedServices, availSubs, newSel);
-      };
-
-      const toggleService = (svc) => {
-        const newSel = { ...selectedServices, [svc]: !selectedServices[svc] };
-        setSelectedServices(newSel);
-        refreshCombos(servicesList, newSel, availSubs, selectedSubs);
-      };
-
-      const setAllServices = (val) => {
-        const newSel = {};
-        servicesList.forEach(s => newSel[s] = val);
-        setSelectedServices(newSel);
-        refreshCombos(servicesList, newSel, availSubs, selectedSubs);
-      };
-
-      const addCustomService = () => {
-        const svcs = customServiceInput.split(/[,\n]/).map(s => cleanServiceName(s)).filter(s => s && !servicesList.includes(s));
-        if (svcs.length === 0) return;
-        const newList = [...servicesList, ...svcs];
-        setServicesList(newList);
-        const newSel = { ...selectedServices };
-        svcs.forEach(s => newSel[s] = true);
-        setSelectedServices(newSel);
-        setCustomServiceInput('');
-        refreshCombos(newList, newSel, availSubs, selectedSubs);
-      };
-
-      const removeService = (svc) => {
-        const newList = servicesList.filter(s => s !== svc);
-        setServicesList(newList);
-        const newSel = { ...selectedServices };
-        delete newSel[svc];
-        setSelectedServices(newSel);
-        refreshCombos(newList, newSel, availSubs, selectedSubs);
       };
 
       const suggestServices = async () => {
         setSuggestingServices(true);
         try {
+          const existing = genServicesText.split('\n').map(s => s.trim()).filter(Boolean);
           const resp = await api(`/projects/${project.id}/rank-tracking/suggest-services`, {
             method: 'POST',
-            body: { existing: servicesList }
+            body: { existing }
           });
-          const suggested = (resp.services || []).map(s => cleanServiceName(s)).filter(s => s && !servicesList.map(x => x.toLowerCase()).includes(s.toLowerCase()));
-          if (suggested.length === 0) { alert('No new suggestions found'); return; }
-          const newList = [...servicesList, ...suggested];
-          setServicesList(newList);
-          const newSel = { ...selectedServices };
-          suggested.forEach(s => newSel[s] = true);
-          setSelectedServices(newSel);
-          refreshCombos(newList, newSel, availSubs, selectedSubs);
-        } catch (e) { alert('Error suggesting services: ' + e.message); }
+          const suggested = (resp.services || []).map(s => cleanServiceName(s)).filter(s => s && !existing.map(x => x.toLowerCase()).includes(s.toLowerCase()));
+          if (suggested.length === 0) { alert('No new suggestions'); return; }
+          setGenServicesText(prev => {
+            const lines = prev.split('\n').map(s => s.trim()).filter(Boolean);
+            return [...new Set([...lines, ...suggested])].join('\n');
+          });
+        } catch (e) { alert('Error: ' + e.message); }
         finally { setSuggestingServices(false); }
       };
 
-      const importServicesCSV = () => {
-        const input = document.createElement('input');
-        input.type = 'file'; input.accept = '.csv,.txt';
-        input.onchange = async (e) => {
-          const file = e.target.files[0]; if (!file) return;
-          const text = await file.text();
-          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-          const svcs = lines.map(l => l.split(',')[0].replace(/^["']|["']$/g, '').trim()).filter(s => s && !['service','keyword','services'].includes(s.toLowerCase()) && !servicesList.includes(s));
-          if (svcs.length === 0) { alert('No new services found in CSV'); return; }
-          const newList = [...servicesList, ...svcs];
-          setServicesList(newList);
-          const newSel = { ...selectedServices };
-          svcs.forEach(s => newSel[s] = true);
-          setSelectedServices(newSel);
-          refreshCombos(newList, newSel, availSubs, selectedSubs);
-        };
-        input.click();
+      const generateCombos = async () => {
+        const services = genServicesText.split('\n').map(s => s.trim()).filter(Boolean);
+        const suburbs = genSuburbsText.split('\n').map(s => s.trim()).filter(Boolean);
+        if (services.length === 0 || suburbs.length === 0) { alert('Add at least one service and one suburb'); return; }
+        setGenerating(true);
+        try {
+          const resp = await api(`/projects/${project.id}/rank-tracking/generate-combos`, {
+            method: 'POST',
+            body: { services, suburbs, count: mapsLimit, mode: comboMode }
+          });
+          const combos = (resp.combos || []).map(c => ({ service: c.service, location: c.suburb, volume: c.volume ?? null }));
+          // Filter out already tracked
+          const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
+          const fresh = combos.filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`));
+          setGenCombos(fresh);
+          const checked = {};
+          fresh.forEach((_, i) => checked[i] = true);
+          setGenChecked(checked);
+          setGenStep('results');
+        } catch (e) { alert('Error generating: ' + e.message); }
+        finally { setGenerating(false); }
+      };
+
+      const addManualCombo = () => {
+        if (!manualService.trim() || !manualSuburb.trim()) return;
+        const newCombo = { service: manualService.trim(), location: manualSuburb.trim(), volume: null };
+        const newCombos = [...genCombos, newCombo];
+        setGenCombos(newCombos);
+        setGenChecked(prev => ({ ...prev, [newCombos.length - 1]: true }));
+        setManualService('');
+        setManualSuburb('');
+      };
+
+      const removeCombo = (idx) => {
+        const newCombos = genCombos.filter((_, i) => i !== idx);
+        setGenCombos(newCombos);
+        const newChecked = {};
+        newCombos.forEach((_, i) => newChecked[i] = true);
+        setGenChecked(newChecked);
       };
 
       const addGeneratedKeywords = async () => {
-        const toAdd = genCombos.filter((_, i) => genChecked[i] && i < mapsLimit);
+        const toAdd = genCombos.filter((_, i) => genChecked[i]);
         if (toAdd.length === 0) return;
         for (const c of toAdd) {
           await api(`/projects/${project.id}/rank-tracking/keywords`, {
@@ -5947,10 +5827,10 @@
             body: { keywords: [c.service], location: c.location }
           });
         }
-        // Persist services & custom suburbs to project
+        // Persist inputs
         api(`/projects/${project.id}`, {
           method: 'PUT',
-          body: { map_services: servicesList.join('\n'), map_custom_suburbs: customSuburbs }
+          body: { map_services: genServicesText, map_custom_suburbs: genSuburbsText }
         }).catch(() => {});
         alert(`Added ${toAdd.length} Maps keywords`);
         setShowGenerator(false);
@@ -5958,12 +5838,9 @@
       };
 
       const toggleGenItem = (idx) => {
-        if (idx >= mapsLimit) return;
         setGenChecked(prev => ({ ...prev, [idx]: !prev[idx] }));
       };
-      const totalChecked = Object.entries(genChecked).filter(([k, v]) => v).length;
-      const checkedCount = Object.entries(genChecked).filter(([k, v]) => v && parseInt(k) < mapsLimit).length;
-      const overLimit = totalChecked > mapsLimit ? totalChecked - mapsLimit : 0;
+      const checkedCount = Object.values(genChecked).filter(Boolean).length;
 
       const mToggleSort = (col) => {
         if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -6264,165 +6141,150 @@
             </div>
           )}
           {/* Generate Maps Keywords Modal */}
-          {showGenerator && (() => {
-            const svcCount = Object.values(selectedServices).filter(Boolean).length;
-            const subCount = Object.values(selectedSubs).filter(Boolean).length;
-            const svcAllOn = servicesList.length > 0 && svcCount === servicesList.length;
-            const svcAllOff = svcCount === 0;
-            const subAllOn = availSubs.length > 0 && subCount === availSubs.length;
-            const subAllOff = subCount === 0;
-            return (
+          {showGenerator && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               onClick={() => setShowGenerator(false)}>
               <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 800, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                 onClick={e => e.stopPropagation()}>
                 {/* Header */}
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 8, color: 'var(--accent)' }} />Generate Keywords</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                      <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{svcCount}</span> services × <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{subCount}</span> suburbs = <span style={{ fontWeight: 700, color: genCombos.length > mapsLimit ? '#f59e0b' : 'var(--text)' }}>{genCombos.length}</span> combos
-                    </div>
-                    <button onClick={() => setShowGenerator(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}>×</button>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>
+                    <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 8, color: 'var(--accent)' }} />
+                    {genStep === 'input' ? 'Generate Keywords' : `${genCombos.length} Keywords Generated`}
                   </div>
+                  <button onClick={() => setShowGenerator(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}>×</button>
                 </div>
 
                 <div style={{ overflow: 'auto', flex: 1, padding: '20px' }}>
-                  {/* Two panels: Services + Suburbs */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                    {/* Services panel */}
-                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>
-                          <i className="fa-solid fa-briefcase" style={{ marginRight: 6, color: 'var(--accent)' }} />
-                          Services ({svcCount}/{servicesList.length})
-                        </span>
-                        <span>
-                          <button onClick={() => setAllServices(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 10 }} disabled={svcAllOn}>All</button>
-                          {' '}
-                          <button onClick={() => setAllServices(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 10 }} disabled={svcAllOff}>None</button>
-                        </span>
-                      </div>
-                      {servicesList.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', maxHeight: 140, overflow: 'auto', marginBottom: 8 }}>
-                          {servicesList.map(svc => (
-                            <label key={svc} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: selectedServices[svc] ? 'var(--text)' : 'var(--text3)', background: selectedServices[svc] ? 'var(--bg3)' : 'transparent', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' }}>
-                              <input type="checkbox" checked={!!selectedServices[svc]} onChange={() => toggleService(svc)} style={{ margin: 0 }} />
-                              {svc}
-                              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeService(svc); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 10, padding: 0, marginLeft: 2 }}>×</button>
-                            </label>
-                          ))}
+                  {genStep === 'input' ? (
+                    <React.Fragment>
+                    {/* Step 1: Input services + suburbs */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+                      {/* Services */}
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+                            <i className="fa-solid fa-briefcase" style={{ marginRight: 6, color: 'var(--accent)' }} />Services
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>{genServicesText.split('\n').filter(s => s.trim()).length} added</span>
                         </div>
-                      )}
-                      {/* Add custom + AI suggest + CSV */}
-                      <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-                        <input className="form-input" value={customServiceInput} onChange={(e) => setCustomServiceInput(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomService(); } }}
-                          placeholder="Add service..." style={{ fontSize: 11, padding: '4px 8px', flex: 1 }} />
-                        <button onClick={addCustomService} className="btn" style={{ fontSize: 10, padding: '4px 8px' }}>Add</button>
+                        <textarea className="form-input" value={genServicesText} onChange={(e) => setGenServicesText(e.target.value)}
+                          placeholder={'One per line, e.g.:\nauto locksmith\ncar key replacement\nemergency lockout\ntransponder key programming'}
+                          rows={8} style={{ fontSize: 12, resize: 'vertical', minHeight: 160, fontFamily: 'inherit' }} />
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          <button onClick={suggestServices} disabled={suggestingServices} className="btn btn-primary" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
+                            {suggestingServices ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating...</> : <><i className="fa-solid fa-robot" style={{ marginRight: 4 }} />AI Suggest</>}
+                          </button>
+                          <button onClick={() => {
+                            const input = document.createElement('input');
+                            input.type = 'file'; input.accept = '.csv,.txt';
+                            input.onchange = async (e) => {
+                              const file = e.target.files[0]; if (!file) return;
+                              const text = await file.text();
+                              const lines = text.split(/\r?\n/).map(l => l.split(',')[0].replace(/^["']|["']$/g, '').trim()).filter(s => s && !['service','keyword','services'].includes(s.toLowerCase()));
+                              setGenServicesText(prev => {
+                                const existing = prev.split('\n').filter(s => s.trim());
+                                return [...new Set([...existing, ...lines])].join('\n');
+                              });
+                            };
+                            input.click();
+                          }} className="btn" style={{ fontSize: 11, padding: '6px 12px' }}>
+                            <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />CSV
+                          </button>
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button onClick={suggestServices} disabled={suggestingServices} className="btn btn-primary" style={{ fontSize: 10, padding: '4px 10px', flex: 1 }}>
-                          {suggestingServices ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Suggesting...</> : <><i className="fa-solid fa-robot" style={{ marginRight: 4 }} />AI Suggest</>}
-                        </button>
-                        <button onClick={importServicesCSV} className="btn" style={{ fontSize: 10, padding: '4px 10px' }}>
-                          <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />CSV
-                        </button>
+                      {/* Suburbs */}
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+                            <i className="fa-solid fa-map-marker-alt" style={{ marginRight: 6, color: '#22c55e' }} />Suburbs
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>{genSuburbsText.split('\n').filter(s => s.trim()).length} added</span>
+                        </div>
+                        <textarea className="form-input" value={genSuburbsText} onChange={(e) => setGenSuburbsText(e.target.value)}
+                          placeholder={'One per line, e.g.:\nVincent\nSubiaco\nVictoria Park\nNedlands\nBayswater'}
+                          rows={8} style={{ fontSize: 12, resize: 'vertical', minHeight: 160, fontFamily: 'inherit' }} />
+                        {/* Quick-fill from service areas */}
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          <button onClick={async () => {
+                            const resp = await api(`/projects/${project.id}/service-areas`);
+                            const areas = (resp.service_areas || resp || []).filter(a => !cityNames.has((a.name || '').toLowerCase()));
+                            const sorted = areas.sort((a, b) => (a.distance || 99) - (b.distance || 99));
+                            setGenSuburbsText(prev => {
+                              const existing = prev.split('\n').filter(s => s.trim());
+                              return [...new Set([...existing, ...sorted.map(a => a.name)])].join('\n');
+                            });
+                          }} className="btn" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
+                            <i className="fa-solid fa-location-dot" style={{ marginRight: 4 }} />Load from Settings
+                          </button>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Suburbs panel */}
-                    <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>
-                          <i className="fa-solid fa-map-marker-alt" style={{ marginRight: 6, color: '#22c55e' }} />
-                          Suburbs ({subCount}/{availSubs.length})
-                        </span>
-                        <span>
-                          <button onClick={() => setAllSubs(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 10 }} disabled={subAllOn}>All</button>
-                          {' '}
-                          <button onClick={() => setAllSubs(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 10 }} disabled={subAllOff}>None</button>
-                        </span>
+                    {/* Config row */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '12px 16px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                        {[['1:1', '1 : 1'], ['many', 'Many : Many']].map(([val, label]) => (
+                          <button key={val} onClick={() => setComboMode(val)}
+                            style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                              background: comboMode === val ? 'var(--accent)' : 'var(--bg3)', color: comboMode === val ? '#fff' : 'var(--text2)' }}>{label}</button>
+                        ))}
                       </div>
-                      {/* Distance control */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                        <button onClick={() => { const d = Math.max(5, maxDistance - 5); setMaxDistance(d); regenerateCombos(d); }} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)', width: 22, height: 22, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
-                        <input type="range" min={5} max={50} step={5} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
-                        <button onClick={() => { const d = Math.min(50, maxDistance + 5); setMaxDistance(d); regenerateCombos(d); }} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)', width: 22, height: 22, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
-                        <span style={{ fontSize: 11, fontWeight: 600, minWidth: 36 }}>{maxDistance}km</span>
-                      </div>
-                      {availSubs.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', maxHeight: 140, overflow: 'auto' }}>
-                          {availSubs.map(sub => (
-                            <label key={sub.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: selectedSubs[sub.name] ? 'var(--text)' : 'var(--text3)' }}>
-                              <input type="checkbox" checked={!!selectedSubs[sub.name]} onChange={() => toggleSuburb(sub.name)} style={{ margin: 0 }} />
-                              {sub.name}{sub.distance != null ? ` (${sub.distance.toFixed(0)}km)` : ''}
-                            </label>
-                          ))}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', padding: 8 }}>Add service areas in Settings</div>
-                      )}
-                      {/* Custom suburbs input */}
-                      <div style={{ marginTop: 8 }}>
-                        <input className="form-input" value={customSuburbs} onChange={(e) => setCustomSuburbs(e.target.value)}
-                          placeholder="Custom suburbs (comma separated)" style={{ fontSize: 11, padding: '4px 8px', width: '100%' }} />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Mode + Package selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-                    {/* Mode toggle */}
-                    <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                      {[['1:1', '1 : 1'], ['many', 'Many : Many']].map(([val, label]) => (
-                        <button key={val} onClick={() => { setComboMode(val); refreshCombos(null, null, null, null, val); }}
-                          style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
-                            background: comboMode === val ? 'var(--accent)' : 'var(--bg3)', color: comboMode === val ? '#fff' : 'var(--text2)' }}>{label}</button>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Keywords:</span>
+                      {[10, 20, 30, 40, 50].map(n => (
+                        <button key={n} onClick={() => setMapsLimit(n)}
+                          style={{ padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                            background: mapsLimit === n ? 'var(--accent)' : 'var(--bg3)', color: mapsLimit === n ? '#fff' : 'var(--text2)',
+                            border: mapsLimit === n ? 'none' : '1px solid var(--border)' }}>{n}</button>
                       ))}
                     </div>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Package:</span>
-                    {[10, 20, 30, 40, 50].map(n => (
-                      <button key={n} onClick={() => setMapsLimit(n)}
-                        style={{ padding: '4px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                          background: mapsLimit === n ? 'var(--accent)' : 'var(--bg3)', color: mapsLimit === n ? '#fff' : 'var(--text2)',
-                          border: mapsLimit === n ? 'none' : '1px solid var(--border)' }}>{n}</button>
-                    ))}
-                    <button className="btn" onClick={resetGenerator} style={{ fontSize: 11, padding: '4px 12px', marginLeft: 'auto', color: '#ef4444' }}>
-                      <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Reset
-                    </button>
-                    <button className="btn" onClick={() => regenerateCombos()} style={{ fontSize: 11, padding: '4px 12px' }}>
-                      <i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Refresh
-                    </button>
-                  </div>
-
-                  {/* Combos table */}
-                  {genCombos.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>
-                      {servicesList.length === 0 ? 'Add services above to get started. Click "AI Suggest" for automatic suggestions.' :
-                       subCount === 0 ? 'Select suburbs to generate keyword combos.' : 'No new combos to generate.'}
-                    </div>
+                    </React.Fragment>
                   ) : (
                     <React.Fragment>
-                    {genCombos.length > mapsLimit && <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>{genCombos.length} combos exceed package of {mapsLimit} — first {mapsLimit} auto-selected</div>}
+                    {/* Step 2: Results */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <button className="btn" onClick={() => setGenStep('input')} style={{ fontSize: 11, padding: '4px 12px' }}>
+                        <i className="fa-solid fa-arrow-left" style={{ marginRight: 4 }} />Back to inputs
+                      </button>
+                      <button className="btn" onClick={generateCombos} disabled={generating} style={{ fontSize: 11, padding: '4px 12px' }}>
+                        <i className="fa-solid fa-sync" style={{ marginRight: 4 }} />{generating ? 'Regenerating...' : 'Regenerate'}
+                      </button>
+                    </div>
+
+                    {/* Manual add row */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                      <input className="form-input" value={manualService} onChange={(e) => setManualService(e.target.value)} placeholder="Service..." style={{ fontSize: 11, padding: '4px 8px', flex: 1 }} />
+                      <input className="form-input" value={manualSuburb} onChange={(e) => setManualSuburb(e.target.value)} placeholder="Suburb..." style={{ fontSize: 11, padding: '4px 8px', flex: 1 }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') addManualCombo(); }} />
+                      <button onClick={addManualCombo} className="btn" style={{ fontSize: 10, padding: '4px 10px' }}>
+                        <i className="fa-solid fa-plus" style={{ marginRight: 3 }} />Add
+                      </button>
+                    </div>
+
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                           <th style={{ padding: '6px 10px', width: 24 }}></th>
                           <th style={{ padding: '6px 10px', textAlign: 'left' }}>Service</th>
                           <th style={{ padding: '6px 10px', textAlign: 'left' }}>Suburb</th>
-                          <th style={{ padding: '6px 10px', textAlign: 'center', width: 70 }}>Distance</th>
+                          <th style={{ padding: '6px 10px', textAlign: 'center', width: 70 }}>Vol.</th>
+                          <th style={{ padding: '6px 10px', width: 30 }}></th>
                         </tr>
                       </thead>
                       <tbody>
                         {genCombos.map((c, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)', opacity: i >= mapsLimit ? 0.35 : 1, cursor: i < mapsLimit ? 'pointer' : 'default' }} onClick={() => { if (i < mapsLimit) toggleGenItem(i); }}>
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => toggleGenItem(i)}>
                             <td style={{ padding: '6px 10px', textAlign: 'center' }}>
-                              <input type="checkbox" checked={!!genChecked[i]} onChange={(e) => { e.stopPropagation(); toggleGenItem(i); }} disabled={i >= mapsLimit} />
+                              <input type="checkbox" checked={!!genChecked[i]} onChange={(e) => { e.stopPropagation(); toggleGenItem(i); }} />
                             </td>
                             <td style={{ padding: '6px 10px', fontWeight: 500 }}>{c.service}</td>
                             <td style={{ padding: '6px 10px' }}>{c.location}</td>
-                            <td style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)' }}>{c.distance != null ? `${c.distance.toFixed(0)}km` : <span style={{ color: 'var(--accent)', fontSize: 10 }}>custom</span>}</td>
+                            <td style={{ padding: '6px 10px', textAlign: 'center', color: c.volume != null ? (c.volume >= 100 ? '#22c55e' : c.volume >= 10 ? '#f59e0b' : 'var(--text3)') : 'var(--text3)', fontSize: 11 }}>
+                              {c.volume != null ? c.volume.toLocaleString() : '—'}
+                            </td>
+                            <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                              <button onClick={(e) => { e.stopPropagation(); removeCombo(i); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 11 }}>×</button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -6430,31 +6292,31 @@
                     </React.Fragment>
                   )}
                 </div>
+
                 {/* Footer */}
                 <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button className="btn" onClick={() => {
-                    if (overLimit > 0) {
-                      const newChecked = { ...genChecked };
-                      const keys = Object.entries(newChecked).filter(([k, v]) => v).map(([k]) => parseInt(k)).sort((a, b) => b - a);
-                      let toRemove = overLimit;
-                      for (const k of keys) { if (toRemove <= 0) break; newChecked[k] = false; toRemove--; }
-                      setGenChecked(newChecked);
-                    } else {
-                      const max = Math.min(genCombos.length, mapsLimit);
-                      if (checkedCount === max) setGenChecked({});
-                      else setGenChecked(checkAll(genCombos, mapsLimit));
-                    }
-                  }} style={{ flex: 1, fontSize: 12 }}>
-                    {overLimit > 0 ? `Deselect ${overLimit} (over limit)` : (genCombos.length > 0 && checkedCount === Math.min(genCombos.length, mapsLimit)) ? 'Deselect All' : 'Select All'}
-                  </button>
-                  <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={checkedCount === 0} style={{ flex: 1, fontSize: 12 }}>
-                    <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {checkedCount} Keywords
-                  </button>
+                  {genStep === 'input' ? (
+                    <button className="btn btn-primary" onClick={generateCombos} disabled={generating} style={{ flex: 1, fontSize: 13, padding: '10px 16px' }}>
+                      {generating ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Generating combos & estimating volume...</>
+                        : <><i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Generate {mapsLimit} Keywords</>}
+                    </button>
+                  ) : (
+                    <React.Fragment>
+                      <button className="btn" onClick={() => {
+                        if (checkedCount === genCombos.length) setGenChecked({});
+                        else { const c = {}; genCombos.forEach((_, i) => c[i] = true); setGenChecked(c); }
+                      }} style={{ flex: 1, fontSize: 12 }}>
+                        {checkedCount === genCombos.length ? 'Deselect All' : 'Select All'}
+                      </button>
+                      <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={checkedCount === 0} style={{ flex: 1, fontSize: 12 }}>
+                        <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {checkedCount} Keywords
+                      </button>
+                    </React.Fragment>
+                  )}
                 </div>
               </div>
             </div>
-          );
-          })()}
+          )}
         </div>
       );
     }
