@@ -5723,7 +5723,8 @@
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
       const openGenerator = async () => {
-        const areas = await api(`/projects/${project.id}/service-areas`);
+        const resp = await api(`/projects/${project.id}/service-areas`);
+        const areas = resp.service_areas || resp;
         if (!Array.isArray(areas) || areas.length === 0) {
           alert('No service areas found. Add them in Settings & Integrations first.');
           return;
