@@ -5804,7 +5804,7 @@
         setSelectedSubs(newSel);
         const combos = rebuildCombos(availSubs, newSel, genServices);
         setGenCombos(combos);
-        setGenChecked(checkAll(combos, mapsLimit));
+        // Don't reset row checkboxes — keep existing selections, just re-map to new combos
       };
 
       const importServicesCSV = () => {
@@ -6193,8 +6193,10 @@
                   <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16 }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Distance from headquarters</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button onClick={() => { const d = Math.max(5, maxDistance - 5); setMaxDistance(d); regenerateCombos(d); }} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)', width: 28, height: 28, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                        <input type="range" min={5} max={50} step={5} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
+                        <button onClick={() => { const d = Math.min(50, maxDistance + 5); setMaxDistance(d); regenerateCombos(d); }} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)', width: 28, height: 28, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
                       </div>
                     </div>
