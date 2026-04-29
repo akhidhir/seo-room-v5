@@ -1030,68 +1030,139 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
     console.log(`[orchestrator] Running AI orchestrator for project ${projectId} with ${Object.keys(reports).length} audit reports`);
     res.json({ status: 'running', pillars: Object.keys(reports) });
 
-    // Run async
+    // Run async — TWO-STEP orchestrator for maximum accuracy
     (async () => {
       try {
         const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
         const serviceAreas = project.service_areas || [];
         const hasWordPress = !!(project.wordpress_url && project.wp_username && project.wp_app_password);
 
-        // Build the orchestrator prompt
+        // Build report sections
         let reportSection = '';
         for (const [pillar, r] of Object.entries(reports)) {
           const label = { gbp_external: 'GBP External Audit', gsc_agent: 'GSC Audit', website: 'Website Audit' }[pillar] || pillar;
           reportSection += `\n\n=== ${label} (completed ${new Date(r.completedAt).toLocaleDateString()}) ===\n${r.text}`;
         }
 
+        // Include raw GSC data if available (structured source of truth for GSC metrics)
+        let rawDataSection = '';
+        if (reports.gsc_agent) {
+          const gscAuditData = await pool.query('SELECT audit_data FROM audits WHERE id=$1', [reports.gsc_agent.auditId]);
+          if (gscAuditData.rows.length > 0) {
+            const ad = typeof gscAuditData.rows[0].audit_data === 'string' ? JSON.parse(gscAuditData.rows[0].audit_data) : gscAuditData.rows[0].audit_data;
+            if (ad?.raw_gsc_data && ad.raw_gsc_data.length > 0) {
+              rawDataSection += `\n\n=== RAW GSC DATA (structured, authoritative — use these numbers, not the report's paraphrasing) ===\n${JSON.stringify(ad.raw_gsc_data.slice(0, 100), null, 1)}`;
+            }
+          }
+        }
+
+        // ========== STEP 1: FACT EXTRACTION ==========
+        // Extract only verifiable facts from reports — no recommendations, no opinions
+        console.log(`[orchestrator] Step 1: Extracting structured facts...`);
+
+        const factExtractionPrompt = `You are a precise data extractor. Read these SEO audit reports and extract ONLY verifiable facts — NO recommendations, NO opinions, NO suggestions.
+
+For each fact, record:
+- The exact data point (number, URL, status, score, etc.)
+- Which report it came from
+- Whether it's a measured value or an inference
+
+Return ONLY a JSON object with these sections:
+
+{
+  "pages": [{"url": "/path", "exists": true|false, "title": "...", "meta_desc": "...", "word_count": 123, "has_schema": true|false, "source": "report_name"}],
+  "gbp_profile": {"name": "...", "rating": 4.2, "review_count": 47, "categories": ["..."], "has_description": true|false|null, "has_hours": true|false|null, "has_photos": true|false|null, "photo_count": 12, "source": "report_name"},
+  "competitors": [{"name": "...", "rating": 4.5, "review_count": 80, "position": 1, "source": "report_name"}],
+  "gsc_metrics": [{"query": "...", "page": "/path", "clicks": 10, "impressions": 500, "ctr": 2.0, "position": 8.5, "source": "gsc_data"}],
+  "technical_issues": [{"issue": "...", "url": "/path", "details": "...", "source": "report_name"}],
+  "service_areas": [{"name": "...", "has_page": true|false, "page_url": "/path_or_null", "source": "report_name"}],
+  "directories": [{"name": "...", "listed": true|false|null, "source": "report_name"}],
+  "scores": {"performance": 45, "lcp": "3.2s", "cls": 0.15, "source": "report_name"}
+}
+
+RULES:
+- Only include data EXPLICITLY stated in the reports. If a field is not mentioned, use null.
+- For pages: only list pages the report explicitly names with URLs.
+- For has_description/has_hours/has_photos: use null if the report doesn't mention it (NOT false).
+- Include the raw GSC data rows as gsc_metrics if provided.
+- Do NOT infer — if the report says "N/A" or doesn't mention something, it's null.
+
+REPORTS:
+${reportSection}
+${rawDataSection}`;
+
+        const factResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 12000,
+          messages: [{ role: 'user', content: factExtractionPrompt }]
+        });
+
+        const factText = factResp.content[0].text.trim();
+        const factJsonMatch = factText.match(/\{[\s\S]*\}/);
+        let facts = {};
+        if (factJsonMatch) {
+          try { facts = JSON.parse(factJsonMatch[0]); } catch (e) {
+            console.error('[orchestrator] Failed to parse facts JSON:', e.message);
+          }
+        }
+        console.log(`[orchestrator] Step 1 complete: ${Object.keys(facts).length} fact categories extracted`);
+
+        // ========== STEP 2: ACTION ITEMS FROM FACTS ==========
+        // Generate action items grounded in the extracted facts
+        console.log(`[orchestrator] Step 2: Generating action items from verified facts...`);
+
         const orchestratorPrompt = `You are the SEO Orchestrator for "${project.business_name || project.name}" (${domain}).
 Service areas: ${serviceAreas.map(a => a.name).join(', ') || 'not set'}
 WordPress connected: ${hasWordPress ? 'YES — can auto-fix meta titles, descriptions, content via API' : 'NO — content changes need manual WordPress editing'}
 
-You have ${Object.keys(reports).length} audit reports below. Your job:
+You have TWO inputs:
+1. STRUCTURED FACTS (verified data extracted from audit reports — this is your PRIMARY source of truth)
+2. AUDIT REPORTS (for context and recommendations — SECONDARY source)
 
-1. EXTRACT every actionable finding from ALL reports into a unified action plan
-2. DEDUPLICATE — if the same page or issue appears in multiple audits, merge into ONE item. Prefer the most specific recommendation.
-3. CATCH CONTRADICTIONS — if one audit says a page/feature exists but another recommends creating it, resolve the contradiction. Always trust factual data (e.g. "Website Page: Yes") over recommendations.
-4. ASSIGN execution_type for each item based on WHO/WHAT executes it:
-   - "plugin" (WP Plugin) — any WordPress content change: meta titles, descriptions, headings, schema, content edits, creating pages, internal links, canonical tags, redirects. These are automated via WordPress REST API + Yoast.
-   - "manual" with assignee_label "Manual" — business owner physical actions: taking photos, asking customers for reviews, registering on directories (Yelp, TrueLocal, etc.), claiming listings, in-person tasks.
-   - "manual" with assignee_label "SEO Specialist" — GBP profile edits (description, categories, hours, posts, responding to reviews), strategic decisions (cannibalization resolution), server/theme configs (Core Web Vitals, page speed, SSL, crawl errors, mobile usability), social media management.
-   - "api" (Automated) — API-driven tasks: submitting URLs for indexing, sitemap submission.
-5. PRIORITIZE — order by business impact. Quick wins (pages close to page 1) first, then critical fixes, then optimizations.
-6. SEVERITY — Critical (blocking revenue/visibility), High (significant impact), Medium (improvement), Low (nice-to-have)
+=== STRUCTURED FACTS (PRIMARY — trust these over report text) ===
+${JSON.stringify(facts, null, 2)}
 
-CRITICAL ACCURACY RULES:
-- ONLY extract findings that are EXPLICITLY stated in the reports. Do NOT invent, assume, or infer issues not mentioned.
-- If a report says a page EXISTS (e.g. "Website Page: Yes"), do NOT recommend creating it. Recommend optimizing it instead.
-- If two reports contradict each other, trust the one with concrete data (URLs, scores, status codes) over vague recommendations.
-- NEVER include a finding unless you can point to the exact sentence in the report that supports it.
-- If a field in the report is null, empty, or "N/A", do NOT flag it as missing — the data may simply not be available.
-- The "description" field must quote or closely paraphrase what the report actually says about the issue.
-- The "recommendation" field must have specific, actionable instructions (not vague advice).
-- For WP Plugin items: specify the exact page URL/path and what to change.
-- For SEO Specialist items: include step-by-step instructions.
-- For Manual items: explain exactly what the business owner needs to do.
-- ZERO tolerance for hallucinated URLs, page titles, or metrics not found in the reports.
+=== AUDIT REPORTS (SECONDARY — use for context only) ===
+${reportSection}
 
-Return ONLY a JSON array, no explanation:
+YOUR JOB:
+1. Create action items ONLY for issues supported by the STRUCTURED FACTS above.
+2. If facts.pages shows a page EXISTS (exists: true), do NOT recommend creating it — recommend optimizing.
+3. If facts.gbp_profile shows a field is null, do NOT flag it as missing — data was unavailable.
+4. For GSC items: use the actual numbers from facts.gsc_metrics (position, CTR, clicks). Do NOT make up metrics.
+5. For competitors: use actual competitor data from facts.competitors.
+6. DEDUPLICATE — same issue across audits = ONE item.
+
+ASSIGN execution_type:
+- "plugin" (WP Plugin) — WordPress content changes via REST API + Yoast: meta titles, descriptions, headings, schema, content, pages, internal links, canonical tags, redirects
+- "manual" with assignee_label "Manual" — business owner physical tasks: photos, review requests, directory registrations, claiming listings
+- "manual" with assignee_label "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses), strategy, server/theme configs, social media
+- "api" (Automated) — API tasks: URL indexing submission, sitemap submission
+
+SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
+PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
+
+VALIDATION RULES — every action item MUST pass ALL of these:
+- The "current_value" field must contain an actual value from the STRUCTURED FACTS (a real number, URL, or status — not a description)
+- The "page_url" must be a real URL from facts.pages or facts.gsc_metrics — NEVER invented
+- The "description" must reference specific data from STRUCTURED FACTS
+- If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
+
+Return ONLY a JSON array:
 [{
   "pillar": "<gbp_external|gsc_agent|website>",
-  "category": "<section name from the report>",
+  "category": "<section name>",
   "title": "<short actionable title>",
-  "description": "<what's wrong>",
+  "description": "<what's wrong — cite specific data from facts>",
   "recommendation": "<specific fix with steps>",
   "severity": "<Critical|High|Medium|Low>",
   "execution_type": "<plugin|manual|api>",
   "assignee_label": "<WP Plugin|SEO Specialist|Manual|Automated>",
-  "current_value": "<current state if known>",
-  "new_value": "<target state>",
-  "page_url": "<specific page path if applicable, e.g. /burst-pipes-perth/>",
-  "duplicate_of": "<title of another item if this is a cross-audit duplicate — set to empty string if unique>"
-}]
-
-AUDIT REPORTS:
-${reportSection}`;
+  "current_value": "<actual value from facts>",
+  "new_value": "<target value>",
+  "page_url": "<real URL from facts or empty string>",
+  "fact_source": "<which fact category supports this: pages|gbp_profile|competitors|gsc_metrics|technical_issues|service_areas|directories|scores>"
+}]`;
 
         const resp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
@@ -1102,16 +1173,16 @@ ${reportSection}`;
         const text = resp.content[0].text.trim();
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (!jsonMatch) {
-          console.error('[orchestrator] No JSON array found in response');
+          console.error('[orchestrator] No JSON array found in Step 2 response');
           return;
         }
 
         const items = JSON.parse(jsonMatch[0]);
-        console.log(`[orchestrator] AI returned ${items.length} action items`);
+        console.log(`[orchestrator] Step 2: AI returned ${items.length} action items`);
 
         // Filter out duplicates flagged by AI
         const uniqueItems = items.filter(i => !i.duplicate_of);
-        console.log(`[orchestrator] After dedup: ${uniqueItems.length} items (${items.length - uniqueItems.length} duplicates removed)`);
+        console.log(`[orchestrator] After dedup: ${uniqueItems.length} items`);
 
         // Validate
         const validExecTypes = ['plugin', 'manual', 'api'];
@@ -1122,11 +1193,12 @@ ${reportSection}`;
           gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
         };
 
-        // Clean slate — delete ALL action items and findings for this project (orchestrator is sole source of truth)
+        // Clean slate — delete ALL action items and findings for this project
         await pool.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
         await pool.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
 
         let savedCount = 0;
+        let skippedCount = 0;
         for (const item of uniqueItems) {
           const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
           const validCats = PILLAR_CATEGORIES[pillar] || [];
@@ -1137,7 +1209,7 @@ ${reportSection}`;
           const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
           const assigneeLabel = item.assignee_label || (execType === 'plugin' ? 'WP Plugin' : execType === 'api' ? 'Automated' : 'SEO Specialist');
 
-          if (!item.title) continue;
+          if (!item.title) { skippedCount++; continue; }
 
           const auditId = reports[pillar]?.auditId || null;
 
@@ -1149,7 +1221,7 @@ ${reportSection}`;
              (item.recommendation || '').slice(0, 1000), severity, (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500)]
           );
 
-          // Save action item with AI-assigned execution_type and assignee_label
+          // Save action item
           await pool.query(
             `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
@@ -1161,7 +1233,7 @@ ${reportSection}`;
           savedCount++;
         }
 
-        console.log(`[orchestrator] Saved ${savedCount} action items for project ${projectId}`);
+        console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
       } catch (e) {
         console.error('[orchestrator] Error:', e.message);
       }
@@ -4006,6 +4078,12 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
     res.json({ auditId, status: 'running', sessionId: session.id });
 
+    // Store raw GSC data for structured orchestrator use
+    const gscRawRows = (gscData && gscData.rows) ? gscData.rows.slice(0, 200).map(r => ({
+      query: r.keys[0], page: r.keys[1], clicks: r.clicks, impressions: r.impressions,
+      ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1)),
+    })) : null;
+
     (async () => {
       try {
         await waitForSessionReady(apiBase, agentHeaders, session.id, 'gsc-agent');
@@ -4013,8 +4091,8 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gsc-agent');
 
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-        console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
+          ['completed', JSON.stringify({ report: finalText, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
+        console.log(`[gsc-agent] Report stored (${finalText.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
         // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
