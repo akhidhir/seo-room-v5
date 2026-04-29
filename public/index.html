@@ -6297,77 +6297,126 @@
                                 </div>
                               )}
                             </div>
-                            {/* Row 2: Competitor Analysis */}
+                            {/* Row 2: Gap Analysis — Top 3 Competitors */}
                             {(() => {
-                              const comps = gridScanData?.competitors || [];
+                              const compData = gridScanData?.competitors || {};
+                              const comps = Array.isArray(compData) ? compData.slice(0, 3) : (compData.top || []).slice(0, 3);
+                              const our = compData.our_business || {};
                               if (comps.length === 0) return null;
-                              // Get our business stats for comparison
-                              const ourRating = null; // TODO: from GBP data
-                              const ourReviews = null;
+                              const ourReviews = our.reviews || 0;
+                              const ourRating = our.rating || 0;
+                              const maxReviews = Math.max(...comps.map(c => c.reviews || 0), ourReviews);
+                              const avgCompReviews = Math.round(comps.reduce((s, c) => s + (c.reviews || 0), 0) / comps.length);
+                              const avgCompRating = (comps.reduce((s, c) => s + (c.rating || 0), 0) / comps.filter(c => c.rating).length).toFixed(1);
+                              const reviewGap = avgCompReviews - ourReviews;
+                              const reviewTarget = Math.max(...comps.map(c => c.reviews || 0));
+                              // Build action items based on gaps
+                              const actions = [];
+                              if (reviewGap > 0) actions.push({ icon: 'fa-star', color: '#f59e0b', text: `Get ${reviewGap}+ more reviews to match competitor average (${avgCompReviews}). Top competitor has ${reviewTarget}.`, priority: 'high' });
+                              if (ourRating && ourRating < parseFloat(avgCompRating)) actions.push({ icon: 'fa-star-half-stroke', color: '#3b82f6', text: `Improve rating from ${ourRating} to ${avgCompRating}+ (competitor average).`, priority: 'medium' });
+                              if (solv < 50) actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `Add "${kw.location}" to GBP service areas and create a dedicated landing page for "${kw.keyword} ${kw.location}".`, priority: 'high' });
+                              if (comps.some(c => c.top1 > foundIn)) actions.push({ icon: 'fa-bullseye', color: '#ef4444', text: `Post GBP updates mentioning "${kw.keyword}" and "${kw.location}" weekly to boost relevance.`, priority: 'medium' });
+                              actions.push({ icon: 'fa-building', color: '#22c55e', text: `Ensure NAP consistency across all directories. Check that business categories match: "${comps[0]?.type || 'Locksmith'}".`, priority: 'medium' });
                               return (
                                 <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-                                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 10 }}>
-                                    <i className="fa-solid fa-users" style={{ marginRight: 6, color: '#f59e0b' }} />
-                                    Competitors Beating You — Who ranks in the top 3 across the grid
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
+                                    <i className="fa-solid fa-crosshairs" style={{ marginRight: 6, color: '#ef4444' }} />
+                                    Gap Analysis — What you need to compete
                                   </div>
-                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                    <thead>
-                                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                        <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 11 }}>Competitor</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 70 }}>Rating</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 70 }}>Reviews</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 80 }}>Avg Pos</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 90 }}>Dominance</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 80 }}>#1 Count</th>
-                                        <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 11, width: 90 }}>Top 3 Count</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {comps.map((c, ci) => {
-                                        const domColor = c.dominance >= 50 ? '#ef4444' : c.dominance >= 30 ? '#f59e0b' : c.dominance >= 10 ? '#3b82f6' : '#22c55e';
-                                        return (
-                                          <tr key={ci} style={{ borderBottom: '1px solid var(--border)', background: ci === 0 ? 'rgba(239,68,68,0.04)' : 'transparent' }}>
-                                            <td style={{ padding: '8px 10px' }}>
-                                              <div style={{ fontWeight: ci === 0 ? 700 : 500, color: ci === 0 ? '#ef4444' : 'var(--text)' }}>
-                                                {ci === 0 && <i className="fa-solid fa-crown" style={{ marginRight: 4, fontSize: 10, color: '#ef4444' }} />}
-                                                {c.name}
-                                              </div>
-                                              {c.type && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>{c.type}</div>}
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                                              {c.rating ? (
-                                                <span style={{ color: c.rating >= 4.5 ? '#22c55e' : c.rating >= 4 ? '#3b82f6' : '#f59e0b', fontWeight: 600 }}>
-                                                  <i className="fa-solid fa-star" style={{ fontSize: 9, marginRight: 2 }} />{c.rating}
-                                                </span>
-                                              ) : <span style={{ color: 'var(--text3)' }}>—</span>}
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: c.reviews >= 100 ? '#22c55e' : c.reviews >= 30 ? '#3b82f6' : 'var(--text2)' }}>
+                                  {/* You vs Competitors comparison cards */}
+                                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${comps.length + 1}, 1fr)`, gap: 10, marginBottom: 16 }}>
+                                    {/* Your card */}
+                                    <div style={{ background: 'rgba(99,102,241,0.08)', borderRadius: 10, padding: 14, border: '2px solid var(--accent)', position: 'relative' }}>
+                                      <div style={{ position: 'absolute', top: -8, left: 12, background: 'var(--accent)', color: '#fff', fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>YOU</div>
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 8, marginTop: 4 }}>{our.title || project.business_name || 'Your Business'}</div>
+                                      <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
+                                        <div>
+                                          <div style={{ fontSize: 10, color: 'var(--text3)' }}>Rating</div>
+                                          <div style={{ fontSize: 18, fontWeight: 800, color: ourRating >= 4.5 ? '#22c55e' : ourRating >= 4 ? '#3b82f6' : '#f59e0b' }}>
+                                            {ourRating ? <><i className="fa-solid fa-star" style={{ fontSize: 12 }} /> {ourRating}</> : '—'}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div style={{ fontSize: 10, color: 'var(--text3)' }}>Reviews</div>
+                                          <div style={{ fontSize: 18, fontWeight: 800, color: ourReviews >= avgCompReviews ? '#22c55e' : '#ef4444' }}>{ourReviews || '—'}</div>
+                                        </div>
+                                      </div>
+                                      <div style={{ fontSize: 10, color: 'var(--text3)' }}>Visibility</div>
+                                      <div style={{ fontSize: 16, fontWeight: 800, color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : '#ef4444' }}>{solv?.toFixed(0) || 0}%</div>
+                                    </div>
+                                    {/* Competitor cards */}
+                                    {comps.map((c, ci) => (
+                                      <div key={ci} style={{ background: 'rgba(239,68,68,0.04)', borderRadius: 10, padding: 14, border: '1px solid var(--border)', position: 'relative' }}>
+                                        <div style={{ position: 'absolute', top: -8, left: 12, background: ci === 0 ? '#ef4444' : '#6b7280', color: '#fff', fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>
+                                          #{ci + 1} THREAT
+                                        </div>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 8, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.name}>{c.name}</div>
+                                        <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
+                                          <div>
+                                            <div style={{ fontSize: 10, color: 'var(--text3)' }}>Rating</div>
+                                            <div style={{ fontSize: 18, fontWeight: 800, color: c.rating >= 4.5 ? '#22c55e' : '#3b82f6' }}>
+                                              {c.rating ? <><i className="fa-solid fa-star" style={{ fontSize: 12 }} /> {c.rating}</> : '—'}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div style={{ fontSize: 10, color: 'var(--text3)' }}>Reviews</div>
+                                            <div style={{ fontSize: 18, fontWeight: 800, color: (c.reviews || 0) > ourReviews ? '#ef4444' : '#22c55e' }}>
                                               {c.reviews || '—'}
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                                              <span style={{ color: c.avg_position <= 1.5 ? '#22c55e' : c.avg_position <= 2.5 ? '#3b82f6' : '#f59e0b', fontWeight: 600 }}>
-                                                #{c.avg_position}
-                                              </span>
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
-                                                <div style={{ width: 50, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                                                  <div style={{ width: `${Math.min(c.dominance, 100)}%`, height: '100%', background: domColor, borderRadius: 3 }} />
-                                                </div>
-                                                <span style={{ color: domColor, fontWeight: 700, fontSize: 11 }}>{c.dominance}%</span>
-                                              </div>
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: c.top1 > 0 ? '#ef4444' : 'var(--text3)' }}>
-                                              {c.top1}/{dataPoints || '?'}
-                                            </td>
-                                            <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: c.top3 > 0 ? '#f59e0b' : 'var(--text3)' }}>
-                                              {c.top3}/{dataPoints || '?'}
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
+                                              {(c.reviews || 0) > ourReviews && <span style={{ fontSize: 10, marginLeft: 2 }}>+{(c.reviews || 0) - ourReviews}</span>}
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <div style={{ fontSize: 10, color: 'var(--text3)' }}>Dominance</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                                            <div style={{ width: `${Math.min(c.dominance, 100)}%`, height: '100%', background: c.dominance >= 50 ? '#ef4444' : c.dominance >= 30 ? '#f59e0b' : '#3b82f6', borderRadius: 3 }} />
+                                          </div>
+                                          <span style={{ fontSize: 14, fontWeight: 800, color: c.dominance >= 50 ? '#ef4444' : c.dominance >= 30 ? '#f59e0b' : '#3b82f6' }}>{c.dominance}%</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {/* Review gap bar */}
+                                  {maxReviews > 0 && (
+                                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', marginBottom: 12, border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>
+                                        <i className="fa-solid fa-star" style={{ marginRight: 4, color: '#f59e0b' }} />Review Gap
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                        <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600, width: 40, textAlign: 'right' }}>You</span>
+                                        <div style={{ flex: 1, height: 14, background: 'var(--border)', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+                                          <div style={{ width: `${maxReviews > 0 ? (ourReviews / maxReviews) * 100 : 0}%`, height: '100%', background: 'var(--accent)', borderRadius: 4, minWidth: ourReviews > 0 ? 2 : 0 }} />
+                                        </div>
+                                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', width: 40 }}>{ourReviews}</span>
+                                      </div>
+                                      {comps.map((c, ci) => (
+                                        <div key={ci} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                                          <span style={{ fontSize: 10, color: 'var(--text3)', width: 40, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.name}>#{ci+1}</span>
+                                          <div style={{ flex: 1, height: 10, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+                                            <div style={{ width: `${maxReviews > 0 ? ((c.reviews || 0) / maxReviews) * 100 : 0}%`, height: '100%', background: '#ef4444', borderRadius: 4, opacity: 0.6 }} />
+                                          </div>
+                                          <span style={{ fontSize: 11, fontWeight: 600, color: '#ef4444', width: 40 }}>{c.reviews || 0}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {/* Action items */}
+                                  <div style={{ background: 'rgba(34,197,94,0.06)', borderRadius: 8, padding: '12px 16px', border: '1px solid rgba(34,197,94,0.15)' }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', marginBottom: 8 }}>
+                                      <i className="fa-solid fa-clipboard-check" style={{ marginRight: 4 }} />What To Do
+                                    </div>
+                                    {actions.map((a, i) => (
+                                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                                        <div style={{ width: 20, height: 20, borderRadius: '50%', background: a.priority === 'high' ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                                          <i className={`fa-solid ${a.icon}`} style={{ fontSize: 9, color: a.color }} />
+                                        </div>
+                                        <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.4 }}>
+                                          {a.priority === 'high' && <span style={{ color: '#ef4444', fontWeight: 700, fontSize: 10, marginRight: 4 }}>HIGH</span>}
+                                          {a.text}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
                               );
                             })()}

@@ -5494,6 +5494,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
     for (const kw of keywords) {
       const kwLabel = `${kw.keyword} ${kw.location}`;
       const pointResults = [];
+      let ourBusiness = null;
 
       for (let i = 0; i < gridPoints.length; i += 5) {
         const batch = gridPoints.slice(i, i + 5);
@@ -5542,6 +5543,10 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
               if ((nameMatch || domainMatch) && !found) {
                 position = placePos;
                 found = true;
+                // Capture our own business stats
+                if (!ourBusiness) {
+                  ourBusiness = { rating: place.rating || null, reviews: place.reviews || 0, type: place.type || '', title: place.title || '' };
+                }
               }
             }
 
@@ -5619,7 +5624,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
         `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, scanned_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
         [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat,
-         JSON.stringify(pointResults), JSON.stringify(competitors), arp, atrp, solv, foundCount, totalScanned]
+         JSON.stringify(pointResults), JSON.stringify({ top: competitors.slice(0, 3), our_business: ourBusiness }), arp, atrp, solv, foundCount, totalScanned]
       );
 
       // Also update rank_tracking with grid metrics (compatible with existing table display)
@@ -5635,7 +5640,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
         [projectId, kw.keyword, kw.location, null, arp ? Math.round(arp) : null, businessName, JSON.stringify([gridMetrics])]
       );
 
-      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults, competitors };
+      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults, competitors, our_business: ourBusiness };
       results.push(result);
       console.log(`[grid-scan] "${kwLabel}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%, found=${foundCount}/${totalScanned}`);
     }
