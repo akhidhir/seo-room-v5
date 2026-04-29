@@ -5735,6 +5735,7 @@
       // --- Suburbs state ---
       const [customSuburbs, setCustomSuburbs] = useState(project.map_custom_suburbs || '');
       const [mapsLimit, setMapsLimit] = useState(20);
+      const [comboMode, setComboMode] = useState('1:1'); // '1:1' or 'many'
       const [selectedSubs, setSelectedSubs] = useState({});
       const [availSubs, setAvailSubs] = useState([]);
 
@@ -5749,21 +5750,30 @@
         ];
       };
 
-      const buildCombos = (svcs, svcSel, subs, subSel) => {
+      const buildCombos = (svcs, svcSel, subs, subSel, mode) => {
         const activeSvcs = svcs.filter(s => svcSel[s]);
         const activeSubs = subs.filter(s => subSel[s.name]).sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
         const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
-        // Interleave: each row is a different service + different suburb
-        // Pattern: svc[0]+sub[0], svc[1]+sub[1], svc[2]+sub[2], ...
-        // This gives max variety in the first N rows
+        const m = mode || comboMode;
         const combos = [];
-        const total = activeSvcs.length * activeSubs.length;
-        for (let i = 0; i < total; i++) {
-          const svc = activeSvcs[i % activeSvcs.length];
-          const sub = activeSubs[i % activeSubs.length];
-          combos.push({ service: svc, location: sub.name, distance: sub.distance });
+        if (m === '1:1') {
+          // One-to-one: pair each service with one suburb, cycling through both
+          const len = Math.max(activeSvcs.length, activeSubs.length);
+          for (let i = 0; i < len; i++) {
+            const svc = activeSvcs[i % activeSvcs.length];
+            const sub = activeSubs[i % activeSubs.length];
+            combos.push({ service: svc, location: sub.name, distance: sub.distance });
+          }
+        } else {
+          // Many-to-many: full cross-product, interleaved for variety
+          const total = activeSvcs.length * activeSubs.length;
+          for (let i = 0; i < total; i++) {
+            const svc = activeSvcs[i % activeSvcs.length];
+            const sub = activeSubs[Math.floor(i / activeSvcs.length) % activeSubs.length];
+            combos.push({ service: svc, location: sub.name, distance: sub.distance });
+          }
         }
-        // Deduplicate (interleaving can create dupes when list sizes align)
+        // Deduplicate
         const seen = new Set();
         const unique = combos.filter(c => {
           const k = `${c.service}|${c.location}`;
@@ -5780,8 +5790,8 @@
         return obj;
       };
 
-      const refreshCombos = (svcs, svcSel, subs, subSel) => {
-        const combos = buildCombos(svcs || servicesList, svcSel || selectedServices, subs || availSubs, subSel || selectedSubs);
+      const refreshCombos = (svcs, svcSel, subs, subSel, mode) => {
+        const combos = buildCombos(svcs || servicesList, svcSel || selectedServices, subs || availSubs, subSel || selectedSubs, mode);
         setGenCombos(combos);
         setGenChecked(checkAll(combos, mapsLimit));
       };
@@ -6352,8 +6362,16 @@
                     </div>
                   </div>
 
-                  {/* Package selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  {/* Mode + Package selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                    {/* Mode toggle */}
+                    <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      {[['1:1', '1 : 1'], ['many', 'Many : Many']].map(([val, label]) => (
+                        <button key={val} onClick={() => { setComboMode(val); refreshCombos(null, null, null, null, val); }}
+                          style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                            background: comboMode === val ? 'var(--accent)' : 'var(--bg3)', color: comboMode === val ? '#fff' : 'var(--text2)' }}>{label}</button>
+                      ))}
+                    </div>
                     <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Package:</span>
                     {[10, 20, 30, 40, 50].map(n => (
                       <button key={n} onClick={() => setMapsLimit(n)}
