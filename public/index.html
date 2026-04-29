@@ -4850,9 +4850,9 @@
 
       const pillars = [
         { id: 'all', label: 'All', icon: 'fas fa-layer-group', color: 'var(--accent)' },
-        { id: 'gbp_external', label: 'GBP', icon: 'fas fa-store', color: '#ef4444' },
-        { id: 'gsc_agent', label: 'GSC', icon: 'fas fa-chart-line', color: '#3b82f6' },
-        { id: 'website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
+        { id: 'GBP', label: 'GBP', icon: 'fas fa-store', color: '#ef4444' },
+        { id: 'GSC', label: 'GSC', icon: 'fas fa-chart-line', color: '#3b82f6' },
+        { id: 'Website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
       ];
 
       // Compute assignee label for each item (memoized)
@@ -4901,8 +4901,8 @@
       }, [itemsWithAssignee, activePillar]);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
-      const pillarLabels = { gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website', gbp: 'GBP', gsc: 'GSC', technical: 'Website' };
-      const pillarColors = { gbp_external: '#ef4444', gsc_agent: '#3b82f6', website: '#8b5cf6', gbp: '#ef4444', gsc: '#3b82f6', technical: '#8b5cf6' };
+      const pillarLabels = { GBP: 'GBP', GSC: 'GSC', Website: 'Website', gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website', gbp: 'GBP', gsc: 'GSC', technical: 'Website' };
+      const pillarColors = { GBP: '#ef4444', GSC: '#3b82f6', Website: '#8b5cf6', gbp_external: '#ef4444', gsc_agent: '#3b82f6', website: '#8b5cf6', gbp: '#ef4444', gsc: '#3b82f6', technical: '#8b5cf6' };
 
       return (
         <div>
