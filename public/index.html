@@ -6371,6 +6371,9 @@
         }
       };
 
+      const [bulkMode, setBulkMode] = useState(false);
+      const [bulkText, setBulkText] = useState('');
+
       const handleAddSuburb = () => {
         if (!newSuburb.trim()) return;
         setFormData((prev) => ({
@@ -6379,6 +6382,17 @@
         }));
         setNewSuburb('');
         setNewDistance(20);
+      };
+
+      const handleBulkAdd = () => {
+        if (!bulkText.trim()) return;
+        const names = bulkText.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        const existing = new Set(formData.serviceAreas.map(a => a.name.toLowerCase()));
+        const newAreas = names.filter(n => !existing.has(n.toLowerCase())).map(name => ({ name, distance: newDistance }));
+        if (newAreas.length === 0) return;
+        setFormData(prev => ({ ...prev, serviceAreas: [...prev.serviceAreas, ...newAreas] }));
+        setBulkText('');
+        setBulkMode(false);
       };
 
       const handleRemoveSuburb = (index) => {
@@ -6671,28 +6685,64 @@
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px auto', gap: '8px' }}>
-              <input
-                type="text"
-                className="form-input"
-                value={newSuburb}
-                onChange={(e) => setNewSuburb(e.target.value)}
-                placeholder="Suburb name"
-                onKeyPress={(e) => e.key === 'Enter' && handleAddSuburb()}
-              />
-              <input
-                type="number"
-                className="form-input"
-                value={newDistance}
-                onChange={(e) => setNewDistance(Math.max(1, parseInt(e.target.value) || 20))}
-                min="1"
-                max="100"
-                style={{ textAlign: 'center' }}
-              />
-              <button className="btn btn-secondary btn-small" onClick={handleAddSuburb}>
-                <i className="fas fa-plus"></i> Add
-              </button>
-            </div>
+            {!bulkMode ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px auto', gap: '8px' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newSuburb}
+                    onChange={(e) => setNewSuburb(e.target.value)}
+                    placeholder="Suburb name"
+                    onKeyPress={(e) => e.key === 'Enter' && handleAddSuburb()}
+                  />
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={newDistance}
+                    onChange={(e) => setNewDistance(Math.max(1, parseInt(e.target.value) || 20))}
+                    min="1"
+                    max="100"
+                    style={{ textAlign: 'center' }}
+                  />
+                  <button className="btn btn-secondary btn-small" onClick={handleAddSuburb}>
+                    <i className="fas fa-plus"></i> Add
+                  </button>
+                </div>
+                <button onClick={() => setBulkMode(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, marginTop: 8, padding: 0 }}>
+                  <i className="fas fa-list" style={{ marginRight: 4 }}></i>Bulk add suburbs
+                </button>
+              </>
+            ) : (
+              <div>
+                <textarea
+                  className="form-input"
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  placeholder="Paste suburbs — one per line or comma-separated"
+                  rows={6}
+                  style={{ width: '100%', marginBottom: 8, fontFamily: 'inherit', resize: 'vertical' }}
+                />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text2)' }}>Distance (km):</span>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={newDistance}
+                    onChange={(e) => setNewDistance(Math.max(1, parseInt(e.target.value) || 20))}
+                    min="1" max="100"
+                    style={{ width: 80, textAlign: 'center' }}
+                  />
+                  <button className="btn btn-primary btn-small" onClick={handleBulkAdd}>
+                    <i className="fas fa-plus" style={{ marginRight: 4 }}></i>Add All
+                  </button>
+                  <button className="btn btn-secondary btn-small" onClick={() => { setBulkMode(false); setBulkText(''); }}>Cancel</button>
+                  {bulkText.trim() && <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                    {bulkText.split(/[,\n]/).map(s => s.trim()).filter(Boolean).length} suburbs detected
+                  </span>}
+                </div>
+              </div>
+            )}
           </div>}
 
           <div className="card">
