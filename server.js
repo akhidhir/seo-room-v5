@@ -1350,7 +1350,7 @@ function extractImageIssues(lighthouseData) {
 }
 
 // Helper: discover pages from sitemap or WP REST API
-async function discoverPages(projectUrl, wpUrl) {
+async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   const pages = [];
   const baseUrl = projectUrl.replace(/\/$/, '');
   const seenUrls = new Set();
@@ -1400,14 +1400,23 @@ async function discoverPages(projectUrl, wpUrl) {
     }
   } catch (e) { /* sitemap not available */ }
 
-  // Try WP REST API if available and no sitemap pages
-  if (pages.length === 0 && wpUrl) {
+  // Try WP REST API if available and no sitemap pages (or to supplement sitemap)
+  if (wpUrl) {
     try {
-      const wpPages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link');
-      for (const p of wpPages) {
-        pages.push({ page_id: String(p.id), title: p.title.rendered, slug: p.slug, url: p.link });
+      const wpBase = wpUrl.replace(/\/$/, '');
+      const fetchOpts = { signal: AbortSignal.timeout(30000), ...(authHeaders ? { headers: authHeaders } : {}) };
+      const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link`, fetchOpts);
+      if (resp.ok) {
+        const wpPages = await resp.json();
+        for (const p of (Array.isArray(wpPages) ? wpPages : [])) {
+          const url = p.link || '';
+          if (!seenUrls.has(url)) {
+            seenUrls.add(url);
+            pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url });
+          }
+        }
       }
-    } catch (e) { /* WP API not available */ }
+    } catch (e) { console.log('[discoverPages] WP REST API failed:', e.message); }
   }
 
   // Fallback: just test the homepage
@@ -1427,7 +1436,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
     const siteUrl = project.wordpress_url || (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : null);
     if (!siteUrl) return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' });
 
-    const pages = await discoverPages(siteUrl, project.wordpress_url);
+    const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
 
     // Process pages in parallel batches of 5
     const BATCH_SIZE = 5;
@@ -2004,7 +2013,15 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     }
 
     console.log(`[onpage-audit] Fetched ${allPages.length} pages/posts`);
-    if (allPages.length === 0) return res.json({ pages: [], message: 'No published pages found' });
+    if (allPages.length === 0) {
+      // Check if REST API requires auth
+      const testResp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=1`, { signal: AbortSignal.timeout(10000) }).catch(() => null);
+      const isAuthRequired = testResp && testResp.status === 401;
+      const msg = isAuthRequired
+        ? 'WordPress REST API requires authentication. Add WP Username and Application Password in Project Settings.'
+        : 'No published pages found. Check that the WordPress URL is correct and the REST API is accessible.';
+      return res.json({ pages: [], message: msg });
+    }
 
     // 3. Analyze each page
     const results = [];
