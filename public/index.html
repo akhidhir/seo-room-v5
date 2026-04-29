@@ -6170,7 +6170,7 @@
                       <textarea
                         className="form-input"
                         value={genServices}
-                        onChange={(e) => setGenServices(e.target.value)}
+                        onChange={(e) => { setGenServices(e.target.value); }}
                         placeholder={`auto locksmith\ncar key replacement\ncar key cutting`}
                         rows={4}
                         style={{ fontSize: 13, resize: 'vertical', minHeight: 80 }}
@@ -6204,7 +6204,7 @@
                         {[25, 50, 100, 200, 500].map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
-                    <button className="btn btn-primary" onClick={regenerateCombos} style={{ fontSize: 12, padding: '8px 16px', marginTop: 16 }}>
+                    <button className="btn btn-primary" onClick={() => regenerateCombos()} style={{ fontSize: 12, padding: '8px 16px', marginTop: 16 }}>
                       <i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Regenerate
                     </button>
                   </div>
@@ -6285,7 +6285,7 @@
                       else setGenChecked(checkAll(genCombos, mapsLimit));
                     }
                   }} style={{ flex: 1 }}>
-                    {overLimit > 0 ? `Deselect ${overLimit}` : checkedCount === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
+                    {overLimit > 0 ? `Deselect ${overLimit}` : (genCombos.length > 0 && checkedCount === Math.min(genCombos.length, mapsLimit)) ? 'Deselect All' : 'Select All'}
                   </button>
                   <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={checkedCount === 0} style={{ flex: 1 }}>
                     <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {checkedCount} Keywords
