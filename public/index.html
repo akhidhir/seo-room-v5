@@ -4799,6 +4799,10 @@
     // ============ UNIFIED ACTION PLAN ============
     function UnifiedActionPlanPage({ project }) {
       const [activePillar, setActivePillar] = useState('all');
+      const [filterSeverity, setFilterSeverity] = useState('all');
+      const [filterCategory, setFilterCategory] = useState('all');
+      const [filterAssignee, setFilterAssignee] = useState('all');
+      const [filterStatus, setFilterStatus] = useState('all');
       const [items, setItems] = useState([]);
       const [loading, setLoading] = useState(false);
       const [syncing, setSyncing] = useState(false);
@@ -4851,17 +4855,50 @@
         { id: 'website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
       ];
 
-      const filtered = activePillar === 'all' ? items : items.filter(i => i._pillar === activePillar || i.pillar === activePillar);
+      // Compute assignee label for each item (memoized)
+      const itemsWithAssignee = useMemo(() => items.map(item => {
+        const aiLabel = item.assignee_label;
+        const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item._pillar || item.pillar);
+        const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
+        return { ...item, _assigneeLabel: assigneeLabel };
+      }), [items]);
+
+      // Derive unique filter options from data
+      const filterOptions = useMemo(() => {
+        const categories = [...new Set(itemsWithAssignee.map(i => i._category || i.category).filter(Boolean))].sort();
+        const severities = [...new Set(itemsWithAssignee.map(i => (i.severity || 'medium').toLowerCase()).filter(Boolean))].sort((a, b) => {
+          const order = { critical: 0, high: 1, medium: 2, low: 3 };
+          return (order[a] ?? 9) - (order[b] ?? 9);
+        });
+        const assignees = [...new Set(itemsWithAssignee.map(i => i._assigneeLabel).filter(Boolean))].sort();
+        return { categories, severities, assignees };
+      }, [itemsWithAssignee]);
+
+      const filtered = useMemo(() => {
+        return itemsWithAssignee.filter(i => {
+          if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
+          if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
+          if (filterCategory !== 'all' && (i._category || i.category) !== filterCategory) return false;
+          if (filterAssignee !== 'all' && i._assigneeLabel !== filterAssignee) return false;
+          if (filterStatus !== 'all' && (i.status || 'pending') !== filterStatus) return false;
+          return true;
+        });
+      }, [itemsWithAssignee, activePillar, filterSeverity, filterCategory, filterAssignee, filterStatus]);
+
+      const activeFilterCount = [filterSeverity, filterCategory, filterAssignee, filterStatus].filter(f => f !== 'all').length;
+
+      const clearFilters = () => { setFilterSeverity('all'); setFilterCategory('all'); setFilterAssignee('all'); setFilterStatus('all'); };
 
       const stats = useMemo(() => {
-        const total = filtered.length;
-        const critical = filtered.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
-        const high = filtered.filter(i => (i.severity || '').toLowerCase() === 'high').length;
-        const pending = filtered.filter(i => i.status === 'pending').length;
-        const done = filtered.filter(i => i.status === 'done' || i.status === 'completed').length;
-        const inProgress = filtered.filter(i => i.status === 'in-progress').length;
+        const base = activePillar === 'all' ? itemsWithAssignee : itemsWithAssignee.filter(i => (i._pillar || i.pillar) === activePillar);
+        const total = base.length;
+        const critical = base.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
+        const high = base.filter(i => (i.severity || '').toLowerCase() === 'high').length;
+        const pending = base.filter(i => i.status === 'pending').length;
+        const done = base.filter(i => i.status === 'done' || i.status === 'completed').length;
+        const inProgress = base.filter(i => i.status === 'in-progress').length;
         return { total, critical, high, pending, done, inProgress };
-      }, [filtered]);
+      }, [itemsWithAssignee, activePillar]);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
       const pillarLabels = { gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website', gbp: 'GBP', gsc: 'GSC', technical: 'Website' };
@@ -4913,6 +4950,32 @@
             ))}
           </div>
 
+          {/* Filter bar */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginRight: 4 }}><i className="fas fa-filter" style={{ marginRight: 4 }} />Filters:</span>
+            {[
+              { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
+              { value: filterCategory, set: setFilterCategory, label: 'Category', options: filterOptions.categories },
+              { value: filterAssignee, set: setFilterAssignee, label: 'Assignee', options: filterOptions.assignees },
+              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done'] },
+            ].map(f => (
+              <select key={f.label} value={f.value} onChange={e => f.set(e.target.value)}
+                style={{ fontSize: 12, padding: '5px 8px', background: f.value !== 'all' ? 'var(--accent)' : 'var(--card)', border: '1px solid var(--border)', borderRadius: 6,
+                  color: f.value !== 'all' ? '#fff' : 'var(--text2)', cursor: 'pointer', fontWeight: f.value !== 'all' ? 600 : 400 }}>
+                <option value="all">{f.label}</option>
+                {f.options.map(o => <option key={o} value={o} style={{ background: 'var(--card)', color: 'var(--text1)' }}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
+              </select>
+            ))}
+            {activeFilterCount > 0 && (
+              <button onClick={clearFilters} style={{ fontSize: 11, padding: '5px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text3)', cursor: 'pointer' }}>
+                <i className="fas fa-times" style={{ marginRight: 4 }} />Clear ({activeFilterCount})
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>
+              {filtered.length}{filtered.length !== stats.total ? ` of ${stats.total}` : ''} items
+            </span>
+          </div>
+
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
           {loading && (
@@ -4939,9 +5002,7 @@
                   {filtered.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
-                    const aiLabel = item.assignee_label;
-                    const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item._pillar || item.pillar);
-                    const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
+                    const assigneeLabel = item._assigneeLabel;
                     const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
                     const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
                     const aColor = assigneeColorMap[assigneeLabel] || '#6b7280';
