@@ -233,6 +233,28 @@ async function initDb() {
       )
     `);
 
+    // Grid scan results (SerpAPI Maps grid scanning — replaces Local Falcon)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS grid_scans (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword_id INTEGER REFERENCES rank_keywords(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        location TEXT DEFAULT '',
+        grid_size INTEGER DEFAULT 5,
+        center_lat DOUBLE PRECISION,
+        center_lng DOUBLE PRECISION,
+        radius_km DOUBLE PRECISION DEFAULT 10,
+        grid_points JSONB DEFAULT '[]',
+        arp DOUBLE PRECISION,
+        atrp DOUBLE PRECISION,
+        solv DOUBLE PRECISION,
+        found_in INTEGER DEFAULT 0,
+        data_points INTEGER DEFAULT 0,
+        scanned_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // GSC keywords (position data from Google Search Console)
     await client.query(`
       CREATE TABLE IF NOT EXISTS gsc_keywords (
@@ -5083,6 +5105,17 @@ app.delete('/api/projects/:projectId/rank-tracking/keywords/:keywordId', async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk delete keywords by IDs
+app.post('/api/projects/:projectId/rank-tracking/keywords/bulk-delete', async (req, res) => {
+  const { ids } = req.body;
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No IDs provided' });
+  try {
+    await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1::int[]) AND project_id=$2', [ids, req.params.projectId]);
+    await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1::int[]) AND project_id=$2', [ids, req.params.projectId]);
+    res.json({ ok: true, deleted: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete ALL tracked keywords for a project
 app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   try {
@@ -5100,13 +5133,18 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
       `DELETE FROM rank_tracking WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
       [req.params.projectId]
     );
+    // Delete grid scans
+    const gridDel = await pool.query(
+      `DELETE FROM grid_scans WHERE project_id=$1`,
+      [req.params.projectId]
+    );
     // Delete the maps keywords themselves
     const kwDel = await pool.query(
       `DELETE FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
       [req.params.projectId]
     );
-    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking records for project ${req.params.projectId}`);
-    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount });
+    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking + ${gridDel.rowCount} grid scans for project ${req.params.projectId}`);
+    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount, grid_scans_deleted: gridDel.rowCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5302,15 +5340,10 @@ app.post('/api/projects/:projectId/maps/sync-localfalcon', async (req, res) => {
     });
 
     if (relevantReports.length === 0) {
-      // Try all reports if no name match (user might have only one location)
-      if (reports.length > 0) {
-        console.log(`[maps-localfalcon] No name match for "${businessName}", using all ${reports.length} reports`);
-      } else {
-        return res.status(400).json({ error: 'No scan reports found in Local Falcon. Run scans there first.' });
-      }
+      return res.status(400).json({ error: `No Local Falcon reports match business "${businessName}". Found ${reports.length} reports for other businesses. Check your business name in Project Settings.` });
     }
 
-    const reportsToUse = relevantReports.length > 0 ? relevantReports : reports;
+    const reportsToUse = relevantReports;
     const baseTime = Date.now();
     let synced = 0;
 
@@ -5371,6 +5404,211 @@ app.post('/api/projects/:projectId/maps/sync-localfalcon', async (req, res) => {
     console.error('[maps-localfalcon] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ==================== GRID SCAN (SerpAPI Maps — replaces Local Falcon) ====================
+
+// Generate NxN grid of GPS points around a center
+function generateGrid(centerLat, centerLng, radiusKm, gridSize) {
+  const points = [];
+  const latPerKm = 1 / 111.32;
+  const lngPerKm = 1 / (111.32 * Math.cos(centerLat * Math.PI / 180));
+  const step = (radiusKm * 2) / (gridSize - 1);
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      const offsetKmY = radiusKm - (row * step); // top to bottom
+      const offsetKmX = -radiusKm + (col * step); // left to right
+      points.push({
+        row, col,
+        lat: Math.round((centerLat + offsetKmY * latPerKm) * 100000) / 100000,
+        lng: Math.round((centerLng + offsetKmX * lngPerKm) * 100000) / 100000,
+      });
+    }
+  }
+  return points;
+}
+
+// Run grid scan for selected keywords
+app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  const { projectId } = req.params;
+  const { keyword_ids, grid_size = 5, radius_km = 10 } = req.body;
+
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const businessName = project.business_name || project.name || '';
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+
+    if (!businessName) return res.status(400).json({ error: 'Business name not set in Project Settings' });
+
+    // Get business center GPS from project location
+    const rawLocation = (project.location || '').trim();
+    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+    let centerGps = null;
+    const candidates = [rawLocation.toLowerCase().trim(), locParts[0], locParts.slice(0, 2).join(' ')].filter(Boolean);
+    for (const c of candidates) { if (SUBURB_GPS[c]) { centerGps = SUBURB_GPS[c]; break; } }
+
+    // If GBP location has GPS in the name (like "place_id:xxx"), fall back to project location
+    if (!centerGps) {
+      // Try to use the first service area as fallback
+      const areas = project.service_areas || [];
+      if (areas.length > 0) {
+        const firstArea = (areas[0].name || areas[0] || '').toLowerCase().trim();
+        if (SUBURB_GPS[firstArea]) centerGps = SUBURB_GPS[firstArea];
+      }
+    }
+    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for location "${rawLocation}". Add a known suburb as your project location.` });
+
+    // Get keywords to scan
+    let kwFilter = '';
+    let kwParams = [projectId];
+    if (keyword_ids && keyword_ids.length > 0) {
+      kwFilter = ` AND id = ANY($2)`;
+      kwParams.push(keyword_ids);
+    }
+    const kwRes = await pool.query(`SELECT * FROM rank_keywords WHERE project_id=$1${kwFilter} ORDER BY keyword`, kwParams);
+    const keywords = kwRes.rows.filter(k => k.location); // only maps keywords (have location)
+
+    if (keywords.length === 0) return res.status(400).json({ error: 'No maps keywords found. Add service + location keywords first.' });
+
+    const gridSizeInt = Math.min(Math.max(parseInt(grid_size) || 5, 3), 7);
+    const radiusFloat = Math.min(Math.max(parseFloat(radius_km) || 10, 2), 30);
+    const totalPoints = gridSizeInt * gridSizeInt;
+    const totalCalls = keywords.length * totalPoints;
+
+    console.log(`[grid-scan] Starting: ${keywords.length} keywords × ${totalPoints} points = ${totalCalls} API calls, grid=${gridSizeInt}×${gridSizeInt}, radius=${radiusFloat}km, center=${centerGps.lat},${centerGps.lng}`);
+
+    // Generate grid points
+    const gridPoints = generateGrid(centerGps.lat, centerGps.lng, radiusFloat, gridSizeInt);
+
+    const results = [];
+    const nameLower = businessName.toLowerCase();
+    const nameNoSpaces = nameLower.replace(/\s+/g, '');
+    const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+
+    // Process keywords sequentially, grid points in parallel batches of 5
+    for (const kw of keywords) {
+      const kwLabel = `${kw.keyword} ${kw.location}`;
+      const pointResults = [];
+
+      for (let i = 0; i < gridPoints.length; i += 5) {
+        const batch = gridPoints.slice(i, i + 5);
+        const promises = batch.map(async (point) => {
+          try {
+            const data = await serpApiSearch({
+              engine: 'google_maps',
+              q: kwLabel,
+              ll: `@${point.lat},${point.lng},14z`,
+              type: 'search',
+            });
+
+            const localResults = data.local_results || [];
+            let position = null;
+            let found = false;
+
+            for (let p = 0; p < localResults.length && p < 20; p++) {
+              const place = localResults[p];
+              const titleLower = (place.title || '').toLowerCase();
+              const titleNoSpaces = titleLower.replace(/\s+/g, '');
+              const placePos = place.position || (p + 1);
+
+              const nameMatch = nameLower && (
+                titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+                (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
+              );
+
+              // Also match by domain/website
+              const placeWebsite = (place.website || '').toLowerCase();
+              const domainMatch = domain && placeWebsite && (placeWebsite.includes(domain) || domain.includes(placeWebsite.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')));
+
+              if (nameMatch || domainMatch) {
+                position = placePos;
+                found = true;
+                break;
+              }
+            }
+
+            return { ...point, position, found, error: null };
+          } catch (err) {
+            console.error(`[grid-scan] Error at (${point.row},${point.col}) for "${kwLabel}":`, err.message);
+            return { ...point, position: null, found: false, error: err.message };
+          }
+        });
+
+        const batchResults = await Promise.all(promises);
+        pointResults.push(...batchResults);
+      }
+
+      // Calculate metrics
+      const successPoints = pointResults.filter(p => !p.error);
+      const foundPoints = successPoints.filter(p => p.found);
+      const totalScanned = successPoints.length;
+      const foundCount = foundPoints.length;
+
+      // ARP: average rank of found positions
+      const arp = foundCount > 0
+        ? Math.round((foundPoints.reduce((s, p) => s + p.position, 0) / foundCount) * 10) / 10
+        : null;
+
+      // ATRP: average true rank (unfound = 21)
+      const atrp = totalScanned > 0
+        ? Math.round((successPoints.reduce((s, p) => s + (p.found ? p.position : 21), 0) / totalScanned) * 10) / 10
+        : null;
+
+      // SOLV: share of local voice = % of points where found in top 3
+      const top3Count = foundPoints.filter(p => p.position <= 3).length;
+      const solv = totalScanned > 0
+        ? Math.round((top3Count / totalScanned) * 1000) / 10
+        : 0;
+
+      // Save to grid_scans table
+      await pool.query(
+        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())`,
+        [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat,
+         JSON.stringify(pointResults), arp, atrp, solv, foundCount, totalScanned]
+      );
+
+      // Also update rank_tracking with grid metrics (compatible with existing table display)
+      const gridMetrics = {
+        arp, atrp, solv, found_in: foundCount, data_points: totalScanned,
+        grid_size: gridSizeInt, radius_km: radiusFloat,
+        source: 'serpapi_grid'
+      };
+
+      await pool.query(
+        `INSERT INTO rank_tracking (project_id, keyword, location, serp_position, maps_position, maps_title, competitors, checked_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+        [projectId, kw.keyword, kw.location, null, arp ? Math.round(arp) : null, businessName, JSON.stringify([gridMetrics])]
+      );
+
+      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults };
+      results.push(result);
+      console.log(`[grid-scan] "${kwLabel}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%, found=${foundCount}/${totalScanned}`);
+    }
+
+    console.log(`[grid-scan] Done. Scanned ${keywords.length} keywords, ${totalCalls} API calls.`);
+    res.json({ ok: true, scanned: keywords.length, total_api_calls: totalCalls, results });
+  } catch (e) {
+    console.error('[grid-scan] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest grid scan results for a project
+app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
+  try {
+    // Get latest scan per keyword using DISTINCT ON
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (keyword, location) *
+      FROM grid_scans
+      WHERE project_id=$1
+      ORDER BY keyword, location, scanned_at DESC
+    `, [req.params.projectId]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Get tracked keywords

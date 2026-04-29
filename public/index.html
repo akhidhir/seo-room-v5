@@ -5677,24 +5677,120 @@
       );
     }
 
+    // ============ GRID HEATMAP COMPONENT ============
+    function GridHeatmap({ gridPoints, gridSize, keyword, location }) {
+      if (!gridPoints || gridPoints.length === 0) return null;
+      const cellSize = gridSize <= 3 ? 56 : gridSize <= 5 ? 44 : 36;
+      const getColor = (p) => {
+        if (!p || p.error) return '#374151';
+        if (!p.found) return '#ef4444';
+        if (p.position <= 3) return '#22c55e';
+        if (p.position <= 5) return '#84cc16';
+        if (p.position <= 10) return '#f59e0b';
+        if (p.position <= 15) return '#f97316';
+        return '#ef4444';
+      };
+      const getBg = (p) => {
+        if (!p || p.error) return 'rgba(55,65,81,0.3)';
+        if (!p.found) return 'rgba(239,68,68,0.15)';
+        if (p.position <= 3) return 'rgba(34,197,94,0.15)';
+        if (p.position <= 5) return 'rgba(132,204,22,0.12)';
+        if (p.position <= 10) return 'rgba(245,158,11,0.12)';
+        if (p.position <= 15) return 'rgba(249,115,22,0.12)';
+        return 'rgba(239,68,68,0.12)';
+      };
+      const center = Math.floor(gridSize / 2);
+      return (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridSize}, ${cellSize}px)`, gap: 3, justifyContent: 'center' }}>
+            {gridPoints.map((p, i) => (
+              <div key={i} title={`(${p.lat.toFixed(3)}, ${p.lng.toFixed(3)})${p.found ? ` — Rank #${p.position}` : ' — Not found'}`}
+                style={{
+                  width: cellSize, height: cellSize, borderRadius: 6,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: getBg(p), border: (p.row === center && p.col === center) ? '2px solid var(--accent)' : '1px solid var(--border)',
+                  fontSize: p.found ? 16 : 11, fontWeight: p.found ? 800 : 600,
+                  color: getColor(p), cursor: 'default', position: 'relative',
+                }}>
+                {p.error ? '?' : p.found ? `#${p.position}` : '—'}
+                {p.row === center && p.col === center && (
+                  <div style={{ position: 'absolute', bottom: 2, right: 3, fontSize: 8, color: 'var(--accent)' }}>
+                    <i className="fa-solid fa-location-dot" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 10, fontSize: 10, color: 'var(--text3)' }}>
+            {[
+              { color: '#22c55e', label: 'Top 3' },
+              { color: '#84cc16', label: '4-5' },
+              { color: '#f59e0b', label: '6-10' },
+              { color: '#f97316', label: '11-15' },
+              { color: '#ef4444', label: '16+ / Not found' },
+            ].map(l => (
+              <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: l.color, opacity: 0.7 }} />
+                {l.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     // ============ MAPS RANKINGS PAGE ============
     function MapsRankingsPage({ project }) {
       const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
       const [syncing, setSyncing] = useState(false);
       const [mapsChecked, setMapsChecked] = useState(false);
       const [expandedMapRow, setExpandedMapRow] = useState(null);
+      const [gridScans, setGridScans] = useState({});
+      const [gridSize, setGridSize] = useState(5);
+      const [gridRadius, setGridRadius] = useState(10);
+      const [scanProgress, setScanProgress] = useState('');
+
+      // Load grid scans on mount
+      useEffect(() => {
+        (async () => {
+          const data = await api(`/projects/${project.id}/maps/grid-scans`);
+          if (Array.isArray(data)) {
+            const scanMap = {};
+            data.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
+            setGridScans(scanMap);
+            if (data.length > 0) setMapsChecked(true);
+          }
+        })();
+      }, [project.id]);
 
       const handleCheckRankings = async () => {
+        const mapKws = keywords.filter(k => k.location);
+        if (mapKws.length === 0) return alert('No maps keywords. Add service + location keywords first.');
+        const totalCalls = mapKws.length * gridSize * gridSize;
+        if (!confirm(`Grid scan ${mapKws.length} keywords × ${gridSize}×${gridSize} grid = ${totalCalls} SerpAPI calls.\n\nEstimated cost: ~$${(totalCalls * 0.005).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
         setSyncing(true);
-        const r = await api(`/projects/${project.id}/maps/sync-localfalcon`, { method: 'POST' });
-        if (r.ok) { await loadData(); } else if (r.error) alert(r.error);
+        setScanProgress(`Scanning 0/${mapKws.length} keywords...`);
+        try {
+          const r = await api(`/projects/${project.id}/maps/grid-scan`, {
+            method: 'POST',
+            body: { grid_size: gridSize, radius_km: gridRadius }
+          });
+          if (r.ok && r.results) {
+            const scanMap = { ...gridScans };
+            r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
+            setGridScans(scanMap);
+            await loadData();
+          } else if (r.error) alert(r.error);
+        } catch (e) { alert(e.message); }
         setSyncing(false);
+        setScanProgress('');
         setMapsChecked(true);
       };
 
       const cleanMapsData = async () => {
-        if (!confirm('Clean all old Maps data? This removes stale rankings so you start fresh.')) return;
+        if (!confirm('Clean all Maps data? This removes rankings and grid scans so you start fresh.')) return;
         await api(`/projects/${project.id}/maps/clean`, { method: 'DELETE' });
+        setGridScans({});
         setMapsChecked(false);
         loadData();
       };
@@ -5706,6 +5802,7 @@
         for (const kw of mapKws) {
           await api(`/projects/${project.id}/rank-tracking/keywords/${kw.id}`, { method: 'DELETE' });
         }
+        setGridScans({});
         setMapsChecked(false);
         loadData();
       };
@@ -5714,6 +5811,17 @@
       const [expandedKw, setExpandedKw] = useState(null);
       const [mSortCol, setMSortCol] = useState(null);
       const [mSortDir, setMSortDir] = useState('asc');
+      const [mapsSelected, setMapsSelected] = useState({});
+      const mapsSelCount = Object.values(mapsSelected).filter(Boolean).length;
+
+      const bulkDeleteMaps = async () => {
+        const ids = Object.entries(mapsSelected).filter(([k, v]) => v).map(([k]) => parseInt(k));
+        if (ids.length === 0) return;
+        if (!confirm(`Delete ${ids.length} keywords?`)) return;
+        await api(`/projects/${project.id}/rank-tracking/keywords/bulk-delete`, { method: 'POST', body: { ids } });
+        setMapsSelected({});
+        loadData();
+      };
       const [showGenerator, setShowGenerator] = useState(false);
       const [genAreas, setGenAreas] = useState([]);
       // genChecked declared above with genCombos
@@ -5848,46 +5956,38 @@
       };
       const mSortIcon = (col) => mSortCol === col ? (mSortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
+      // Helper to get grid scan data for a keyword
+      const getGridData = (kw) => {
+        const scanKey = `${kw.keyword}|||${kw.location}`;
+        const scan = gridScans[scanKey];
+        if (scan) return scan;
+        // Fallback: check competitors array for serpapi_grid or local_falcon source
+        const comps = kw.competitors || [];
+        const gridMeta = comps.find(c => c.source === 'serpapi_grid') || comps.find(c => c.source === 'local_falcon');
+        return gridMeta || {};
+      };
+
       // Only show keywords that have a location (service + location combos)
       const mapsKeywordsRaw = merged.filter(kw => kw.location);
       const mapsKeywords = useMemo(() => {
         if (!mSortCol) return mapsKeywordsRaw;
         return [...mapsKeywordsRaw].sort((a, b) => {
           let va, vb;
+          const gA = getGridData(a), gB = getGridData(b);
           if (mSortCol === 'service') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
           else if (mSortCol === 'location') { va = (a.location || '').toLowerCase(); vb = (b.location || '').toLowerCase(); }
           else if (mSortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
-          else if (mSortCol === 'maps') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.arp ?? 999; vb = lfB.arp ?? 999;
-          }
-          else if (mSortCol === 'atrp') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.atrp ?? 999; vb = lfB.atrp ?? 999;
-          }
-          else if (mSortCol === 'solv') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
-          }
-          else if (mSortCol === 'coverage') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = (lfA.found_in ?? 0) / (lfA.data_points || 1); vb = (lfB.found_in ?? 0) / (lfB.data_points || 1);
-          }
-          else if (mSortCol === 'status') {
-            const lfA = (a.competitors || []).find(c => c.source === 'local_falcon') || {};
-            const lfB = (b.competitors || []).find(c => c.source === 'local_falcon') || {};
-            va = lfA.solv ?? -1; vb = lfB.solv ?? -1;
-          }
+          else if (mSortCol === 'maps') { va = gA.arp ?? 999; vb = gB.arp ?? 999; }
+          else if (mSortCol === 'atrp') { va = gA.atrp ?? 999; vb = gB.atrp ?? 999; }
+          else if (mSortCol === 'solv') { va = gA.solv ?? -1; vb = gB.solv ?? -1; }
+          else if (mSortCol === 'coverage') { va = (gA.found_in ?? 0) / (gA.data_points || 1); vb = (gB.found_in ?? 0) / (gB.data_points || 1); }
+          else if (mSortCol === 'status') { va = gA.solv ?? -1; vb = gB.solv ?? -1; }
           else return 0;
           if (va < vb) return mSortDir === 'asc' ? -1 : 1;
           if (va > vb) return mSortDir === 'asc' ? 1 : -1;
           return 0;
         });
-      }, [mapsKeywordsRaw, mSortCol, mSortDir]);
+      }, [mapsKeywordsRaw, mSortCol, mSortDir, gridScans]);
 
       const handleAdd = () => {
         if (!service.trim() || !location.trim()) return;
@@ -5940,6 +6040,9 @@
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <h2 style={{ margin: 0 }}><i className="fa-solid fa-map-location-dot" style={{ marginRight: 8, color: '#22c55e' }} />Google Maps Rankings</h2>
             <div style={{ display: 'flex', gap: 8 }}>
+              {mapsSelCount > 0 && <button className="btn" onClick={bulkDeleteMaps} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
+                <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete {mapsSelCount} Selected
+              </button>}
               {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={cleanMapsData} style={{ fontSize: 13, color: '#f59e0b', borderColor: '#f59e0b' }}>
                 <i className="fa-solid fa-broom" style={{ marginRight: 4 }} />Clean Old Data
               </button>}
@@ -5955,21 +6058,48 @@
               <button onClick={downloadMapsSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
                 Sample
               </button>
-              <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
-                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
+              <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || mapsKeywordsRaw.length === 0} style={{ fontSize: 13 }}>
+                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />{scanProgress || 'Scanning...'}</> : <><i className="fa-solid fa-th" style={{ marginRight: 4 }} />Grid Scan</>}
               </button>
             </div>
           </div>
 
+          {/* Grid scan settings */}
+          {mapsKeywordsRaw.length > 0 && (
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'center', fontSize: 12, color: 'var(--text2)' }}>
+              <span style={{ fontWeight: 600 }}>Grid Settings:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                Size:
+                <select value={gridSize} onChange={e => setGridSize(parseInt(e.target.value))} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}>
+                  <option value={3}>3×3 (9 pts)</option>
+                  <option value={5}>5×5 (25 pts)</option>
+                  <option value={7}>7×7 (49 pts)</option>
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                Radius:
+                <select value={gridRadius} onChange={e => setGridRadius(parseInt(e.target.value))} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}>
+                  <option value={5}>5 km</option>
+                  <option value={10}>10 km</option>
+                  <option value={15}>15 km</option>
+                  <option value={20}>20 km</option>
+                  <option value={30}>30 km</option>
+                </select>
+              </label>
+              <span style={{ color: 'var(--text3)', fontSize: 11 }}>
+                {mapsKeywordsRaw.length} keywords × {gridSize*gridSize} pts = {mapsKeywordsRaw.length * gridSize * gridSize} API calls (~${(mapsKeywordsRaw.length * gridSize * gridSize * 0.005).toFixed(2)})
+              </span>
+            </div>
+          )}
+
           {/* Maps summary */}
-          {mapsKeywords.some(k => k.checked_at) && (() => {
-            const getLF = (kw) => { const comps = kw.competitors || []; return comps.find(c => c.source === 'local_falcon') || {}; };
-            const withData = mapsKeywords.filter(r => r.checked_at);
-            const withSolv = withData.filter(r => getLF(r).solv !== undefined);
-            const avgSolv = withSolv.length ? (withSolv.reduce((s,r) => s + (getLF(r).solv || 0), 0) / withSolv.length).toFixed(1) : '—';
-            const dominant = withSolv.filter(r => (getLF(r).solv || 0) >= 50).length;
-            const visible = withSolv.filter(r => (getLF(r).solv || 0) > 0 && (getLF(r).solv || 0) < 50).length;
-            const invisible = withData.filter(r => !getLF(r).solv && !r.maps_position).length;
+          {(mapsKeywords.some(k => k.checked_at) || Object.keys(gridScans).length > 0) && (() => {
+            const withData = mapsKeywords.filter(r => { const g = getGridData(r); return g.solv !== undefined || g.arp !== undefined || r.checked_at; });
+            const withSolv = withData.filter(r => getGridData(r).solv !== undefined);
+            const avgSolv = withSolv.length ? (withSolv.reduce((s,r) => s + (getGridData(r).solv || 0), 0) / withSolv.length).toFixed(1) : '—';
+            const dominant = withSolv.filter(r => (getGridData(r).solv || 0) >= 50).length;
+            const visible = withSolv.filter(r => (getGridData(r).solv || 0) > 0 && (getGridData(r).solv || 0) < 50).length;
+            const invisible = withData.filter(r => !getGridData(r).solv && !r.maps_position).length;
             const ranked = mapsKeywords.filter(r => r.maps_position);
             const avgPos = ranked.length ? (ranked.reduce((s,r) => s + r.maps_position, 0) / ranked.length).toFixed(1) : '—';
             return (
@@ -6018,6 +6148,13 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '10px 8px', width: 30, textAlign: 'center' }}>
+                      <input type="checkbox" checked={mapsKeywords.length > 0 && mapsKeywords.every(k => mapsSelected[k.id])} onChange={(e) => {
+                        const sel = {};
+                        if (e.target.checked) mapsKeywords.forEach(k => sel[k.id] = true);
+                        setMapsSelected(sel);
+                      }} />
+                    </th>
                     {[
                       { key: 'service', label: 'Service', align: 'left', w: null },
                       { key: 'location', label: 'Location', align: 'left', w: 140 },
@@ -6036,58 +6173,63 @@
                 </thead>
                 <tbody>
                   {mapsKeywords.map(kw => {
-                    const showData = mapsChecked && kw.checked_at;
-                    const lf = showData ? (kw.competitors || []).find(c => c.source === 'local_falcon') || {} : {};
-                    const hasLFData = lf.solv !== undefined || lf.arp !== undefined;
-                    const arp = lf.arp;
-                    const atrp = lf.atrp;
-                    const solv = lf.solv;
-                    const foundIn = lf.found_in;
-                    const dataPoints = lf.data_points;
-                    const statusLabel = !showData || !hasLFData ? (showData ? 'No Scan' : null) : solv >= 80 ? 'Dominant' : solv >= 50 ? 'Strong' : solv >= 20 ? 'Competitive' : solv > 0 ? 'Needs Work' : foundIn > 0 ? 'Weak' : 'Not Visible';
-                    const statusColor = !showData || !hasLFData ? '#6b7280' : solv >= 80 ? '#22c55e' : solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : foundIn > 0 ? '#f59e0b' : '#ef4444';
-                    const statusIcon = !showData || !hasLFData ? 'fa-circle-question' : solv >= 50 ? 'fa-circle-check' : solv >= 20 ? 'fa-circle-minus' : solv > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+                    const g = getGridData(kw);
+                    const hasData = g.solv !== undefined || g.arp !== undefined;
+                    const arp = g.arp;
+                    const atrp = g.atrp;
+                    const solv = g.solv;
+                    const foundIn = g.found_in;
+                    const dataPoints = g.data_points;
+                    const statusLabel = !hasData ? (kw.checked_at ? 'No Scan' : null) : solv >= 80 ? 'Dominant' : solv >= 50 ? 'Strong' : solv >= 20 ? 'Competitive' : solv > 0 ? 'Needs Work' : foundIn > 0 ? 'Weak' : 'Not Visible';
+                    const statusColor = !hasData ? '#6b7280' : solv >= 80 ? '#22c55e' : solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : foundIn > 0 ? '#f59e0b' : '#ef4444';
+                    const statusIcon = !hasData ? 'fa-circle-question' : solv >= 50 ? 'fa-circle-check' : solv >= 20 ? 'fa-circle-minus' : solv > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
                     const isExpanded = expandedMapRow === kw.id;
+                    const scanKey = `${kw.keyword}|||${kw.location}`;
+                    const gridScanData = gridScans[scanKey];
+                    const gridPointsData = gridScanData?.grid_points || [];
                     const actionAdvice = {
                       'Dominant': { color: '#22c55e', icon: 'fa-trophy', title: 'You dominate this area', actions: ['Maintain review velocity — keep asking for reviews', 'Monitor competitors entering this area', 'Focus efforts on weaker suburbs instead'] },
                       'Strong': { color: '#22c55e', icon: 'fa-thumbs-up', title: 'Strong presence — keep it up', actions: ['Continue collecting reviews mentioning this suburb', 'Keep GBP posts active and updated', 'Monitor for any ranking drops'] },
                       'Competitive': { color: '#3b82f6', icon: 'fa-chart-line', title: 'Good visibility — room to grow', actions: ['Increase review count — aim for reviews mentioning this suburb', 'Add a dedicated service page for this area on your website', 'Build local citations in directories for this suburb', 'Post GBP updates targeting this location'] },
-                      'Needs Work': { color: '#f59e0b', icon: 'fa-wrench', title: 'Showing up in a few spots — needs improvement', actions: ['Create a dedicated landing page: "plumber in ' + (kw.location || 'suburb') + '"', 'Ask happy customers in this area to leave reviews mentioning the suburb', 'Add this suburb to your GBP service area if not already listed', 'Build backlinks from local directories and community sites', 'Post GBP updates about jobs completed in this area'] },
+                      'Needs Work': { color: '#f59e0b', icon: 'fa-wrench', title: 'Showing up in a few spots — needs improvement', actions: ['Create a dedicated landing page for this service in ' + (kw.location || 'this suburb'), 'Ask happy customers in this area to leave reviews mentioning the suburb', 'Add this suburb to your GBP service area if not already listed', 'Build backlinks from local directories and community sites', 'Post GBP updates about jobs completed in this area'] },
                       'Weak': { color: '#f59e0b', icon: 'fa-exclamation-circle', title: 'Found but never in top 3', actions: ['Your GBP is detected but ranks too low to appear in the local pack', 'Focus on reviews — volume and recency are key ranking factors', 'Create location-specific content on your website for this suburb', 'Ensure NAP (Name, Address, Phone) is consistent across all directories', 'Check that your GBP categories match your services'] },
                       'Not Visible': { color: '#ef4444', icon: 'fa-eye-slash', title: 'Not found in this area', actions: ['Verify your GBP service area includes this suburb', 'This area may be too far from your business address', 'Create a dedicated service page targeting this suburb', 'Build citations in local directories for this area', 'Consider if this suburb is worth targeting based on distance'] },
-                      'No Scan': { color: '#6b7280', icon: 'fa-circle-question', title: 'No Local Falcon scan data', actions: ['Add this keyword to Local Falcon to start tracking', 'Or delete this keyword and re-run Check Rankings'] },
+                      'No Scan': { color: '#6b7280', icon: 'fa-circle-question', title: 'Not scanned yet', actions: ['Click "Grid Scan" to run a SerpAPI Maps grid scan for all keywords'] },
                     };
                     const advice = actionAdvice[statusLabel] || null;
                     return (
                     <React.Fragment key={kw.id}>
-                    <tr onClick={() => statusLabel ? setExpandedMapRow(isExpanded ? null : kw.id) : null} style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: statusLabel ? 'pointer' : 'default', background: isExpanded ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
+                    <tr onClick={() => setExpandedMapRow(isExpanded ? null : kw.id)} style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? 'rgba(99,102,241,0.05)' : mapsSelected[kw.id] ? 'rgba(239,68,68,0.05)' : 'transparent' }}>
+                      <td style={{ padding: '10px 8px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={!!mapsSelected[kw.id]} onChange={() => setMapsSelected(prev => ({ ...prev, [kw.id]: !prev[kw.id] }))} />
+                      </td>
                       <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text2)' }}>
                         <i className="fa-solid fa-location-dot" style={{ marginRight: 4, fontSize: 10, color: '#22c55e' }} />{kw.location}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && arp ? (
+                        {hasData && arp ? (
                           <span style={{ color: arp <= 3 ? '#22c55e' : arp <= 10 ? '#3b82f6' : arp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
                             {arp.toFixed(1)}
                           </span>
-                        ) : showData && hasLFData ? <span style={{ color: '#ef4444', fontWeight: 700 }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        ) : hasData ? <span style={{ color: '#ef4444', fontWeight: 700 }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && atrp ? (
+                        {hasData && atrp ? (
                           <span style={{ color: atrp <= 3 ? '#22c55e' : atrp <= 10 ? '#3b82f6' : atrp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 600, fontSize: 14 }}>
                             {atrp.toFixed(1)}
                           </span>
-                        ) : showData && hasLFData ? <span style={{ color: '#ef4444' }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        ) : hasData ? <span style={{ color: '#ef4444' }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && solv !== undefined ? (
+                        {hasData && solv !== undefined ? (
                           <span style={{ color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
                             {solv.toFixed(0)}%
                           </span>
                         ) : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                        {showData && hasLFData && foundIn !== undefined ? (
+                        {hasData && foundIn !== undefined ? (
                           <span style={{ color: 'var(--text2)', fontSize: 13 }}>
                             {foundIn}/{dataPoints || '?'}
                           </span>
@@ -6097,7 +6239,7 @@
                         {statusLabel ? (
                           <span style={{ color: statusColor, fontWeight: 600, fontSize: 12 }}>
                             <i className={`fa-solid ${statusIcon}`} style={{ marginRight: 4 }} />{statusLabel}
-                            {statusLabel !== 'Dominant' && <i className="fa-solid fa-chevron-down" style={{ marginLeft: 6, fontSize: 9, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
+                            <i className="fa-solid fa-chevron-down" style={{ marginLeft: 6, fontSize: 9, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
                           </span>
                         ) : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
@@ -6107,20 +6249,55 @@
                         </button>
                       </td>
                     </tr>
-                    {isExpanded && advice && (
+                    {isExpanded && (
                       <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td colSpan={8} style={{ padding: 0 }}>
-                          <div style={{ padding: '14px 20px 16px 40px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                            <div style={{ fontWeight: 700, fontSize: 13, color: advice.color, marginBottom: 10 }}>
-                              <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {advice.actions.map((action, i) => (
-                                <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                                  <i className="fa-solid fa-arrow-right" style={{ fontSize: 9, marginTop: 4, color: advice.color, flexShrink: 0 }} />
-                                  <span>{action}</span>
+                        <td colSpan={9} style={{ padding: 0 }}>
+                          <div style={{ padding: '16px 20px 20px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                            <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+                              {/* Grid heatmap */}
+                              {gridPointsData.length > 0 && (
+                                <div style={{ flexShrink: 0 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textAlign: 'center' }}>
+                                    <i className="fa-solid fa-grid-4" style={{ marginRight: 4 }} />Grid Scan — {gridScanData.grid_size}×{gridScanData.grid_size}, {gridScanData.radius_km}km radius
+                                  </div>
+                                  <GridHeatmap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} keyword={kw.keyword} location={kw.location} />
+                                  {gridScanData.scanned_at && (
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 6 }}>
+                                      Scanned: {new Date(gridScanData.scanned_at).toLocaleDateString()} {new Date(gridScanData.scanned_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                              )}
+                              {/* Action advice */}
+                              {advice && (
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 13, color: advice.color, marginBottom: 10 }}>
+                                    <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    {advice.actions.map((action, i) => (
+                                      <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                        <i className="fa-solid fa-arrow-right" style={{ fontSize: 9, marginTop: 4, color: advice.color, flexShrink: 0 }} />
+                                        <span>{action}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {/* Metrics detail */}
+                                  {hasData && (
+                                    <div style={{ marginTop: 14, display: 'flex', gap: 16, fontSize: 11, color: 'var(--text3)' }}>
+                                      {arp && <span>ARP: <strong style={{ color: 'var(--text2)' }}>{arp.toFixed(1)}</strong></span>}
+                                      {atrp && <span>ATRP: <strong style={{ color: 'var(--text2)' }}>{atrp.toFixed(1)}</strong></span>}
+                                      {solv !== undefined && <span>SOLV: <strong style={{ color: 'var(--text2)' }}>{solv.toFixed(1)}%</strong></span>}
+                                      {foundIn !== undefined && <span>Found: <strong style={{ color: 'var(--text2)' }}>{foundIn}/{dataPoints}</strong></span>}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {!advice && !gridPointsData.length && (
+                                <div style={{ flex: 1, color: 'var(--text3)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+                                  No scan data yet. Click "Grid Scan" to scan this keyword.
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
