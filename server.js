@@ -246,6 +246,7 @@ async function initDb() {
         center_lng DOUBLE PRECISION,
         radius_km DOUBLE PRECISION DEFAULT 10,
         grid_points JSONB DEFAULT '[]',
+        competitors JSONB DEFAULT '[]',
         arp DOUBLE PRECISION,
         atrp DOUBLE PRECISION,
         solv DOUBLE PRECISION,
@@ -5507,12 +5508,26 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
             const localResults = data.local_results || [];
             let position = null;
             let found = false;
+            const top3 = [];
 
             for (let p = 0; p < localResults.length && p < 20; p++) {
               const place = localResults[p];
               const titleLower = (place.title || '').toLowerCase();
               const titleNoSpaces = titleLower.replace(/\s+/g, '');
               const placePos = place.position || (p + 1);
+
+              // Capture top 3 for competitor analysis
+              if (placePos <= 3) {
+                top3.push({
+                  position: placePos,
+                  title: place.title || '',
+                  rating: place.rating || null,
+                  reviews: place.reviews || 0,
+                  type: place.type || '',
+                  address: place.address || '',
+                  website: place.website || '',
+                });
+              }
 
               const nameMatch = nameLower && (
                 titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
@@ -5523,14 +5538,13 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
               const placeWebsite = (place.website || '').toLowerCase();
               const domainMatch = domain && placeWebsite && (placeWebsite.includes(domain) || domain.includes(placeWebsite.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')));
 
-              if (nameMatch || domainMatch) {
+              if ((nameMatch || domainMatch) && !found) {
                 position = placePos;
                 found = true;
-                break;
               }
             }
 
-            return { ...point, position, found, error: null };
+            return { ...point, position, found, top3, error: null };
           } catch (err) {
             console.error(`[grid-scan] Error at (${point.row},${point.col}) for "${kwLabel}":`, err.message);
             return { ...point, position: null, found: false, error: err.message };
@@ -5563,12 +5577,48 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
         ? Math.round((top3Count / totalScanned) * 1000) / 10
         : 0;
 
+      // Aggregate competitor data across all grid points
+      const compMap = {};
+      for (const pt of successPoints) {
+        for (const c of (pt.top3 || [])) {
+          const cName = c.title.trim();
+          if (!cName) continue;
+          // Skip our own business
+          const cLower = cName.toLowerCase();
+          const cNoSpaces = cLower.replace(/\s+/g, '');
+          const isUs = cLower.includes(nameLower) || cNoSpaces.includes(nameNoSpaces) ||
+            (nameWords.length >= 2 && nameWords.every(w => cLower.includes(w)));
+          if (isUs) continue;
+          if (!compMap[cName]) {
+            compMap[cName] = { name: cName, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, top1: 0, top3: 0, positions: [] };
+          }
+          compMap[cName].appearances++;
+          if (c.position === 1) compMap[cName].top1++;
+          if (c.position <= 3) compMap[cName].top3++;
+          compMap[cName].positions.push(c.position);
+          // Update to latest non-null values
+          if (c.rating && (!compMap[cName].rating || c.rating > compMap[cName].rating)) compMap[cName].rating = c.rating;
+          if (c.reviews && c.reviews > compMap[cName].reviews) compMap[cName].reviews = c.reviews;
+          if (c.type && !compMap[cName].type) compMap[cName].type = c.type;
+          if (c.website && !compMap[cName].website) compMap[cName].website = c.website;
+        }
+      }
+      // Sort by appearances (most dominant competitors first)
+      const competitors = Object.values(compMap)
+        .map(c => ({
+          ...c,
+          avg_position: Math.round((c.positions.reduce((s,p) => s+p, 0) / c.positions.length) * 10) / 10,
+          dominance: Math.round((c.top3 / totalScanned) * 1000) / 10, // % of grid points in top 3
+        }))
+        .sort((a, b) => b.appearances - a.appearances)
+        .slice(0, 10); // top 10 competitors
+
       // Save to grid_scans table
       await pool.query(
-        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())`,
+        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
         [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat,
-         JSON.stringify(pointResults), arp, atrp, solv, foundCount, totalScanned]
+         JSON.stringify(pointResults), JSON.stringify(competitors), arp, atrp, solv, foundCount, totalScanned]
       );
 
       // Also update rank_tracking with grid metrics (compatible with existing table display)
@@ -5584,7 +5634,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
         [projectId, kw.keyword, kw.location, null, arp ? Math.round(arp) : null, businessName, JSON.stringify([gridMetrics])]
       );
 
-      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults };
+      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults, competitors };
       results.push(result);
       console.log(`[grid-scan] "${kwLabel}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%, found=${foundCount}/${totalScanned}`);
     }
