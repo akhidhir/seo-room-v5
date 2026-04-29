@@ -5030,9 +5030,11 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
           let serp = { position: null, url: null, title: null, snippet: null, type: null };
           const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
           for (const item of (data.organic_results || [])) {
-            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
-            const itemHost = itemDomain.split('/')[0];
-            if (domain && (itemHost === domain || itemHost === 'www.' + domain || itemHost.endsWith('.' + domain))) {
+            let itemHost = '';
+            try { itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch (e) {
+              itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase();
+            }
+            if (domain && (itemHost === domain || itemHost.endsWith('.' + domain))) {
               serp = { position: item.position, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               break;
             }
@@ -5259,25 +5261,29 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           const domainLower = domain.toLowerCase();
           if (idx < 3) console.log(`[rank-sync] "${query}" matching domain: "${domainLower}", organic_results: ${(data.organic_results || []).length}`);
           for (const item of (data.organic_results || [])) {
-            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
             const pos = item.position;
 
-            // Strict domain match: extract just the hostname from the result
-            const itemHost = itemDomain.split('/')[0];
-            if (idx < 3 && pos <= 5) console.log(`[rank-sync]   #${pos} itemHost="${itemHost}" vs domain="${domainLower}" match=${itemHost === domainLower}`);
+            // Use item.link (actual URL) for domain matching — NOT displayed_link which has Google's display format
+            let itemHost = '';
+            try {
+              itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase();
+            } catch (e) {
+              itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase();
+            }
+            if (idx < 3 && pos <= 5) console.log(`[rank-sync]   #${pos} itemHost="${itemHost}" link="${(item.link || '').slice(0, 60)}" vs domain="${domainLower}" match=${itemHost === domainLower}`);
             if (domainLower && (itemHost === domainLower || itemHost === 'www.' + domainLower || itemHost.endsWith('.' + domainLower))) {
               if (!serp.position) {
                 serp = { position: pos, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               }
             } else {
               if (kwCompetitors.filter(c => c.source === 'serp').length < 3) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
+                kwCompetitors.push({ domain: itemHost, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
             // Named competitors — strict host match
             for (const cd of competitorDomains) {
-              if ((itemHost === cd || itemHost === 'www.' + cd || itemHost.endsWith('.' + cd)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
+              if ((itemHost === cd || itemHost === 'www.' + cd || itemHost.endsWith('.' + cd)) && !kwCompetitors.find(c => c.domain === itemHost && c.source === 'serp')) {
+                kwCompetitors.push({ domain: itemHost, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
           }
