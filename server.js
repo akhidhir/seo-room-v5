@@ -5431,6 +5431,7 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
 app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
+  const limit = parseInt(req.body.limit) || 50; // Default 50, accepts 10/20/30/40/50
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -5439,7 +5440,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
 
     if (!domain) return res.status(400).json({ error: 'Project has no website/domain configured' });
 
-    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI`);
+    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI (limit: ${limit})`);
 
     // Use Google organic search with site: to find pages that rank, then extract keywords
     // Also check GSC data first as a primary keyword source
@@ -5449,8 +5450,8 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
     // 1. Pull from GSC if available
     try {
       const gscRes = await pool.query(
-        `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT 200`,
-        [projectId]
+        `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT $2`,
+        [projectId, limit * 4]
       );
       for (const r of gscRes.rows) {
         const kw = r.keyword.toLowerCase().trim();
@@ -5510,8 +5511,53 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
       }
     }
 
-    console.log(`[discover] Found ${keywords.length} total keywords for ${domain}`);
-    res.json({ ok: true, keywords, total: keywords.length });
+    // Sort by relevance: GSC keywords with impressions first, then by position
+    keywords.sort((a, b) => {
+      if (a.source === 'gsc' && b.source !== 'gsc') return -1;
+      if (b.source === 'gsc' && a.source !== 'gsc') return 1;
+      if (a.impressions && b.impressions) return b.impressions - a.impressions;
+      if (a.position && b.position) return a.position - b.position;
+      return 0;
+    });
+
+    const capped = keywords.slice(0, limit);
+    console.log(`[discover] Found ${keywords.length} total, returning top ${capped.length} (limit: ${limit}) for ${domain}`);
+
+    // Fetch search volume from DataForSEO Keywords Data API
+    if (DATAFORSEO_AUTH && capped.length > 0) {
+      try {
+        console.log(`[discover] Fetching search volume for ${capped.length} keywords via DataForSEO`);
+        const dfsBody = [{
+          keywords: capped.map(k => k.keyword),
+          location_name: 'Australia',
+          language_name: 'English',
+          date_from: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        }];
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify(dfsBody),
+        });
+        const dfsData = await dfsRes.json();
+        if (dfsData.tasks?.[0]?.result) {
+          const volMap = {};
+          for (const r of dfsData.tasks[0].result) {
+            if (r.keyword && r.search_volume != null) {
+              volMap[r.keyword.toLowerCase()] = r.search_volume;
+            }
+          }
+          for (const kw of capped) {
+            const vol = volMap[kw.keyword.toLowerCase()];
+            if (vol != null) kw.volume = vol;
+          }
+          console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
+        }
+      } catch (e) {
+        console.log('[discover] DataForSEO volume lookup failed:', e.message);
+      }
+    }
+
+    res.json({ ok: true, keywords: capped, total: keywords.length, limit });
   } catch (e) {
     console.error('[discover] Error:', e.message);
     res.status(500).json({ error: e.message });
