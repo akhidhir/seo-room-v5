@@ -5726,35 +5726,38 @@
       const [genServices, setGenServices] = useState(project.industry || '');
       const [customSuburbs, setCustomSuburbs] = useState('');
       const [mapsLimit, setMapsLimit] = useState(100);
+      const [selectedSubs, setSelectedSubs] = useState({});
+      const [availSubs, setAvailSubs] = useState([]);
 
       const parseList = (text) => text.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
 
-      const buildCombos = (areas, svcsText, dist, subsText) => {
+      const getAvailSubs = (areas, dist, customText) => {
+        const fromAreas = areas.filter(a => (a.distance || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
+        const extras = parseList(customText).filter(s => !fromAreas.find(a => a.name.toLowerCase() === s.toLowerCase()));
+        return [
+          ...fromAreas.map(a => ({ name: a.name, distance: a.distance })),
+          ...extras.map(s => ({ name: s, distance: null }))
+        ];
+      };
+
+      const rebuildCombos = (subs, subSel, svcsText) => {
         const svcs = parseList(svcsText);
         if (svcs.length === 0) svcs.push(project.industry || 'service');
-        const extraSubs = parseList(subsText);
         const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
-        const filtered = areas.filter(a => (a.distance || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
+        const activeSubs = subs.filter(s => subSel[s.name]);
         const combos = [];
         for (const svc of svcs) {
-          for (const a of filtered) {
-            combos.push({ service: svc, location: a.name, distance: a.distance });
-          }
-          for (const sub of extraSubs) {
-            if (!filtered.find(a => a.name.toLowerCase() === sub.toLowerCase())) {
-              combos.push({ service: svc, location: sub, distance: null });
-            }
+          for (const s of activeSubs) {
+            combos.push({ service: svc, location: s.name, distance: s.distance });
           }
         }
-        return combos
-          .filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
+        return combos.filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
           .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
       };
 
-      const selectAll = (combos) => {
+      const checkAll = (combos, limit) => {
         const obj = {};
-        const max = Math.min(combos.length, mapsLimit);
-        for (let i = 0; i < max; i++) obj[i] = true;
+        for (let i = 0; i < Math.min(combos.length, limit); i++) obj[i] = true;
         return obj;
       };
 
@@ -5763,17 +5766,45 @@
         const areas = resp.service_areas || resp;
         const areasArr = Array.isArray(areas) ? areas : [];
         setGenAreas(areasArr);
-        const combos = buildCombos(areasArr, genServices, maxDistance, customSuburbs);
+        const subs = getAvailSubs(areasArr, maxDistance, customSuburbs);
+        setAvailSubs(subs);
+        const sel = {};
+        subs.forEach(s => sel[s.name] = true);
+        setSelectedSubs(sel);
+        const combos = rebuildCombos(subs, sel, genServices);
         setGenCombos(combos);
-        setGenChecked(selectAll(combos));
+        setGenChecked(checkAll(combos, mapsLimit));
         setShowGenerator(true);
       };
 
       const regenerateCombos = (overrideDist) => {
         const dist = overrideDist != null ? overrideDist : maxDistance;
-        const combos = buildCombos(genAreas, genServices, dist, customSuburbs);
+        const subs = getAvailSubs(genAreas, dist, customSuburbs);
+        setAvailSubs(subs);
+        // New suburbs default selected, removed suburbs dropped
+        const sel = {};
+        subs.forEach(s => sel[s.name] = selectedSubs[s.name] !== undefined ? selectedSubs[s.name] : true);
+        setSelectedSubs(sel);
+        const combos = rebuildCombos(subs, sel, genServices);
         setGenCombos(combos);
-        setGenChecked(selectAll(combos));
+        setGenChecked(checkAll(combos, mapsLimit));
+      };
+
+      const toggleSuburb = (name) => {
+        const newSel = { ...selectedSubs, [name]: !selectedSubs[name] };
+        setSelectedSubs(newSel);
+        const combos = rebuildCombos(availSubs, newSel, genServices);
+        setGenCombos(combos);
+        setGenChecked(checkAll(combos, mapsLimit));
+      };
+
+      const setAllSubs = (val) => {
+        const newSel = {};
+        Object.keys(selectedSubs).forEach(k => newSel[k] = val);
+        setSelectedSubs(newSel);
+        const combos = rebuildCombos(availSubs, newSel, genServices);
+        setGenCombos(combos);
+        setGenChecked(checkAll(combos, mapsLimit));
       };
 
       const importServicesCSV = () => {
@@ -6175,32 +6206,22 @@
                     <React.Fragment>
                     <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{genCombos.length} combos{genCombos.length > mapsLimit ? <span style={{ color: '#f59e0b', fontWeight: 600 }}> — limit is {mapsLimit}, only first {mapsLimit} will be added</span> : ''}</div>
                     {(() => {
-                      const uniqueSubs = [...new Set(genCombos.map(c => c.location))];
-                      const isSubSelected = (sub) => genCombos.every((c, i) => c.location !== sub || i >= mapsLimit || genChecked[i]);
-                      const toggleSub = (sub) => {
-                        const indices = genCombos.map((c, i) => c.location === sub && i < mapsLimit ? i : -1).filter(i => i >= 0);
-                        const allIn = indices.every(i => genChecked[i]);
-                        setGenChecked(prev => {
-                          const next = { ...prev };
-                          indices.forEach(i => next[i] = !allIn);
-                          return next;
-                        });
-                      };
-                      const allSubsSelected = uniqueSubs.every(s => isSubSelected(s));
+                      const allOn = Object.values(selectedSubs).every(Boolean);
+                      const allOff = Object.values(selectedSubs).every(v => !v);
                       return (
                         <div style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>Filter by suburb</span>
-                            <button onClick={() => {
-                              if (allSubsSelected) setGenChecked({});
-                              else setGenChecked(selectAll(genCombos));
-                            }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}>{allSubsSelected ? 'Deselect All' : 'Select All'}</button>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>Suburbs ({Object.values(selectedSubs).filter(Boolean).length}/{availSubs.length} selected)</span>
+                            <span>
+                              <button onClick={() => setAllSubs(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, marginRight: 8 }} disabled={allOn}>Select All</button>
+                              <button onClick={() => setAllSubs(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }} disabled={allOff}>Deselect All</button>
+                            </span>
                           </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
-                            {uniqueSubs.map(sub => (
-                              <label key={sub} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--text2)' }}>
-                                <input type="checkbox" checked={isSubSelected(sub)} onChange={() => toggleSub(sub)} style={{ margin: 0 }} />
-                                {sub}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', maxHeight: 120, overflow: 'auto' }}>
+                            {availSubs.map(sub => (
+                              <label key={sub.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: selectedSubs[sub.name] ? 'var(--text)' : 'var(--text3)' }}>
+                                <input type="checkbox" checked={!!selectedSubs[sub.name]} onChange={() => toggleSuburb(sub.name)} style={{ margin: 0 }} />
+                                {sub.name}{sub.distance != null ? ` (${sub.distance.toFixed(0)}km)` : ''}
                               </label>
                             ))}
                           </div>
@@ -6236,7 +6257,7 @@
                   <button className="btn" onClick={() => {
                     const max = Math.min(genCombos.length, mapsLimit);
                     if (checkedCount === max) setGenChecked({});
-                    else setGenChecked(selectAll(genCombos));
+                    else setGenChecked(checkAll(genCombos, mapsLimit));
                   }} style={{ flex: 1 }}>
                     {checkedCount === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
                   </button>
