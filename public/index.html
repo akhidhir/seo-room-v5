@@ -5716,8 +5716,9 @@
       const [mSortDir, setMSortDir] = useState('asc');
       const [showGenerator, setShowGenerator] = useState(false);
       const [genAreas, setGenAreas] = useState([]);
-      const [genSelected, setGenSelected] = useState(new Set());
+      // genChecked declared above with genCombos
       const [genCombos, setGenCombos] = useState([]);
+      const [genChecked, setGenChecked] = useState({});
       const [maxDistance, setMaxDistance] = useState(20);
 
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
@@ -5750,6 +5751,13 @@
           .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
       };
 
+      const selectAll = (combos) => {
+        const obj = {};
+        const max = Math.min(combos.length, mapsLimit);
+        for (let i = 0; i < max; i++) obj[i] = true;
+        return obj;
+      };
+
       const openGenerator = async () => {
         const resp = await api(`/projects/${project.id}/service-areas`);
         const areas = resp.service_areas || resp;
@@ -5757,16 +5765,15 @@
         setGenAreas(areasArr);
         const combos = buildCombos(areasArr, genServices, maxDistance, customSuburbs);
         setGenCombos(combos);
-        const max = Math.min(combos.length, mapsLimit);
-        setGenSelected(new Set(Array.from({length: max}, (_, i) => i)));
+        setGenChecked(selectAll(combos));
         setShowGenerator(true);
       };
 
-      const regenerateCombos = () => {
-        const combos = buildCombos(genAreas, genServices, maxDistance, customSuburbs);
+      const regenerateCombos = (overrideDist) => {
+        const dist = overrideDist != null ? overrideDist : maxDistance;
+        const combos = buildCombos(genAreas, genServices, dist, customSuburbs);
         setGenCombos(combos);
-        const max = Math.min(combos.length, mapsLimit);
-        setGenSelected(new Set(Array.from({length: max}, (_, i) => i)));
+        setGenChecked(selectAll(combos));
       };
 
       const importServicesCSV = () => {
@@ -5788,7 +5795,7 @@
       };
 
       const addGeneratedKeywords = async () => {
-        const toAdd = genCombos.filter((_, i) => genSelected.has(i) && i < mapsLimit);
+        const toAdd = genCombos.filter((_, i) => genChecked[i] && i < mapsLimit);
         if (toAdd.length === 0) return;
         for (const c of toAdd) {
           await api(`/projects/${project.id}/rank-tracking/keywords`, {
@@ -5802,12 +5809,9 @@
       };
 
       const toggleGenItem = (idx) => {
-        setGenSelected(prev => {
-          const next = new Set(prev);
-          if (next.has(idx)) next.delete(idx); else next.add(idx);
-          return next;
-        });
+        setGenChecked(prev => ({ ...prev, [idx]: !prev[idx] }));
       };
+      const checkedCount = Object.values(genChecked).filter(Boolean).length;
 
       const mToggleSort = (col) => {
         if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -6151,7 +6155,7 @@
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Distance from headquarters</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => setMaxDistance(parseInt(e.target.value))} style={{ flex: 1 }} />
+                        <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
                         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
                       </div>
                     </div>
@@ -6170,6 +6174,39 @@
                   ) : (
                     <React.Fragment>
                     <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{genCombos.length} combos{genCombos.length > mapsLimit ? <span style={{ color: '#f59e0b', fontWeight: 600 }}> — limit is {mapsLimit}, only first {mapsLimit} will be added</span> : ''}</div>
+                    {(() => {
+                      const uniqueSubs = [...new Set(genCombos.map(c => c.location))];
+                      const isSubSelected = (sub) => genCombos.every((c, i) => c.location !== sub || i >= mapsLimit || genChecked[i]);
+                      const toggleSub = (sub) => {
+                        const indices = genCombos.map((c, i) => c.location === sub && i < mapsLimit ? i : -1).filter(i => i >= 0);
+                        const allIn = indices.every(i => genChecked[i]);
+                        setGenChecked(prev => {
+                          const next = { ...prev };
+                          indices.forEach(i => next[i] = !allIn);
+                          return next;
+                        });
+                      };
+                      const allSubsSelected = uniqueSubs.every(s => isSubSelected(s));
+                      return (
+                        <div style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>Filter by suburb</span>
+                            <button onClick={() => {
+                              if (allSubsSelected) setGenChecked({});
+                              else setGenChecked(selectAll(genCombos));
+                            }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}>{allSubsSelected ? 'Deselect All' : 'Select All'}</button>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+                            {uniqueSubs.map(sub => (
+                              <label key={sub} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--text2)' }}>
+                                <input type="checkbox" checked={isSubSelected(sub)} onChange={() => toggleSub(sub)} style={{ margin: 0 }} />
+                                {sub}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
@@ -6183,7 +6220,7 @@
                         {genCombos.map((c, i) => (
                           <tr key={i} style={{ borderBottom: '1px solid var(--border)', opacity: i >= mapsLimit ? 0.4 : 1 }} onClick={() => { if (i < mapsLimit) toggleGenItem(i); }}>
                             <td style={{ padding: '8px 12px', textAlign: 'center', cursor: 'pointer' }}>
-                              <input type="checkbox" checked={genSelected.has(i)} onChange={(e) => { e.stopPropagation(); toggleGenItem(i); }} disabled={i >= mapsLimit} />
+                              <input type="checkbox" checked={!!genChecked[i]} onChange={(e) => { e.stopPropagation(); toggleGenItem(i); }} disabled={i >= mapsLimit} />
                             </td>
                             <td style={{ padding: '8px 12px', cursor: 'pointer', fontWeight: 500 }}>{c.service}</td>
                             <td style={{ padding: '8px 12px', cursor: 'pointer' }}>{c.location}</td>
@@ -6198,13 +6235,13 @@
                 <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
                   <button className="btn" onClick={() => {
                     const max = Math.min(genCombos.length, mapsLimit);
-                    if (genSelected.size === max) setGenSelected(new Set());
-                    else setGenSelected(new Set(Array.from({length: max}, (_, i) => i)));
+                    if (checkedCount === max) setGenChecked({});
+                    else setGenChecked(selectAll(genCombos));
                   }} style={{ flex: 1 }}>
-                    {genSelected.size === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
+                    {checkedCount === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
                   </button>
-                  <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={genSelected.size === 0} style={{ flex: 1 }}>
-                    <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {genSelected.size} Keywords
+                  <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={checkedCount === 0} style={{ flex: 1 }}>
+                    <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {checkedCount} Keywords
                   </button>
                 </div>
               </div>
