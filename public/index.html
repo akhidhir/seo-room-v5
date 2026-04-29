@@ -6454,6 +6454,36 @@
         setBulkMode(false);
       };
 
+      const importSuburbsCSV = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.csv,.txt';
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          const lines = text.split(/\r?\n/).filter(l => l.trim());
+          const existing = new Set(formData.serviceAreas.map(a => a.name.toLowerCase()));
+          const newAreas = [];
+          for (const line of lines) {
+            const parts = line.split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+            const name = parts[0];
+            if (!name || name.toLowerCase() === 'suburb' || name.toLowerCase() === 'name' || name.toLowerCase() === 'location') continue;
+            if (existing.has(name.toLowerCase())) continue;
+            existing.add(name.toLowerCase());
+            const dist = parts[1] ? parseInt(parts[1]) || 20 : newDistance;
+            newAreas.push({ name, distance: dist });
+          }
+          if (newAreas.length > 0) {
+            setFormData(prev => ({ ...prev, serviceAreas: [...prev.serviceAreas, ...newAreas] }));
+            alert(`Imported ${newAreas.length} suburbs`);
+          } else {
+            alert('No new suburbs found. CSV format: suburb name, distance (one per line)');
+          }
+        };
+        input.click();
+      };
+
       const handleRemoveSuburb = (index) => {
         setFormData((prev) => ({
           ...prev,
@@ -6768,9 +6798,14 @@
                     <i className="fas fa-plus"></i> Add
                   </button>
                 </div>
-                <button onClick={() => setBulkMode(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, marginTop: 8, padding: 0 }}>
-                  <i className="fas fa-list" style={{ marginRight: 4 }}></i>Bulk add suburbs
-                </button>
+                <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+                  <button onClick={() => setBulkMode(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                    <i className="fas fa-list" style={{ marginRight: 4 }}></i>Bulk add suburbs
+                  </button>
+                  <button onClick={importSuburbsCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                    <i className="fas fa-file-csv" style={{ marginRight: 4 }}></i>Import CSV
+                  </button>
+                </div>
               </>
             ) : (
               <div>
