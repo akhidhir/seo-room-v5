@@ -1961,7 +1961,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     let yoastMap = {};
     try {
       const yoastResp = await fetch(`${wpBase}/wp-json/seoroom/v1/yoast-scores`, {
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(30000),
+        ...(getWpAuthHeaders(project) ? { headers: getWpAuthHeaders(project) } : {}),
       });
       if (yoastResp.ok) {
         const scores = await yoastResp.json();
@@ -1972,14 +1973,14 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       console.log(`[onpage-audit] seoroom plugin not available: ${e.message}`);
     }
 
-    // 2. Fetch all published pages from WP REST API
+    // 2. Fetch all published pages from WP REST API (with auth if available)
+    const wpAuth = getWpAuthHeaders(project);
+    const wpFetchOpts = { signal: AbortSignal.timeout(30000), ...(wpAuth ? { headers: wpAuth } : {}) };
     let allPages = [];
     let page = 1;
     while (true) {
       try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, {
-          signal: AbortSignal.timeout(30000)
-        });
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, wpFetchOpts);
         if (!resp.ok) break;
         const pages = await resp.json();
         if (!Array.isArray(pages) || pages.length === 0) break;
@@ -1992,9 +1993,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     page = 1;
     while (true) {
       try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, {
-          signal: AbortSignal.timeout(30000)
-        });
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, wpFetchOpts);
         if (!resp.ok) break;
         const posts = await resp.json();
         if (!Array.isArray(posts) || posts.length === 0) break;
