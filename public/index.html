@@ -5654,9 +5654,7 @@
                       <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0 }}>
                         <th style={{ padding: '8px 12px', width: 30 }}></th>
                         <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Keyword</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Volume</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Position</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 100 }}>Volume</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5667,12 +5665,6 @@
                           </td>
                           <td style={{ padding: '8px 12px', fontWeight: 500 }}>{k.keyword}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                            <span style={{ color: posColor(k.position), fontWeight: 700 }}>{k.position ? `#${k.position}` : '—'}</span>
-                          </td>
-                          <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {k.url || '—'}
-                          </td>
                         </tr>
                       ))}
                     </tbody>

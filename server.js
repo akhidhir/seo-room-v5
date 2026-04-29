@@ -4840,16 +4840,7 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
          ON CONFLICT (project_id, keyword, location) DO UPDATE SET search_volume=COALESCE(EXCLUDED.search_volume, rank_keywords.search_volume), competition=COALESCE(EXCLUDED.competition, rank_keywords.competition)`,
         [projectId, kw, k.volume || null, k.competition || null]
       );
-      // Insert into rank_tracking with SERP position + URL (unique timestamp per keyword)
-      if (k.position) {
-        const ts = new Date(baseTime + i).toISOString();
-        await pool.query(
-          `INSERT INTO rank_tracking (project_id, keyword, serp_position, serp_url, checked_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (project_id, keyword, location, checked_at) DO NOTHING`,
-          [projectId, kw, k.position, k.url || null, ts]
-        );
-      }
+      // Don't insert GSC position as SERP rank — only real SERP checks should populate rank_tracking
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
@@ -5457,7 +5448,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
         const kw = r.keyword.toLowerCase().trim();
         if (kw && !seen.has(kw)) {
           seen.add(kw);
-          keywords.push({ keyword: r.keyword, volume: null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
+          keywords.push({ keyword: r.keyword, volume: r.impressions || null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
         }
       }
       console.log(`[discover] Found ${keywords.length} keywords from GSC`);
@@ -5531,37 +5522,38 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
           keywords: capped.map(k => k.keyword),
           location_name: 'Australia',
           language_name: 'English',
-          date_from: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         }];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
         const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
           body: JSON.stringify(dfsBody),
+          signal: controller.signal,
         });
-        const dfsData = await dfsRes.json();
-        console.log(`[discover] DataForSEO status: ${dfsData.status_code}, tasks: ${dfsData.tasks?.length}`);
+        clearTimeout(timeout);
+        const dfsText = await dfsRes.text();
+        console.log(`[discover] DataForSEO HTTP ${dfsRes.status}, body length: ${dfsText.length}`);
+        console.log(`[discover] DataForSEO raw (first 500): ${dfsText.slice(0, 500)}`);
+        const dfsData = JSON.parse(dfsText);
         const task = dfsData.tasks?.[0];
-        if (task) {
-          console.log(`[discover] Task status: ${task.status_code} ${task.status_message}, results: ${task.result?.length || 0}`);
-          if (task.result) {
-            const volMap = {};
-            for (const r of task.result) {
-              if (r.keyword && r.search_volume != null) {
-                volMap[r.keyword.toLowerCase()] = r.search_volume;
-              }
+        if (task?.result) {
+          const volMap = {};
+          for (const r of task.result) {
+            if (r.keyword && r.search_volume != null) {
+              volMap[r.keyword.toLowerCase()] = r.search_volume;
             }
-            for (const kw of capped) {
-              const vol = volMap[kw.keyword.toLowerCase()];
-              if (vol != null) kw.volume = vol;
-            }
-            console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
-            if (task.result[0]) console.log(`[discover] Sample result keys: ${Object.keys(task.result[0]).join(', ')}`);
           }
+          for (const kw of capped) {
+            const vol = volMap[kw.keyword.toLowerCase()];
+            if (vol != null) kw.volume = vol;
+          }
+          console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
         } else {
-          console.log(`[discover] DataForSEO raw response: ${JSON.stringify(dfsData).slice(0, 500)}`);
+          console.log(`[discover] DataForSEO no results. Status: ${task?.status_code} ${task?.status_message}`);
         }
       } catch (e) {
-        console.log('[discover] DataForSEO volume lookup failed:', e.message);
+        console.log(`[discover] DataForSEO volume lookup failed: ${e.name}: ${e.message}`);
       }
     }
 
