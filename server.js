@@ -4944,6 +4944,42 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// AI suggest service keywords for Maps
+app.post('/api/projects/:projectId/rank-tracking/suggest-services', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const p = projRes.rows[0];
+    const existing = (req.body.existing || []).join(', ');
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: `You are a local SEO expert. Generate service keywords for a Maps ranking campaign.
+
+Business: ${p.business_name || p.name}
+Industry: ${p.industry || 'general'}
+Location: ${p.location || 'Australia'}
+${existing ? `Already have: ${existing}` : ''}
+
+Generate 20-30 service keyword variations that people would search on Google Maps to find this business. Include:
+- Core services (e.g., "auto locksmith", "car key replacement")
+- Specific service variations (e.g., "transponder key programming", "emergency car lockout")
+- Near-me style keywords (e.g., "locksmith near me", "24 hour locksmith")
+- Problem-based keywords (e.g., "locked out of car", "lost car keys")
+
+Return ONLY a JSON array of strings, no duplicates, no explanation. Example: ["service 1", "service 2"]` }]
+    });
+    const text = msg.content[0].text.trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    const services = match ? JSON.parse(match[0]) : [];
+    res.json({ services });
+  } catch (e) {
+    console.error('[suggest-services] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Add keywords to track
 app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   const { projectId } = req.params;
