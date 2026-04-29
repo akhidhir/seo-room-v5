@@ -5256,13 +5256,16 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           // Parse organic results
           let serp = { position: null, url: null, title: null, snippet: null, type: null };
           let kwCompetitors = [];
+          const domainLower = domain.toLowerCase();
+          if (idx < 3) console.log(`[rank-sync] "${query}" matching domain: "${domainLower}", organic_results: ${(data.organic_results || []).length}`);
           for (const item of (data.organic_results || [])) {
             const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
             const pos = item.position;
 
-            // Strict domain match: the result's hostname must match our domain exactly
+            // Strict domain match: extract just the hostname from the result
             const itemHost = itemDomain.split('/')[0];
-            if (domain && (itemHost === domain.toLowerCase() || itemHost === 'www.' + domain.toLowerCase() || itemHost.endsWith('.' + domain.toLowerCase()))) {
+            if (idx < 3 && pos <= 5) console.log(`[rank-sync]   #${pos} itemHost="${itemHost}" vs domain="${domainLower}" match=${itemHost === domainLower}`);
+            if (domainLower && (itemHost === domainLower || itemHost === 'www.' + domainLower || itemHost.endsWith('.' + domainLower))) {
               if (!serp.position) {
                 serp = { position: pos, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               }
