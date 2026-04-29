@@ -342,6 +342,7 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS assignee_label TEXT`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
+    await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
 
     // GBP tasks are manual (SEO Specialist) — no extension automation
     await client.query(`
