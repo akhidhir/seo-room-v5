@@ -524,15 +524,76 @@ app.delete('/api/projects/:id', async (req, res) => {
   }
 });
 
+// Haversine distance in km
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Perth suburb GPS coordinates for distance calculation
+const SUBURB_GPS = {
+  'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
+  'east cannington': { lat: -32.0100, lng: 115.9500 }, 'ferndale': { lat: -32.0300, lng: 115.9500 },
+  'lynwood': { lat: -32.0400, lng: 115.9300 }, 'parkwood': { lat: -32.0450, lng: 115.9150 },
+  'queens park': { lat: -32.0050, lng: 115.9400 }, 'riverton': { lat: -32.0350, lng: 115.8940 },
+  'rossmoyne': { lat: -32.0380, lng: 115.8700 }, 'shelley': { lat: -32.0280, lng: 115.8800 },
+  'willetton': { lat: -32.0530, lng: 115.8890 }, 'wilson': { lat: -32.0230, lng: 115.9100 },
+  'canning vale': { lat: -32.0580, lng: 115.9180 }, 'bentley': { lat: -32.0000, lng: 115.9200 },
+  'welshpool': { lat: -31.9930, lng: 115.9450 }, 'atwell': { lat: -32.1440, lng: 115.8640 },
+  'aubin grove': { lat: -32.1640, lng: 115.8660 }, 'banjup': { lat: -32.1290, lng: 115.8580 },
+  'beeliar': { lat: -32.1350, lng: 115.8150 }, 'bibra lake': { lat: -32.0930, lng: 115.8200 },
+  'cockburn': { lat: -32.1300, lng: 115.8500 }, 'coogee': { lat: -32.1190, lng: 115.7650 },
+  'coolbellup': { lat: -32.0830, lng: 115.8030 }, 'hamilton hill': { lat: -32.0820, lng: 115.7770 },
+  'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
+  'jandakot': { lat: -32.1050, lng: 115.8700 }, 'lake coogee': { lat: -32.1280, lng: 115.7800 },
+  'munster': { lat: -32.1310, lng: 115.7870 }, 'north coogee': { lat: -32.1100, lng: 115.7640 },
+  'north lake': { lat: -32.0770, lng: 115.8330 }, 'south lake': { lat: -32.0870, lng: 115.8350 },
+  'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
+  'treeby': { lat: -32.1500, lng: 115.8630 }, 'wattleup': { lat: -32.1470, lng: 115.7990 },
+  'yangebup': { lat: -32.1220, lng: 115.8140 }, 'murdoch': { lat: -32.0660, lng: 115.8430 },
+  'perth': { lat: -31.9505, lng: 115.8605 }, 'fremantle': { lat: -32.0569, lng: 115.7439 },
+  'joondalup': { lat: -31.7467, lng: 115.7672 }, 'midland': { lat: -31.8893, lng: 116.0108 },
+  'armadale': { lat: -32.1531, lng: 116.0107 }, 'rockingham': { lat: -32.2833, lng: 115.7333 },
+  'mandurah': { lat: -32.5269, lng: 115.7217 }, 'stirling': { lat: -31.8833, lng: 115.8333 },
+  'claremont': { lat: -31.9803, lng: 115.7814 }, 'subiaco': { lat: -31.9490, lng: 115.8270 },
+  'nedlands': { lat: -31.9800, lng: 115.8060 }, 'cottesloe': { lat: -31.9930, lng: 115.7640 },
+  'mosman park': { lat: -32.0070, lng: 115.7630 }, 'peppermint grove': { lat: -31.9990, lng: 115.7690 },
+  'cambridge': { lat: -31.9370, lng: 115.7930 }, 'victoria park': { lat: -31.9760, lng: 115.8990 },
+  'south perth': { lat: -31.9720, lng: 115.8640 }, 'como': { lat: -31.9910, lng: 115.8610 },
+  'bayswater': { lat: -31.9160, lng: 115.9150 }, 'bassendean': { lat: -31.9030, lng: 115.9470 },
+  'belmont': { lat: -31.9530, lng: 115.9360 }, 'kalamunda': { lat: -31.9750, lng: 116.0580 },
+  'mundaring': { lat: -31.9020, lng: 116.1690 }, 'swan': { lat: -31.7930, lng: 116.0260 },
+  'gosnells': { lat: -32.0810, lng: 115.9810 }, 'serpentine': { lat: -32.3580, lng: 115.9810 },
+  'jarrahdale': { lat: -32.3380, lng: 116.0570 }, 'byford': { lat: -32.2240, lng: 116.0040 },
+  'wanneroo': { lat: -31.7500, lng: 115.8000 }, 'alkimos': { lat: -31.6280, lng: 115.7250 },
+  'beaconsfield': { lat: -32.0560, lng: 115.7640 }, 'melville': { lat: -32.0440, lng: 115.7860 },
+  'kwinana': { lat: -32.2400, lng: 115.7700 }, 'vincent': { lat: -31.9330, lng: 115.8500 },
+};
+
 // Get/set service areas for a project
 app.get('/api/projects/:id/service-areas', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT service_areas FROM projects WHERE id=$1 AND user_id=$2',
+      'SELECT service_areas, location FROM projects WHERE id=$1 AND user_id=$2',
       [req.params.id, req.auth.userId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    res.json({ service_areas: result.rows[0].service_areas || [] });
+    const areas = result.rows[0].service_areas || [];
+    const projectLocation = (result.rows[0].location || '').toLowerCase().trim();
+    // If project has a known location, recalculate real distances
+    const hqGps = SUBURB_GPS[projectLocation];
+    if (hqGps) {
+      for (const area of areas) {
+        const subGps = SUBURB_GPS[area.name.toLowerCase()];
+        if (subGps) {
+          area.distance = Math.round(haversineKm(hqGps.lat, hqGps.lng, subGps.lat, subGps.lng) * 10) / 10;
+        }
+      }
+    }
+    res.json({ service_areas: areas, hq_location: projectLocation, hq_found: !!hqGps });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

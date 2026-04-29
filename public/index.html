@@ -5777,15 +5777,15 @@
         setShowGenerator(true);
       };
 
-      const regenerateCombos = (overrideDist) => {
+      const regenerateCombos = (overrideDist, overrideServices) => {
         const dist = overrideDist != null ? overrideDist : maxDistance;
+        const svcs = overrideServices != null ? overrideServices : genServices;
         const subs = getAvailSubs(genAreas, dist, customSuburbs);
         setAvailSubs(subs);
-        // New suburbs default selected, removed suburbs dropped
         const sel = {};
-        subs.forEach(s => sel[s.name] = selectedSubs[s.name] !== undefined ? selectedSubs[s.name] : true);
+        subs.forEach(s => sel[s.name] = s.name in selectedSubs ? selectedSubs[s.name] : true);
         setSelectedSubs(sel);
-        const combos = rebuildCombos(subs, sel, genServices);
+        const combos = rebuildCombos(subs, sel, svcs);
         setGenCombos(combos);
         setGenChecked(checkAll(combos, mapsLimit));
       };
@@ -5840,9 +5840,10 @@
       };
 
       const toggleGenItem = (idx) => {
+        if (idx >= mapsLimit) return;
         setGenChecked(prev => ({ ...prev, [idx]: !prev[idx] }));
       };
-      const checkedCount = Object.values(genChecked).filter(Boolean).length;
+      const checkedCount = Object.entries(genChecked).filter(([k, v]) => v && parseInt(k) < mapsLimit).length;
 
       const mToggleSort = (col) => {
         if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
