@@ -5802,7 +5802,25 @@
         const subSel = {};
         subs.forEach(s => subSel[s.name] = s.name in selectedSubs ? selectedSubs[s.name] : true);
         setSelectedSubs(subSel);
-        refreshCombos(servicesList, selectedServices, subs, subSel);
+        // Also refresh service selections
+        const svcSel = { ...selectedServices };
+        servicesList.forEach(s => { if (!(s in svcSel)) svcSel[s] = true; });
+        setSelectedServices(svcSel);
+        refreshCombos(servicesList, svcSel, subs, subSel);
+      };
+
+      const resetGenerator = () => {
+        setServicesList([]);
+        setSelectedServices({});
+        setCustomServiceInput('');
+        setCustomSuburbs('');
+        const subs = getAvailSubs(genAreas, maxDistance, '');
+        setAvailSubs(subs);
+        const subSel = {};
+        subs.forEach(s => subSel[s.name] = true);
+        setSelectedSubs(subSel);
+        setGenCombos([]);
+        setGenChecked({});
       };
 
       const toggleSuburb = (name) => {
@@ -6332,7 +6350,10 @@
                           background: mapsLimit === n ? 'var(--accent)' : 'var(--bg3)', color: mapsLimit === n ? '#fff' : 'var(--text2)',
                           border: mapsLimit === n ? 'none' : '1px solid var(--border)' }}>{n}</button>
                     ))}
-                    <button className="btn" onClick={() => regenerateCombos()} style={{ fontSize: 11, padding: '4px 12px', marginLeft: 'auto' }}>
+                    <button className="btn" onClick={resetGenerator} style={{ fontSize: 11, padding: '4px 12px', marginLeft: 'auto', color: '#ef4444' }}>
+                      <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Reset
+                    </button>
+                    <button className="btn" onClick={() => regenerateCombos()} style={{ fontSize: 11, padding: '4px 12px' }}>
                       <i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Refresh
                     </button>
                   </div>

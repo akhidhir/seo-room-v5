@@ -4968,6 +4968,8 @@ Generate 20-30 service keyword variations that people would search on Google Map
 - Near-me style keywords (e.g., "locksmith near me", "24 hour locksmith")
 - Problem-based keywords (e.g., "locked out of car", "lost car keys")
 
+IMPORTANT: Do NOT include city names, suburb names, or location names in the keywords. The location will be added separately as a suburb. For example return "auto locksmith" NOT "auto locksmith Perth".
+
 Return ONLY a JSON array of strings, no duplicates, no explanation. Example: ["service 1", "service 2"]` }]
     });
     const text = msg.content[0].text.trim();
