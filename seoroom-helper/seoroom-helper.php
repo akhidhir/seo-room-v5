@@ -66,3 +66,37 @@ function seoroom_add_yoast_to_rest($response, $post, $request) {
     ];
     return $response;
 }
+
+// REST endpoint: /wp-json/seoroom/v1/yoast-scores
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom/v1', '/yoast-scores', [
+        'methods'  => 'GET',
+        'callback' => 'seoroom_yoast_scores',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+
+function seoroom_yoast_scores() {
+    $results = [];
+    $post_types = ['page', 'post'];
+    foreach ($post_types as $type) {
+        $posts = get_posts([
+            'post_type'      => $type,
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+        ]);
+        foreach ($posts as $p) {
+            $results[] = [
+                'id'            => $p->ID,
+                'title'         => $p->post_title,
+                'type'          => $type,
+                'focus_keyword' => get_post_meta($p->ID, '_yoast_wpseo_focuskw', true),
+                'seo_score'     => get_post_meta($p->ID, '_yoast_wpseo_linkdex', true),
+                'content_score' => get_post_meta($p->ID, '_yoast_wpseo_content_score', true),
+                'meta_title'    => get_post_meta($p->ID, '_yoast_wpseo_title', true),
+                'meta_desc'     => get_post_meta($p->ID, '_yoast_wpseo_metadesc', true),
+            ];
+        }
+    }
+    return rest_ensure_response($results);
+}

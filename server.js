@@ -2136,11 +2136,14 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       const content = pg.content?.rendered || '';
       const yoast = pg.yoast_head_json || {};
       const pluginData = yoastMap[pg.id];
+      // Fallback: read from seoroom_yoast (added by plugin to REST response) or meta fields
+      const srYoast = pg.seoroom_yoast || {};
+      const pgMeta = pg.meta || {};
 
       // Extract fields
       const metaTitle = yoast.title || '';
       const metaDesc = yoast.description || '';
-      const focusKeyword = pluginData?.focus_keyword || '';
+      const focusKeyword = pluginData?.focus_keyword || srYoast.focus_keyword || pgMeta._yoast_wpseo_focuskw || pgMeta.yoast_wpseo_focuskw || '';
       const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const wordCount = plainText.split(/\s+/).filter(Boolean).length;
 
@@ -2165,8 +2168,9 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
 
       // Determine Yoast score
       let yoastScore = 'gray';
-      if (pluginData) {
-        const seoScore = pluginData.seo_score || 0;
+      const rawSeoScore = pluginData?.seo_score || srYoast.seo_score || pgMeta._yoast_wpseo_linkdex || 0;
+      if (rawSeoScore) {
+        const seoScore = parseInt(rawSeoScore) || 0;
         yoastScore = seoScore >= 70 ? 'green' : seoScore >= 40 ? 'orange' : 'red';
       } else {
         // Heuristic based on meta completeness
