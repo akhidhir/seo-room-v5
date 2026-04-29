@@ -5722,6 +5722,8 @@
 
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
+      const [genService, setGenService] = useState(project.industry || '');
+
       const openGenerator = async () => {
         const resp = await api(`/projects/${project.id}/service-areas`);
         const areas = resp.service_areas || resp;
@@ -5730,22 +5732,23 @@
           return;
         }
         setGenAreas(areas);
-        // Auto-generate: "plumber" + each suburb within distance
-        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
-        const filtered = areas.filter(a => (a.distance_km || 0) <= 20 && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
-          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
+        const svc = genService || project.industry || 'service';
+        const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
+        const filtered = areas.filter(a => (a.distance || 0) <= maxDistance && !cityNames.has(a.name.toLowerCase()));
+        const combos = filtered.map(a => ({ service: svc, location: a.name, distance: a.distance }))
+          .filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
           .sort((a, b) => (a.distance || 0) - (b.distance || 0));
         setGenCombos(combos);
         setGenSelected(new Set(combos.map((_, i) => i)));
         setShowGenerator(true);
       };
 
-      const regenerateCombos = (dist) => {
-        const tracked = new Set(merged.filter(k => k.location).map(k => `plumber|${k.location.toLowerCase()}`));
-        const filtered = genAreas.filter(a => (a.distance_km || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: 'plumber', location: a.name, distance: a.distance_km }))
-          .filter(c => !tracked.has(`plumber|${c.location.toLowerCase()}`))
+      const regenerateCombos = (dist, svc) => {
+        const serviceStr = svc || genService || project.industry || 'service';
+        const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
+        const filtered = genAreas.filter(a => (a.distance || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
+        const combos = filtered.map(a => ({ service: serviceStr, location: a.name, distance: a.distance }))
+          .filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
           .sort((a, b) => (a.distance || 0) - (b.distance || 0));
         setGenCombos(combos);
         setGenSelected(new Set(combos.map((_, i) => i)));
@@ -5827,6 +5830,45 @@
         setLocation('');
       };
 
+      const importMapsCSV = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.csv,.txt';
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          const lines = text.split(/\r?\n/).filter(l => l.trim());
+          let added = 0;
+          for (const line of lines) {
+            const parts = line.split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+            if (parts.length < 2) continue;
+            const [svc, loc] = parts;
+            if (!svc || !loc || svc.toLowerCase() === 'service' || svc.toLowerCase() === 'keyword') continue;
+            await api(`/projects/${project.id}/rank-tracking/keywords`, {
+              method: 'POST',
+              body: { keywords: [svc], location: loc }
+            });
+            added++;
+          }
+          if (added > 0) {
+            alert(`Imported ${added} maps keywords`);
+            window.location.reload();
+          } else {
+            alert('No valid rows found. CSV format: service,location (one per line)');
+          }
+        };
+        input.click();
+      };
+
+      const downloadMapsSampleCSV = () => {
+        const csv = 'service,location\nlocksmith,Perth CBD\nlocksmith,Fremantle\ncar key replacement,Joondalup';
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'maps-keywords-sample.csv'; a.click();
+        URL.revokeObjectURL(url);
+      };
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -5840,6 +5882,12 @@
               </button>}
               <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
+              </button>
+              <button className="btn" onClick={importMapsCSV} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
+              </button>
+              <button onClick={downloadMapsSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
+                Sample
               </button>
               <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
                 {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
@@ -6038,10 +6086,20 @@
                 </div>
                 <div style={{ overflow: 'auto', flex: 1, padding: '20px' }}>
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Service: <strong>plumber</strong> (hardcoded)</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 12 }}>Distance from headquarters</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Service keyword</div>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={genService}
+                      onChange={(e) => { setGenService(e.target.value); }}
+                      onBlur={() => regenerateCombos(maxDistance, genService)}
+                      onKeyPress={(e) => e.key === 'Enter' && regenerateCombos(maxDistance, genService)}
+                      placeholder={project.industry || 'e.g. locksmith, plumber, dentist'}
+                      style={{ marginBottom: 12, fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Distance from headquarters</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d); }} style={{ flex: 1 }} />
+                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d, genService); }} style={{ flex: 1 }} />
                       <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
                     </div>
                   </div>
