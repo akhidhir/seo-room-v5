@@ -5358,9 +5358,41 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
       await Promise.all(promises);
     }
 
-    // Search volume via SerpAPI — use google_trends or keyword info if available
-    // SerpAPI doesn't have a bulk volume endpoint like DataForSEO, so we skip bulk volume fetch
-    // Volume data can be populated via GSC import or manual CSV upload instead
+    // Fetch search volumes via DataForSEO for all tracked keywords
+    if (DATAFORSEO_AUTH && kwRes.rows.length > 0) {
+      try {
+        const allKws = kwRes.rows.map(k => k.keyword);
+        console.log(`[rank-sync] Fetching DataForSEO volumes for ${allKws.length} keywords`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords: allKws, location_name: 'Australia', language_name: 'English' }]),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (dfsRes.ok) {
+          const dfsData = await dfsRes.json();
+          const volResults = dfsData?.tasks?.[0]?.result || [];
+          let updated = 0;
+          for (const r of volResults) {
+            if (r.keyword && r.search_volume != null) {
+              await pool.query(
+                'UPDATE rank_keywords SET search_volume=$1 WHERE project_id=$2 AND LOWER(keyword)=LOWER($3)',
+                [r.search_volume, projectId, r.keyword]
+              );
+              updated++;
+            }
+          }
+          console.log(`[rank-sync] Updated ${updated} keyword volumes via DataForSEO`);
+        } else {
+          console.log(`[rank-sync] DataForSEO volume fetch failed: HTTP ${dfsRes.status}`);
+        }
+      } catch (volErr) {
+        console.log(`[rank-sync] DataForSEO volume fetch error: ${volErr.message}`);
+      }
+    }
 
     const synced = results.filter(r => r && !r.error).length;
     console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords.`);
