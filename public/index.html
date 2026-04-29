@@ -5722,7 +5722,9 @@
 
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
-      const [genService, setGenService] = useState(project.industry || '');
+      const [genServices, setGenServices] = useState(project.industry || '');
+
+      const parseServices = (text) => text.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
 
       const openGenerator = async () => {
         const resp = await api(`/projects/${project.id}/service-areas`);
@@ -5732,26 +5734,40 @@
           return;
         }
         setGenAreas(areas);
-        const svc = genService || project.industry || 'service';
+        const svcs = parseServices(genServices);
+        if (svcs.length === 0) svcs.push(project.industry || 'service');
         const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
         const filtered = areas.filter(a => (a.distance || 0) <= maxDistance && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: svc, location: a.name, distance: a.distance }))
+        const combos = [];
+        for (const svc of svcs) {
+          for (const a of filtered) {
+            combos.push({ service: svc, location: a.name, distance: a.distance });
+          }
+        }
+        const deduped = combos
           .filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
           .sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        setGenCombos(combos);
-        setGenSelected(new Set(combos.map((_, i) => i)));
+        setGenCombos(deduped);
+        setGenSelected(new Set(deduped.map((_, i) => i)));
         setShowGenerator(true);
       };
 
-      const regenerateCombos = (dist, svc) => {
-        const serviceStr = svc || genService || project.industry || 'service';
+      const regenerateCombos = (dist, svcText) => {
+        const svcs = parseServices(svcText || genServices);
+        if (svcs.length === 0) svcs.push(project.industry || 'service');
         const tracked = new Set(merged.filter(k => k.location).map(k => `${k.keyword.toLowerCase()}|${k.location.toLowerCase()}`));
         const filtered = genAreas.filter(a => (a.distance || 0) <= dist && !cityNames.has(a.name.toLowerCase()));
-        const combos = filtered.map(a => ({ service: serviceStr, location: a.name, distance: a.distance }))
+        const combos = [];
+        for (const svc of svcs) {
+          for (const a of filtered) {
+            combos.push({ service: svc, location: a.name, distance: a.distance });
+          }
+        }
+        const deduped = combos
           .filter(c => !tracked.has(`${c.service.toLowerCase()}|${c.location.toLowerCase()}`))
           .sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        setGenCombos(combos);
-        setGenSelected(new Set(combos.map((_, i) => i)));
+        setGenCombos(deduped);
+        setGenSelected(new Set(deduped.map((_, i) => i)));
       };
 
       const addGeneratedKeywords = async () => {
@@ -6086,20 +6102,19 @@
                 </div>
                 <div style={{ overflow: 'auto', flex: 1, padding: '20px' }}>
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Service keyword</div>
-                    <input
-                      type="text"
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 4 }}>Service keywords <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(one per line or comma-separated)</span></div>
+                    <textarea
                       className="form-input"
-                      value={genService}
-                      onChange={(e) => { setGenService(e.target.value); }}
-                      onBlur={() => regenerateCombos(maxDistance, genService)}
-                      onKeyPress={(e) => e.key === 'Enter' && regenerateCombos(maxDistance, genService)}
-                      placeholder={project.industry || 'e.g. locksmith, plumber, dentist'}
-                      style={{ marginBottom: 12, fontSize: 13 }}
+                      value={genServices}
+                      onChange={(e) => { setGenServices(e.target.value); }}
+                      onBlur={() => regenerateCombos(maxDistance, genServices)}
+                      placeholder={`e.g.\nauto locksmith\ncar key replacement\ncar key cutting`}
+                      rows={3}
+                      style={{ marginBottom: 12, fontSize: 13, resize: 'vertical', minHeight: 60 }}
                     />
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Distance from headquarters</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d, genService); }} style={{ flex: 1 }} />
+                      <input type="range" min={5} max={40} value={maxDistance} onChange={(e) => { const d = parseInt(e.target.value); setMaxDistance(d); regenerateCombos(d, genServices); }} style={{ flex: 1 }} />
                       <span style={{ fontSize: 13, fontWeight: 600, minWidth: 50 }}>{maxDistance}km</span>
                     </div>
                   </div>
@@ -6110,6 +6125,7 @@
                       <thead>
                         <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                           <th style={{ padding: '8px 12px', width: 24 }}></th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Service</th>
                           <th style={{ padding: '8px 12px', textAlign: 'left' }}>Suburb</th>
                           <th style={{ padding: '8px 12px', textAlign: 'center', width: 80 }}>Distance</th>
                         </tr>
@@ -6120,6 +6136,7 @@
                             <td style={{ padding: '8px 12px', textAlign: 'center', cursor: 'pointer' }}>
                               <input type="checkbox" checked={genSelected.has(i)} onChange={() => toggleGenItem(i)} />
                             </td>
+                            <td style={{ padding: '8px 12px', cursor: 'pointer', fontWeight: 500 }}>{c.service}</td>
                             <td style={{ padding: '8px 12px', cursor: 'pointer' }}>{c.location}</td>
                             <td style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text3)', cursor: 'pointer' }}>{c.distance ? `${c.distance.toFixed(1)}km` : '—'}</td>
                           </tr>
