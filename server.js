@@ -5031,7 +5031,8 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
           const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
           for (const item of (data.organic_results || [])) {
             const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
-            if (domain && (itemDomain.includes(domain) || domain.includes(itemDomain.split('/')[0]))) {
+            const itemHost = itemDomain.split('/')[0];
+            if (domain && (itemHost === domain || itemHost === 'www.' + domain || itemHost.endsWith('.' + domain))) {
               serp = { position: item.position, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               break;
             }
@@ -5259,7 +5260,9 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
             const pos = item.position;
 
-            if (domain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain.split('/')[0]))) {
+            // Strict domain match: the result's hostname must match our domain exactly
+            const itemHost = itemDomain.split('/')[0];
+            if (domain && (itemHost === domain.toLowerCase() || itemHost === 'www.' + domain.toLowerCase() || itemHost.endsWith('.' + domain.toLowerCase()))) {
               if (!serp.position) {
                 serp = { position: pos, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               }
@@ -5268,9 +5271,9 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
                 kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
-            // Named competitors
+            // Named competitors — strict host match
             for (const cd of competitorDomains) {
-              if ((itemDomain.includes(cd) || cd.includes(itemDomain)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
+              if ((itemHost === cd || itemHost === 'www.' + cd || itemHost.endsWith('.' + cd)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
                 kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
