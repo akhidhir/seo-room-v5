@@ -1061,13 +1061,18 @@ You have ${Object.keys(reports).length} audit reports below. Your job:
 5. PRIORITIZE — order by business impact. Quick wins (pages close to page 1) first, then critical fixes, then optimizations.
 6. SEVERITY — Critical (blocking revenue/visibility), High (significant impact), Medium (improvement), Low (nice-to-have)
 
-CRITICAL RULES:
-- Do NOT invent findings. Only extract what's in the reports.
-- Do NOT recommend creating a page that already exists — recommend optimizing it instead.
+CRITICAL ACCURACY RULES:
+- ONLY extract findings that are EXPLICITLY stated in the reports. Do NOT invent, assume, or infer issues not mentioned.
+- If a report says a page EXISTS (e.g. "Website Page: Yes"), do NOT recommend creating it. Recommend optimizing it instead.
+- If two reports contradict each other, trust the one with concrete data (URLs, scores, status codes) over vague recommendations.
+- NEVER include a finding unless you can point to the exact sentence in the report that supports it.
+- If a field in the report is null, empty, or "N/A", do NOT flag it as missing — the data may simply not be available.
+- The "description" field must quote or closely paraphrase what the report actually says about the issue.
 - The "recommendation" field must have specific, actionable instructions (not vague advice).
 - For WP Plugin items: specify the exact page URL/path and what to change.
 - For SEO Specialist items: include step-by-step instructions.
 - For Manual items: explain exactly what the business owner needs to do.
+- ZERO tolerance for hallucinated URLs, page titles, or metrics not found in the reports.
 
 Return ONLY a JSON array, no explanation:
 [{
@@ -1117,11 +1122,9 @@ ${reportSection}`;
           gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
         };
 
-        // Clear old action items and findings for all pillars
-        for (const pillar of auditPillars) {
-          await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
-          await pool.query('DELETE FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
-        }
+        // Clean slate — delete ALL action items and findings for this project (orchestrator is sole source of truth)
+        await pool.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
+        await pool.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
 
         let savedCount = 0;
         for (const item of uniqueItems) {
@@ -1168,66 +1171,7 @@ ${reportSection}`;
   }
 });
 
-// Legacy sync-all (kept for backward compatibility)
-app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
-  const { projectId } = req.params;
-  const pillars = ['gbp_external', 'gsc_agent', 'gsc', 'website'];
-  const results = {};
-  for (const pillar of pillars) {
-    try {
-      const auditRes = await pool.query(
-        `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
-        [projectId, pillar]
-      );
-      if (auditRes.rows.length > 0) {
-        const auditData = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
-        const reportText = auditData?.report || auditData?.final_report || '';
-        if (reportText) {
-          const auditIdRes = await pool.query(
-            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
-            [projectId, pillar]
-          );
-          const auditId = auditIdRes.rows[0]?.id;
-          const count = await extractFindingsFromReport(reportText, pillar, parseInt(projectId), auditId);
-          results[pillar] = { extracted: count };
-        } else {
-          // No report text — old-style audit that saves findings directly. Create action_items from audit_findings.
-          const auditIdRes = await pool.query(
-            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
-            [projectId, pillar]
-          );
-          const auditId = auditIdRes.rows[0]?.id;
-          if (auditId) {
-            const existingFindings = await pool.query(
-              `SELECT * FROM audit_findings WHERE project_id=$1 AND audit_id=$2`, [parseInt(projectId), auditId]
-            );
-            if (existingFindings.rows.length > 0) {
-              // Clear old action_items for this pillar, then create from findings
-              await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [parseInt(projectId), pillar]);
-              for (const f of existingFindings.rows) {
-                await pool.query(
-                  `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
-                  [parseInt(projectId), f.id, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
-                );
-              }
-              results[pillar] = { extracted: existingFindings.rows.length, source: 'audit_findings' };
-            } else {
-              results[pillar] = { extracted: 0, reason: 'no findings in DB' };
-            }
-          } else {
-            results[pillar] = { extracted: 0, reason: 'no report text' };
-          }
-        }
-      } else {
-        results[pillar] = { extracted: 0, reason: 'no completed audit' };
-      }
-    } catch (e) {
-      results[pillar] = { error: e.message };
-    }
-  }
-  res.json({ results });
-});
+// Legacy sync-all removed — orchestrator is the sole source of truth for action items
 
 // ==================== SERPAPI HELPER ====================
 
@@ -3826,9 +3770,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
         console.log(`[gbp-external] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -3931,9 +3873,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
         console.log(`[website-agent] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'website', projectId, auditId);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[website-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -4075,9 +4015,7 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
         console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'gsc_agent', projectId, auditId);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
