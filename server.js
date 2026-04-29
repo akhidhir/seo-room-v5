@@ -896,13 +896,29 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       titleCounts[key] = (titleCounts[key] || 0) + 1;
     }
 
-    // Deduplicate: same title + same pillar = duplicate, keep newest
+    // Normalize title for fuzzy dedup: strip filler words, punctuation, collapse whitespace
+    function normalizeTitle(t) {
+      return (t || '').toLowerCase().trim()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\b(the|a|an|to|for|of|in|on|and|or|with|your|their|its|this|that|add|create|update|implement|ensure|improve|optimize)\b/g, '')
+        .replace(/\s+/g, ' ').trim();
+    }
+
+    // Deduplicate: same pillar + similar title = duplicate, keep the one with assignee_label (orchestrator) first, then newest
     const seen = new Map();
     const deduped = [];
-    for (const item of items) {
-      const key = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
-      if (!seen.has(key)) {
-        seen.set(key, true);
+    // Sort so orchestrator items (have assignee_label) come first
+    const sorted = [...items].sort((a, b) => {
+      if (a.assignee_label && !b.assignee_label) return -1;
+      if (!a.assignee_label && b.assignee_label) return 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+    for (const item of sorted) {
+      const exactKey = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
+      const fuzzyKey = `${item.pillar}:${normalizeTitle(item.title)}`;
+      if (!seen.has(exactKey) && !seen.has(fuzzyKey)) {
+        seen.set(exactKey, true);
+        if (fuzzyKey !== exactKey) seen.set(fuzzyKey, true);
         deduped.push(item);
       }
     }
