@@ -5723,8 +5723,8 @@
 
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
-      const [genServices, setGenServices] = useState(project.industry || '');
-      const [customSuburbs, setCustomSuburbs] = useState('');
+      const [genServices, setGenServices] = useState(project.map_services || project.industry || '');
+      const [customSuburbs, setCustomSuburbs] = useState(project.map_custom_suburbs || '');
       const [mapsLimit, setMapsLimit] = useState(100);
       const [selectedSubs, setSelectedSubs] = useState({});
       const [availSubs, setAvailSubs] = useState([]);
@@ -5834,6 +5834,11 @@
             body: { keywords: [c.service], location: c.location }
           });
         }
+        // Persist services & custom suburbs to project
+        api(`/projects/${project.id}`, {
+          method: 'PUT',
+          body: { map_services: genServices, map_custom_suburbs: customSuburbs }
+        }).catch(() => {});
         alert(`Added ${toAdd.length} Maps keywords`);
         setShowGenerator(false);
         loadData();
@@ -6201,27 +6206,23 @@
                       <i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Regenerate
                     </button>
                   </div>
-                  {genCombos.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)' }}>No combos generated. Add services and suburbs above, then click Regenerate.</div>
-                  ) : (
-                    <React.Fragment>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{genCombos.length} combos{genCombos.length > mapsLimit ? <span style={{ color: '#f59e0b', fontWeight: 600 }}> — limit is {mapsLimit}, only first {mapsLimit} will be added</span> : ''}</div>
-                    {(() => {
-                      const allOn = Object.values(selectedSubs).every(Boolean);
-                      const allOff = Object.values(selectedSubs).every(v => !v);
-                      return (
-                        <div style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>Suburbs ({Object.values(selectedSubs).filter(Boolean).length}/{availSubs.length} selected)</span>
-                            <span>
-                              <button onClick={() => setAllSubs(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, marginRight: 8 }} disabled={allOn}>Select All</button>
-                              <button onClick={() => setAllSubs(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }} disabled={allOff}>Deselect All</button>
-                            </span>
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', maxHeight: 120, overflow: 'auto' }}>
-                            {availSubs.map(sub => (
-                              <label key={sub.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: selectedSubs[sub.name] ? 'var(--text)' : 'var(--text3)' }}>
-                                <input type="checkbox" checked={!!selectedSubs[sub.name]} onChange={() => toggleSuburb(sub.name)} style={{ margin: 0 }} />
+                  {/* Suburb selector — always visible */}
+                  {availSubs.length > 0 && (() => {
+                    const allOn = Object.values(selectedSubs).every(Boolean);
+                    const allOff = Object.values(selectedSubs).every(v => !v);
+                    return (
+                      <div style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>Suburbs ({Object.values(selectedSubs).filter(Boolean).length}/{availSubs.length} selected)</span>
+                          <span>
+                            <button onClick={() => setAllSubs(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, marginRight: 8 }} disabled={allOn}>Select All</button>
+                            <button onClick={() => setAllSubs(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }} disabled={allOff}>Deselect All</button>
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', maxHeight: 120, overflow: 'auto' }}>
+                          {availSubs.map(sub => (
+                            <label key={sub.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: selectedSubs[sub.name] ? 'var(--text)' : 'var(--text3)' }}>
+                              <input type="checkbox" checked={!!selectedSubs[sub.name]} onChange={() => toggleSuburb(sub.name)} style={{ margin: 0 }} />
                                 {sub.name}{sub.distance != null ? ` (${sub.distance.toFixed(0)}km)` : ''}
                               </label>
                             ))}
@@ -6229,6 +6230,15 @@
                         </div>
                       );
                     })()}
+
+                  {/* Combos table */}
+                  {genCombos.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)' }}>
+                      {availSubs.length === 0 ? 'No suburbs available. Add service areas in Settings or custom suburbs above.' : 'Select suburbs above to generate combos.'}
+                    </div>
+                  ) : (
+                    <React.Fragment>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{genCombos.length} combos{genCombos.length > mapsLimit ? <span style={{ color: '#f59e0b', fontWeight: 600 }}> — limit is {mapsLimit}, only first {mapsLimit} will be added</span> : ''}</div>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>

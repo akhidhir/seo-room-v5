@@ -310,6 +310,8 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_custom_suburbs TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -478,6 +480,8 @@ app.put('/api/projects/:id', async (req, res) => {
   const gbp_location_name = b.gbp_location_name || b.gbpLocationName;
   const wp_username = b.wp_username || b.wpUsername;
   const wp_app_password = b.wp_app_password || b.wpAppPassword;
+  const map_services = b.map_services;
+  const map_custom_suburbs = b.map_custom_suburbs;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -491,7 +495,9 @@ app.put('/api/projects/:id', async (req, res) => {
            gbp_location_id=COALESCE($13, gbp_location_id),
            gbp_location_name=COALESCE($14, gbp_location_name),
            wp_username=COALESCE($15, wp_username),
-           wp_app_password=COALESCE($16, wp_app_password)
+           wp_app_password=COALESCE($16, wp_app_password),
+           map_services=COALESCE($17, map_services),
+           map_custom_suburbs=COALESCE($18, map_custom_suburbs)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -499,7 +505,8 @@ app.put('/api/projects/:id', async (req, res) => {
        is_local_business, is_elementor_site, wordpress_url,
        service_areas ? JSON.stringify(service_areas) : null,
        gsc_property || null, gbp_location_id || null, gbp_location_name || null,
-       wp_username || null, wp_app_password || null]
+       wp_username || null, wp_app_password || null,
+       map_services !== undefined ? map_services : null, map_custom_suburbs !== undefined ? map_custom_suburbs : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -582,18 +589,30 @@ app.get('/api/projects/:id/service-areas', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const areas = result.rows[0].service_areas || [];
-    const projectLocation = (result.rows[0].location || '').toLowerCase().trim();
-    // If project has a known location, recalculate real distances
-    const hqGps = SUBURB_GPS[projectLocation];
+    const rawLocation = (result.rows[0].location || '').trim();
+    // Try to match project location to SUBURB_GPS — handle "Cannington, WA", "Cannington Perth" etc.
+    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+    let hqGps = null;
+    // Try full string first, then first word, then first two words
+    const candidates = [
+      rawLocation.toLowerCase().trim(),
+      locParts[0],
+      locParts.slice(0, 2).join(' '),
+      locParts.slice(0, 3).join(' '),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (SUBURB_GPS[candidate]) { hqGps = SUBURB_GPS[candidate]; break; }
+    }
     if (hqGps) {
       for (const area of areas) {
-        const subGps = SUBURB_GPS[area.name.toLowerCase()];
+        const subGps = SUBURB_GPS[area.name.toLowerCase().trim()];
         if (subGps) {
           area.distance = Math.round(haversineKm(hqGps.lat, hqGps.lng, subGps.lat, subGps.lng) * 10) / 10;
         }
       }
     }
-    res.json({ service_areas: areas, hq_location: projectLocation, hq_found: !!hqGps });
+    console.log(`[service-areas] project location="${rawLocation}", hq matched=${!!hqGps}, areas=${areas.length}`);
+    res.json({ service_areas: areas, hq_location: rawLocation, hq_found: !!hqGps });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
