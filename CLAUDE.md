@@ -17,8 +17,8 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 ## Architecture
 
 - **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
-- **Single-file React**: `public/index.html` via Babel standalone (~6000+ lines)
-- **Server**: `server.js` (~3500+ lines)
+- **Single-file React**: `public/index.html` via Babel standalone (~7000+ lines)
+- **Server**: `server.js` (~6000+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
@@ -36,14 +36,14 @@ Sandbox can't git push. The workflow is:
 
 ## APIs & Integrations
 
-- **SerpAPI**: SERPAPI_KEY env var — used for rank tracking (SERP + Maps), GBP profile lookup, competitor analysis
+- **SerpAPI**: SERPAPI_KEY env var — used for rank tracking (SERP + Maps), GBP profile lookup, competitor analysis, **grid scanning** (replaces Local Falcon)
 - **Anthropic (Claude Haiku)**: ANTHROPIC_API_KEY — AI analysis for all audits (GBP, GSC, Technical). Model: claude-haiku-4-5-20251001
 - **Google OAuth 2.0**: GSC + GBP connections (user-level via `user_integrations` table)
 - **Google Search Console API**: searchconsole.googleapis.com — URL Inspection for indexing checks, search analytics for GSC audit
 - **PageSpeed Insights API**: PAGESPEED_API_KEY — Core Web Vitals scoring per page (mobile). Batched 5-at-a-time for speed.
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
-- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — user has account, not actively used yet. Could be used for richer GBP/backlink data
-- **Local Falcon**: Connected but may be replaced by SerpAPI grid scanning
+- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator. Could be used for richer GBP/backlink data
+- **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
 - **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
 
 ## Google Cloud Project
@@ -75,9 +75,9 @@ Sandbox can't git push. The workflow is:
 - Content Queue, Drafts, Approved, Published — ALL FAKE DATA. Needs real implementation.
 
 ### REPORTS
-- Maps Rankings — SerpAPI-based with GPS coords for suburb accuracy
-- SERP Rankings — SerpAPI-based keyword tracking
-- Monthly Reports — in progress
+- **Maps Rankings** ✅ WORKING — Full Local Falcon replacement. AI-powered keyword generator (Haiku suggests service+suburb combos with DataForSEO volume estimation). **SerpAPI Grid Scan**: configurable NxN grid (3×3, 5×5, 7×7) at configurable radius (5-30km). Generates GPS grid around business, calls SerpAPI `google_maps` from each point, calculates ARP/ATRP/SOLV/coverage. **Grid Heatmap**: visual NxN grid with color-coded positions per keyword. **Competitor Gap Analysis**: captures top 3 at each grid point, shows You vs Threats cards with rating/reviews/dominance comparison, review gap bar, and prioritized "What To Do" actions. Bulk select/delete. CSV import/export.
+- **SERP Rankings** — SerpAPI-based keyword tracking
+- **Monthly Reports** — in progress
 
 ### SETTINGS
 - **Project Settings** — Basic info (name, domain, business name, industry, location), Project Type (Local Business toggle, Elementor toggle), WordPress URL, **WP Username + Application Password** fields, Google Connections (GSC property dropdown, GBP Place ID text field), Service Areas list, Competitors list
@@ -86,7 +86,7 @@ Sandbox can't git push. The workflow is:
 
 ## Database Tables
 
-projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**
+projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**
 
 ### wp_change_history (Universal WordPress Rollback)
 ```sql
@@ -106,6 +106,32 @@ CREATE TABLE IF NOT EXISTS wp_change_history (
 ```
 Covers ALL WordPress writes (Yoast meta fixes, future copywriter, image compression). Snapshot-before-write pattern.
 
+### grid_scans (SerpAPI Grid Scan — replaces Local Falcon)
+```sql
+CREATE TABLE IF NOT EXISTS grid_scans (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  keyword_id INTEGER REFERENCES rank_keywords(id) ON DELETE CASCADE,
+  keyword TEXT NOT NULL,
+  location TEXT DEFAULT '',
+  grid_size INTEGER DEFAULT 5,
+  center_lat DOUBLE PRECISION,
+  center_lng DOUBLE PRECISION,
+  radius_km DOUBLE PRECISION DEFAULT 10,
+  grid_points JSONB DEFAULT '[]',
+  competitors JSONB DEFAULT '[]',
+  arp DOUBLE PRECISION,
+  atrp DOUBLE PRECISION,
+  solv DOUBLE PRECISION,
+  found_in INTEGER DEFAULT 0,
+  data_points INTEGER DEFAULT 0,
+  scanned_at TIMESTAMPTZ DEFAULT NOW()
+)
+```
+- `grid_points`: array of `{row, col, lat, lng, position, found, top3: [{title, rating, reviews, type}]}`
+- `competitors`: `{top: [{name, rating, reviews, type, website, appearances, top1, top3, avg_position, dominance}], our_business: {rating, reviews, type, title}}`
+- Metrics: ARP (avg rank of found), ATRP (avg true rank, unfound=21), SOLV (% top 3), found_in/data_points
+
 ### Projects table extra columns
 - `wp_username TEXT` — WordPress Application Password username
 - `wp_app_password TEXT` — WordPress Application Password
@@ -123,6 +149,10 @@ Covers ALL WordPress writes (Yoast meta fixes, future copywriter, image compress
 - Loading overlay: `audit-loading-overlay` CSS class with `spinner-large`
 - Category boxes: 2-column grid, colored header with icon + chevron, collapsible, CRITICAL badge
 - `AUSTRALIAN_DIRECTORIES` — array of 25 directories with name, url, type, free/paid, difficulty, priority
+- `generateGrid(centerLat, centerLng, radiusKm, gridSize)` — generates NxN GPS grid around center point using Haversine offsets
+- `GridHeatmap` component — visual NxN grid with color-coded cells (green top 3 → red not found), center pin marker, legend
+- `getGridData(kw)` — frontend helper to get grid scan data for a keyword (checks gridScans state, falls back to rank_tracking competitors)
+- `SUBURB_GPS` — 50+ Perth suburb GPS coordinates for distance calculation and grid center point lookup
 
 ### PILLAR_CATEGORIES constant
 ```javascript
@@ -154,14 +184,14 @@ const PILLAR_CATEGORIES = {
 
 ## Pending / Next Up (Priority Order)
 
-1. **Build Orchestrator** — task-based (one finding = one task, no bundling). Cross-audit deduplication with trust scoring. Single unified action plan. Foundation built: `extractFindingsFromReport()` + `audit_findings` as single source of truth. Agent findings auto-approved.
-2. **Grid scan for Maps** — build Local Falcon-style grid using SerpAPI GPS coords. Search from multiple points around business, show position at each point in a visual grid. Would replace Local Falcon subscription.
-3. **GBP fix automation** — Chrome extension executes approved GBP action items (update description, add categories, respond to reviews, create posts). Flow: audit → approve → extension executes.
-4. **Copywriter pages** — replace fake data with real content workflow connected to action items.
-5. **Project switcher** — sidebar dropdown loads real projects from DB (currently hardcoded "Current Project" / "Project 2").
-6. **Ahrefs data ingestion** — port from v4 (handleAhrefsIngest + parseAhrefsFindings functions), store backlinks/referring domains for citation analysis in GBP audit.
-7. **DataForSEO integration** — for richer GBP profile data (description, hours, full reviews with responses). User has account. Better than SerpAPI for GBP details.
-8. **Build own SERP API** — future cost optimization, replace SerpAPI with direct Google scraping via proxies.
+1. **GBP fix automation** — Chrome extension executes approved GBP action items (update description, add categories, respond to reviews, create posts). Flow: audit → approve → extension executes.
+2. **Copywriter pages** — replace fake data with real content workflow connected to action items.
+3. **Project switcher** — sidebar dropdown loads real projects from DB (currently hardcoded "Current Project" / "Project 2").
+4. **Ahrefs data ingestion** — port from v4 (handleAhrefsIngest + parseAhrefsFindings functions), store backlinks/referring domains for citation analysis in GBP audit.
+5. **DataForSEO integration** — for richer GBP profile data (description, hours, full reviews with responses). User has account. Better than SerpAPI for GBP details.
+6. **Build own SERP API** — future cost optimization, replace SerpAPI with direct Google scraping via proxies.
+7. **Grid scan history** — track position changes over time, show trend arrows in table.
+8. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
 ## Known Issues
 
@@ -169,6 +199,7 @@ const PILLAR_CATEGORIES = {
 - GBP Management API: 0 quota, can't list locations in Project Settings dropdown. Using manual Place ID input instead.
 - Places API (New): billing project limit reached, can't enable. Would give better GBP profile data than SerpAPI.
 - PageSpeed audit with 50 pages takes ~2 minutes (5 parallel batches). Railway may timeout on very large sites.
+- Grid scan with 25 keywords × 25 points = 625 API calls takes ~4 minutes. Cost: ~$3.12 per full scan at $0.005/call. Railway timeout risk for 7×7 grids with many keywords.
 
 ## v4 Reference
 
@@ -183,7 +214,7 @@ const PILLAR_CATEGORIES = {
 - Path: `~/Desktop/seo-room-extension/`
 - Currently scrapes Ahrefs (site-overview, backlink-profile, content-gap, backlink-gap, organic-keywords)
 - Future: extend to automate GBP fixes (update description, categories, respond to reviews)
-- Future: extend to scrape Google Maps for grid scan (replace SerpAPI for maps)
+- Future: extend to scrape Google Maps for grid scan (cost optimization — replace SerpAPI for maps)
 
 ## WordPress Plugin (seoroom-helper)
 

@@ -2284,12 +2284,14 @@ async function readWpYoastMeta(wpBase, pageId, authHeaders) {
       if (resp.ok) {
         const data = await resp.json();
         const yoast = data.yoast_head_json || {};
+        const seoroom = data.seoroom_yoast || {};
+        const meta = data.meta || {};
         return {
           type,
           title: data.title?.rendered || '',
-          yoast_wpseo_title: data.meta?.yoast_wpseo_title || yoast.title || '',
-          yoast_wpseo_metadesc: data.meta?.yoast_wpseo_metadesc || yoast.description || '',
-          yoast_wpseo_focuskw: data.meta?.yoast_wpseo_focuskw || ''
+          yoast_wpseo_title: meta._yoast_wpseo_title || meta.yoast_wpseo_title || seoroom.title || yoast.title || '',
+          yoast_wpseo_metadesc: meta._yoast_wpseo_metadesc || meta.yoast_wpseo_metadesc || seoroom.description || yoast.description || '',
+          yoast_wpseo_focuskw: meta._yoast_wpseo_focuskw || meta.yoast_wpseo_focuskw || seoroom.focus_keyword || ''
         };
       }
     } catch (e) { /* try next type */ }
@@ -2412,9 +2414,9 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 
         // 3. Write new values to WordPress
         const meta = {};
-        if (fix.new_meta_title) meta.yoast_wpseo_title = fix.new_meta_title;
-        if (fix.new_meta_desc) meta.yoast_wpseo_metadesc = fix.new_meta_desc;
-        if (fix.new_focus_keyword) meta.yoast_wpseo_focuskw = fix.new_focus_keyword;
+        if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
+        if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
+        if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
 
         const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${fix.id}`, {
           method: 'POST',
