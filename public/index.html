@@ -5724,9 +5724,18 @@
       const cityNames = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'hobart', 'darwin', 'canberra', 'gold coast', 'newcastle', 'wollongong', 'geelong', 'townsville', 'cairns', 'toowoomba', 'ballarat', 'bendigo', 'launceston', 'mackay', 'rockhampton', 'bunbury', 'mandurah', 'dubai', 'abu dhabi', 'sharjah', 'london', 'new york']);
 
       // --- Services state (checkbox-based like suburbs) ---
+      const cleanServiceName = (s) => {
+        // Strip city/suburb names from service keywords
+        let cleaned = s.trim();
+        for (const city of cityNames) {
+          const re = new RegExp('\\s+' + city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
+          cleaned = cleaned.replace(re, '');
+        }
+        return cleaned.trim();
+      };
       const [servicesList, setServicesList] = useState(() => {
         const saved = project.map_services || '';
-        return saved ? saved.split('\n').filter(s => s.trim()).map(s => s.trim()) : [];
+        return saved ? [...new Set(saved.split('\n').filter(s => s.trim()).map(s => cleanServiceName(s)).filter(Boolean))] : [];
       });
       const [selectedServices, setSelectedServices] = useState({});
       const [customServiceInput, setCustomServiceInput] = useState('');
@@ -5871,7 +5880,7 @@
       };
 
       const addCustomService = () => {
-        const svcs = customServiceInput.split(/[,\n]/).map(s => s.trim()).filter(s => s && !servicesList.includes(s));
+        const svcs = customServiceInput.split(/[,\n]/).map(s => cleanServiceName(s)).filter(s => s && !servicesList.includes(s));
         if (svcs.length === 0) return;
         const newList = [...servicesList, ...svcs];
         setServicesList(newList);
@@ -5898,7 +5907,7 @@
             method: 'POST',
             body: { existing: servicesList }
           });
-          const suggested = (resp.services || []).filter(s => !servicesList.map(x => x.toLowerCase()).includes(s.toLowerCase()));
+          const suggested = (resp.services || []).map(s => cleanServiceName(s)).filter(s => s && !servicesList.map(x => x.toLowerCase()).includes(s.toLowerCase()));
           if (suggested.length === 0) { alert('No new suggestions found'); return; }
           const newList = [...servicesList, ...suggested];
           setServicesList(newList);
