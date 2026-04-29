@@ -5848,7 +5848,9 @@
         if (idx >= mapsLimit) return;
         setGenChecked(prev => ({ ...prev, [idx]: !prev[idx] }));
       };
+      const totalChecked = Object.entries(genChecked).filter(([k, v]) => v).length;
       const checkedCount = Object.entries(genChecked).filter(([k, v]) => v && parseInt(k) < mapsLimit).length;
+      const overLimit = totalChecked > mapsLimit ? totalChecked - mapsLimit : 0;
 
       const mToggleSort = (col) => {
         if (mSortCol === col) setMSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -6266,11 +6268,24 @@
                 </div>
                 <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
                   <button className="btn" onClick={() => {
-                    const max = Math.min(genCombos.length, mapsLimit);
-                    if (checkedCount === max) setGenChecked({});
-                    else setGenChecked(checkAll(genCombos, mapsLimit));
+                    if (overLimit > 0) {
+                      // Deselect from the end until we match the limit
+                      const newChecked = { ...genChecked };
+                      const keys = Object.entries(newChecked).filter(([k, v]) => v).map(([k]) => parseInt(k)).sort((a, b) => b - a);
+                      let toRemove = overLimit;
+                      for (const k of keys) {
+                        if (toRemove <= 0) break;
+                        newChecked[k] = false;
+                        toRemove--;
+                      }
+                      setGenChecked(newChecked);
+                    } else {
+                      const max = Math.min(genCombos.length, mapsLimit);
+                      if (checkedCount === max) setGenChecked({});
+                      else setGenChecked(checkAll(genCombos, mapsLimit));
+                    }
                   }} style={{ flex: 1 }}>
-                    {checkedCount === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
+                    {overLimit > 0 ? `Deselect ${overLimit}` : checkedCount === Math.min(genCombos.length, mapsLimit) ? 'Deselect All' : 'Select All'}
                   </button>
                   <button className="btn btn-primary" onClick={addGeneratedKeywords} disabled={checkedCount === 0} style={{ flex: 1 }}>
                     <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {checkedCount} Keywords
