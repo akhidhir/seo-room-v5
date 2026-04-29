@@ -5539,18 +5539,26 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
           body: JSON.stringify(dfsBody),
         });
         const dfsData = await dfsRes.json();
-        if (dfsData.tasks?.[0]?.result) {
-          const volMap = {};
-          for (const r of dfsData.tasks[0].result) {
-            if (r.keyword && r.search_volume != null) {
-              volMap[r.keyword.toLowerCase()] = r.search_volume;
+        console.log(`[discover] DataForSEO status: ${dfsData.status_code}, tasks: ${dfsData.tasks?.length}`);
+        const task = dfsData.tasks?.[0];
+        if (task) {
+          console.log(`[discover] Task status: ${task.status_code} ${task.status_message}, results: ${task.result?.length || 0}`);
+          if (task.result) {
+            const volMap = {};
+            for (const r of task.result) {
+              if (r.keyword && r.search_volume != null) {
+                volMap[r.keyword.toLowerCase()] = r.search_volume;
+              }
             }
+            for (const kw of capped) {
+              const vol = volMap[kw.keyword.toLowerCase()];
+              if (vol != null) kw.volume = vol;
+            }
+            console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
+            if (task.result[0]) console.log(`[discover] Sample result keys: ${Object.keys(task.result[0]).join(', ')}`);
           }
-          for (const kw of capped) {
-            const vol = volMap[kw.keyword.toLowerCase()];
-            if (vol != null) kw.volume = vol;
-          }
-          console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
+        } else {
+          console.log(`[discover] DataForSEO raw response: ${JSON.stringify(dfsData).slice(0, 500)}`);
         }
       } catch (e) {
         console.log('[discover] DataForSEO volume lookup failed:', e.message);
