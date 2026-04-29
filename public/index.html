@@ -5363,6 +5363,7 @@
       const [sortDir, setSortDir] = useState('asc');
       const [discovering, setDiscovering] = useState(false);
       const [discovered, setDiscovered] = useState(null);
+      const [discoverLimit, setDiscoverLimit] = useState(20);
       const [selectedDiscovered, setSelectedDiscovered] = useState(new Set());
 
       const toggleSort = (col) => {
@@ -5390,7 +5391,7 @@
 
       const discoverKeywords = async () => {
         setDiscovering(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/discover`, { method: 'POST' });
+        const r = await api(`/projects/${project.id}/rank-tracking/discover`, { method: 'POST', body: { limit: discoverLimit } });
         if (r.ok && r.keywords) {
           // Filter out keywords already tracked
           const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
@@ -5444,9 +5445,15 @@
               {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
                 <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete All
               </button>}
-              <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 13 }}>
-                {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />Discover Keywords</>}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+                <select value={discoverLimit} onChange={e => setDiscoverLimit(Number(e.target.value))} disabled={discovering}
+                  style={{ fontSize: 13, padding: '6px 8px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)', borderRight: 'none', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer' }}>
+                  {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 13, borderRadius: '0 6px 6px 0' }}>
+                  {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />Discover Keywords</>}
+                </button>
+              </div>
               <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
               </button>
