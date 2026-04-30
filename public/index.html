@@ -4268,6 +4268,27 @@
         openFixModal(targetPages);
       };
 
+      const [addingLinks, setAddingLinks] = React.useState(null);
+      const handleAddLinks = async (page) => {
+        if (!confirm(`Add internal links to "${page.title}"? This will modify the page content on WordPress (with rollback).`)) return;
+        setAddingLinks(page.id);
+        try {
+          const resp = await fetch(`/api/projects/${project.id}/onpage-audit/add-links`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_id: page.id }),
+          });
+          const data = await resp.json();
+          if (data.success) {
+            alert(`Added ${data.count} internal links:\n\n${data.links_added.map(l => `• "${l.anchor}" → ${l.url}`).join('\n')}`);
+            loadHistory();
+            runAudit();
+          } else {
+            alert(data.message || data.error || 'Failed to add links');
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setAddingLinks(null);
+      };
+
       const [regenMeta, setRegenMeta] = React.useState(null);
       const handleRegenMeta = async (page) => {
         setRegenMeta(page.id);
@@ -4629,6 +4650,12 @@
                                       <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback All Changes
                                     </button>
                                   )}
+                                  <button className="btn" onClick={() => handleAddLinks(page)}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#3b82f6', borderColor: '#3b82f6' }}
+                                    disabled={addingLinks === page.id}>
+                                    <i className={addingLinks === page.id ? 'fas fa-spinner fa-spin' : 'fas fa-link'} style={{ marginRight: 4 }} />
+                                    {addingLinks === page.id ? 'Adding Links...' : 'Add Internal Links'}
+                                  </button>
                                   <button className="btn" onClick={() => handleRegenMeta(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}
                                     disabled={regenMeta === page.id}>

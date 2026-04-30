@@ -2480,6 +2480,140 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
   }
 });
 
+// Add internal links to a page via AI
+app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Fetch target page content
+    let pageData, pageType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (pageResp.ok) {
+      pageData = await pageResp.json();
+    } else {
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (pageResp.ok) { pageData = await pageResp.json(); pageType = 'posts'; }
+    }
+    if (!pageData) return res.status(404).json({ error: 'Page not found in WordPress' });
+
+    const currentContent = pageData.content?.rendered || pageData.content?.raw || '';
+    if (!currentContent.trim()) return res.status(400).json({ error: 'Page has no content' });
+
+    // Fetch all other pages to build link targets
+    const allPages = [];
+    for (const type of ['pages', 'posts']) {
+      let pg = 1;
+      while (true) {
+        try {
+          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&_fields=id,title,link,slug`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!r.ok) break;
+          const items = await r.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          allPages.push(...items.filter(p => p.id !== page_id));
+          if (items.length < 50) break;
+          pg++;
+        } catch { break; }
+      }
+    }
+
+    if (allPages.length === 0) return res.status(400).json({ error: 'No other pages found to link to' });
+
+    // Build link target list for AI
+    const linkTargets = allPages.map(p => ({
+      title: p.title?.rendered || p.title,
+      url: p.link || '',
+      slug: p.slug || '',
+    }));
+
+    console.log(`[add-links] Page ${page_id}: "${pageData.title?.rendered}", ${allPages.length} link targets available`);
+
+    // Ask AI to insert internal links
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      system: `You are an SEO expert. Your job is to add internal links to existing page content.
+
+Rules:
+- ONLY add <a href="URL">anchor text</a> links to EXISTING text — do NOT add new text, sentences, or paragraphs
+- Use natural anchor text that already exists in the content — find phrases that match other page topics
+- Link to relevant pages only — the anchor text should relate to the linked page
+- Add 3-8 internal links depending on content length
+- Do NOT link the same page twice
+- Do NOT add links inside headings (h1, h2, h3, etc.)
+- Do NOT add links where there's already an <a> tag
+- Do NOT modify any HTML structure, classes, IDs, or styles
+- Do NOT change any text content — only wrap existing text in <a> tags
+- Keep all existing links intact
+- Return the FULL modified HTML content with the new links added
+- Open links in same tab (no target="_blank")
+
+Return JSON: {"modified_content": "<full HTML with links added>", "links_added": [{"anchor": "text linked", "url": "target URL", "reason": "why this link"}]}`,
+      messages: [{ role: 'user', content: `Add internal links to this page content.
+
+Page: ${pageData.title?.rendered || ''}
+
+Available link targets:
+${linkTargets.map(t => `- "${t.title}" → ${t.url}`).join('\n')}
+
+Current content:
+${currentContent.slice(0, 12000)}` }],
+    });
+
+    const raw = aiResp.content[0].text;
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: raw.slice(0, 500) });
+    }
+
+    if (!parsed.modified_content || !parsed.links_added?.length) {
+      return res.json({ success: false, message: 'AI could not find suitable places to add links', links_added: [] });
+    }
+
+    // Snapshot current content for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [projectId, page_id, pageData.link, pageData.title?.rendered, 'internal-links', 'content',
+       currentContent.slice(0, 50000), parsed.modified_content.slice(0, 50000)]
+    );
+
+    // Write updated content to WordPress
+    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: parsed.modified_content }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    console.log(`[add-links] Added ${parsed.links_added.length} links to page ${page_id}`);
+    res.json({
+      success: true,
+      links_added: parsed.links_added,
+      count: parsed.links_added.length,
+    });
+  } catch (e) {
+    console.error('[add-links] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get change history for a project
 app.get('/api/projects/:projectId/wp-changes', async (req, res) => {
   try {
