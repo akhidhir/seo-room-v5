@@ -5484,6 +5484,122 @@
     }
 
     // ============ COPYWRITER PAGE ============
+    // ============ NEW WEBSITE — PROJECT SETUP ============
+    function NewWebsiteSetupPage({ project }) {
+      var pid = project ? project.id : null;
+      var [form, setForm] = React.useState({
+        nw_name: '', nw_domain: '', nw_industry: '', nw_location: '', nw_business_type: '', nw_notes: ''
+      });
+      var [saved, setSaved] = React.useState(false);
+      var [loading, setLoading] = React.useState(true);
+
+      // Load existing new website settings from project
+      React.useEffect(function() {
+        if (!project) return;
+        setForm({
+          nw_name: project.nw_name || project.business_name || '',
+          nw_domain: project.nw_domain || project.domain || '',
+          nw_industry: project.nw_industry || project.industry || '',
+          nw_location: project.nw_location || project.location || '',
+          nw_business_type: project.nw_business_type || '',
+          nw_notes: project.nw_notes || '',
+        });
+        setLoading(false);
+      }, [project]);
+
+      var handleSave = async function() {
+        setSaved(false);
+        try {
+          await api('/projects/' + pid, { method: 'PUT', body: form });
+          setSaved(true);
+          setTimeout(function() { setSaved(false); }, 3000);
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      var updateField = function(field, value) {
+        setForm(function(prev) { return Object.assign({}, prev, { [field]: value }); });
+      };
+
+      var fieldStyle = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' };
+      var labelStyle = { fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6, display: 'block', textTransform: 'uppercase', letterSpacing: 0.5 };
+
+      if (loading) return React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+        React.createElement('div', { className: 'spinner-large', style: { margin: '0 auto 16px' } }), 'Loading...'
+      );
+
+      return React.createElement('div', null,
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0 } },
+            React.createElement('i', { className: 'fas fa-globe', style: { marginRight: 10, color: 'var(--accent)' } }),
+            'New Website Setup'
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } },
+            'Enter the new website details. This info will guide AI content generation.'
+          )
+        ),
+
+        React.createElement('div', { style: { maxWidth: 600, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 } },
+          // Project Name
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('label', { style: labelStyle }, 'Project / Business Name'),
+            React.createElement('input', { type: 'text', value: form.nw_name, onChange: function(e) { updateField('nw_name', e.target.value); }, placeholder: 'e.g. Car Key Rescue', style: fieldStyle })
+          ),
+          // Domain
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('label', { style: labelStyle }, 'Domain'),
+            React.createElement('input', { type: 'text', value: form.nw_domain, onChange: function(e) { updateField('nw_domain', e.target.value); }, placeholder: 'e.g. carkeyrescueperth.com.au', style: fieldStyle })
+          ),
+          // Industry
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('label', { style: labelStyle }, 'Industry / Niche'),
+            React.createElement('input', { type: 'text', value: form.nw_industry, onChange: function(e) { updateField('nw_industry', e.target.value); }, placeholder: 'e.g. Automotive Locksmith', style: fieldStyle })
+          ),
+          // Location
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('label', { style: labelStyle }, 'Location / Service Area'),
+            React.createElement('input', { type: 'text', value: form.nw_location, onChange: function(e) { updateField('nw_location', e.target.value); }, placeholder: 'e.g. Perth, Western Australia', style: fieldStyle })
+          ),
+          // Business Type
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('label', { style: labelStyle }, 'Business Type'),
+            React.createElement('select', { value: form.nw_business_type, onChange: function(e) { updateField('nw_business_type', e.target.value); }, style: fieldStyle },
+              React.createElement('option', { value: '' }, 'Select...'),
+              React.createElement('option', { value: 'local_service' }, 'Local Service Business'),
+              React.createElement('option', { value: 'ecommerce' }, 'E-Commerce'),
+              React.createElement('option', { value: 'saas' }, 'SaaS / Software'),
+              React.createElement('option', { value: 'professional' }, 'Professional Services'),
+              React.createElement('option', { value: 'hospitality' }, 'Hospitality / Food'),
+              React.createElement('option', { value: 'health' }, 'Health & Medical'),
+              React.createElement('option', { value: 'education' }, 'Education'),
+              React.createElement('option', { value: 'other' }, 'Other')
+            )
+          ),
+          // Notes
+          React.createElement('div', { style: { marginBottom: 20 } },
+            React.createElement('label', { style: labelStyle }, 'Additional Notes'),
+            React.createElement('textarea', { value: form.nw_notes, onChange: function(e) { updateField('nw_notes', e.target.value); }, placeholder: 'Any specific requirements, USPs, or target audience info...', rows: 3, style: Object.assign({}, fieldStyle, { resize: 'vertical' }) })
+          ),
+          // Save
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+            React.createElement('button', { className: 'btn btn-primary', onClick: handleSave, style: { fontSize: 14, padding: '10px 24px' } },
+              React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save'
+            ),
+            saved && React.createElement('span', { style: { fontSize: 13, color: '#22c55e' } },
+              React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Saved!'
+            )
+          ),
+
+          // Next step hint
+          React.createElement('div', { style: { marginTop: 20, padding: '12px 16px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 8, fontSize: 12, color: 'var(--text2)' } },
+            React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6, color: 'var(--accent)' } }),
+            'Next step: expand "New Website" in the sidebar and go to ',
+            React.createElement('strong', null, 'Keywords'),
+            ' to upload your target keywords.'
+          )
+        )
+      );
+    }
+
     // ============ CONTENT KEYWORDS PAGE ============
     function ContentKeywordsPage({ project }) {
       var _useState = React.useState, useState = _useState;
@@ -9070,6 +9186,8 @@
             return <CitationsPage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} />;
+          case 'nw-project':
+            return <NewWebsiteSetupPage project={project} />;
           case 'nw-keywords':
             return <ContentKeywordsPage project={project} />;
           case 'nw-pages':
@@ -9134,14 +9252,14 @@ case 'action-plan':
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
         ]},
-        { section: 'NEW WEBSITE', items: [
-          { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
-          { id: 'nw-pages', label: 'Page Setup', icon: 'fas fa-sitemap' },
-          { id: 'nw-queue', label: 'Draft Queue', icon: 'fas fa-pen' },
-          { id: 'nw-review', label: 'Review & Approve', icon: 'fas fa-check-circle' },
-          { id: 'nw-publish', label: 'Publish', icon: 'fas fa-rocket' },
-        ]},
-        { section: 'CONTENT REWRITE', items: [
+        { section: 'COPYWRITER', items: [
+          { id: 'nw-project', label: 'New Website', icon: 'fas fa-globe', expandable: true, children: [
+            { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
+            { id: 'nw-pages', label: 'Page Setup', icon: 'fas fa-sitemap' },
+            { id: 'nw-queue', label: 'Draft Queue', icon: 'fas fa-pen' },
+            { id: 'nw-review', label: 'Review & Approve', icon: 'fas fa-check-circle' },
+            { id: 'nw-publish', label: 'Publish', icon: 'fas fa-rocket' },
+          ]},
           { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
           { id: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
           { id: 'approved-content', label: 'Approved', icon: 'fas fa-check-circle' },

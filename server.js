@@ -335,6 +335,12 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_custom_suburbs TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_name TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_domain TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_industry TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_location TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -569,6 +575,12 @@ app.put('/api/projects/:id', async (req, res) => {
   const wp_app_password = b.wp_app_password || b.wpAppPassword;
   const map_services = b.map_services;
   const map_custom_suburbs = b.map_custom_suburbs;
+  const nw_name = b.nw_name;
+  const nw_domain = b.nw_domain;
+  const nw_industry = b.nw_industry;
+  const nw_location = b.nw_location;
+  const nw_business_type = b.nw_business_type;
+  const nw_notes = b.nw_notes;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -584,7 +596,13 @@ app.put('/api/projects/:id', async (req, res) => {
            wp_username=COALESCE($15, wp_username),
            wp_app_password=COALESCE($16, wp_app_password),
            map_services=COALESCE($17, map_services),
-           map_custom_suburbs=COALESCE($18, map_custom_suburbs)
+           map_custom_suburbs=COALESCE($18, map_custom_suburbs),
+           nw_name=COALESCE($19, nw_name),
+           nw_domain=COALESCE($20, nw_domain),
+           nw_industry=COALESCE($21, nw_industry),
+           nw_location=COALESCE($22, nw_location),
+           nw_business_type=COALESCE($23, nw_business_type),
+           nw_notes=COALESCE($24, nw_notes)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -593,7 +611,8 @@ app.put('/api/projects/:id', async (req, res) => {
        service_areas ? JSON.stringify(service_areas) : null,
        gsc_property || null, gbp_location_id || null, gbp_location_name || null,
        wp_username || null, wp_app_password || null,
-       map_services !== undefined ? map_services : null, map_custom_suburbs !== undefined ? map_custom_suburbs : null]
+       map_services !== undefined ? map_services : null, map_custom_suburbs !== undefined ? map_custom_suburbs : null,
+       nw_name || null, nw_domain || null, nw_industry || null, nw_location || null, nw_business_type || null, nw_notes || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
