@@ -3856,6 +3856,27 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
     }
     let final = Object.values(kwMap);
 
+    // Collapse Google Ads "near me" clusters — when multiple keywords share the exact same
+    // volume AND are "near me" variants, keep only the shortest (most generic) one.
+    // Google Ads groups these into one cluster with identical volumes.
+    const volumeGroups = {};
+    for (const kw of final) {
+      const v = kw.volume || 0;
+      if (!volumeGroups[v]) volumeGroups[v] = [];
+      volumeGroups[v].push(kw);
+    }
+    const collapsed = [];
+    for (const [vol, group] of Object.entries(volumeGroups)) {
+      if (group.length > 3) {
+        // Likely a Google Ads cluster — keep the 2 shortest (most generic) keywords
+        group.sort((a, b) => a.keyword.length - b.keyword.length);
+        collapsed.push(group[0], group[1]);
+      } else {
+        collapsed.push(...group);
+      }
+    }
+    final = collapsed;
+
     // Exclude already-shown keywords (for "Fetch More")
     if (Array.isArray(exclude_keywords) && exclude_keywords.length > 0) {
       const excludeSet = new Set(exclude_keywords.map(k => k.toLowerCase()));
