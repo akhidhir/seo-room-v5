@@ -6323,8 +6323,11 @@
     function NewWebsitePagesPage({ project }) {
       var [keywords, setKeywords] = React.useState([]);
       var [loading, setLoading] = React.useState(true);
-      var [assignModal, setAssignModal] = React.useState(null); // { keyword_ids, current_type }
+      var [assignModal, setAssignModal] = React.useState(null); // { keyword_ids: [], keyword_text }
       var [saving, setSaving] = React.useState(false);
+      var [newPageModal, setNewPageModal] = React.useState(null); // { type: 'service'|'suburb'|'blog' }
+      var [newPageName, setNewPageName] = React.useState('');
+      var [selectedUnassigned, setSelectedUnassigned] = React.useState(new Set());
 
       var pid = project ? project.id : null;
       var loadKeywords = async function() {
@@ -6339,17 +6342,25 @@
       React.useEffect(function() { loadKeywords(); }, [pid]);
 
       var pageTypes = [
-        { key: 'home', label: 'Home Page', icon: 'fas fa-home', color: '#6366f1', desc: 'Main landing page — primary keywords' },
+        { key: 'home', label: 'Home Page', icon: 'fas fa-home', color: '#6366f1', desc: 'Main landing page', single: true },
         { key: 'service', label: 'Service Pages', icon: 'fas fa-briefcase', color: '#22c55e', desc: 'Core service/product pages' },
-        { key: 'suburb', label: 'Suburb Pages', icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Location-based service pages' },
-        { key: 'blog', label: 'Blog Posts', icon: 'fas fa-blog', color: '#3b82f6', desc: 'Informational & long-tail content' },
+        { key: 'suburb', label: 'Suburb Pages', icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Location-based pages' },
+        { key: 'blog', label: 'Blog Posts', icon: 'fas fa-blog', color: '#3b82f6', desc: 'Informational content' },
       ];
 
       var unassigned = keywords.filter(function(k) { return !k.page_type || k.page_type === 'unassigned'; });
-      var grouped = {};
-      pageTypes.forEach(function(pt) { grouped[pt.key] = keywords.filter(function(k) { return k.page_type === pt.key; }); });
 
-      var [dragKw, setDragKw] = React.useState(null);
+      // Group by page_type + page_name to get distinct "pages"
+      var getPages = function(type) {
+        var typeKws = keywords.filter(function(k) { return k.page_type === type; });
+        var pages = {};
+        typeKws.forEach(function(k) {
+          var name = k.page_name || '(unnamed)';
+          if (!pages[name]) pages[name] = [];
+          pages[name].push(k);
+        });
+        return pages;
+      };
 
       var handleAssign = async function(kwIds, pageType, pageName) {
         setSaving(true);
@@ -6360,18 +6371,48 @@
           });
           await loadKeywords();
           setAssignModal(null);
+          setSelectedUnassigned(new Set());
         } catch (e) { alert('Error: ' + e.message); }
         setSaving(false);
       };
 
+      var handleCreatePage = function() {
+        if (!newPageName.trim() || !newPageModal) return;
+        // If there are selected unassigned keywords, assign them to this new page
+        var selIds = Array.from(selectedUnassigned);
+        if (selIds.length > 0) {
+          handleAssign(selIds, newPageModal.type, newPageName.trim());
+        }
+        setNewPageModal(null);
+        setNewPageName('');
+      };
+
+      var toggleUnassigned = function(id) {
+        setSelectedUnassigned(function(prev) {
+          var s = new Set(prev);
+          if (s.has(id)) s.delete(id); else s.add(id);
+          return s;
+        });
+      };
+
+      var selectAllUnassigned = function() {
+        if (selectedUnassigned.size === unassigned.length) setSelectedUnassigned(new Set());
+        else setSelectedUnassigned(new Set(unassigned.map(function(k) { return k.id; })));
+      };
+
+      var pillStyle = function(color) {
+        return { fontSize: 12, padding: '4px 10px', borderRadius: 20, background: color + '18', color: color, border: '1px solid ' + color + '40', display: 'inline-flex', alignItems: 'center', gap: 6 };
+      };
+
       return React.createElement('div', null,
+        // Header
         React.createElement('div', { style: { marginBottom: 24 } },
           React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0 } },
             React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 10, color: 'var(--accent)' } }),
             'Page Setup'
           ),
           React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } },
-            'Assign keywords to page types. Each keyword becomes a page in the draft queue.'
+            'Create pages, then assign keywords to each page. Select keywords on the left, then click a page to assign.'
           )
         ),
 
@@ -6384,83 +6425,202 @@
                 React.createElement('i', { className: 'fas fa-key', style: { fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 } }),
                 'No keywords yet. Add keywords in the Keywords page first.'
               )
-            : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 } },
+            : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20 } },
 
-                // Left: Unassigned keywords
+                // Left: Unassigned keywords with checkboxes
                 React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 } },
-                  React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } },
-                    React.createElement('i', { className: 'fas fa-inbox', style: { marginRight: 6, color: '#6b7280' } }),
-                    'Unassigned (' + unassigned.length + ')'
+                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                    React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } },
+                      React.createElement('i', { className: 'fas fa-inbox', style: { marginRight: 6, color: '#6b7280' } }),
+                      'Unassigned (' + unassigned.length + ')'
+                    ),
+                    unassigned.length > 0 && React.createElement('button', {
+                      onClick: selectAllUnassigned,
+                      style: { fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text3)', cursor: 'pointer' }
+                    }, selectedUnassigned.size === unassigned.length ? 'Deselect' : 'Select All')
                   ),
-                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 12 } }, 'Click a keyword to assign it'),
+                  selectedUnassigned.size > 0 && React.createElement('div', { style: { fontSize: 11, color: 'var(--accent)', fontWeight: 600, marginBottom: 8 } },
+                    selectedUnassigned.size + ' selected — click a page on the right to assign'
+                  ),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 12 } },
+                    selectedUnassigned.size === 0 ? 'Select keywords, then click a page to assign' : ''
+                  ),
                   unassigned.length === 0
                     ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: 16, textAlign: 'center' } }, 'All keywords assigned!')
-                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 500, overflowY: 'auto' } },
+                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 550, overflowY: 'auto' } },
                         unassigned.map(function(kw) {
+                          var sel = selectedUnassigned.has(kw.id);
                           return React.createElement('div', {
                             key: kw.id,
-                            onClick: function() { setAssignModal({ keyword_ids: [kw.id], keyword_text: kw.keyword }); },
-                            style: { padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: 13, transition: 'all 0.15s' },
-                            onMouseEnter: function(e) { e.currentTarget.style.borderColor = 'var(--accent)'; },
-                            onMouseLeave: function(e) { e.currentTarget.style.borderColor = 'var(--border)'; },
-                          }, kw.keyword);
+                            onClick: function() { toggleUnassigned(kw.id); },
+                            style: { padding: '7px 10px', borderRadius: 6, border: sel ? '1px solid var(--accent)' : '1px solid var(--border)', background: sel ? 'rgba(99,102,241,0.08)' : 'var(--bg)', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 },
+                          },
+                            React.createElement('input', { type: 'checkbox', checked: sel, readOnly: true, style: { pointerEvents: 'none' } }),
+                            kw.keyword,
+                            kw.search_volume ? React.createElement('span', { style: { marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' } }, kw.search_volume.toLocaleString()) : null
+                          );
                         })
                       )
                 ),
 
-                // Right: Page type columns
-                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+                // Right: Page type sections with named pages
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
                   pageTypes.map(function(pt) {
-                    var items = grouped[pt.key] || [];
+                    var pages = getPages(pt.key);
+                    var pageNames = Object.keys(pages);
+                    var totalKws = Object.values(pages).reduce(function(sum, arr) { return sum + arr.length; }, 0);
+
                     return React.createElement('div', { key: pt.key, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 } },
-                      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                      // Header with add button
+                      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
                         React.createElement('div', null,
-                          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: pt.color } },
-                            React.createElement('i', { className: pt.icon, style: { marginRight: 6 } }),
-                            pt.label + ' (' + items.length + ')'
+                          React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: pt.color } },
+                            React.createElement('i', { className: pt.icon, style: { marginRight: 8 } }),
+                            pt.label
                           ),
-                          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 10 } }, pt.desc)
+                          React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)', marginLeft: 10 } },
+                            totalKws + ' keyword' + (totalKws !== 1 ? 's' : '') + (pageNames.length > 0 ? ' across ' + pageNames.length + ' page' + (pageNames.length !== 1 ? 's' : '') : '')
+                          )
+                        ),
+                        !pt.single && React.createElement('button', {
+                          onClick: function() { setNewPageModal({ type: pt.key, label: pt.label, color: pt.color, icon: pt.icon }); setNewPageName(''); },
+                          style: { fontSize: 12, padding: '5px 12px', borderRadius: 6, border: '1px solid ' + pt.color + '60', background: 'transparent', color: pt.color, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }
+                        },
+                          React.createElement('i', { className: 'fas fa-plus', style: { fontSize: 10 } }),
+                          'Add Page'
                         )
                       ),
-                      items.length === 0
-                        ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 0' } }, 'No keywords assigned')
-                        : React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                            items.map(function(kw) {
-                              return React.createElement('span', {
-                                key: kw.id,
-                                style: { fontSize: 12, padding: '4px 10px', borderRadius: 20, background: pt.color + '18', color: pt.color, border: '1px solid ' + pt.color + '40', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
-                                onClick: function() { setAssignModal({ keyword_ids: [kw.id], keyword_text: kw.keyword }); },
-                              },
+
+                      // Home page — single, click to assign
+                      pt.single && React.createElement('div', {
+                        onClick: function() {
+                          if (selectedUnassigned.size > 0) handleAssign(Array.from(selectedUnassigned), pt.key, 'Home');
+                        },
+                        style: { padding: 12, borderRadius: 8, border: '1px dashed ' + (selectedUnassigned.size > 0 ? pt.color : 'var(--border)'), background: selectedUnassigned.size > 0 ? pt.color + '08' : 'transparent', cursor: selectedUnassigned.size > 0 ? 'pointer' : 'default', transition: 'all 0.15s' }
+                      },
+                        (pages['Home'] || []).length > 0
+                          ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                              (pages['Home'] || []).map(function(kw) {
+                                return React.createElement('span', { key: kw.id, style: pillStyle(pt.color) },
+                                  kw.keyword,
+                                  React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
+                                );
+                              })
+                            )
+                          : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } },
+                              selectedUnassigned.size > 0 ? 'Click here to assign ' + selectedUnassigned.size + ' selected keyword' + (selectedUnassigned.size !== 1 ? 's' : '') : 'No keywords assigned'
+                            )
+                      ),
+
+                      // Multi-page types — show each named page
+                      !pt.single && pageNames.length === 0 && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 0' } },
+                        'No pages created yet. Click "Add Page" to start.'
+                      ),
+                      !pt.single && pageNames.map(function(pageName) {
+                        var pageKws = pages[pageName];
+                        return React.createElement('div', {
+                          key: pageName,
+                          onClick: function() {
+                            if (selectedUnassigned.size > 0) handleAssign(Array.from(selectedUnassigned), pt.key, pageName);
+                          },
+                          style: { padding: 12, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8, background: selectedUnassigned.size > 0 ? pt.color + '06' : 'transparent', cursor: selectedUnassigned.size > 0 ? 'pointer' : 'default', transition: 'all 0.15s' }
+                        },
+                          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+                            React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: pt.color } }, pageName),
+                            React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, pageKws.length + ' keyword' + (pageKws.length !== 1 ? 's' : ''))
+                          ),
+                          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
+                            pageKws.map(function(kw) {
+                              return React.createElement('span', { key: kw.id, style: pillStyle(pt.color) },
                                 kw.keyword,
-                                React.createElement('i', {
-                                  className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6 },
-                                  onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); }
-                                })
+                                React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
                               );
-                            })
+                            }),
+                            selectedUnassigned.size > 0 && React.createElement('span', { style: { fontSize: 11, color: pt.color, fontStyle: 'italic', alignSelf: 'center' } },
+                              '+ click to add ' + selectedUnassigned.size
+                            )
                           )
+                        );
+                      })
                     );
                   })
                 )
               ),
 
-        // Assign modal
+        // New Page modal
+        newPageModal && React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }, onClick: function() { setNewPageModal(null); } },
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%', border: '1px solid var(--border)' }, onClick: function(e) { e.stopPropagation(); } },
+            React.createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 700 } },
+              React.createElement('i', { className: newPageModal.icon, style: { marginRight: 8, color: newPageModal.color } }),
+              'New ' + newPageModal.label.replace(/s$/, '')
+            ),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 16 } },
+              newPageModal.type === 'service' ? 'e.g. "Computer Repairs", "Laptop Screen Fix"' :
+              newPageModal.type === 'suburb' ? 'e.g. "Perth", "Joondalup", "Fremantle"' :
+              'e.g. "How to Fix a Slow Computer", "Best Laptops 2025"'
+            ),
+            React.createElement('input', {
+              type: 'text', value: newPageName, onChange: function(e) { setNewPageName(e.target.value); },
+              placeholder: 'Page name...',
+              autoFocus: true,
+              onKeyDown: function(e) { if (e.key === 'Enter') handleCreatePage(); },
+              style: { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, boxSizing: 'border-box', marginBottom: 12 }
+            }),
+            selectedUnassigned.size > 0 && React.createElement('div', { style: { fontSize: 12, color: 'var(--accent)', marginBottom: 12 } },
+              selectedUnassigned.size + ' selected keyword' + (selectedUnassigned.size !== 1 ? 's' : '') + ' will be assigned to this page'
+            ),
+            React.createElement('div', { style: { display: 'flex', gap: 8 } },
+              React.createElement('button', {
+                onClick: handleCreatePage, disabled: !newPageName.trim() || saving,
+                style: { flex: 1, padding: '10px 16px', borderRadius: 8, border: 'none', background: newPageModal.color, color: '#fff', fontWeight: 700, fontSize: 13, cursor: newPageName.trim() ? 'pointer' : 'not-allowed' }
+              }, saving ? 'Creating...' : 'Create Page'),
+              React.createElement('button', {
+                onClick: function() { setNewPageModal(null); },
+                className: 'btn', style: { fontSize: 13, padding: '10px 16px' }
+              }, 'Cancel')
+            )
+          )
+        ),
+
+        // Legacy assign modal (for reassigning individual keywords)
         assignModal && React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }, onClick: function() { setAssignModal(null); } },
           React.createElement('div', { style: { background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%', border: '1px solid var(--border)' }, onClick: function(e) { e.stopPropagation(); } },
-            React.createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 700 } }, 'Assign Keyword'),
+            React.createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 700 } }, 'Move Keyword'),
             React.createElement('div', { style: { fontSize: 13, color: '#3b82f6', fontWeight: 600, marginBottom: 16 } }, '"' + assignModal.keyword_text + '"'),
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
               pageTypes.map(function(pt) {
-                return React.createElement('button', {
-                  key: pt.key, className: 'btn',
-                  onClick: function() { handleAssign(assignModal.keyword_ids, pt.key); },
-                  disabled: saving,
-                  style: { fontSize: 13, padding: '10px 16px', textAlign: 'left', color: pt.color, borderColor: pt.color + '60', display: 'flex', alignItems: 'center', gap: 10 }
-                },
-                  React.createElement('i', { className: pt.icon, style: { width: 20, textAlign: 'center' } }),
-                  pt.label
+                var pages = getPages(pt.key);
+                var pageNames = Object.keys(pages);
+                if (pt.single) {
+                  return React.createElement('button', {
+                    key: pt.key, className: 'btn',
+                    onClick: function() { handleAssign(assignModal.keyword_ids, pt.key, 'Home'); },
+                    disabled: saving,
+                    style: { fontSize: 13, padding: '10px 16px', textAlign: 'left', color: pt.color, borderColor: pt.color + '60', display: 'flex', alignItems: 'center', gap: 10 }
+                  },
+                    React.createElement('i', { className: pt.icon, style: { width: 20, textAlign: 'center' } }),
+                    pt.label
+                  );
+                }
+                // Show existing pages + "New page" option
+                return React.createElement('div', { key: pt.key },
+                  pageNames.map(function(name) {
+                    return React.createElement('button', {
+                      key: name, className: 'btn',
+                      onClick: function() { handleAssign(assignModal.keyword_ids, pt.key, name); },
+                      disabled: saving,
+                      style: { fontSize: 13, padding: '10px 16px', textAlign: 'left', color: pt.color, borderColor: pt.color + '60', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, width: '100%' }
+                    },
+                      React.createElement('i', { className: pt.icon, style: { width: 20, textAlign: 'center' } }),
+                      name
+                    );
+                  })
                 );
-              })
+              }),
+              React.createElement('button', {
+                className: 'btn', onClick: function() { handleAssign(assignModal.keyword_ids, 'unassigned'); },
+                style: { fontSize: 12, color: '#6b7280', borderColor: '#6b728040', marginTop: 4 }
+              }, 'Unassign')
             ),
             React.createElement('button', {
               className: 'btn', onClick: function() { setAssignModal(null); },
