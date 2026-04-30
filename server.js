@@ -3680,6 +3680,30 @@ const AU_LOCATIONS = {
   }
 };
 
+// City/state populations for local volume estimation (ABS 2024 estimates)
+const AU_POPULATION = 26500000;
+const AU_CITY_POP = {
+  'Sydney': 5450000, 'Melbourne': 5150000, 'Brisbane': 2600000, 'Perth': 2200000,
+  'Adelaide': 1420000, 'Gold Coast': 720000, 'Newcastle': 510000, 'Canberra': 470000,
+  'Sunshine Coast': 370000, 'Wollongong': 310000, 'Geelong': 270000, 'Hobart': 250000,
+  'Townsville': 195000, 'Cairns': 160000, 'Toowoomba': 170000, 'Darwin': 150000,
+  'Ballarat': 115000, 'Bendigo': 100000, 'Launceston': 90000, 'Mackay': 85000,
+  'Rockhampton': 80000, 'Bunbury': 75000, 'Bundaberg': 75000, 'Hervey Bay': 70000,
+  'Wagga Wagga': 65000, 'Coffs Harbour': 55000, 'Shepparton': 55000, 'Mildura': 55000,
+  'Gladstone': 45000, 'Tamworth': 45000, 'Albury': 55000, 'Orange': 42000,
+  'Dubbo': 40000, 'Bathurst': 40000, 'Lismore': 30000, 'Port Macquarie': 50000,
+  'Central Coast': 340000, 'Mandurah': 100000, 'Geraldton': 40000, 'Kalgoorlie': 32000,
+  'Albany': 38000, 'Broome': 16000, 'Karratha': 22000, 'Mount Gambier': 30000,
+  'Whyalla': 21000, 'Murray Bridge': 22000, 'Port Augusta': 14000, 'Port Lincoln': 15000,
+  'Devonport': 30000, 'Burnie': 20000, 'Alice Springs': 25000, 'Warrnambool': 35000,
+  'Wodonga': 42000, 'Traralgon': 28000,
+};
+const AU_STATE_POP = {
+  'New South Wales': 8350000, 'Victoria': 6750000, 'Queensland': 5450000,
+  'Western Australia': 2900000, 'South Australia': 1850000, 'Tasmania': 570000,
+  'Northern Territory': 250000, 'Australian Capital Territory': 470000,
+};
+
 app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
   const { projectId } = req.params;
   const { seeds, country, state, city, is_local, package_size, exclude_keywords, min_volume } = req.body;
@@ -3700,8 +3724,7 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
   const locationState = state || null;
 
   // Always use COUNTRY-level location code for volume data (city-level gives tiny buckets)
-  // The city/state is used for local keyword variants (appending "Perth" etc.), not for volume scoping
-  const locationCode = AU_LOCATIONS.country.code; // 2036 = Australia — always country-level for realistic volumes
+  const locationCode = AU_LOCATIONS.country.code; // 2036 = Australia
   let locationName = 'Australia';
   if (locationCity && locationState) {
     locationName = locationCity + ', ' + locationState + ', Australia';
@@ -3709,7 +3732,15 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
     locationName = locationState + ', Australia';
   }
 
-  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (code: ${locationCode} = country-level) | Local: ${is_local} | Cap: ${cap}`);
+  // Calculate local volume ratio from population
+  let localRatio = 1;
+  if (is_local && locationCity && AU_CITY_POP[locationCity]) {
+    localRatio = AU_CITY_POP[locationCity] / AU_POPULATION;
+  } else if (is_local && locationState && AU_STATE_POP[locationState]) {
+    localRatio = AU_STATE_POP[locationState] / AU_POPULATION;
+  }
+
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} | Local: ${is_local} (ratio: ${(localRatio*100).toFixed(1)}%) | Cap: ${cap}`);
 
   try {
     // Step 1: Expand seeds with SerpAPI autocomplete
@@ -3836,18 +3867,27 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
       final = final.filter(kw => (kw.volume || 0) >= min_volume);
     }
 
+    // Add local volume estimate
+    if (is_local && localRatio < 1) {
+      final = final.map(kw => ({
+        ...kw,
+        local_volume: Math.round((kw.volume || 0) * localRatio),
+      }));
+    }
+
     // Sort by volume descending
     final.sort((a, b) => (b.volume || 0) - (a.volume || 0));
 
     // Cap to package size
     final = final.slice(0, cap);
 
-    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap})`);
+    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, local_ratio: ${(localRatio*100).toFixed(1)}%)`);
     res.json({
       keywords: final,
       total_found: Object.keys(kwMap).length,
       location: locationName,
       location_code: locationCode,
+      local_ratio: is_local ? localRatio : null,
     });
   } catch (e) {
     console.error('[kw-research] Error:', e.message, e.stack);

@@ -5840,7 +5840,7 @@
               { label: 'KEYWORDS FOUND', value: results.total_found, color: 'var(--accent)' },
               { label: 'SHOWING', value: filteredKeywords.length, color: '#10b981' },
               { label: 'SELECTED', value: selected.filter(function(i) { return minVolume <= 0 || (results.keywords[i] && (results.keywords[i].volume || 0) >= minVolume); }).length, color: '#f59e0b' },
-              { label: 'LOCATION', value: results.location.split(',')[0], color: '#8b5cf6', small: true },
+              { label: 'LOCATION', value: results.location.split(',')[0] + (results.local_ratio ? ' (' + (results.local_ratio * 100).toFixed(1) + '%)' : ''), color: '#8b5cf6', small: true },
             ].map(function(s, i) {
               return React.createElement('div', { key: i, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' } },
                 React.createElement('div', { style: { fontSize: s.small ? 18 : 28, fontWeight: 700, color: s.color } }, s.value),
@@ -5894,7 +5894,8 @@
                     React.createElement('input', { type: 'checkbox', checked: selected.length === results.keywords.length, onChange: toggleAll })
                   ),
                   React.createElement('th', { style: { padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'Keyword'),
-                  React.createElement('th', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'Volume'),
+                  React.createElement('th', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'National Vol.'),
+                  results.local_ratio && results.local_ratio < 1 ? React.createElement('th', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'Local Est.') : null,
                   React.createElement('th', { style: { padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'Competition'),
                   React.createElement('th', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 } }, 'CPC')
                 )
@@ -5916,6 +5917,9 @@
                     React.createElement('td', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)' } },
                       kw.volume != null ? kw.volume.toLocaleString() : '—'
                     ),
+                    results.local_ratio && results.local_ratio < 1 ? React.createElement('td', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: '#f59e0b' } },
+                      kw.local_volume != null ? kw.local_volume.toLocaleString() : '—'
+                    ) : null,
                     React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center' } },
                       kw.competition ? React.createElement('span', { style: { fontSize: 11, fontWeight: 600, color: compColor, textTransform: 'uppercase' } }, kw.competition) : '—'
                     ),
