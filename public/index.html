@@ -4154,8 +4154,7 @@
         try {
           await api(`/projects/${project.id}/onpage-audit/update-keyword`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page_id: page.id, keyword: newKw }),
+            body: { page_id: page.id, keyword: newKw },
           });
           // Update local state
           setPages(prev => prev.map(p => p.id === page.id ? { ...p, focusKeyword: newKw } : p));
