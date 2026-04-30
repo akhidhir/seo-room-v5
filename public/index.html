@@ -4144,21 +4144,28 @@
       const [showHistory, setShowHistory] = useState(false);
       const [rollingBack, setRollingBack] = useState(null);
       const [searchQuery, setSearchQuery] = useState('');
-      const [editingKeyword, setEditingKeyword] = useState({}); // { [pageId]: value }
+      const [editingKeyword, setEditingKeyword] = useState({});
       const [savingKeyword, setSavingKeyword] = useState(null);
+
+      const cancelEditKeyword = (pageId) => {
+        setEditingKeyword(prev => {
+          const next = Object.assign({}, prev);
+          delete next[pageId];
+          return next;
+        });
+      };
 
       const handleSaveKeyword = async (page) => {
         const newKw = (editingKeyword[page.id] || '').trim();
-        if (newKw === (page.focusKeyword || '')) { setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; }); return; }
+        if (newKw === (page.focusKeyword || '')) { cancelEditKeyword(page.id); return; }
         setSavingKeyword(page.id);
         try {
-          await api(`/projects/${project.id}/onpage-audit/update-keyword`, {
+          await api('/projects/' + project.id + '/onpage-audit/update-keyword', {
             method: 'POST',
             body: { page_id: page.id, keyword: newKw },
           });
-          // Update local state
-          setPages(prev => prev.map(p => p.id === page.id ? { ...p, focusKeyword: newKw } : p));
-          setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; });
+          setPages(prev => prev.map(p => p.id === page.id ? Object.assign({}, p, { focusKeyword: newKw }) : p));
+          cancelEditKeyword(page.id);
           loadHistory();
         } catch (e) { alert('Failed to save keyword: ' + e.message); }
         setSavingKeyword(null);
@@ -4566,18 +4573,18 @@
                             <i className={seo.icon} style={{ color: seo.color, fontSize: 12 }} />
                           </td>
                           <td style={{ padding: '10px 10px', fontSize: 12 }} onClick={e => e.stopPropagation()}>
-                            {editingKeyword.hasOwnProperty(page.id) ? (
+                            {page.id in editingKeyword ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <input type="text" value={editingKeyword[page.id] || ''} autoFocus
                                   onChange={e => setEditingKeyword(prev => ({ ...prev, [page.id]: e.target.value }))}
-                                  onKeyDown={e => { if (e.key === 'Enter') handleSaveKeyword(page); if (e.key === 'Escape') setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; }); }}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleSaveKeyword(page); if (e.key === 'Escape') cancelEditKeyword(page.id); }}
                                   style={{ width: 120, padding: '3px 6px', fontSize: 11, borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--card)', color: 'var(--text1)' }}
                                   disabled={savingKeyword === page.id} />
                                 <button onClick={() => handleSaveKeyword(page)} disabled={savingKeyword === page.id}
                                   style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', padding: 2, fontSize: 12 }}>
                                   {savingKeyword === page.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="fas fa-check" />}
                                 </button>
-                                <button onClick={() => setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; })}
+                                <button onClick={() => cancelEditKeyword(page.id)}
                                   style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2, fontSize: 12 }}>
                                   <i className="fas fa-times" />
                                 </button>
