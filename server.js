@@ -2861,7 +2861,7 @@ app.post('/api/projects/:projectId/onpage-audit/update-keyword', async (req, res
 app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { page_id } = req.body;
+    const { page_id, preview, selected_links } = req.body;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -2953,6 +2953,28 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
 
     if (!picks.pages?.length) {
       return res.json({ success: false, message: 'AI found no suitable pages for inbound links', links_added: [] });
+    }
+
+    // If selected_links provided, filter picks to only those source page IDs
+    if (Array.isArray(selected_links) && selected_links.length > 0) {
+      picks.pages = picks.pages.filter(p => selected_links.includes(p.id));
+      console.log(`[add-inbound] Filtered to ${picks.pages.length} selected source pages`);
+    }
+
+    // Preview mode — return AI picks without applying
+    if (preview === true) {
+      const previewLinks = picks.pages.map(p => {
+        const src = otherPages.find(op => op.id === p.id);
+        return {
+          source_page_id: p.id,
+          source_title: src ? (src.title?.rendered || src.title?.raw || '') : '',
+          source_url: src ? (src.link || '') : '',
+          anchor: p.anchor,
+          target_url: targetUrl,
+          reason: p.reason,
+        };
+      });
+      return res.json({ success: true, preview: true, links_added: previewLinks, count: previewLinks.length });
     }
 
     // Now process each selected page — add the link

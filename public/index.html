@@ -4318,21 +4318,42 @@
         if (!linkPreview || selectedPreviewLinks.length === 0) return;
         setLinkPreview(Object.assign({}, linkPreview, { applying: true }));
         var chosen = selectedPreviewLinks.map(function(i) { return linkPreview.links[i]; });
-        var chosenUrls = chosen.map(function(l) { return l.url; });
+
         try {
-          const data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
-            method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenUrls },
-          });
+          var data;
+          if (linkPreview.type === 'inbound') {
+            var chosenIds = chosen.map(function(l) { return l.source_page_id; });
+            data = await api('/projects/' + project.id + '/onpage-audit/add-inbound-links', {
+              method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenIds },
+            });
+          } else {
+            var chosenUrls = chosen.map(function(l) { return l.url; });
+            data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
+              method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenUrls },
+            });
+          }
+
           if (data.success) {
-            setLinksResult({ pageId: linkPreview.page.id, type: 'outbound', links: data.links_added });
+            setLinksResult({ pageId: linkPreview.page.id, type: linkPreview.type, links: data.links_added });
             setExpandedPage(linkPreview.page.id);
-            var addedOut = data.links_added ? data.links_added.length : 0;
-            setPages(function(prev) { return prev.map(function(p) {
-              if (p.id === linkPreview.page.id) {
-                return Object.assign({}, p, { internalLinks: (p.internalLinks || 0) + addedOut });
-              }
-              return p;
-            }); });
+            if (linkPreview.type === 'inbound') {
+              var addedCount = data.links_added ? data.links_added.length : 0;
+              setPages(function(prev) { return prev.map(function(p) {
+                if (p.id === linkPreview.page.id) {
+                  var newFrom = (p.inboundFrom || []).concat((data.links_added || []).map(function(l) { return { title: l.source_title || '', url: l.source_url || '' }; }));
+                  return Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + addedCount, inboundFrom: newFrom });
+                }
+                return p;
+              }); });
+            } else {
+              var addedOut = data.links_added ? data.links_added.length : 0;
+              setPages(function(prev) { return prev.map(function(p) {
+                if (p.id === linkPreview.page.id) {
+                  return Object.assign({}, p, { internalLinks: (p.internalLinks || 0) + addedOut });
+                }
+                return p;
+              }); });
+            }
             loadHistory();
             setLinkPreview(null);
             setSelectedPreviewLinks([]);
@@ -4341,26 +4362,15 @@
       };
 
       const handleAddInboundLinks = async (page) => {
-        if (!confirm(`Add inbound links? This will modify OTHER pages to link to "${page.title}" (with rollback).`)) return;
         setAddingLinks('inbound-' + page.id);
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/add-inbound-links`, {
-            method: 'POST', body: { page_id: page.id },
+            method: 'POST', body: { page_id: page.id, preview: true },
           });
-          if (data.success) {
-            setLinksResult({ pageId: page.id, type: 'inbound', links: data.links_added });
-            setExpandedPage(page.id);
-            // Update local inbound count
-            var addedCount = data.links_added ? data.links_added.length : 0;
-            setPages(function(prev) { return prev.map(function(p) {
-              if (p.id === page.id) {
-                var newFrom = (p.inboundFrom || []).concat((data.links_added || []).map(function(l) { return { title: l.source_title || '', url: l.source_url || '' }; }));
-                return Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + addedCount, inboundFrom: newFrom });
-              }
-              return p;
-            }); });
-            loadHistory();
-          } else { alert(data.message || data.error || 'Failed to add inbound links'); }
+          if (data.success && data.links_added && data.links_added.length > 0) {
+            setLinkPreview({ page: page, type: 'inbound', links: data.links_added, applying: false });
+            setSelectedPreviewLinks(data.links_added.map(function(_, i) { return i; }));
+          } else { alert(data.message || 'No suitable inbound link opportunities found'); }
         } catch (e) { alert('Error: ' + e.message); }
         setAddingLinks(null);
       };
@@ -4695,15 +4705,32 @@
                                   <i className="fas fa-traffic-light" style={{ marginRight: 6 }} />Issue Analysis
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                  {page.issues.map((issue, i) => {
-                                    const ic = issueIcon(issue.type);
-                                    return (
-                                      <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-                                        <i className={ic.icon} style={{ color: ic.color, fontSize: 11, flexShrink: 0 }} />
-                                        <span>{issue.text}</span>
-                                      </div>
-                                    );
-                                  })}
+                                  {(function() {
+                                    // Re-evaluate link issues based on current state
+                                    var liveIssues = page.issues.map(function(issue) {
+                                      if (issue.text.match(/inbound link/i) || issue.text.match(/orphan page/i)) {
+                                        var ib = page.inboundLinks || 0;
+                                        if (ib > 0) return { type: 'good', text: 'Good inbound linking (' + ib + ' page' + (ib !== 1 ? 's' : '') + ' link here)' };
+                                        return issue;
+                                      }
+                                      if (issue.text.match(/outbound link/i)) {
+                                        var ob = page.internalLinks || 0;
+                                        if (ob >= 3 && issue.type !== 'good') return { type: 'good', text: 'Good outbound linking (' + ob + ' links)' };
+                                        if (ob < 3 && issue.type === 'good') return { type: 'warning', text: 'Only ' + ob + ' outbound links — add more for better linking' };
+                                        return issue;
+                                      }
+                                      return issue;
+                                    });
+                                    return liveIssues.map(function(issue, i) {
+                                      var ic = issueIcon(issue.type);
+                                      return (
+                                        React.createElement('div', { key: i, style: { fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' } },
+                                          React.createElement('i', { className: ic.icon, style: { color: ic.color, fontSize: 11, flexShrink: 0 } }),
+                                          React.createElement('span', null, issue.text)
+                                        )
+                                      );
+                                    });
+                                  })()}
                                 </div>
                                 {/* Per-page change history */}
                                 {hasHistory && (function() {
@@ -4912,8 +4939,8 @@
               <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 650, width: '90%', maxHeight: '80vh', overflow: 'auto', border: '1px solid var(--border)' }}
                 onClick={function(e) { e.stopPropagation(); }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 4 }}>
-                  <i className="fas fa-link" style={{ marginRight: 8, color: '#3b82f6' }} />
-                  Review Suggested Links
+                  <i className={linkPreview.type === 'inbound' ? 'fas fa-sign-in-alt' : 'fas fa-link'} style={{ marginRight: 8, color: linkPreview.type === 'inbound' ? '#a855f7' : '#3b82f6' }} />
+                  {linkPreview.type === 'inbound' ? 'Review Inbound Links' : 'Review Outbound Links'}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -4949,6 +4976,13 @@
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                         <input type="checkbox" checked={isSelected} readOnly style={{ marginTop: 2, accentColor: '#3b82f6', flexShrink: 0 }} />
                         <div style={{ flex: 1 }}>
+                          {linkPreview.type === 'inbound' && link.source_title && (
+                            <div style={{ marginBottom: 6 }}>
+                              <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Source Page</div>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#a855f7' }}>{link.source_title}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text3)' }}>{link.source_url}</div>
+                            </div>
+                          )}
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                             <div>
                               <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Anchor Text</div>
@@ -4961,10 +4995,12 @@
                               </div>
                             )}
                           </div>
+                          {linkPreview.type !== 'inbound' && (
                           <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
                             <i className="fas fa-arrow-right" style={{ marginRight: 4, fontSize: 9 }} />
                             {link.url}
                           </div>
+                          )}
                           {link.reason && (
                             <div style={{ fontSize: 11, color: 'var(--text2)', fontStyle: 'italic' }}>{link.reason}</div>
                           )}
