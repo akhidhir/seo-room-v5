@@ -2238,8 +2238,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       else if (wordCount < 800) issues.push({ type: 'warning', text: `Content could be longer (${wordCount} words) — aim for 800+` });
       else issues.push({ type: 'good', text: `Good content length (${wordCount} words)` });
 
-      if (internalLinks < 3) issues.push({ type: 'warning', text: `Only ${internalLinks} internal links — add more for better linking` });
-      else issues.push({ type: 'good', text: `Good internal linking (${internalLinks} links)` });
+      if (internalLinks < 3) issues.push({ type: 'warning', text: `Only ${internalLinks} outbound links — add more for better linking` });
+      else issues.push({ type: 'good', text: `Good outbound linking (${internalLinks} links)` });
 
       if (images > 0 && imagesWithAlt < images) issues.push({ type: 'warning', text: `${images - imagesWithAlt} image(s) missing alt text` });
       else if (images > 0) issues.push({ type: 'good', text: 'All images have alt text' });
@@ -2290,6 +2290,14 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       }
       result.inboundLinks = inbound;
       result.inboundFrom = inboundFrom;
+      // Add inbound link issue to the issues array
+      if (inbound === 0) {
+        result.issues.push({ type: 'problem', text: 'No inbound links — orphan page, no other pages link here' });
+      } else if (inbound < 3) {
+        result.issues.push({ type: 'warning', text: `Only ${inbound} inbound link${inbound > 1 ? 's' : ''} — aim for 3+` });
+      } else {
+        result.issues.push({ type: 'good', text: `Good inbound linking (${inbound} pages link here)` });
+      }
     }
 
     // Sort: red first, then orange, then green
