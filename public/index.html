@@ -6329,7 +6329,20 @@
       var [newPageName, setNewPageName] = React.useState('');
       var [editingPage, setEditingPage] = React.useState(null); // { type, oldName }
       var [editPageName, setEditPageName] = React.useState('');
+      var [emptyPages, setEmptyPages] = React.useState({}); // { service: ['Page1'], suburb: ['Perth'] } — pages with no keywords yet
       var [selectedUnassigned, setSelectedUnassigned] = React.useState(new Set());
+      var defaultLabels = { home: 'Home Page', service: 'Service Pages', suburb: 'Suburb Pages', blog: 'Blog Posts' };
+      var savedLabels = project && project.nw_page_labels ? project.nw_page_labels : {};
+      var [typeLabels, setTypeLabels] = React.useState(Object.assign({}, defaultLabels, savedLabels));
+      var [editingType, setEditingType] = React.useState(null);
+      var [editTypeName, setEditTypeName] = React.useState('');
+
+      // Sync from project when it loads
+      React.useEffect(function() {
+        if (project && project.nw_page_labels) {
+          setTypeLabels(Object.assign({}, defaultLabels, project.nw_page_labels));
+        }
+      }, [project && project.id]);
 
       var pid = project ? project.id : null;
       var loadKeywords = async function() {
@@ -6344,11 +6357,23 @@
       React.useEffect(function() { loadKeywords(); }, [pid]);
 
       var pageTypes = [
-        { key: 'home', label: 'Home Page', icon: 'fas fa-home', color: '#6366f1', desc: 'Main landing page', single: true },
-        { key: 'service', label: 'Service Pages', icon: 'fas fa-briefcase', color: '#22c55e', desc: 'Core service/product pages' },
-        { key: 'suburb', label: 'Suburb Pages', icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Location-based pages' },
-        { key: 'blog', label: 'Blog Posts', icon: 'fas fa-blog', color: '#3b82f6', desc: 'Informational content' },
+        { key: 'home', label: typeLabels.home, icon: 'fas fa-home', color: '#6366f1', desc: 'Main landing page', single: true },
+        { key: 'service', label: typeLabels.service, icon: 'fas fa-briefcase', color: '#22c55e', desc: 'Core service/product pages' },
+        { key: 'suburb', label: typeLabels.suburb, icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Location-based pages' },
+        { key: 'blog', label: typeLabels.blog, icon: 'fas fa-blog', color: '#3b82f6', desc: 'Informational content' },
       ];
+
+      var handleRenameType = function() {
+        if (!editingType || !editTypeName.trim()) { setEditingType(null); return; }
+        var newLabels = Object.assign({}, typeLabels);
+        newLabels[editingType] = editTypeName.trim();
+        setTypeLabels(newLabels);
+        setEditingType(null);
+        // Persist to project
+        if (pid) {
+          api('/projects/' + pid, { method: 'PUT', body: { nw_page_labels: newLabels } }).catch(function(e) { console.error('Save labels:', e); });
+        }
+      };
 
       var unassigned = keywords.filter(function(k) { return !k.page_type || k.page_type === 'unassigned'; });
 
@@ -6361,6 +6386,12 @@
           if (!pages[name]) pages[name] = [];
           pages[name].push(k);
         });
+        // Merge empty pages (created but no keywords yet)
+        if (emptyPages[type]) {
+          emptyPages[type].forEach(function(name) {
+            if (!pages[name]) pages[name] = [];
+          });
+        }
         return pages;
       };
 
@@ -6371,6 +6402,14 @@
             method: 'PUT',
             body: { keyword_ids: kwIds, page_type: pageType, page_name: pageName || null },
           });
+          // Remove from emptyPages if it was an empty page (now has keywords)
+          if (pageName && emptyPages[pageType] && emptyPages[pageType].indexOf(pageName) !== -1) {
+            setEmptyPages(function(prev) {
+              var updated = Object.assign({}, prev);
+              updated[pageType] = (updated[pageType] || []).filter(function(n) { return n !== pageName; });
+              return updated;
+            });
+          }
           await loadKeywords();
           setAssignModal(null);
           setSelectedUnassigned(new Set());
@@ -6380,10 +6419,20 @@
 
       var handleCreatePage = function() {
         if (!newPageName.trim() || !newPageModal) return;
-        // If there are selected unassigned keywords, assign them to this new page
+        var type = newPageModal.type;
+        var name = newPageName.trim();
         var selIds = Array.from(selectedUnassigned);
         if (selIds.length > 0) {
-          handleAssign(selIds, newPageModal.type, newPageName.trim());
+          // Assign selected keywords to this new page
+          handleAssign(selIds, type, name);
+        } else {
+          // No keywords selected — create empty page in local state
+          setEmptyPages(function(prev) {
+            var updated = Object.assign({}, prev);
+            if (!updated[type]) updated[type] = [];
+            if (updated[type].indexOf(name) === -1) updated[type].push(name);
+            return updated;
+          });
         }
         setNewPageModal(null);
         setNewPageName('');
@@ -6391,14 +6440,29 @@
 
       var handleRenamePage = async function() {
         if (!editingPage || !editPageName.trim()) return;
-        var pages = getPages(editingPage.type);
-        var kwIds = (pages[editingPage.oldName] || []).map(function(k) { return k.id; });
-        if (kwIds.length === 0) { setEditingPage(null); return; }
+        var newName = editPageName.trim();
+        var oldName = editingPage.oldName;
+        var type = editingPage.type;
+        if (newName === oldName) { setEditingPage(null); return; }
+        var pages = getPages(type);
+        var kwIds = (pages[oldName] || []).map(function(k) { return k.id; });
+        if (kwIds.length === 0) {
+          // Empty page — just rename in local state
+          setEmptyPages(function(prev) {
+            var updated = Object.assign({}, prev);
+            if (updated[type]) {
+              updated[type] = updated[type].map(function(n) { return n === oldName ? newName : n; });
+            }
+            return updated;
+          });
+          setEditingPage(null);
+          return;
+        }
         setSaving(true);
         try {
           await api('/projects/' + pid + '/content-keywords/bulk-assign', {
             method: 'PUT',
-            body: { keyword_ids: kwIds, page_type: editingPage.type, page_name: editPageName.trim() },
+            body: { keyword_ids: kwIds, page_type: type, page_name: newName },
           });
           await loadKeywords();
         } catch (e) { alert('Error: ' + e.message); }
@@ -6492,12 +6556,22 @@
                     return React.createElement('div', { key: pt.key, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 } },
                       // Header with add button
                       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
-                        React.createElement('div', null,
-                          React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: pt.color } },
-                            React.createElement('i', { className: pt.icon, style: { marginRight: 8 } }),
-                            pt.label
-                          ),
-                          React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)', marginLeft: 10 } },
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                          React.createElement('i', { className: pt.icon, style: { fontSize: 15, color: pt.color } }),
+                          editingType === pt.key
+                            ? React.createElement('input', {
+                                type: 'text', value: editTypeName, autoFocus: true,
+                                onChange: function(e) { setEditTypeName(e.target.value); },
+                                onKeyDown: function(e) { if (e.key === 'Enter') handleRenameType(); if (e.key === 'Escape') setEditingType(null); },
+                                onBlur: handleRenameType,
+                                style: { fontSize: 15, fontWeight: 700, color: pt.color, background: 'var(--bg)', border: '1px solid ' + pt.color, borderRadius: 4, padding: '2px 8px', outline: 'none', width: 180 }
+                              })
+                            : React.createElement('span', {
+                                style: { fontSize: 15, fontWeight: 700, color: pt.color, cursor: 'text', borderBottom: '1px dashed transparent' },
+                                onDoubleClick: function() { setEditingType(pt.key); setEditTypeName(pt.label); },
+                                title: 'Double-click to rename'
+                              }, pt.label),
+                          React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } },
                             totalKws + ' keyword' + (totalKws !== 1 ? 's' : '') + (pageNames.length > 0 ? ' across ' + pageNames.length + ' page' + (pageNames.length !== 1 ? 's' : '') : '')
                           )
                         ),
@@ -6537,14 +6611,15 @@
                       ),
                       !pt.single && pageNames.map(function(pageName) {
                         var pageKws = pages[pageName];
+                        var isEmpty = pageKws.length === 0;
                         return React.createElement('div', {
                           key: pageName,
                           onClick: function() {
                             if (selectedUnassigned.size > 0) handleAssign(Array.from(selectedUnassigned), pt.key, pageName);
                           },
-                          style: { padding: 12, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8, background: selectedUnassigned.size > 0 ? pt.color + '06' : 'transparent', cursor: selectedUnassigned.size > 0 ? 'pointer' : 'default', transition: 'all 0.15s' }
+                          style: { padding: 12, borderRadius: 8, border: isEmpty ? '1px dashed ' + pt.color + '60' : '1px solid var(--border)', marginBottom: 8, background: selectedUnassigned.size > 0 ? pt.color + '06' : 'transparent', cursor: selectedUnassigned.size > 0 ? 'pointer' : 'default', transition: 'all 0.15s' }
                         },
-                          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+                          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isEmpty ? 0 : 6 } },
                             editingPage && editingPage.type === pt.key && editingPage.oldName === pageName
                               ? React.createElement('input', {
                                   type: 'text', value: editPageName, autoFocus: true,
@@ -6559,9 +6634,25 @@
                                   onDoubleClick: function(e) { e.stopPropagation(); setEditingPage({ type: pt.key, oldName: pageName }); setEditPageName(pageName); },
                                   title: 'Double-click to rename'
                                 }, pageName),
-                            React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, pageKws.length + ' keyword' + (pageKws.length !== 1 ? 's' : ''))
+                            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                              React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+                                isEmpty ? 'No keywords' : pageKws.length + ' keyword' + (pageKws.length !== 1 ? 's' : '')
+                              ),
+                              isEmpty && React.createElement('i', {
+                                className: 'fas fa-trash', title: 'Delete page',
+                                onClick: function(e) {
+                                  e.stopPropagation();
+                                  setEmptyPages(function(prev) {
+                                    var updated = Object.assign({}, prev);
+                                    if (updated[pt.key]) updated[pt.key] = updated[pt.key].filter(function(n) { return n !== pageName; });
+                                    return updated;
+                                  });
+                                },
+                                style: { fontSize: 10, color: '#ef4444', cursor: 'pointer', opacity: 0.6 }
+                              })
+                            )
                           ),
-                          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
+                          !isEmpty && React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
                             pageKws.map(function(kw) {
                               return React.createElement('span', { key: kw.id, style: pillStyle(pt.color) },
                                 kw.keyword,
@@ -6571,6 +6662,9 @@
                             selectedUnassigned.size > 0 && React.createElement('span', { style: { fontSize: 11, color: pt.color, fontStyle: 'italic', alignSelf: 'center' } },
                               '+ click to add ' + selectedUnassigned.size
                             )
+                          ),
+                          isEmpty && selectedUnassigned.size > 0 && React.createElement('div', { style: { fontSize: 11, color: pt.color, fontStyle: 'italic', marginTop: 4 } },
+                            'Click to assign ' + selectedUnassigned.size + ' selected keyword' + (selectedUnassigned.size !== 1 ? 's' : '')
                           )
                         );
                       })
