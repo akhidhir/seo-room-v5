@@ -8392,6 +8392,24 @@
     }
 
     // ============ MAPS RANKINGS PAGE ============
+    const TOP_DIRECTORIES = [
+      { name: 'Google Business Profile', url: 'business.google.com', free: true, type: 'Essential' },
+      { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', free: true, type: 'Essential' },
+      { name: 'Bing Places', url: 'bingplaces.com', free: true, type: 'Essential' },
+      { name: 'Facebook Business', url: 'facebook.com', free: true, type: 'Essential' },
+      { name: 'Yellow Pages Australia', url: 'yellowpages.com.au', free: true, type: 'Major' },
+      { name: 'True Local', url: 'truelocal.com.au', free: true, type: 'Major' },
+      { name: 'Hotfrog', url: 'hotfrog.com.au', free: true, type: 'Major' },
+      { name: 'Local Business Guide', url: 'localbusinessguide.com.au', free: true, type: 'Major' },
+      { name: 'Start Local', url: 'startlocal.com.au', free: true, type: 'Major' },
+      { name: 'Yelp Australia', url: 'yelp.com.au', free: true, type: 'Major' },
+      { name: 'Localsearch', url: 'localsearch.com.au', free: true, type: 'Major' },
+      { name: 'Word of Mouth', url: 'wordofmouth.com.au', free: true, type: 'Major' },
+      { name: 'LinkedIn Company', url: 'linkedin.com', free: true, type: 'Standard' },
+      { name: 'dLook', url: 'dlook.com.au', free: true, type: 'Standard' },
+      { name: 'Superpages', url: 'superpages.com.au', free: true, type: 'Standard' },
+    ];
+
     function MapsRankingsPage({ project }) {
       const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
       const [syncing, setSyncing] = useState(false);
@@ -8938,9 +8956,12 @@
                       if (unlistedDirs.length === 0 && listedDirs.length === 0) {
                         if (citationFindings.length > 0) {
                           actions.push(warn('Citations: ' + citationFindings[0].title));
-                        } else {
-                          actions.push(info('Run a Citation Scan to check directory listings'));
                         }
+                        // Show top directories to register on (no scan data available)
+                        const essentialDirs = TOP_DIRECTORIES.filter(d => d.type === 'Essential').map(d => d.name);
+                        const majorDirs = TOP_DIRECTORIES.filter(d => d.type === 'Major').slice(0, 4).map(d => d.name);
+                        actions.push(warn('Ensure listed on essential directories: ' + essentialDirs.join(', ')));
+                        actions.push(info('Also register on: ' + majorDirs.join(', ') + ' +' + (TOP_DIRECTORIES.length - essentialDirs.length - 4) + ' more'));
                       }
                       // 4. GBP audit findings
                       if (criticalFindings.length > 0) {
