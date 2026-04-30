@@ -3699,19 +3699,17 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
   const locationCity = city || null;
   const locationState = state || null;
 
-  // Resolve DataForSEO location code — most specific wins
-  let locationCode = AU_LOCATIONS.country.code; // default Australia
+  // Always use COUNTRY-level location code for volume data (city-level gives tiny buckets)
+  // The city/state is used for local keyword variants (appending "Perth" etc.), not for volume scoping
+  const locationCode = AU_LOCATIONS.country.code; // 2036 = Australia — always country-level for realistic volumes
   let locationName = 'Australia';
-  if (locationState && AU_LOCATIONS.states[locationState]) {
-    locationCode = AU_LOCATIONS.states[locationState].code;
+  if (locationCity && locationState) {
+    locationName = locationCity + ', ' + locationState + ', Australia';
+  } else if (locationState) {
     locationName = locationState + ', Australia';
-    if (locationCity && AU_LOCATIONS.states[locationState].cities[locationCity]) {
-      locationCode = AU_LOCATIONS.states[locationState].cities[locationCity];
-      locationName = locationCity + ', ' + locationState + ', Australia';
-    }
   }
 
-  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (${locationCode}) | Local: ${is_local} | Cap: ${cap}`);
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (code: ${locationCode} = country-level) | Local: ${is_local} | Cap: ${cap}`);
 
   try {
     // Step 1: Expand seeds with SerpAPI autocomplete
