@@ -4297,20 +4297,35 @@
       const [addingLinks, setAddingLinks] = React.useState(null); // 'outbound-123' or 'inbound-123'
       const [linksResult, setLinksResult] = React.useState(null); // { pageId, type, links: [] }
 
+      const [linkPreview, setLinkPreview] = useState(null); // { page, type, links, applying }
+
       const handleAddOutboundLinks = async (page) => {
-        if (!confirm(`Add outbound links from "${page.title}" to other pages? (with rollback)`)) return;
         setAddingLinks('outbound-' + page.id);
         try {
-          const data = await api(`/projects/${project.id}/onpage-audit/add-links`, {
-            method: 'POST', body: { page_id: page.id },
+          const data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
+            method: 'POST', body: { page_id: page.id, preview: true },
           });
-          if (data.success) {
-            setLinksResult({ pageId: page.id, type: 'outbound', links: data.links_added });
-            setExpandedPage(page.id);
-            loadHistory();
-          } else { alert(data.message || data.error || 'Failed to add links'); }
+          if (data.success && data.links_added && data.links_added.length > 0) {
+            setLinkPreview({ page: page, type: 'outbound', links: data.links_added, applying: false });
+          } else { alert(data.message || 'No suitable link opportunities found'); }
         } catch (e) { alert('Error: ' + e.message); }
         setAddingLinks(null);
+      };
+
+      const handleApplyLinks = async () => {
+        if (!linkPreview) return;
+        setLinkPreview(Object.assign({}, linkPreview, { applying: true }));
+        try {
+          const data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
+            method: 'POST', body: { page_id: linkPreview.page.id },
+          });
+          if (data.success) {
+            setLinksResult({ pageId: linkPreview.page.id, type: 'outbound', links: data.links_added });
+            setExpandedPage(linkPreview.page.id);
+            loadHistory();
+            setLinkPreview(null);
+          } else { alert(data.message || data.error || 'Failed to add links'); }
+        } catch (e) { alert('Error: ' + e.message); }
       };
 
       const handleAddInboundLinks = async (page) => {
@@ -4876,6 +4891,57 @@
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {linkPreview && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+              onClick={function() { if (!linkPreview.applying) setLinkPreview(null); }}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 650, width: '90%', maxHeight: '80vh', overflow: 'auto', border: '1px solid var(--border)' }}
+                onClick={function(e) { e.stopPropagation(); }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 4 }}>
+                  <i className="fas fa-link" style={{ marginRight: 8, color: '#3b82f6' }} />
+                  Review Suggested Links
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
+                  {linkPreview.links.length} link{linkPreview.links.length !== 1 ? 's' : ''} suggested for "{linkPreview.page.title}"
+                </div>
+
+                {linkPreview.links.map(function(link, i) {
+                  return (
+                    <div key={i} style={{ background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', padding: 12, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                        <div>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Anchor Text</div>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>{link.anchor}</div>
+                        </div>
+                        {link.target_keyword && (
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Target Keyword</div>
+                            <div style={{ fontSize: 12, color: '#22c55e' }}>{link.target_keyword}</div>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
+                        <i className="fas fa-arrow-right" style={{ marginRight: 4, fontSize: 9 }} />
+                        {link.url}
+                      </div>
+                      {link.reason && (
+                        <div style={{ fontSize: 11, color: 'var(--text2)', fontStyle: 'italic' }}>{link.reason}</div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+                  <button className="btn" onClick={function() { setLinkPreview(null); }} disabled={linkPreview.applying} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={handleApplyLinks} disabled={linkPreview.applying} style={{ fontSize: 13, padding: '8px 20px' }}>
+                    {linkPreview.applying
+                      ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Applying...')
+                      : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Apply ' + linkPreview.links.length + ' Link' + (linkPreview.links.length !== 1 ? 's' : ''))}
+                  </button>
+                </div>
               </div>
             </div>
           )}
