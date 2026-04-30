@@ -3074,8 +3074,9 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
       // Standard content field — write directly
       payload = { content: change.original_value };
     } else {
-      // Yoast meta fields
-      payload = { meta: { [change.field_name]: change.original_value } };
+      // Yoast meta fields — ensure underscore prefix (DB stores without, WP needs with)
+      const wpKey = change.field_name.startsWith('_') ? change.field_name : '_' + change.field_name;
+      payload = { meta: { [wpKey]: change.original_value } };
     }
     const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${change.page_id}`, {
       method: 'POST',
@@ -3100,7 +3101,8 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
 
     // Mark as rolled back
     await pool.query('UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id=$1', [changeId]);
-    console.log(`[rollback] Rolled back change ${changeId} — ${change.field_name} on page ${change.page_id}`);
+    const wpKey2 = change.field_name.startsWith('_') ? change.field_name : '_' + change.field_name;
+    console.log(`[rollback] Rolled back change ${changeId} — ${change.field_name} (wpKey: ${wpKey2}) on page ${change.page_id}, original: "${(change.original_value || '').slice(0, 80)}"`);
     res.json({ success: true });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
@@ -3147,12 +3149,17 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
       }
     }
 
-    // Write meta fields (Yoast etc)
+    // Write meta fields (Yoast etc) — add underscore prefix if missing
     if (Object.keys(metaFields).length > 0) {
+      const wpMeta = {};
+      for (const [k, v] of Object.entries(metaFields)) {
+        const wpKey = k.startsWith('_') ? k : '_' + k;
+        wpMeta[wpKey] = v;
+      }
       const metaResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meta: metaFields }),
+        body: JSON.stringify({ meta: wpMeta }),
         signal: AbortSignal.timeout(15000)
       });
       if (!metaResp.ok) {
