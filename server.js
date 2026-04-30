@@ -3593,9 +3593,10 @@ app.get('/api/projects/:projectId/content-keywords', async (req, res) => {
 // Bulk add keywords (from CSV, paste, or manual)
 app.post('/api/projects/:projectId/content-keywords/bulk', async (req, res) => {
   try {
-    const { keywords } = req.body; // array of { keyword, page_type?, page_name? }
+    const { keywords, search_volumes } = req.body; // keywords: array of string or { keyword, page_type?, page_name? }, search_volumes: { keyword: volume } optional
     if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
     const projectId = req.params.projectId;
+    const volMap = search_volumes || {};
     const added = [];
     for (const kw of keywords) {
       const keyword = (kw.keyword || kw).toString().trim();
@@ -3603,9 +3604,10 @@ app.post('/api/projects/:projectId/content-keywords/bulk', async (req, res) => {
       // Skip duplicates
       const exists = await pool.query('SELECT id FROM content_keywords WHERE project_id=$1 AND LOWER(keyword)=LOWER($2)', [projectId, keyword]);
       if (exists.rows.length > 0) continue;
+      const vol = volMap[keyword] || volMap[keyword.toLowerCase()] || (kw.search_volume != null ? kw.search_volume : null);
       const r = await pool.query(
-        `INSERT INTO content_keywords (project_id, keyword, page_type, page_name) VALUES ($1,$2,$3,$4) RETURNING *`,
-        [projectId, keyword, kw.page_type || 'unassigned', kw.page_name || null]
+        `INSERT INTO content_keywords (project_id, keyword, page_type, page_name, search_volume) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [projectId, keyword, kw.page_type || 'unassigned', kw.page_name || null, vol]
       );
       added.push(r.rows[0]);
     }
@@ -3659,6 +3661,187 @@ app.post('/api/projects/:projectId/content-keywords/bulk-delete', async (req, re
     await pool.query('DELETE FROM content_keywords WHERE id = ANY($1) AND project_id=$2', [keyword_ids, req.params.projectId]);
     res.json({ success: true, deleted: keyword_ids.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== KEYWORD RESEARCH (DataForSEO + SerpAPI) ====================
+
+// Australian location codes for DataForSEO (Google Ads location IDs)
+const AU_LOCATIONS = {
+  country: { name: 'Australia', code: 2036 },
+  states: {
+    'New South Wales': { code: 20532, cities: { 'Sydney': 1003854, 'Newcastle': 1003821, 'Wollongong': 1003871, 'Central Coast': 9069149, 'Coffs Harbour': 1003799, 'Wagga Wagga': 1003865, 'Albury': 1003783, 'Tamworth': 1003860, 'Orange': 1003825, 'Dubbo': 1003803, 'Bathurst': 1003788, 'Lismore': 1003817, 'Port Macquarie': 1003833 } },
+    'Victoria': { code: 20533, cities: { 'Melbourne': 1003819, 'Geelong': 1003806, 'Ballarat': 1003787, 'Bendigo': 1003789, 'Shepparton': 1003847, 'Mildura': 1003820, 'Warrnambool': 1003867, 'Wodonga': 1003870, 'Traralgon': 1003862 } },
+    'Queensland': { code: 20534, cities: { 'Brisbane': 1003793, 'Gold Coast': 1003808, 'Sunshine Coast': 1003857, 'Townsville': 1003861, 'Cairns': 1003795, 'Toowoomba': 1003858, 'Mackay': 1003818, 'Rockhampton': 1003841, 'Bundaberg': 1003794, 'Hervey Bay': 1003811, 'Gladstone': 1003807 } },
+    'Western Australia': { code: 20535, cities: { 'Perth': 1003829, 'Mandurah': 9069155, 'Bunbury': 1003792, 'Geraldton': 1003805, 'Kalgoorlie': 1003813, 'Albany': 1003782, 'Broome': 1003791, 'Karratha': 1003814 } },
+    'South Australia': { code: 20536, cities: { 'Adelaide': 1003781, 'Mount Gambier': 1003822, 'Whyalla': 1003869, 'Murray Bridge': 1003823, 'Port Augusta': 1003831, 'Port Lincoln': 1003832 } },
+    'Tasmania': { code: 20537, cities: { 'Hobart': 1003812, 'Launceston': 1003816, 'Devonport': 1003801, 'Burnie': 1003796 } },
+    'Northern Territory': { code: 20538, cities: { 'Darwin': 1003800, 'Alice Springs': 1003784 } },
+    'Australian Capital Territory': { code: 20539, cities: { 'Canberra': 1003797 } },
+  }
+};
+
+app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
+  const { projectId } = req.params;
+  const { seeds, country, state, city, is_local, package_size } = req.body;
+  // seeds: string[] of seed keywords
+  // country: 'Australia' (future: others)
+  // state: e.g. 'Western Australia'
+  // city: e.g. 'Perth'
+  // is_local: boolean — if true, append city/state to keywords
+  // package_size: 10|20|30|40|50
+
+  if (!Array.isArray(seeds) || seeds.length === 0) return res.status(400).json({ error: 'Provide at least one seed keyword' });
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
+
+  const cap = package_size || 20;
+  const locationCity = city || null;
+  const locationState = state || null;
+
+  // Resolve DataForSEO location code — most specific wins
+  let locationCode = AU_LOCATIONS.country.code; // default Australia
+  let locationName = 'Australia';
+  if (locationState && AU_LOCATIONS.states[locationState]) {
+    locationCode = AU_LOCATIONS.states[locationState].code;
+    locationName = locationState + ', Australia';
+    if (locationCity && AU_LOCATIONS.states[locationState].cities[locationCity]) {
+      locationCode = AU_LOCATIONS.states[locationState].cities[locationCity];
+      locationName = locationCity + ', ' + locationState + ', Australia';
+    }
+  }
+
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (${locationCode}) | Local: ${is_local} | Cap: ${cap}`);
+
+  try {
+    // Step 1: Expand seeds with SerpAPI autocomplete
+    let expandedSeeds = [...seeds];
+    if (SERPAPI_KEY) {
+      for (const seed of seeds.slice(0, 5)) { // cap seed expansion to 5 seeds
+        try {
+          const acUrl = `https://serpapi.com/search.json?engine=google_autocomplete&q=${encodeURIComponent(seed)}&gl=au&api_key=${SERPAPI_KEY}`;
+          const acResp = await fetch(acUrl, { signal: AbortSignal.timeout(8000) });
+          if (acResp.ok) {
+            const acData = await acResp.json();
+            const suggestions = (acData.suggestions || []).map(s => s.value).filter(Boolean);
+            expandedSeeds.push(...suggestions.slice(0, 5));
+          }
+        } catch (e) { console.log(`[kw-research] Autocomplete error for "${seed}": ${e.message}`); }
+      }
+    }
+
+    // If local, also create location variants
+    if (is_local && locationCity) {
+      const localVariants = seeds.map(s => `${s} ${locationCity}`);
+      expandedSeeds.push(...localVariants);
+    }
+    if (is_local && locationState) {
+      const stateVariants = seeds.map(s => `${s} ${locationState}`);
+      expandedSeeds.push(...stateVariants);
+    }
+
+    // Deduplicate
+    expandedSeeds = [...new Set(expandedSeeds.map(s => s.trim().toLowerCase()))].filter(Boolean);
+    console.log(`[kw-research] Expanded to ${expandedSeeds.length} seed keywords`);
+
+    // Step 2: DataForSEO keywords_for_keywords — get related keywords
+    let allKeywords = [];
+    const batchSize = 20; // DFS limit per request
+    for (let i = 0; i < expandedSeeds.length; i += batchSize) {
+      const batch = expandedSeeds.slice(i, i + batchSize);
+      try {
+        const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{
+            keywords: batch,
+            location_code: locationCode,
+            language_name: 'English',
+            sort_by: 'search_volume',
+            limit: Math.min(cap * 3, 200), // fetch more than needed to filter
+          }]),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (dfsResp.ok) {
+          const dfsData = await dfsResp.json();
+          const results = dfsData?.tasks?.[0]?.result || [];
+          for (const r of results) {
+            if (r.keyword && r.search_volume != null) {
+              allKeywords.push({
+                keyword: r.keyword,
+                volume: r.search_volume || 0,
+                competition: r.competition || null,
+                competition_index: r.competition_index != null ? r.competition_index : null,
+                cpc: r.cpc || null,
+                intent: r.keyword_info?.keyword_properties?.keyword_intent || null,
+              });
+            }
+          }
+        } else {
+          const errText = await dfsResp.text();
+          console.log(`[kw-research] DFS keywords_for_keywords error: ${dfsResp.status} ${errText.substring(0, 200)}`);
+        }
+      } catch (e) { console.log(`[kw-research] DFS batch error: ${e.message}`); }
+    }
+
+    // Step 3: If keywords_for_keywords returned nothing, fall back to search_volume on expanded seeds
+    if (allKeywords.length === 0) {
+      console.log(`[kw-research] keywords_for_keywords returned nothing, falling back to search_volume`);
+      try {
+        const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{
+            keywords: expandedSeeds.slice(0, 100),
+            location_code: locationCode,
+            language_name: 'English',
+          }]),
+          signal: AbortSignal.timeout(20000),
+        });
+        if (dfsResp.ok) {
+          const dfsData = await dfsResp.json();
+          const results = dfsData?.tasks?.[0]?.result || [];
+          for (const r of results) {
+            if (r.keyword && r.search_volume != null) {
+              allKeywords.push({
+                keyword: r.keyword,
+                volume: r.search_volume || 0,
+                competition: r.competition || null,
+                competition_index: r.competition_index != null ? r.competition_index : null,
+                cpc: r.cpc || null,
+                intent: null,
+              });
+            }
+          }
+        }
+      } catch (e) { console.log(`[kw-research] search_volume fallback error: ${e.message}`); }
+    }
+
+    // Deduplicate by keyword (keep highest volume)
+    const kwMap = {};
+    for (const kw of allKeywords) {
+      const key = kw.keyword.toLowerCase();
+      if (!kwMap[key] || (kw.volume || 0) > (kwMap[key].volume || 0)) {
+        kwMap[key] = kw;
+      }
+    }
+    let final = Object.values(kwMap);
+
+    // Sort by volume descending
+    final.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+
+    // Cap to package size
+    final = final.slice(0, cap);
+
+    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap})`);
+    res.json({
+      keywords: final,
+      total_found: Object.keys(kwMap).length,
+      location: locationName,
+      location_code: locationCode,
+    });
+  } catch (e) {
+    console.error('[kw-research] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ==================== GSC AUDIT ====================
