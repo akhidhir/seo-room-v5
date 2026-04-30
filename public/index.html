@@ -4322,6 +4322,14 @@
           if (data.success) {
             setLinksResult({ pageId: linkPreview.page.id, type: 'outbound', links: data.links_added });
             setExpandedPage(linkPreview.page.id);
+            // Update local outbound count
+            var addedOut = data.links_added ? data.links_added.length : 0;
+            setPages(function(prev) { return prev.map(function(p) {
+              if (p.id === linkPreview.page.id) {
+                return Object.assign({}, p, { internalLinks: (p.internalLinks || 0) + addedOut });
+              }
+              return p;
+            }); });
             loadHistory();
             setLinkPreview(null);
           } else { alert(data.message || data.error || 'Failed to add links'); }
@@ -4338,6 +4346,15 @@
           if (data.success) {
             setLinksResult({ pageId: page.id, type: 'inbound', links: data.links_added });
             setExpandedPage(page.id);
+            // Update local inbound count
+            var addedCount = data.links_added ? data.links_added.length : 0;
+            setPages(function(prev) { return prev.map(function(p) {
+              if (p.id === page.id) {
+                var newFrom = (p.inboundFrom || []).concat((data.links_added || []).map(function(l) { return { title: l.source_title || '', url: l.source_url || '' }; }));
+                return Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + addedCount, inboundFrom: newFrom });
+              }
+              return p;
+            }); });
             loadHistory();
           } else { alert(data.message || data.error || 'Failed to add inbound links'); }
         } catch (e) { alert('Error: ' + e.message); }
