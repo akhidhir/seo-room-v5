@@ -6327,6 +6327,8 @@
       var [saving, setSaving] = React.useState(false);
       var [newPageModal, setNewPageModal] = React.useState(null); // { type: 'service'|'suburb'|'blog' }
       var [newPageName, setNewPageName] = React.useState('');
+      var [editingPage, setEditingPage] = React.useState(null); // { type, oldName }
+      var [editPageName, setEditPageName] = React.useState('');
       var [selectedUnassigned, setSelectedUnassigned] = React.useState(new Set());
 
       var pid = project ? project.id : null;
@@ -6385,6 +6387,23 @@
         }
         setNewPageModal(null);
         setNewPageName('');
+      };
+
+      var handleRenamePage = async function() {
+        if (!editingPage || !editPageName.trim()) return;
+        var pages = getPages(editingPage.type);
+        var kwIds = (pages[editingPage.oldName] || []).map(function(k) { return k.id; });
+        if (kwIds.length === 0) { setEditingPage(null); return; }
+        setSaving(true);
+        try {
+          await api('/projects/' + pid + '/content-keywords/bulk-assign', {
+            method: 'PUT',
+            body: { keyword_ids: kwIds, page_type: editingPage.type, page_name: editPageName.trim() },
+          });
+          await loadKeywords();
+        } catch (e) { alert('Error: ' + e.message); }
+        setSaving(false);
+        setEditingPage(null);
       };
 
       var toggleUnassigned = function(id) {
@@ -6526,7 +6545,20 @@
                           style: { padding: 12, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8, background: selectedUnassigned.size > 0 ? pt.color + '06' : 'transparent', cursor: selectedUnassigned.size > 0 ? 'pointer' : 'default', transition: 'all 0.15s' }
                         },
                           React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
-                            React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: pt.color } }, pageName),
+                            editingPage && editingPage.type === pt.key && editingPage.oldName === pageName
+                              ? React.createElement('input', {
+                                  type: 'text', value: editPageName, autoFocus: true,
+                                  onChange: function(e) { setEditPageName(e.target.value); },
+                                  onKeyDown: function(e) { if (e.key === 'Enter') handleRenamePage(); if (e.key === 'Escape') setEditingPage(null); },
+                                  onBlur: handleRenamePage,
+                                  onClick: function(e) { e.stopPropagation(); },
+                                  style: { fontSize: 13, fontWeight: 700, color: pt.color, background: 'var(--bg)', border: '1px solid ' + pt.color, borderRadius: 4, padding: '2px 6px', outline: 'none', width: 180 }
+                                })
+                              : React.createElement('span', {
+                                  style: { fontSize: 13, fontWeight: 700, color: pt.color, cursor: 'text', borderBottom: '1px dashed transparent' },
+                                  onDoubleClick: function(e) { e.stopPropagation(); setEditingPage({ type: pt.key, oldName: pageName }); setEditPageName(pageName); },
+                                  title: 'Double-click to rename'
+                                }, pageName),
                             React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, pageKws.length + ' keyword' + (pageKws.length !== 1 ? 's' : ''))
                           ),
                           React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
