@@ -8928,7 +8928,13 @@
                         if (status === 'Dominant') actions.push(info('Focus efforts on weaker suburbs instead'));
                         if (inServiceArea) actions.push(ok(kwObj.location + ' is in your GBP service areas'));
                         if (matchingPage) actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')')));
-                        if (listedDirs.length > 0) actions.push(ok('Listed in ' + listedDirs.length + ' directories'));
+                        if (listedDirs.length > 0 || unlistedDirs.length > 0) {
+                          const dirList = TOP_DIRECTORIES.map(d => {
+                            const citEntry = citationStatuses[d.name];
+                            return { ...d, status: citEntry ? (citEntry.status === 'listed' || citEntry.status === 'found' ? 'listed' : 'not_listed') : 'unknown', listing_url: citEntry?.listing_url };
+                          });
+                          actions.push({ text: '__directories__', color: 'none', directories: dirList });
+                        }
                         return { ...base, actions };
                       }
 
@@ -8945,23 +8951,20 @@
                       } else {
                         actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Site Staging'));
                       }
-                      // 3. Directories — show unlisted ones they should register on
-                      if (unlistedDirs.length > 0) {
-                        const topUnlisted = unlistedDirs.slice(0, 5);
-                        actions.push(bad('Not listed in ' + unlistedDirs.length + ' directories: ' + topUnlisted.join(', ') + (unlistedDirs.length > 5 ? ' +' + (unlistedDirs.length - 5) + ' more' : '')));
-                      }
-                      if (listedDirs.length > 0) {
-                        actions.push(ok('Listed in ' + listedDirs.length + ' directories: ' + listedDirs.slice(0, 4).join(', ') + (listedDirs.length > 4 ? ' +' + (listedDirs.length - 4) + ' more' : '')));
+                      // 3. Directories — show checklist with real scan data
+                      if (unlistedDirs.length > 0 || listedDirs.length > 0) {
+                        const dirList = TOP_DIRECTORIES.map(d => {
+                          const citEntry = citationStatuses[d.name];
+                          return { ...d, status: citEntry ? (citEntry.status === 'listed' || citEntry.status === 'found' ? 'listed' : 'not_listed') : 'unknown', listing_url: citEntry?.listing_url };
+                        });
+                        actions.push({ text: '__directories__', color: 'none', directories: dirList });
                       }
                       if (unlistedDirs.length === 0 && listedDirs.length === 0) {
                         if (citationFindings.length > 0) {
                           actions.push(warn('Citations: ' + citationFindings[0].title));
                         }
-                        // Show top directories to register on (no scan data available)
-                        const essentialDirs = TOP_DIRECTORIES.filter(d => d.type === 'Essential').map(d => d.name);
-                        const majorDirs = TOP_DIRECTORIES.filter(d => d.type === 'Major').slice(0, 4).map(d => d.name);
-                        actions.push(warn('Ensure listed on essential directories: ' + essentialDirs.join(', ')));
-                        actions.push(info('Also register on: ' + majorDirs.join(', ') + ' +' + (TOP_DIRECTORIES.length - essentialDirs.length - 4) + ' more'));
+                        // Show directory checklist with links — no scan data, show all as unchecked
+                        actions.push({ text: '__directories__', color: 'none', directories: TOP_DIRECTORIES.map(d => ({ ...d, status: 'unknown' })) });
                       }
                       // 4. GBP audit findings
                       if (criticalFindings.length > 0) {
@@ -9075,6 +9078,34 @@
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     {advice.actions.map((action, i) => {
                                       const act = typeof action === 'string' ? { text: action, color: 'var(--text2)' } : action;
+                                      // Directory checklist widget
+                                      if (act.text === '__directories__' && act.directories) {
+                                        const listed = act.directories.filter(d => d.status === 'listed');
+                                        const notListed = act.directories.filter(d => d.status === 'not_listed');
+                                        const unknown = act.directories.filter(d => d.status === 'unknown');
+                                        return (
+                                        <div key={i} style={{ marginTop: 4, marginBottom: 2 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
+                                            <i className="fa-solid fa-list-check" style={{ marginRight: 5 }} />
+                                            Directories ({listed.length} listed{notListed.length > 0 ? ', ' + notListed.length + ' missing' : ''}{unknown.length > 0 ? ', ' + unknown.length + ' not checked' : ''})
+                                          </div>
+                                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 16px' }}>
+                                            {act.directories.map((d, j) => (
+                                              <div key={j} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '2px 0' }}>
+                                                <i className={`fa-solid ${d.status === 'listed' ? 'fa-circle-check' : d.status === 'not_listed' ? 'fa-circle-xmark' : 'fa-circle-question'}`}
+                                                   style={{ fontSize: 10, color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : '#6b7280', flexShrink: 0 }} />
+                                                <a href={'https://' + d.url} target="_blank" rel="noopener noreferrer"
+                                                   style={{ color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : 'var(--text3)', textDecoration: 'none', fontSize: 11 }}
+                                                   onMouseEnter={e => e.target.style.textDecoration='underline'} onMouseLeave={e => e.target.style.textDecoration='none'}>
+                                                  {d.name}
+                                                </a>
+                                                {d.free && d.status !== 'listed' && <span style={{ fontSize: 9, color: '#22c55e', opacity: 0.7 }}>FREE</span>}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                        );
+                                      }
                                       const isGreen = act.color === '#22c55e';
                                       const isRed = act.color === '#ef4444';
                                       const icon = isGreen ? 'fa-circle-check' : isRed ? 'fa-circle-xmark' : 'fa-arrow-right';
