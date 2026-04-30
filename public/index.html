@@ -6789,6 +6789,370 @@
       );
     }
 
+    // ============ NEW WEBSITE — SITE PAGE EDITOR (v4-style Copywriter) ============
+    function SitePageEditor({ page, project, onBack, onUpdate }) {
+      var pid = project ? project.id : null;
+      var [editing, setEditing] = React.useState(false);
+      var [editData, setEditData] = React.useState({
+        meta_title: page.meta_title || '', meta_description: page.meta_description || '',
+        focus_keyword: page.focus_keyword || '', draft_content: page.draft_content || ''
+      });
+      var [generating, setGenerating] = React.useState(false);
+      var [optimising, setOptimising] = React.useState(false);
+      var [publishing, setPublishing] = React.useState(false);
+      var [addKw, setAddKw] = React.useState('');
+      var [targetKeywords, setTargetKeywords] = React.useState((page.keywords || []).map(function(k) { return k.keyword || k; }));
+
+      var content = editing ? editData.draft_content : (page.draft_content || '');
+      var metaTitle = editing ? editData.meta_title : (page.meta_title || '');
+      var metaDesc = editing ? editData.meta_description : (page.meta_description || '');
+      var focusKw = editing ? editData.focus_keyword : (page.focus_keyword || '');
+
+      // Parse stats from HTML content
+      var stats = React.useMemo(function() {
+        if (!content) return { words: 0, h2s: 0, h3s: 0, links: 0, imgs: 0, paragraphs: 0 };
+        var div = document.createElement('div');
+        div.innerHTML = content;
+        var text = div.textContent || div.innerText || '';
+        return {
+          words: text.trim() ? text.trim().split(/\s+/).length : 0,
+          h2s: div.querySelectorAll('h2').length,
+          h3s: div.querySelectorAll('h3').length,
+          links: div.querySelectorAll('a').length,
+          imgs: div.querySelectorAll('img').length,
+          paragraphs: div.querySelectorAll('p').length
+        };
+      }, [content]);
+
+      // Keyword analysis
+      var keywordAnalysis = React.useMemo(function() {
+        if (!content) return [];
+        var div = document.createElement('div');
+        div.innerHTML = content;
+        var text = (div.textContent || '').toLowerCase();
+        return targetKeywords.map(function(kw) {
+          var kwLower = kw.toLowerCase();
+          var count = 0; var pos = 0;
+          while ((pos = text.indexOf(kwLower, pos)) !== -1) { count++; pos += kwLower.length; }
+          return { keyword: kw, count: count };
+        });
+      }, [content, targetKeywords]);
+
+      var focusCount = React.useMemo(function() {
+        if (!content || !focusKw) return 0;
+        var div = document.createElement('div');
+        div.innerHTML = content;
+        var text = (div.textContent || '').toLowerCase();
+        var kwLower = focusKw.toLowerCase();
+        var count = 0; var pos = 0;
+        while ((pos = text.indexOf(kwLower, pos)) !== -1) { count++; pos += kwLower.length; }
+        return count;
+      }, [content, focusKw]);
+
+      // Content score (v4 algorithm)
+      var scoreData = React.useMemo(function() {
+        var score = 0;
+        var tips = [];
+        // Word count (25 pts)
+        if (stats.words >= 1500) { score += 25; tips.push({ type: 'success', text: stats.words + ' words (target: 1,500+)' }); }
+        else if (stats.words >= 800) { score += 15; tips.push({ type: 'warn', text: 'Content short (' + stats.words + ' words). Aim for 1,500+' }); }
+        else if (stats.words >= 400) { score += 8; tips.push({ type: 'error', text: 'Content too short (' + stats.words + ' words). Aim for 1,500+' }); }
+        else { tips.push({ type: 'error', text: 'Content too short (' + stats.words + ' words). Aim for 1,500+' }); }
+        // H2 headings (15 pts)
+        if (stats.h2s >= 3) { score += 15; tips.push({ type: 'success', text: stats.h2s + ' H2 headings (target: 3+)' }); }
+        else if (stats.h2s >= 1) { score += 8; tips.push({ type: 'warn', text: stats.h2s + ' H2 heading' + (stats.h2s !== 1 ? 's' : '') + ' (target: 3+)' }); }
+        else { tips.push({ type: 'error', text: 'No H2 headings (target: 3+)' }); }
+        // H3 subheadings (5 pts)
+        if (stats.h3s >= 2) { score += 5; tips.push({ type: 'success', text: stats.h3s + ' H3 subheadings' }); }
+        else { tips.push({ type: 'warn', text: stats.h3s + ' H3 subheading' + (stats.h3s !== 1 ? 's' : '') + ' (target: 2+)' }); }
+        // Internal links (10 pts)
+        if (stats.links >= 3) { score += 10; tips.push({ type: 'success', text: stats.links + ' internal links' }); }
+        else if (stats.links >= 1) { score += 5; tips.push({ type: 'warn', text: stats.links + ' internal link' + (stats.links !== 1 ? 's' : '') + ' (target: 3+)' }); }
+        else { tips.push({ type: 'error', text: 'No internal links (target: 3+)' }); }
+        // Images (5 pts)
+        if (stats.imgs >= 1) { score += 5; tips.push({ type: 'success', text: 'Add at least 1 image' }); }
+        else { tips.push({ type: 'warn', text: 'Add at least 1 image' }); }
+        // Focus keyword (20 pts)
+        if (focusCount >= 3 && focusCount <= 8) { score += 20; tips.push({ type: 'success', text: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
+        else if (focusCount > 8) { score += 12; tips.push({ type: 'warn', text: 'Focus keyword used ' + focusCount + 'x — reduce to 3-8' }); }
+        else if (focusCount >= 1) { score += 10; tips.push({ type: 'warn', text: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
+        else if (focusKw) { tips.push({ type: 'error', text: 'Focus keyword not found in content' }); }
+        // Keyword coverage (20 pts)
+        var usedKws = keywordAnalysis.filter(function(k) { return k.count > 0; });
+        var coverage = targetKeywords.length > 0 ? Math.round((usedKws.length / targetKeywords.length) * 100) : 0;
+        var kwScore = targetKeywords.length > 0 ? Math.round((usedKws.length / targetKeywords.length) * 20) : 20;
+        score += kwScore;
+        if (coverage < 50 && targetKeywords.length > 0) { tips.push({ type: 'warn', text: 'Using ' + usedKws.length + '/' + targetKeywords.length + ' target keywords. Add more.' }); }
+        else if (targetKeywords.length > 0) { tips.push({ type: 'success', text: 'Using ' + usedKws.length + '/' + targetKeywords.length + ' target keywords' }); }
+        return { score: Math.min(score, 100), tips: tips };
+      }, [stats, focusCount, focusKw, keywordAnalysis, targetKeywords]);
+
+      var scoreColor = scoreData.score >= 75 ? '#22c55e' : scoreData.score >= 50 ? '#f59e0b' : '#ef4444';
+      var tipIcon = function(type) { return type === 'success' ? 'fas fa-check-circle' : type === 'warn' ? 'fas fa-exclamation-circle' : 'fas fa-times-circle'; };
+      var tipColor = function(type) { return type === 'success' ? '#22c55e' : type === 'warn' ? '#f59e0b' : '#ef4444'; };
+
+      var handleGenerate = async function() {
+        setGenerating(true);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages/' + page.id + '/generate-content', { method: 'POST' });
+          if (data.content) {
+            onUpdate(Object.assign({}, page, { draft_content: data.content, word_count: data.word_count, stage: 'written' }));
+            setEditData(function(prev) { return Object.assign({}, prev, { draft_content: data.content }); });
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setGenerating(false);
+      };
+
+      var handleOptimise = async function() {
+        setOptimising(true);
+        try {
+          var missingKws = keywordAnalysis.filter(function(k) { return k.count === 0; }).map(function(k) { return k.keyword; });
+          var data = await api('/projects/' + pid + '/site-pages/' + page.id + '/optimise', {
+            method: 'POST',
+            body: { tips: scoreData.tips, stats: stats, content_score: scoreData.score, missing_keywords: missingKws, focus_keyword: focusKw }
+          });
+          if (data.content_html) {
+            var updated = Object.assign({}, page, {
+              draft_content: data.content_html,
+              meta_title: data.meta_title || page.meta_title,
+              meta_description: data.meta_description || page.meta_description,
+              stage: 'written'
+            });
+            // Save to DB
+            await api('/projects/' + pid + '/site-pages/' + page.id, {
+              method: 'PUT',
+              body: { draft_content: data.content_html, meta_title: data.meta_title, meta_description: data.meta_description }
+            });
+            onUpdate(updated);
+            setEditData({ meta_title: updated.meta_title, meta_description: updated.meta_description, focus_keyword: updated.focus_keyword || focusKw, draft_content: data.content_html });
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setOptimising(false);
+      };
+
+      var handleSaveEdit = async function() {
+        try {
+          var wordCount = 0;
+          if (editData.draft_content) {
+            var div = document.createElement('div'); div.innerHTML = editData.draft_content;
+            wordCount = (div.textContent || '').trim().split(/\s+/).length;
+          }
+          await api('/projects/' + pid + '/site-pages/' + page.id, {
+            method: 'PUT',
+            body: { meta_title: editData.meta_title, meta_description: editData.meta_description, focus_keyword: editData.focus_keyword, draft_content: editData.draft_content, word_count: wordCount }
+          });
+          onUpdate(Object.assign({}, page, editData, { word_count: wordCount }));
+          setEditing(false);
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      var handleApprove = async function() {
+        try {
+          await api('/projects/' + pid + '/site-pages/' + page.id, { method: 'PUT', body: { stage: 'reviewed' } });
+          onUpdate(Object.assign({}, page, { stage: 'reviewed' }));
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      var handlePublish = async function() {
+        if (!confirm('Publish this page to WordPress?')) return;
+        setPublishing(true);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages/' + page.id + '/publish', { method: 'POST' });
+          if (data.success) { onUpdate(Object.assign({}, page, { stage: 'published', published_url: data.url })); alert('Published! ' + data.url); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setPublishing(false);
+      };
+
+      var handleAddKeyword = function() {
+        if (!addKw.trim()) return;
+        if (targetKeywords.indexOf(addKw.trim()) === -1) setTargetKeywords(function(prev) { return prev.concat([addKw.trim()]); });
+        setAddKw('');
+      };
+
+      var stageColors = { draft: '#6b7280', written: '#3b82f6', reviewed: '#f59e0b', published: '#22c55e' };
+      var stageLabel = page.stage || 'draft';
+
+      return React.createElement('div', { style: { padding: '24px 32px' } },
+        // Back link
+        React.createElement('div', { onClick: onBack, style: { cursor: 'pointer', fontSize: 13, color: 'var(--accent)', marginBottom: 16, display: 'inline-flex', alignItems: 'center', gap: 6 } },
+          React.createElement('i', { className: 'fas fa-arrow-left' }), 'Back to list'
+        ),
+
+        // Title + status + actions
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 } },
+          React.createElement('div', null,
+            React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 800 } }, page.page_name),
+            React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' } },
+              React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (stageColors[stageLabel] || '#6b7280') + '20', color: stageColors[stageLabel], fontWeight: 600, textTransform: 'uppercase' } },
+                React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 4, fontSize: 9 } }), stageLabel
+              ),
+              page.page_type && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: 'var(--bg)', color: 'var(--text3)' } }, page.page_type),
+              page.is_cornerstone && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone')
+            )
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            !content && React.createElement('button', {
+              onClick: handleGenerate, disabled: generating,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, generating ? 'Generating...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Generate')),
+            content && React.createElement('button', {
+              onClick: handleOptimise, disabled: optimising,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, optimising ? 'Optimising...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'AI Optimise')),
+            content && stageLabel !== 'published' && React.createElement('button', {
+              onClick: handleApprove,
+              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #22c55e', background: 'transparent', color: '#22c55e', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Approve'),
+            content && React.createElement('button', {
+              onClick: function() { if (editing) handleSaveEdit(); else { setEditData({ meta_title: page.meta_title || '', meta_description: page.meta_description || '', focus_keyword: page.focus_keyword || '', draft_content: page.draft_content || '' }); setEditing(true); } },
+              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }
+            }, React.createElement('i', { className: editing ? 'fas fa-save' : 'fas fa-pen', style: { marginRight: 6 } }), editing ? 'Save' : 'Edit'),
+            content && React.createElement('button', {
+              onClick: handleGenerate, disabled: generating,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, generating ? '...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-redo', style: { marginRight: 6 } }), 'Regenerate')),
+            content && stageLabel !== 'published' && React.createElement('button', {
+              onClick: handlePublish, disabled: publishing,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, publishing ? 'Publishing...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), 'Publish'))
+          )
+        ),
+
+        // Meta section
+        React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20 } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, marginBottom: 12 } },
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'META TITLE'),
+              editing
+                ? React.createElement('input', { type: 'text', value: editData.meta_title, onChange: function(e) { setEditData(Object.assign({}, editData, { meta_title: e.target.value })); }, style: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', fontSize: 14, fontWeight: 600, boxSizing: 'border-box' } })
+                : React.createElement('div', { style: { fontSize: 14, color: 'var(--accent)', fontWeight: 600 } }, metaTitle || '—'),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } }, (metaTitle || '').length + ' / 60 chars')
+            ),
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'FOCUS KEYWORD'),
+              editing
+                ? React.createElement('input', { type: 'text', value: editData.focus_keyword, onChange: function(e) { setEditData(Object.assign({}, editData, { focus_keyword: e.target.value })); }, style: { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: '#22c55e', fontSize: 14, fontWeight: 700, width: 200 } })
+                : React.createElement('div', { style: { fontSize: 14, color: '#22c55e', fontWeight: 700 } }, focusKw || '—')
+            )
+          ),
+          React.createElement('div', null,
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'META DESCRIPTION'),
+            editing
+              ? React.createElement('textarea', { value: editData.meta_description, onChange: function(e) { setEditData(Object.assign({}, editData, { meta_description: e.target.value })); }, rows: 2, style: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box', resize: 'vertical' } })
+              : React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, metaDesc || '—'),
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } }, (metaDesc || '').length + ' / 160 chars')
+          )
+        ),
+
+        // Content + Score panel
+        content ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' } },
+          // Left: Content preview / editor
+          React.createElement('div', null,
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700 } }, 'Content Preview'),
+              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, stats.words + ' words')
+            ),
+            editing
+              ? React.createElement('textarea', {
+                  value: editData.draft_content,
+                  onChange: function(e) { setEditData(Object.assign({}, editData, { draft_content: e.target.value })); },
+                  style: { width: '100%', minHeight: 600, padding: 20, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontSize: 13, lineHeight: 1.7, fontFamily: 'monospace', boxSizing: 'border-box', resize: 'vertical' }
+                })
+              : React.createElement('div', {
+                  style: { padding: 24, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--card)', fontSize: 14, lineHeight: 1.8, color: 'var(--text)', minHeight: 400 },
+                  dangerouslySetInnerHTML: { __html: content }
+                })
+          ),
+
+          // Right: Content Score Panel
+          React.createElement('div', { style: { position: 'sticky', top: 20 } },
+            // Score circle
+            React.createElement('div', { style: { textAlign: 'center', marginBottom: 20 } },
+              React.createElement('div', { style: { position: 'relative', display: 'inline-block' } },
+                React.createElement('svg', { width: 90, height: 90, viewBox: '0 0 90 90' },
+                  React.createElement('circle', { cx: 45, cy: 45, r: 38, fill: 'none', stroke: 'var(--border)', strokeWidth: 6 }),
+                  React.createElement('circle', { cx: 45, cy: 45, r: 38, fill: 'none', stroke: scoreColor, strokeWidth: 6, strokeDasharray: 2 * Math.PI * 38, strokeDashoffset: 2 * Math.PI * 38 * (1 - scoreData.score / 100), strokeLinecap: 'round', transform: 'rotate(-90 45 45)', style: { transition: 'stroke-dashoffset 0.5s' } })
+                ),
+                React.createElement('div', { style: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', fontSize: 28, fontWeight: 800, color: scoreColor } }, scoreData.score)
+              ),
+              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } }, 'Content Score')
+            ),
+
+            // Tips to improve
+            React.createElement('div', { style: { marginBottom: 20 } },
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 8 } }, 'TIPS TO IMPROVE'),
+              scoreData.tips.map(function(tip, i) {
+                return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 } },
+                  React.createElement('i', { className: tipIcon(tip.type), style: { color: tipColor(tip.type), fontSize: 12, marginTop: 2, flexShrink: 0 } }),
+                  React.createElement('span', { style: { fontSize: 12, color: 'var(--text)' } }, tip.text)
+                );
+              })
+            ),
+
+            // Stats grid
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 20 } },
+              [
+                { label: 'Words', value: stats.words, target: '1500+', ok: stats.words >= 1500 },
+                { label: 'H2', value: stats.h2s, target: '3+', ok: stats.h2s >= 3 },
+                { label: 'H3', value: stats.h3s, target: '2+', ok: stats.h3s >= 2 },
+                { label: 'Links', value: stats.links, target: '3+', ok: stats.links >= 3 },
+                { label: 'Paragraphs', value: stats.paragraphs, target: '', ok: true },
+                { label: 'Images', value: stats.imgs, target: '1+', ok: stats.imgs >= 1 }
+              ].map(function(s) {
+                return React.createElement('div', { key: s.label, style: { textAlign: 'center', padding: '8px 4px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)' } },
+                  React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: s.ok ? '#22c55e' : '#f59e0b' } }, s.value),
+                  React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' } }, s.label),
+                  s.target && React.createElement('div', { style: { fontSize: 9, color: 'var(--text3)' } }, s.target)
+                );
+              })
+            ),
+
+            // Focus keyword box
+            focusKw && React.createElement('div', { style: { padding: 12, borderRadius: 8, border: '1px solid ' + (focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b') + '40', background: (focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b') + '08', marginBottom: 16, textAlign: 'center' } },
+              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Focus Keyword'),
+              React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b' } }, '"' + focusKw + '" — ' + focusCount + 'x used')
+            ),
+
+            // Add keyword
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 } }, 'ADD KEYWORD'),
+              React.createElement('div', { style: { display: 'flex', gap: 4 } },
+                React.createElement('input', { type: 'text', value: addKw, placeholder: 'Type keyword...', onChange: function(e) { setAddKw(e.target.value); }, onKeyDown: function(e) { if (e.key === 'Enter') handleAddKeyword(); }, style: { flex: 1, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12 } }),
+                React.createElement('button', { onClick: handleAddKeyword, style: { padding: '5px 10px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 11, cursor: 'pointer' } }, '+')
+              )
+            ),
+
+            // Keywords used
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 } }, 'KEYWORDS USED (' + keywordAnalysis.filter(function(k) { return k.count > 0; }).length + ')'),
+              React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto' } },
+                keywordAnalysis.map(function(kw, i) {
+                  return React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid var(--border)' } },
+                    React.createElement('span', { style: { fontSize: 12, color: kw.count > 0 ? '#22c55e' : '#ef4444' } }, kw.keyword),
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                      React.createElement('span', { style: { fontSize: 11, color: kw.count > 0 ? '#22c55e' : '#ef4444', fontWeight: 600 } }, kw.count + 'x'),
+                      React.createElement('i', { className: 'fas fa-times', onClick: function() { setTargetKeywords(function(prev) { return prev.filter(function(k) { return k !== kw.keyword; }); }); }, style: { fontSize: 9, color: 'var(--text3)', cursor: 'pointer' } })
+                    )
+                  );
+                })
+              )
+            )
+          )
+        )
+        : !generating ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px', background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)' } },
+            React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16 } }),
+            React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No content yet'),
+            React.createElement('button', { onClick: handleGenerate, style: { padding: '12px 24px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' } },
+              React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8 } }), 'Generate Content'
+            )
+          )
+        : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
+            React.createElement('div', { className: 'spinner-large' }),
+            React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
+          )
+      );
+    }
+
     // ============ NEW WEBSITE — SITE STAGING (Visual Site Map) ============
     function SiteStagingPage({ project }) {
       var pid = project ? project.id : null;
@@ -7072,6 +7436,19 @@
 
       if (!project) return React.createElement('div', null, 'Select a project');
 
+      // If a page is selected, show the full editor (v4-style Copywriter)
+      if (selectedPage) {
+        return React.createElement(SitePageEditor, {
+          page: selectedPage,
+          project: project,
+          onBack: function() { setSelectedPage(null); loadPages(); },
+          onUpdate: function(updated) {
+            setSelectedPage(updated);
+            setPages(function(prev) { return prev.map(function(p) { return p.id === updated.id ? updated : p; }); });
+          }
+        });
+      }
+
       return React.createElement('div', { style: { padding: '24px 32px' } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
           React.createElement('div', null,
@@ -7173,8 +7550,7 @@
           React.createElement('div', { style: { marginTop: 12, color: 'var(--text3)' } }, 'Loading site map...')
         ),
 
-        // Detail side panel
-        renderDetailPanel()
+        // Detail panel removed — full-page SitePageEditor is used instead
       );
     }
 

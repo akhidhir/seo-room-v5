@@ -4258,6 +4258,75 @@ app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res)
   }
 });
 
+// AI Optimise a site page — takes score tips + content, returns improved version
+app.post('/api/projects/:projectId/site-pages/:pageId/optimise', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get all pages for internal linking
+    const allPages = await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [projectId, pageId]);
+
+    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
+    const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `You are an SEO content optimizer for ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}.
+
+CURRENT CONTENT (score: ${content_score || 0}/100):
+${page.draft_content || ''}
+
+ISSUES TO FIX:
+${issuesText || 'None'}
+
+MISSING KEYWORDS TO ADD NATURALLY:
+${missingKwsText || 'None'}
+
+FOCUS KEYWORD: ${focus_keyword || page.focus_keyword || 'N/A'}
+Current stats: ${JSON.stringify(stats || {})}
+
+AVAILABLE INTERNAL LINKS:
+${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
+
+REQUIREMENTS:
+- Fix ALL listed issues
+- Weave missing keywords naturally (don't keyword stuff)
+- Target 1500+ words
+- Ensure focus keyword appears 3-8 times
+- Add H2/H3 subheadings if lacking
+- Add internal links as <a href="slug">anchor text</a>
+- Keep the same overall structure and tone, just improve
+- Return ONLY the optimized HTML content (no wrapping markdown)
+- Also return updated meta title (max 60 chars) and meta description (max 155 chars)
+
+Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
+      }]
+    });
+
+    let result;
+    try {
+      const text = aiResponse.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+      result = JSON.parse(text);
+    } catch (e) {
+      // If not JSON, treat as raw HTML
+      result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+    }
+
+    res.json(result);
+  } catch (e) {
+    console.error('[site-pages] Optimise error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== GSC AUDIT ====================
 
 app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
