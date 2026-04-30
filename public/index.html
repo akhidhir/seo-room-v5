@@ -4779,10 +4779,6 @@
                                     <i className={addingLinks === 'inbound-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sign-in-alt'} style={{ marginRight: 4 }} />
                                     {addingLinks === 'inbound-' + page.id ? 'Adding...' : 'Add Inbound'}
                                   </button>
-                                  <button className="btn" onClick={() => handleFixSingle(page)}
-                                    style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}>
-                                    <i className="fas fa-sync-alt" style={{ marginRight: 4 }} />Regenerate Meta
-                                  </button>
                                   <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
                                     disabled={sendingToCopywriter === page.id}>
@@ -4922,11 +4918,16 @@
                 })}
 
                 {!fixModal.loading && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-                    <button className="btn" onClick={() => setFixModal(null)} disabled={fixing} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
-                    <button className="btn btn-primary" onClick={applyFixes} disabled={fixing} style={{ fontSize: 13, padding: '8px 20px' }}>
-                      {fixing ? <><span className="spinner"></span>Applying...</> : <><i className="fas fa-check" style={{ marginRight: 6 }} />Apply {fixModal.suggestions.length} Fix{fixModal.suggestions.length !== 1 ? 'es' : ''}</>}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
+                    <button className="btn" onClick={() => openFixModal(fixModal.pages)} disabled={fixing} style={{ fontSize: 12, padding: '7px 14px', color: '#06b6d4', borderColor: '#06b6d4' }}>
+                      <i className="fas fa-sync-alt" style={{ marginRight: 5 }} />Regenerate
                     </button>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button className="btn" onClick={() => setFixModal(null)} disabled={fixing} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
+                      <button className="btn btn-primary" onClick={applyFixes} disabled={fixing} style={{ fontSize: 13, padding: '8px 20px' }}>
+                        {fixing ? <><span className="spinner"></span>Applying...</> : <><i className="fas fa-check" style={{ marginRight: 6 }} />Apply {fixModal.suggestions.length} Fix{fixModal.suggestions.length !== 1 ? 'es' : ''}</>}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
