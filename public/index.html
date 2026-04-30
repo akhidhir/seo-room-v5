@@ -4138,7 +4138,7 @@
       const [sortBy, setSortBy] = useState(null);
       const [sortDir, setSortDir] = useState('asc');
       const [selected, setSelected] = useState(new Set());
-      const [fixModal, setFixModal] = useState(null); // null | { pages: [...], suggestions: [...], loading: bool }
+      const [fixModal, setFixModal] = useState(null); // null | { pages, suggestions, loading, history: [[...], ...], historyIdx }
       const [fixing, setFixing] = useState(false);
       const [changeHistory, setChangeHistory] = useState([]);
       const [showHistory, setShowHistory] = useState(false);
@@ -4270,21 +4270,39 @@
       };
 
       // Open fix modal — get AI suggestions
-      const openFixModal = async (targetPages) => {
-        setFixModal({ pages: targetPages, suggestions: targetPages.map(p => ({ id: p.id, suggested_title: p.metaTitle, suggested_desc: p.metaDesc, suggested_keyword: p.focusKeyword || '' })), loading: true });
+      const openFixModal = async (targetPages, regenerate) => {
+        var placeholder = targetPages.map(function(p) { return { id: p.id, suggested_title: p.metaTitle, suggested_desc: p.metaDesc, suggested_keyword: p.focusKeyword || '' }; });
+        if (!regenerate) {
+          setFixModal({ pages: targetPages, suggestions: placeholder, loading: true, history: [], historyIdx: -1 });
+        } else {
+          setFixModal(function(prev) { return Object.assign({}, prev, { loading: true }); });
+        }
         try {
-          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
+          var data = await api('/projects/' + project.id + '/onpage-audit/suggest', {
             method: 'POST',
             body: { pages: targetPages }
           });
-          if (data?.suggestions) {
-            setFixModal(prev => ({ ...prev, suggestions: data.suggestions, loading: false }));
+          if (data && data.suggestions) {
+            setFixModal(function(prev) {
+              var newHistory = (prev.history || []).slice(0, (prev.historyIdx >= 0 ? prev.historyIdx + 1 : prev.history.length));
+              newHistory.push(data.suggestions.map(function(s) { return Object.assign({}, s); }));
+              return Object.assign({}, prev, { suggestions: data.suggestions, loading: false, history: newHistory, historyIdx: newHistory.length - 1 });
+            });
           } else {
-            setFixModal(prev => ({ ...prev, loading: false }));
+            setFixModal(function(prev) { return Object.assign({}, prev, { loading: false }); });
           }
         } catch (e) {
-          setFixModal(prev => ({ ...prev, loading: false }));
+          setFixModal(function(prev) { return Object.assign({}, prev, { loading: false }); });
         }
+      };
+
+      var navigateFixHistory = function(dir) {
+        setFixModal(function(prev) {
+          if (!prev || !prev.history || prev.history.length === 0) return prev;
+          var newIdx = prev.historyIdx + dir;
+          if (newIdx < 0 || newIdx >= prev.history.length) return prev;
+          return Object.assign({}, prev, { suggestions: prev.history[newIdx].map(function(s) { return Object.assign({}, s); }), historyIdx: newIdx });
+        });
       };
 
       const handleFixSingle = (page) => openFixModal([page]);
@@ -4405,10 +4423,14 @@
       };
 
       const updateSuggestion = (id, field, value) => {
-        setFixModal(prev => ({
-          ...prev,
-          suggestions: prev.suggestions.map(s => s.id === id ? { ...s, [field]: value } : s)
-        }));
+        setFixModal(function(prev) {
+          var newSugg = prev.suggestions.map(function(s) { return s.id === id ? Object.assign({}, s, { [field]: value }) : s; });
+          var newHistory = prev.history.slice();
+          if (prev.historyIdx >= 0 && prev.historyIdx < newHistory.length) {
+            newHistory[prev.historyIdx] = newSugg.map(function(s) { return Object.assign({}, s); });
+          }
+          return Object.assign({}, prev, { suggestions: newSugg, history: newHistory });
+        });
       };
 
       const applyFixes = async () => {
@@ -4919,9 +4941,24 @@
 
                 {!fixModal.loading && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
-                    <button className="btn" onClick={() => openFixModal(fixModal.pages)} disabled={fixing} style={{ fontSize: 12, padding: '7px 14px', color: '#06b6d4', borderColor: '#06b6d4' }}>
-                      <i className="fas fa-sync-alt" style={{ marginRight: 5 }} />Regenerate
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button className="btn" onClick={function() { openFixModal(fixModal.pages, true); }} disabled={fixing || fixModal.loading} style={{ fontSize: 12, padding: '7px 14px', color: '#06b6d4', borderColor: '#06b6d4' }}>
+                        <i className="fas fa-sync-alt" style={{ marginRight: 5 }} />Regenerate
+                      </button>
+                      {fixModal.history && fixModal.history.length > 1 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <button className="btn" onClick={function() { navigateFixHistory(-1); }} disabled={fixModal.historyIdx <= 0} style={{ fontSize: 11, padding: '6px 10px', minWidth: 32 }}>
+                            <i className="fas fa-chevron-left" />
+                          </button>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', minWidth: 40, textAlign: 'center' }}>
+                            {(fixModal.historyIdx + 1) + ' / ' + fixModal.history.length}
+                          </span>
+                          <button className="btn" onClick={function() { navigateFixHistory(1); }} disabled={fixModal.historyIdx >= fixModal.history.length - 1} style={{ fontSize: 11, padding: '6px 10px', minWidth: 32 }}>
+                            <i className="fas fa-chevron-right" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button className="btn" onClick={() => setFixModal(null)} disabled={fixing} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
                       <button className="btn btn-primary" onClick={applyFixes} disabled={fixing} style={{ fontSize: 13, padding: '8px 20px' }}>
