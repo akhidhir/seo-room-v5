@@ -4466,11 +4466,6 @@
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Yoast SEO scores, meta tags, keyword optimization — fix directly from here</p>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              {activeChanges.length > 0 && (
-                <button className="btn" onClick={() => setShowHistory(!showHistory)} style={{ fontSize: 12, padding: '6px 12px', color: '#f59e0b', borderColor: '#f59e0b' }}>
-                  <i className="fas fa-history" style={{ marginRight: 4 }} />{activeChanges.length} Change{activeChanges.length !== 1 ? 's' : ''}
-                </button>
-              )}
               {selected.size > 0 && (
                 <button className="btn btn-primary" onClick={handleFixBulk} style={{ fontSize: 12, padding: '6px 12px' }}>
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Page{selected.size !== 1 ? 's' : ''}
@@ -4491,35 +4486,6 @@
           )}
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
-
-          {/* Change History Panel */}
-          {showHistory && activeChanges.length > 0 && (
-            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid #f59e0b33', padding: 16, marginBottom: 20 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b' }}><i className="fas fa-history" style={{ marginRight: 6 }} />Change History</div>
-                <button onClick={() => setShowHistory(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-times" /></button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {activeChanges.map(ch => (
-                  <div key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', fontSize: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <span style={{ fontWeight: 600 }}>{ch.page_title || 'Page ' + ch.page_id}</span>
-                      <span style={{ color: 'var(--text3)', marginLeft: 8 }}>{ch.field_name.replace('yoast_wpseo_', '')}</span>
-                    </div>
-                    <div style={{ flex: 2, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ color: '#ef4444', textDecoration: 'line-through', fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.original_value || '(empty)'}</span>
-                      <i className="fas fa-arrow-right" style={{ color: 'var(--text3)', fontSize: 10 }} />
-                      <span style={{ color: '#22c55e', fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.new_value}</span>
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{new Date(ch.applied_at).toLocaleDateString()}</div>
-                    <button onClick={() => handleRollback(ch.id)} disabled={rollingBack === ch.id} className="btn" style={{ fontSize: 10, padding: '3px 8px', color: '#ef4444', borderColor: '#ef4444' }}>
-                      {rollingBack === ch.id ? <span className="spinner"></span> : <><i className="fas fa-undo" style={{ marginRight: 3 }} />Rollback</>}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {overallStats && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
@@ -4735,15 +4701,39 @@
                                     );
                                   })}
                                 </div>
+                                {/* Per-page change history */}
+                                {hasHistory && (function() {
+                                  var pageChanges = activeChanges.filter(function(c) { return c.page_id === page.id; });
+                                  if (pageChanges.length === 0) return null;
+                                  return React.createElement('div', { style: { marginTop: 14, padding: 12, background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 8 } },
+                                    React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#f59e0b', marginBottom: 8 } },
+                                      React.createElement('i', { className: 'fas fa-history', style: { marginRight: 6 } }),
+                                      pageChanges.length + ' Change' + (pageChanges.length !== 1 ? 's' : '') + ' on this page'
+                                    ),
+                                    pageChanges.map(function(ch) {
+                                      var fieldLabel = ch.field_name.replace('yoast_wpseo_', '').replace('_', ' ');
+                                      if (ch.field_name === '_elementor_data') fieldLabel = 'internal links (Elementor)';
+                                      if (ch.field_name === 'content') fieldLabel = 'content';
+                                      var showValues = ch.field_name !== '_elementor_data' && ch.field_name !== 'content';
+                                      return React.createElement('div', { key: ch.id, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 11 } },
+                                        React.createElement('span', { style: { fontWeight: 600, color: 'var(--text2)', minWidth: 80 } }, fieldLabel),
+                                        showValues ? React.createElement('span', { style: { color: '#ef4444', textDecoration: 'line-through', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ch.original_value || '(empty)') : null,
+                                        showValues ? React.createElement('i', { className: 'fas fa-arrow-right', style: { color: 'var(--text3)', fontSize: 8 } }) : null,
+                                        showValues ? React.createElement('span', { style: { color: '#22c55e', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ch.new_value || '(empty)') : null,
+                                        !showValues ? React.createElement('span', { style: { color: 'var(--text3)' } }, ch.change_type) : null,
+                                        React.createElement('span', { style: { color: 'var(--text3)', fontSize: 10, marginLeft: 'auto', whiteSpace: 'nowrap' } }, new Date(ch.applied_at).toLocaleDateString()),
+                                        React.createElement('button', { className: 'btn', onClick: function() { handleRollback(ch.id); }, disabled: rollingBack === ch.id, style: { fontSize: 10, padding: '2px 6px', color: '#ef4444', borderColor: '#ef4444', marginLeft: 4 } },
+                                          rollingBack === ch.id ? React.createElement('span', { className: 'spinner' }) : React.createElement('span', null, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 2 } }), 'Undo')
+                                        )
+                                      );
+                                    })
+                                  );
+                                })()}
+
                                 <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
                                   {isFixable && (
                                     <button className="btn btn-primary" onClick={() => handleFixSingle(page)} style={{ fontSize: 11, padding: '6px 12px' }}>
                                       <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate AI Fix
-                                    </button>
-                                  )}
-                                  {hasHistory && (
-                                    <button className="btn" onClick={() => handleRollbackPage(page.id)} style={{ fontSize: 11, padding: '6px 12px', color: '#f59e0b', borderColor: '#f59e0b' }} disabled={rollingBack === 'page-' + page.id}>
-                                      <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback All Changes
                                     </button>
                                   )}
                                   <button className="btn" onClick={() => handleAddOutboundLinks(page)}
