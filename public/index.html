@@ -4289,37 +4289,6 @@
         setAddingLinks(null);
       };
 
-      const [regenMeta, setRegenMeta] = React.useState(null);
-      const handleRegenMeta = async (page) => {
-        setRegenMeta(page.id);
-        try {
-          // Get AI suggestion
-          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages: [page] }),
-          });
-          if (data?.suggestions?.length) {
-            const s = data.suggestions[0];
-            // Apply fix immediately
-            const fixResp = await api(`/projects/${project.id}/onpage-audit/fix`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fixes: [{
-                id: page.id, url: page.url, title: page.title,
-                new_meta_title: s.suggested_title,
-                new_meta_desc: s.suggested_desc,
-                new_focus_keyword: s.suggested_keyword,
-              }] }),
-            });
-            if (fixResp?.results) {
-              alert(`Meta regenerated for "${page.title}"`);
-              loadHistory();
-              runAudit(); // refresh to show updated meta
-            }
-          }
-        } catch (e) { alert('Error: ' + e.message); }
-        setRegenMeta(null);
-      };
-
       const [sendingToCopywriter, setSendingToCopywriter] = React.useState(null);
       const handleSendToCopywriter = async (page, contentType = 'rewrite') => {
         setSendingToCopywriter(page.id);
@@ -4661,11 +4630,9 @@
                                     <i className={addingLinks === page.id ? 'fas fa-spinner fa-spin' : 'fas fa-link'} style={{ marginRight: 4 }} />
                                     {addingLinks === page.id ? 'Adding Links...' : 'Add Internal Links'}
                                   </button>
-                                  <button className="btn" onClick={() => handleRegenMeta(page)}
-                                    style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}
-                                    disabled={regenMeta === page.id}>
-                                    <i className={regenMeta === page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sync-alt'} style={{ marginRight: 4 }} />
-                                    {regenMeta === page.id ? 'Regenerating...' : 'Regenerate Meta'}
+                                  <button className="btn" onClick={() => handleFixSingle(page)}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}>
+                                    <i className="fas fa-sync-alt" style={{ marginRight: 4 }} />Regenerate Meta
                                   </button>
                                   <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
