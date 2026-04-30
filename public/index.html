@@ -4497,7 +4497,7 @@
                       { key: 'seo', label: 'SEO', align: 'center', width: 55 },
                       { key: 'keyword', label: 'Focus Keyword', align: 'left', width: 150 },
                       { key: 'words', label: 'Words', align: 'center', width: 65 },
-                      { key: 'links', label: 'Links', align: 'center', width: 55 },
+                      { key: 'links', label: 'Out / In', align: 'center', width: 70 },
                       { key: 'issues', label: 'Issues', align: 'center', width: 75 },
                     ].map(col => (
                       <th key={col.key} onClick={() => toggleSort(col.key)} style={{ padding: '10px 10px', textAlign: col.align, fontWeight: 600, color: sortBy === col.key ? 'var(--accent)' : 'var(--text2)', width: col.width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
@@ -4538,8 +4538,10 @@
                           <td style={{ padding: '10px 10px', textAlign: 'center', color: page.wordCount < 500 ? '#ef4444' : page.wordCount < 800 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
                             {page.wordCount}
                           </td>
-                          <td style={{ padding: '10px 10px', textAlign: 'center', color: 'var(--text2)' }}>
-                            {page.internalLinks}
+                          <td style={{ padding: '10px 10px', textAlign: 'center', fontSize: 12 }}>
+                            <span style={{ color: page.internalLinks < 3 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{page.internalLinks}</span>
+                            <span style={{ color: 'var(--text3)', margin: '0 2px' }}>/</span>
+                            <span style={{ color: (page.inboundLinks || 0) === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{page.inboundLinks || 0}</span>
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             {problems > 0 && <span style={{ color: '#ef4444', fontWeight: 600, marginRight: 4 }}>{problems}<i className="fas fa-times-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
@@ -4581,14 +4583,18 @@
                                     <div style={{ fontSize: 13, color: charColor(page.metaDescLen, 120, 155) }}>{page.metaDesc || <span style={{ color: '#ef4444' }}>Empty</span>}</div>
                                   </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 16 }}>
                                   <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
                                     <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>H1</div>
                                     <div style={{ fontSize: 12, fontWeight: 600 }}>{page.h1}</div>
                                   </div>
                                   <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
-                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Internal Links</div>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Outbound Links</div>
                                     <div style={{ fontSize: 16, fontWeight: 700, color: page.internalLinks < 3 ? '#ef4444' : '#22c55e' }}>{page.internalLinks}</div>
+                                  </div>
+                                  <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Inbound Links</div>
+                                    <div style={{ fontSize: 16, fontWeight: 700, color: (page.inboundLinks || 0) === 0 ? '#ef4444' : '#22c55e' }}>{page.inboundLinks || 0}</div>
                                   </div>
                                   <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
                                     <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>Images</div>
@@ -4599,6 +4605,29 @@
                                     <div style={{ fontSize: 16, fontWeight: 700 }}>{page.externalLinks}</div>
                                   </div>
                                 </div>
+                                {/* Inbound links list */}
+                                {page.inboundFrom && page.inboundFrom.length > 0 && (
+                                  <div style={{ marginBottom: 14, padding: 10, background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 8 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', marginBottom: 6 }}>
+                                      <i className="fas fa-sign-in-alt" style={{ marginRight: 5 }} />Inbound Links ({page.inboundFrom.length} pages link here)
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                      {page.inboundFrom.map((src, si) => (
+                                        <a key={si} href={src.url.startsWith('http') ? src.url : (project.wordpress_url?.replace(/\/$/, '') + src.url)}
+                                          target="_blank" rel="noopener noreferrer"
+                                          style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '3px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                          <i className="fas fa-file-alt" style={{ fontSize: 9 }} />{src.title}
+                                        </a>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {page.inboundLinks === 0 && (
+                                  <div style={{ marginBottom: 14, padding: '8px 10px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 8, fontSize: 11, color: '#ef4444' }}>
+                                    <i className="fas fa-exclamation-triangle" style={{ marginRight: 5 }} />No inbound links — no other pages on the site link to this page (orphan page)
+                                  </div>
+                                )}
+
                                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>
                                   <i className="fas fa-traffic-light" style={{ marginRight: 6 }} />Issue Analysis
                                 </div>

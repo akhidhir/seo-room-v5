@@ -2266,6 +2266,32 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       });
     }
 
+    // Calculate inbound links — for each page, count how many other pages link to it
+    const allUrls = allPages.map(pg => (pg.link || '').replace(/\/$/, ''));
+    for (const result of results) {
+      const targetUrl = (wpBase + result.url).replace(/\/$/, '');
+      const targetSlug = result.url.replace(/\//g, '');
+      let inbound = 0;
+      const inboundFrom = [];
+      for (const pg of allPages) {
+        if (pg.id === result.id) continue;
+        const pgContent = pg.content?.rendered || '';
+        // Check if this page's content links to our target
+        const hrefRegex = /href=["']([^"']+)["']/gi;
+        let hm;
+        while ((hm = hrefRegex.exec(pgContent)) !== null) {
+          const href = hm[1].replace(/\/$/, '');
+          if (href === targetUrl || href === result.url.replace(/\/$/, '') || href.endsWith('/' + targetSlug)) {
+            inbound++;
+            inboundFrom.push({ title: pg.title?.rendered || '', url: (pg.link || '').replace(wpBase, '') || '/' });
+            break; // count each source page once
+          }
+        }
+      }
+      result.inboundLinks = inbound;
+      result.inboundFrom = inboundFrom;
+    }
+
     // Sort: red first, then orange, then green
     const scoreOrder = { red: 0, orange: 1, gray: 2, green: 3 };
     results.sort((a, b) => (scoreOrder[a.yoastScore] || 2) - (scoreOrder[b.yoastScore] || 2));
