@@ -4274,11 +4274,10 @@
         if (!confirm(`Add internal links to "${page.title}"? This will modify the page content on WordPress (with rollback).`)) return;
         setAddingLinks(page.id);
         try {
-          const resp = await fetch(`/api/projects/${project.id}/onpage-audit/add-links`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page_id: page.id }),
+          const data = await api(`/projects/${project.id}/onpage-audit/add-links`, {
+            method: 'POST',
+            body: { page_id: page.id },
           });
-          const data = await resp.json();
           if (data.success) {
             setLinksResult({ pageId: page.id, pageUrl: page.url, pageTitle: page.title, links: data.links_added });
             setExpandedPage(page.id);
@@ -4325,10 +4324,9 @@
       const handleSendToCopywriter = async (page, contentType = 'rewrite') => {
         setSendingToCopywriter(page.id);
         try {
-          const resp = await fetch(`/api/projects/${project.id}/content-queue`, {
+          const data = await api(`/projects/${project.id}/content-queue`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: {
               page_id: page.id,
               page_url: page.url,
               page_title: page.title,
@@ -4340,13 +4338,12 @@
               current_meta_title: page.metaTitle,
               current_meta_desc: page.metaDesc,
               current_focus_keyword: page.focusKeyword,
-            }),
+            },
           });
-          if (resp.ok) {
+          if (data && !data.error) {
             alert(`"${page.title}" sent to Copywriter queue`);
           } else {
-            const err = await resp.json();
-            alert(err.error || 'Failed to send');
+            alert(data?.error || 'Failed to send');
           }
         } catch (e) { alert('Error: ' + e.message); }
         setSendingToCopywriter(null);
