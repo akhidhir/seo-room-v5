@@ -2480,7 +2480,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
   }
 });
 
-// Add internal links to a page via AI
+// Add internal links to a page via AI (supports Elementor + classic editor)
 app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -2492,19 +2492,60 @@ app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => 
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Fetch target page content
+    // Fetch target page with all fields
     let pageData, pageType = 'pages';
-    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
     if (pageResp.ok) {
       pageData = await pageResp.json();
     } else {
-      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
       if (pageResp.ok) { pageData = await pageResp.json(); pageType = 'posts'; }
     }
     if (!pageData) return res.status(404).json({ error: 'Page not found in WordPress' });
 
-    const currentContent = pageData.content?.rendered || pageData.content?.raw || '';
-    if (!currentContent.trim()) return res.status(400).json({ error: 'Page has no content' });
+    // Detect Elementor — check for _elementor_data in meta
+    const isElementor = project.is_elementor_site || (pageData.meta && pageData.meta._elementor_data);
+    let elementorData = null;
+    let textWidgets = []; // { path, content } for each text widget
+
+    if (isElementor && pageData.meta?._elementor_data) {
+      try {
+        elementorData = typeof pageData.meta._elementor_data === 'string'
+          ? JSON.parse(pageData.meta._elementor_data) : pageData.meta._elementor_data;
+      } catch { elementorData = null; }
+    }
+
+    // Extract text content from Elementor widgets recursively
+    const extractTextWidgets = (elements, path = '') => {
+      if (!Array.isArray(elements)) return;
+      elements.forEach((el, idx) => {
+        const currentPath = path ? `${path}.${idx}` : `${idx}`;
+        // Text editor widgets contain HTML in settings.editor
+        if (el.widgetType === 'text-editor' && el.settings?.editor) {
+          textWidgets.push({ path: currentPath, field: 'editor', content: el.settings.editor });
+        }
+        // Heading widgets — skip (don't add links in headings)
+        // Recursively check sections/columns/inner sections
+        if (el.elements && el.elements.length > 0) {
+          extractTextWidgets(el.elements, currentPath + '.elements');
+        }
+      });
+    };
+
+    let contentForAI;
+    if (elementorData) {
+      extractTextWidgets(elementorData);
+      if (textWidgets.length === 0) {
+        return res.json({ success: false, message: 'No text editor widgets found in Elementor data', links_added: [] });
+      }
+      // Combine all text widgets for AI, with markers
+      contentForAI = textWidgets.map((tw, i) => `[WIDGET_${i}]\n${tw.content}\n[/WIDGET_${i}]`).join('\n\n');
+      console.log(`[add-links] Elementor page ${page_id}: found ${textWidgets.length} text widgets`);
+    } else {
+      contentForAI = pageData.content?.raw || pageData.content?.rendered || '';
+      if (!contentForAI.trim()) return res.status(400).json({ error: 'Page has no content' });
+      console.log(`[add-links] Classic page ${page_id}: using standard content`);
+    }
 
     // Fetch all other pages to build link targets
     const allPages = [];
@@ -2524,48 +2565,71 @@ app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => 
         } catch { break; }
       }
     }
-
     if (allPages.length === 0) return res.status(400).json({ error: 'No other pages found to link to' });
 
-    // Build link target list for AI
     const linkTargets = allPages.map(p => ({
       title: p.title?.rendered || p.title,
       url: p.link || '',
-      slug: p.slug || '',
     }));
 
-    console.log(`[add-links] Page ${page_id}: "${pageData.title?.rendered}", ${allPages.length} link targets available`);
+    console.log(`[add-links] Page "${pageData.title?.rendered || pageData.title?.raw}", ${allPages.length} link targets, elementor=${!!elementorData}`);
 
-    // Ask AI to insert internal links
+    // Build AI prompt — different for Elementor vs classic
+    const systemPrompt = elementorData
+      ? `You are an SEO expert. Add internal links to Elementor text widget content.
+The content is split into numbered widgets: [WIDGET_0], [WIDGET_1], etc.
+Return the SAME widget structure with links added inside the widget content.
+
+Rules:
+- ONLY add <a href="URL">anchor text</a> links to EXISTING text
+- Use natural anchor text that already exists — find phrases matching other page topics
+- Link to relevant pages only
+- Add 3-8 internal links total across all widgets
+- Do NOT link the same target page twice
+- Do NOT add links where there's already an <a> tag
+- Do NOT modify any HTML structure, classes, IDs, styles, or Elementor shortcodes
+- Do NOT change any text content — only wrap existing phrases in <a> tags
+- Keep all existing links intact
+
+Return JSON:
+{
+  "widgets": [
+    {"index": 0, "modified_content": "<widget 0 HTML with links>"},
+    {"index": 1, "modified_content": "<widget 1 HTML with links>"}
+  ],
+  "links_added": [{"anchor": "text", "url": "target URL", "widget": 0, "reason": "why"}]
+}
+Only include widgets that were actually modified.`
+      : `You are an SEO expert. Add internal links to existing page content.
+
+Rules:
+- ONLY add <a href="URL">anchor text</a> links to EXISTING text
+- Use natural anchor text that already exists — find phrases matching other page topics
+- Link to relevant pages only
+- Add 3-8 internal links depending on content length
+- Do NOT link the same target page twice
+- Do NOT add links inside headings (h1-h6)
+- Do NOT add links where there's already an <a> tag
+- Do NOT modify any HTML structure, classes, IDs, or styles
+- Do NOT change any text content — only wrap existing phrases in <a> tags
+- Keep all existing links intact
+- Return the FULL modified HTML content
+
+Return JSON: {"modified_content": "<full HTML with links>", "links_added": [{"anchor": "text", "url": "target URL", "reason": "why"}]}`;
+
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8000,
-      system: `You are an SEO expert. Your job is to add internal links to existing page content.
-
-Rules:
-- ONLY add <a href="URL">anchor text</a> links to EXISTING text — do NOT add new text, sentences, or paragraphs
-- Use natural anchor text that already exists in the content — find phrases that match other page topics
-- Link to relevant pages only — the anchor text should relate to the linked page
-- Add 3-8 internal links depending on content length
-- Do NOT link the same page twice
-- Do NOT add links inside headings (h1, h2, h3, etc.)
-- Do NOT add links where there's already an <a> tag
-- Do NOT modify any HTML structure, classes, IDs, or styles
-- Do NOT change any text content — only wrap existing text in <a> tags
-- Keep all existing links intact
-- Return the FULL modified HTML content with the new links added
-- Open links in same tab (no target="_blank")
-
-Return JSON: {"modified_content": "<full HTML with links added>", "links_added": [{"anchor": "text linked", "url": "target URL", "reason": "why this link"}]}`,
+      system: systemPrompt,
       messages: [{ role: 'user', content: `Add internal links to this page content.
 
-Page: ${pageData.title?.rendered || ''}
+Page: ${pageData.title?.rendered || pageData.title?.raw || ''}
 
 Available link targets:
 ${linkTargets.map(t => `- "${t.title}" → ${t.url}`).join('\n')}
 
 Current content:
-${currentContent.slice(0, 12000)}` }],
+${contentForAI.slice(0, 12000)}` }],
     });
 
     const raw = aiResp.content[0].text;
@@ -2577,36 +2641,96 @@ ${currentContent.slice(0, 12000)}` }],
       return res.status(500).json({ error: 'AI returned invalid JSON', raw: raw.slice(0, 500) });
     }
 
-    if (!parsed.modified_content || !parsed.links_added?.length) {
+    if (!parsed.links_added?.length) {
       return res.json({ success: false, message: 'AI could not find suitable places to add links', links_added: [] });
     }
 
-    // Snapshot current content for rollback
-    await pool.query(
-      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [projectId, page_id, pageData.link, pageData.title?.rendered, 'internal-links', 'content',
-       currentContent.slice(0, 50000), parsed.modified_content.slice(0, 50000)]
-    );
+    // Apply changes based on content type
+    if (elementorData && parsed.widgets) {
+      // Apply to Elementor widgets
+      const originalJson = JSON.stringify(elementorData);
 
-    // Write updated content to WordPress
-    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
-      method: 'POST',
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: parsed.modified_content }),
-      signal: AbortSignal.timeout(15000),
-    });
+      // Navigate to each widget by path and update settings.editor
+      const setByPath = (obj, pathStr, value) => {
+        const parts = pathStr.split('.');
+        let current = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const key = isNaN(parts[i]) ? parts[i] : parseInt(parts[i]);
+          current = current[key];
+        }
+        const lastKey = isNaN(parts[parts.length - 1]) ? parts[parts.length - 1] : parseInt(parts[parts.length - 1]);
+        current[lastKey] = value;
+      };
 
-    if (!writeResp.ok) {
-      const errText = await writeResp.text();
-      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+      for (const w of parsed.widgets) {
+        const tw = textWidgets[w.index];
+        if (!tw) continue;
+        // The path points to the element, we need to set settings.editor
+        const editorPath = tw.path + '.settings.editor';
+        try { setByPath(elementorData, editorPath, w.modified_content); }
+        catch (e) { console.log(`[add-links] Failed to set widget ${w.index}: ${e.message}`); }
+      }
+
+      // Snapshot for rollback
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', '_elementor_data',
+         originalJson.slice(0, 50000), JSON.stringify(elementorData).slice(0, 50000)]
+      );
+
+      // Write Elementor data back via meta
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elementorData) } }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!writeResp.ok) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+      }
+
+      // Also clear Elementor CSS cache by touching _elementor_css meta
+      await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+
+    } else if (parsed.modified_content) {
+      // Classic editor — write content directly
+      const currentContent = pageData.content?.raw || pageData.content?.rendered || '';
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', 'content',
+         currentContent.slice(0, 50000), parsed.modified_content.slice(0, 50000)]
+      );
+
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: parsed.modified_content }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!writeResp.ok) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+      }
+    } else {
+      return res.json({ success: false, message: 'No content modifications returned', links_added: [] });
     }
 
-    console.log(`[add-links] Added ${parsed.links_added.length} links to page ${page_id}`);
+    console.log(`[add-links] Added ${parsed.links_added.length} links to page ${page_id} (elementor=${!!elementorData})`);
     res.json({
       success: true,
       links_added: parsed.links_added,
       count: parsed.links_added.length,
+      elementor: !!elementorData,
     });
   } catch (e) {
     console.error('[add-links] Error:', e.message);

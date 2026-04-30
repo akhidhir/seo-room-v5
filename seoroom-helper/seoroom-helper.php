@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SEO Room Helper
  * Description: Registers Yoast SEO meta fields for REST API access (read + write). Required by SEO Room Dashboard.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: The SEO Room
  */
 
@@ -16,6 +16,8 @@ add_action('init', function() {
         '_yoast_wpseo_focuskw',
         '_yoast_wpseo_linkdex',
         '_yoast_wpseo_content_score',
+        '_elementor_data',
+        '_elementor_css',
     ];
 
     foreach ($post_types as $type) {
