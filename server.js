@@ -2697,12 +2697,12 @@ ${contentForAI.slice(0, 12000)}` }],
         catch (e) { console.log(`[add-links] Failed to set widget ${w.index}: ${e.message}`); }
       }
 
-      // Snapshot for rollback
+      // Snapshot for rollback (full data, no truncation)
       await pool.query(
         `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', '_elementor_data',
-         originalJson.slice(0, 50000), JSON.stringify(elementorData).slice(0, 50000)]
+         originalJson, JSON.stringify(elementorData)]
       );
 
       // Write Elementor data back via meta
@@ -2733,7 +2733,7 @@ ${contentForAI.slice(0, 12000)}` }],
         `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', 'content',
-         currentContent.slice(0, 50000), parsed.modified_content.slice(0, 50000)]
+         currentContent, parsed.modified_content]
       );
 
       const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
@@ -2907,7 +2907,7 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
           `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', '_elementor_data',
-           originalJson.slice(0, 50000), JSON.stringify(elData).slice(0, 50000)]
+           originalJson, JSON.stringify(elData)]
         );
 
         const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
@@ -2941,7 +2941,7 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
           `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', 'content',
-           content.slice(0, 50000), newContent.slice(0, 50000)]
+           content, newContent]
         );
 
         const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
@@ -3011,14 +3011,33 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     const current = await readWpYoastMeta(wpBase, change.page_id, authHeaders);
     if (!current) return res.status(404).json({ error: 'Page not found in WordPress' });
 
-    // Write original value back
-    const meta = { [change.field_name]: change.original_value };
+    // Write original value back — handle different field types
+    let payload;
+    if (change.field_name === '_elementor_data') {
+      // Elementor data — write as meta, also clear CSS cache
+      payload = { meta: { _elementor_data: change.original_value } };
+    } else if (change.field_name === 'content') {
+      // Standard content field — write directly
+      payload = { content: change.original_value };
+    } else {
+      // Yoast meta fields
+      payload = { meta: { [change.field_name]: change.original_value } };
+    }
     const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${change.page_id}`, {
       method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ meta }),
-      signal: AbortSignal.timeout(15000)
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000)
     });
+    // Clear Elementor CSS cache if we just rolled back Elementor data
+    if (change.field_name === '_elementor_data') {
+      await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${change.page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+    }
 
     if (!writeResp.ok) {
       const errText = await writeResp.text();
@@ -3054,33 +3073,73 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     const current = await readWpYoastMeta(wpBase, parseInt(pageId), authHeaders);
     if (!current) return res.status(404).json({ error: 'Page not found in WordPress' });
 
-    // Build meta object with all original values (earliest change = true original)
-    const meta = {};
-    const fieldOriginals = {};
-    for (const ch of chRes.rows) {
-      if (!fieldOriginals[ch.field_name]) {
-        fieldOriginals[ch.field_name] = ch.original_value;
-      }
-    }
-    // Get the very first original per field (oldest change)
+    // Get the very first original per field (oldest change = true original)
     const allChanges = await pool.query(
       'SELECT DISTINCT ON (field_name) field_name, original_value FROM wp_change_history WHERE project_id=$1 AND page_id=$2 ORDER BY field_name, applied_at ASC',
       [projectId, pageId]
     );
+
+    // Split fields: meta fields vs content vs elementor
+    const metaFields = {};
+    let contentValue = null;
+    let elementorValue = null;
     for (const row of allChanges.rows) {
-      meta[row.field_name] = row.original_value;
+      if (row.field_name === 'content') {
+        contentValue = row.original_value;
+      } else if (row.field_name === '_elementor_data') {
+        elementorValue = row.original_value;
+      } else {
+        metaFields[row.field_name] = row.original_value;
+      }
     }
 
-    const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ meta }),
-      signal: AbortSignal.timeout(15000)
-    });
+    // Write meta fields (Yoast etc)
+    if (Object.keys(metaFields).length > 0) {
+      const metaResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: metaFields }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!metaResp.ok) {
+        const errText = await metaResp.text();
+        return res.status(500).json({ error: `Meta rollback failed: ${errText.slice(0, 200)}` });
+      }
+    }
 
-    if (!writeResp.ok) {
-      const errText = await writeResp.text();
-      return res.status(500).json({ error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
+    // Write content field
+    if (contentValue !== null) {
+      const contentResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: contentValue }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!contentResp.ok) {
+        const errText = await contentResp.text();
+        return res.status(500).json({ error: `Content rollback failed: ${errText.slice(0, 200)}` });
+      }
+    }
+
+    // Write Elementor data
+    if (elementorValue !== null) {
+      const elemResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_data: elementorValue } }),
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!elemResp.ok) {
+        const errText = await elemResp.text();
+        return res.status(500).json({ error: `Elementor rollback failed: ${errText.slice(0, 200)}` });
+      }
+      // Clear Elementor CSS cache
+      await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
     }
 
     // Mark all as rolled back
