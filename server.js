@@ -3773,49 +3773,51 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
     expandedSeeds = [...new Set(expandedSeeds.map(s => s.trim().toLowerCase()))].filter(Boolean);
     console.log(`[kw-research] Expanded to ${expandedSeeds.length} seed keywords`);
 
-    // Step 2: DataForSEO keywords_for_keywords — get related keywords
+    // Step 2: DataForSEO Labs — keyword suggestions (clickstream-adjusted, like Ahrefs)
     let allKeywords = [];
-    const batchSize = 20; // DFS limit per request
-    for (let i = 0; i < expandedSeeds.length; i += batchSize) {
-      const batch = expandedSeeds.slice(i, i + batchSize);
+    for (const seed of expandedSeeds.slice(0, 10)) { // Labs takes one seed at a time
       try {
-        const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live', {
+        const dfsResp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
           body: JSON.stringify([{
-            keywords: batch,
+            keyword: seed,
             location_code: locationCode,
             language_name: 'English',
-            sort_by: 'search_volume',
-            limit: Math.min(cap * 3, 200), // fetch more than needed to filter
+            limit: Math.min(cap * 2, 100),
+            include_seed_keyword: true,
+            include_serp_info: false,
           }]),
-          signal: AbortSignal.timeout(30000),
+          signal: AbortSignal.timeout(20000),
         });
         if (dfsResp.ok) {
           const dfsData = await dfsResp.json();
-          const results = dfsData?.tasks?.[0]?.result || [];
-          for (const r of results) {
-            if (r.keyword && r.search_volume != null) {
+          const items = dfsData?.tasks?.[0]?.result?.[0]?.items || [];
+          for (const item of items) {
+            const kd = item.keyword_data || item;
+            const ki = kd.keyword_info || {};
+            if (kd.keyword && ki.search_volume != null) {
               allKeywords.push({
-                keyword: r.keyword,
-                volume: r.search_volume || 0,
-                competition: r.competition || null,
-                competition_index: r.competition_index != null ? r.competition_index : null,
-                cpc: r.cpc || null,
-                intent: r.keyword_info?.keyword_properties?.keyword_intent || null,
+                keyword: kd.keyword,
+                volume: ki.search_volume || 0,
+                competition: ki.competition != null ? (ki.competition > 0.66 ? 'HIGH' : ki.competition > 0.33 ? 'MEDIUM' : 'LOW') : null,
+                competition_index: ki.competition != null ? Math.round(ki.competition * 100) : null,
+                cpc: ki.cpc || null,
+                intent: ki.keyword_properties?.keyword_intent || null,
+                difficulty: kd.keyword_properties?.keyword_difficulty || null,
               });
             }
           }
         } else {
           const errText = await dfsResp.text();
-          console.log(`[kw-research] DFS keywords_for_keywords error: ${dfsResp.status} ${errText.substring(0, 200)}`);
+          console.log(`[kw-research] DFS Labs error: ${dfsResp.status} ${errText.substring(0, 300)}`);
         }
-      } catch (e) { console.log(`[kw-research] DFS batch error: ${e.message}`); }
+      } catch (e) { console.log(`[kw-research] DFS Labs error for "${seed}": ${e.message}`); }
     }
 
-    // Step 3: If keywords_for_keywords returned nothing, fall back to search_volume on expanded seeds
+    // Fallback: if Labs returned nothing, try Google Ads search_volume on the seeds
     if (allKeywords.length === 0) {
-      console.log(`[kw-research] keywords_for_keywords returned nothing, falling back to search_volume`);
+      console.log(`[kw-research] Labs returned nothing, falling back to google_ads search_volume`);
       try {
         const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
           method: 'POST',
