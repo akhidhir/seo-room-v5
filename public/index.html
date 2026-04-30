@@ -5847,6 +5847,217 @@
       );
     }
 
+    // ============ NEW WEBSITE — PAGE SETUP ============
+    function NewWebsitePagesPage({ project }) {
+      var [keywords, setKeywords] = React.useState([]);
+      var [loading, setLoading] = React.useState(true);
+      var [assignModal, setAssignModal] = React.useState(null); // { keyword_ids, current_type }
+      var [saving, setSaving] = React.useState(false);
+
+      var pid = project ? project.id : null;
+      var loadKeywords = async function() {
+        if (!pid) return;
+        setLoading(true);
+        try {
+          var data = await api('/projects/' + pid + '/content-keywords');
+          if (Array.isArray(data)) setKeywords(data);
+        } catch (e) { console.error(e); }
+        setLoading(false);
+      };
+      React.useEffect(function() { loadKeywords(); }, [pid]);
+
+      var pageTypes = [
+        { key: 'home', label: 'Home Page', icon: 'fas fa-home', color: '#6366f1', desc: 'Main landing page — primary keywords' },
+        { key: 'service', label: 'Service Pages', icon: 'fas fa-briefcase', color: '#22c55e', desc: 'Core service/product pages' },
+        { key: 'suburb', label: 'Suburb Pages', icon: 'fas fa-map-marker-alt', color: '#f59e0b', desc: 'Location-based service pages' },
+        { key: 'blog', label: 'Blog Posts', icon: 'fas fa-blog', color: '#3b82f6', desc: 'Informational & long-tail content' },
+      ];
+
+      var unassigned = keywords.filter(function(k) { return !k.page_type || k.page_type === 'unassigned'; });
+      var grouped = {};
+      pageTypes.forEach(function(pt) { grouped[pt.key] = keywords.filter(function(k) { return k.page_type === pt.key; }); });
+
+      var [dragKw, setDragKw] = React.useState(null);
+
+      var handleAssign = async function(kwIds, pageType, pageName) {
+        setSaving(true);
+        try {
+          await api('/projects/' + pid + '/content-keywords/bulk-assign', {
+            method: 'PUT',
+            body: { keyword_ids: kwIds, page_type: pageType, page_name: pageName || null },
+          });
+          await loadKeywords();
+          setAssignModal(null);
+        } catch (e) { alert('Error: ' + e.message); }
+        setSaving(false);
+      };
+
+      return React.createElement('div', null,
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0 } },
+            React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 10, color: 'var(--accent)' } }),
+            'Page Setup'
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } },
+            'Assign keywords to page types. Each keyword becomes a page in the draft queue.'
+          )
+        ),
+
+        loading
+          ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+              React.createElement('div', { className: 'spinner-large', style: { margin: '0 auto 16px' } }), 'Loading...'
+            )
+          : keywords.length === 0
+            ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+                React.createElement('i', { className: 'fas fa-key', style: { fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 } }),
+                'No keywords yet. Add keywords in the Keywords page first.'
+              )
+            : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 } },
+
+                // Left: Unassigned keywords
+                React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 } },
+                  React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } },
+                    React.createElement('i', { className: 'fas fa-inbox', style: { marginRight: 6, color: '#6b7280' } }),
+                    'Unassigned (' + unassigned.length + ')'
+                  ),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 12 } }, 'Click a keyword to assign it'),
+                  unassigned.length === 0
+                    ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: 16, textAlign: 'center' } }, 'All keywords assigned!')
+                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 500, overflowY: 'auto' } },
+                        unassigned.map(function(kw) {
+                          return React.createElement('div', {
+                            key: kw.id,
+                            onClick: function() { setAssignModal({ keyword_ids: [kw.id], keyword_text: kw.keyword }); },
+                            style: { padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: 13, transition: 'all 0.15s' },
+                            onMouseEnter: function(e) { e.currentTarget.style.borderColor = 'var(--accent)'; },
+                            onMouseLeave: function(e) { e.currentTarget.style.borderColor = 'var(--border)'; },
+                          }, kw.keyword);
+                        })
+                      )
+                ),
+
+                // Right: Page type columns
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+                  pageTypes.map(function(pt) {
+                    var items = grouped[pt.key] || [];
+                    return React.createElement('div', { key: pt.key, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 } },
+                      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                        React.createElement('div', null,
+                          React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: pt.color } },
+                            React.createElement('i', { className: pt.icon, style: { marginRight: 6 } }),
+                            pt.label + ' (' + items.length + ')'
+                          ),
+                          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 10 } }, pt.desc)
+                        )
+                      ),
+                      items.length === 0
+                        ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 0' } }, 'No keywords assigned')
+                        : React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                            items.map(function(kw) {
+                              return React.createElement('span', {
+                                key: kw.id,
+                                style: { fontSize: 12, padding: '4px 10px', borderRadius: 20, background: pt.color + '18', color: pt.color, border: '1px solid ' + pt.color + '40', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
+                                onClick: function() { setAssignModal({ keyword_ids: [kw.id], keyword_text: kw.keyword }); },
+                              },
+                                kw.keyword,
+                                React.createElement('i', {
+                                  className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6 },
+                                  onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); }
+                                })
+                              );
+                            })
+                          )
+                    );
+                  })
+                )
+              ),
+
+        // Assign modal
+        assignModal && React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }, onClick: function() { setAssignModal(null); } },
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%', border: '1px solid var(--border)' }, onClick: function(e) { e.stopPropagation(); } },
+            React.createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 700 } }, 'Assign Keyword'),
+            React.createElement('div', { style: { fontSize: 13, color: '#3b82f6', fontWeight: 600, marginBottom: 16 } }, '"' + assignModal.keyword_text + '"'),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+              pageTypes.map(function(pt) {
+                return React.createElement('button', {
+                  key: pt.key, className: 'btn',
+                  onClick: function() { handleAssign(assignModal.keyword_ids, pt.key); },
+                  disabled: saving,
+                  style: { fontSize: 13, padding: '10px 16px', textAlign: 'left', color: pt.color, borderColor: pt.color + '60', display: 'flex', alignItems: 'center', gap: 10 }
+                },
+                  React.createElement('i', { className: pt.icon, style: { width: 20, textAlign: 'center' } }),
+                  pt.label
+                );
+              })
+            ),
+            React.createElement('button', {
+              className: 'btn', onClick: function() { setAssignModal(null); },
+              style: { marginTop: 12, fontSize: 12, width: '100%' }
+            }, 'Cancel')
+          )
+        )
+      );
+    }
+
+    // ============ NEW WEBSITE — PIPELINE (Queue / Review / Publish) ============
+    function NewWebsitePipelinePage({ stage, project }) {
+      var pid = project ? project.id : null;
+      var stageConfig = {
+        queue: { title: 'Draft Queue', icon: 'fas fa-pen', desc: 'Keywords ready for content generation. Generate AI drafts for each page.', empty: 'No pages in queue. Assign keywords in Page Setup first.' },
+        review: { title: 'Review & Approve', icon: 'fas fa-check-circle', desc: 'Review AI-generated content, edit, and approve for publishing.', empty: 'No content to review. Generate drafts from the queue first.' },
+        publish: { title: 'Publish to WordPress', icon: 'fas fa-rocket', desc: 'Approved content ready to be published as new pages.', empty: 'No approved content. Review and approve drafts first.' },
+      };
+      var config = stageConfig[stage] || stageConfig.queue;
+
+      return React.createElement('div', null,
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0 } },
+            React.createElement('i', { className: config.icon, style: { marginRight: 10, color: 'var(--accent)' } }),
+            config.title
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } }, config.desc)
+        ),
+
+        // Pipeline bar
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' } },
+          [
+            { key: 'queue', label: 'Queue', icon: 'fas fa-pen', page: 'nw-queue' },
+            { key: 'review', label: 'Review', icon: 'fas fa-check-circle', page: 'nw-review' },
+            { key: 'publish', label: 'Publish', icon: 'fas fa-rocket', page: 'nw-publish' },
+          ].map(function(s) {
+            return React.createElement('div', {
+              key: s.key,
+              onClick: function() { setCurrentPage(s.page); },
+              style: { padding: '12px 16px', textAlign: 'center', background: stage === s.key ? 'var(--accent)' : 'var(--card)', color: stage === s.key ? 'white' : 'var(--text2)', cursor: 'pointer', transition: 'all 0.2s' }
+            },
+              React.createElement('i', { className: s.icon, style: { marginRight: 6, fontSize: 11 } }),
+              React.createElement('span', { style: { fontWeight: 600, fontSize: 12 } }, s.label)
+            );
+          })
+        ),
+
+        // Placeholder — will be built out in subsequent tasks
+        React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+          React.createElement('i', { className: config.icon, style: { fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 } }),
+          React.createElement('div', null, config.empty),
+          stage === 'publish' && React.createElement('div', { style: { marginTop: 20, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 20, maxWidth: 500, margin: '20px auto', textAlign: 'left' } },
+            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12 } },
+              React.createElement('i', { className: 'fas fa-cog', style: { marginRight: 8, color: 'var(--accent)' } }),
+              'Publish Settings (per page)'
+            ),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', display: 'flex', flexDirection: 'column', gap: 8 } },
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-file', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'Page Type — Page vs Post'),
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'Parent Page — for hierarchy'),
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'URL Slug — auto or custom'),
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-palette', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'Template — theme/Elementor'),
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'Status — WP Draft vs Live'),
+              React.createElement('div', null, React.createElement('i', { className: 'fas fa-robot', style: { marginRight: 6, width: 14, textAlign: 'center' } }), 'Meta Robots — index / noindex')
+            )
+          )
+        )
+      );
+    }
+
     function CopywriterPage({ stage, project }) {
       const [items, setItems] = React.useState([]);
       const [allItems, setAllItems] = React.useState([]);
@@ -8859,8 +9070,16 @@
             return <CitationsPage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} />;
-          case 'content-keywords':
+          case 'nw-keywords':
             return <ContentKeywordsPage project={project} />;
+          case 'nw-pages':
+            return <NewWebsitePagesPage project={project} />;
+          case 'nw-queue':
+            return <NewWebsitePipelinePage stage="queue" project={project} />;
+          case 'nw-review':
+            return <NewWebsitePipelinePage stage="review" project={project} />;
+          case 'nw-publish':
+            return <NewWebsitePipelinePage stage="publish" project={project} />;
           case 'content-queue':
             return <CopywriterPage stage="queue" project={project} />;
           case 'drafts':
@@ -8915,8 +9134,14 @@ case 'action-plan':
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
         ]},
-        { section: 'COPYWRITER', items: [
-          { id: 'content-keywords', label: 'Keywords', icon: 'fas fa-key' },
+        { section: 'NEW WEBSITE', items: [
+          { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
+          { id: 'nw-pages', label: 'Page Setup', icon: 'fas fa-sitemap' },
+          { id: 'nw-queue', label: 'Draft Queue', icon: 'fas fa-pen' },
+          { id: 'nw-review', label: 'Review & Approve', icon: 'fas fa-check-circle' },
+          { id: 'nw-publish', label: 'Publish', icon: 'fas fa-rocket' },
+        ]},
+        { section: 'CONTENT REWRITE', items: [
           { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
           { id: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
           { id: 'approved-content', label: 'Approved', icon: 'fas fa-check-circle' },
