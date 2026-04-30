@@ -4268,23 +4268,37 @@
         openFixModal(targetPages);
       };
 
-      const [addingLinks, setAddingLinks] = React.useState(null);
-      const [linksResult, setLinksResult] = React.useState(null); // { pageId, pageUrl, links: [] }
-      const handleAddLinks = async (page) => {
-        if (!confirm(`Add internal links to "${page.title}"? This will modify the page content on WordPress (with rollback).`)) return;
-        setAddingLinks(page.id);
+      const [addingLinks, setAddingLinks] = React.useState(null); // 'outbound-123' or 'inbound-123'
+      const [linksResult, setLinksResult] = React.useState(null); // { pageId, type, links: [] }
+
+      const handleAddOutboundLinks = async (page) => {
+        if (!confirm(`Add outbound links from "${page.title}" to other pages? (with rollback)`)) return;
+        setAddingLinks('outbound-' + page.id);
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/add-links`, {
-            method: 'POST',
-            body: { page_id: page.id },
+            method: 'POST', body: { page_id: page.id },
           });
           if (data.success) {
-            setLinksResult({ pageId: page.id, pageUrl: page.url, pageTitle: page.title, links: data.links_added });
+            setLinksResult({ pageId: page.id, type: 'outbound', links: data.links_added });
             setExpandedPage(page.id);
             loadHistory();
-          } else {
-            alert(data.message || data.error || 'Failed to add links');
-          }
+          } else { alert(data.message || data.error || 'Failed to add links'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setAddingLinks(null);
+      };
+
+      const handleAddInboundLinks = async (page) => {
+        if (!confirm(`Add inbound links? This will modify OTHER pages to link to "${page.title}" (with rollback).`)) return;
+        setAddingLinks('inbound-' + page.id);
+        try {
+          const data = await api(`/projects/${project.id}/onpage-audit/add-inbound-links`, {
+            method: 'POST', body: { page_id: page.id },
+          });
+          if (data.success) {
+            setLinksResult({ pageId: page.id, type: 'inbound', links: data.links_added });
+            setExpandedPage(page.id);
+            loadHistory();
+          } else { alert(data.message || data.error || 'Failed to add inbound links'); }
         } catch (e) { alert('Error: ' + e.message); }
         setAddingLinks(null);
       };
@@ -4653,11 +4667,17 @@
                                       <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback All Changes
                                     </button>
                                   )}
-                                  <button className="btn" onClick={() => handleAddLinks(page)}
+                                  <button className="btn" onClick={() => handleAddOutboundLinks(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#3b82f6', borderColor: '#3b82f6' }}
-                                    disabled={addingLinks === page.id}>
-                                    <i className={addingLinks === page.id ? 'fas fa-spinner fa-spin' : 'fas fa-link'} style={{ marginRight: 4 }} />
-                                    {addingLinks === page.id ? 'Adding Links...' : 'Add Internal Links'}
+                                    disabled={addingLinks === 'outbound-' + page.id}>
+                                    <i className={addingLinks === 'outbound-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sign-out-alt'} style={{ marginRight: 4 }} />
+                                    {addingLinks === 'outbound-' + page.id ? 'Adding...' : 'Add Outbound'}
+                                  </button>
+                                  <button className="btn" onClick={() => handleAddInboundLinks(page)}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#10b981', borderColor: '#10b981' }}
+                                    disabled={addingLinks === 'inbound-' + page.id}>
+                                    <i className={addingLinks === 'inbound-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sign-in-alt'} style={{ marginRight: 4 }} />
+                                    {addingLinks === 'inbound-' + page.id ? 'Adding...' : 'Add Inbound'}
                                   </button>
                                   <button className="btn" onClick={() => handleFixSingle(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}>
@@ -4673,16 +4693,16 @@
 
                                 {/* Links Added Result Panel */}
                                 {linksResult && linksResult.pageId === page.id && (
-                                  <div style={{ marginTop: 14, background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: 14 }}>
+                                  <div style={{ marginTop: 14, background: linksResult.type === 'inbound' ? 'rgba(16,185,129,0.05)' : 'rgba(59,130,246,0.05)', border: `1px solid ${linksResult.type === 'inbound' ? 'rgba(16,185,129,0.2)' : 'rgba(59,130,246,0.2)'}`, borderRadius: 8, padding: 14 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                      <div style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>
-                                        <i className="fas fa-link" style={{ marginRight: 6 }} />
-                                        {linksResult.links.length} Internal Links Added
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: linksResult.type === 'inbound' ? '#10b981' : '#3b82f6' }}>
+                                        <i className={linksResult.type === 'inbound' ? 'fas fa-sign-in-alt' : 'fas fa-sign-out-alt'} style={{ marginRight: 6 }} />
+                                        {linksResult.links.length} {linksResult.type === 'inbound' ? 'Inbound' : 'Outbound'} Links Added
                                       </div>
                                       <div style={{ display: 'flex', gap: 8 }}>
                                         <a href={page.url} target="_blank" rel="noopener noreferrer"
                                           style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '4px 10px', border: '1px solid var(--accent)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                          <i className="fas fa-external-link-alt" style={{ fontSize: 9 }} />Check Page Design
+                                          <i className="fas fa-external-link-alt" style={{ fontSize: 9 }} />Check Page
                                         </a>
                                         <button onClick={() => setLinksResult(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}>
                                           <i className="fas fa-times" />
@@ -4692,14 +4712,29 @@
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                       {linksResult.links.map((link, li) => (
                                         <div key={li} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}>
-                                          <i className="fas fa-arrow-right" style={{ color: '#3b82f6', fontSize: 10, flexShrink: 0 }} />
-                                          <span style={{ fontWeight: 600, color: 'var(--text1)', minWidth: 120 }}>"{link.anchor}"</span>
-                                          <i className="fas fa-long-arrow-alt-right" style={{ color: 'var(--text3)', fontSize: 10 }} />
-                                          <a href={link.url} target="_blank" rel="noopener noreferrer"
-                                            style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                            {link.url} <i className="fas fa-external-link-alt" style={{ fontSize: 8, marginLeft: 3 }} />
-                                          </a>
-                                          {link.reason && <span style={{ color: 'var(--text3)', fontSize: 10, flexShrink: 0 }}>{link.reason}</span>}
+                                          {linksResult.type === 'inbound' ? (
+                                            <>
+                                              <a href={link.source_url} target="_blank" rel="noopener noreferrer"
+                                                style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 11, fontWeight: 600, minWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {link.source_title} <i className="fas fa-external-link-alt" style={{ fontSize: 8, marginLeft: 3 }} />
+                                              </a>
+                                              <i className="fas fa-long-arrow-alt-right" style={{ color: '#10b981', fontSize: 10 }} />
+                                              <span style={{ fontWeight: 600, color: 'var(--text1)' }}>"{link.anchor}"</span>
+                                              <i className="fas fa-long-arrow-alt-right" style={{ color: '#10b981', fontSize: 10 }} />
+                                              <span style={{ fontSize: 11, color: 'var(--text3)' }}>→ this page</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <i className="fas fa-arrow-right" style={{ color: '#3b82f6', fontSize: 10, flexShrink: 0 }} />
+                                              <span style={{ fontWeight: 600, color: 'var(--text1)', minWidth: 120 }}>"{link.anchor}"</span>
+                                              <i className="fas fa-long-arrow-alt-right" style={{ color: 'var(--text3)', fontSize: 10 }} />
+                                              <a href={link.url} target="_blank" rel="noopener noreferrer"
+                                                style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {link.url} <i className="fas fa-external-link-alt" style={{ fontSize: 8, marginLeft: 3 }} />
+                                              </a>
+                                            </>
+                                          )}
+                                          {link.reason && <span style={{ color: 'var(--text3)', fontSize: 10, flexShrink: 0, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{link.reason}</span>}
                                         </div>
                                       ))}
                                     </div>

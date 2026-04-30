@@ -2764,6 +2764,219 @@ ${contentForAI.slice(0, 12000)}` }],
   }
 });
 
+// Add inbound links — find other pages and add links in them pointing TO this page
+app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Fetch target page info
+    let targetPage, targetType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (pageResp.ok) { targetPage = await pageResp.json(); }
+    else {
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (pageResp.ok) { targetPage = await pageResp.json(); targetType = 'posts'; }
+    }
+    if (!targetPage) return res.status(404).json({ error: 'Page not found' });
+
+    const targetUrl = targetPage.link || '';
+    const targetTitle = targetPage.title?.rendered || targetPage.title?.raw || '';
+
+    // Fetch all other pages with content
+    const otherPages = [];
+    for (const type of ['pages', 'posts']) {
+      let pg = 1;
+      while (true) {
+        try {
+          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!r.ok) break;
+          const items = await r.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
+          if (items.length < 50) break;
+          pg++;
+        } catch { break; }
+      }
+    }
+
+    if (otherPages.length === 0) return res.json({ success: false, message: 'No other pages found', links_added: [] });
+
+    const isElementor = project.is_elementor_site;
+
+    // Build page summaries for AI to pick the most relevant ones
+    const pageSummaries = otherPages.map(p => {
+      const content = p.content?.rendered || p.content?.raw || '';
+      const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      // Check if already links to target
+      const alreadyLinks = content.toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, ''));
+      return {
+        id: p.id,
+        title: p.title?.rendered || p.title?.raw || '',
+        url: p.link || '',
+        type: p._type,
+        snippet: plainText.slice(0, 200),
+        alreadyLinks,
+        hasElementor: !!(p.meta?._elementor_data),
+      };
+    }).filter(p => !p.alreadyLinks); // Exclude pages that already link to target
+
+    if (pageSummaries.length === 0) return res.json({ success: false, message: 'All pages already link to this page', links_added: [] });
+
+    console.log(`[add-inbound] Target: "${targetTitle}" (${page_id}), ${pageSummaries.length} candidate pages`);
+
+    // Ask AI which pages should link to target and what anchor text to use
+    const pickResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: `You are an SEO expert. Pick the most relevant pages that should link to a target page.
+For each selected page, identify a natural phrase in that page's content that can be wrapped in an <a> tag linking to the target.
+Pick 3-6 pages maximum. Only pick pages where a link would be genuinely relevant and natural.
+
+Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "reason": "why this link makes sense"}]}`,
+      messages: [{ role: 'user', content: `Target page to link TO:
+Title: "${targetTitle}"
+URL: ${targetUrl}
+
+Candidate pages (pick which ones should link to the target):
+${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n')}` }],
+    });
+
+    let picks;
+    try {
+      const jsonMatch = pickResp.content[0].text.match(/\{[\s\S]*\}/);
+      picks = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON for page selection' });
+    }
+
+    if (!picks.pages?.length) {
+      return res.json({ success: false, message: 'AI found no suitable pages for inbound links', links_added: [] });
+    }
+
+    // Now process each selected page — add the link
+    const linksAdded = [];
+    for (const pick of picks.pages) {
+      const sourcePage = otherPages.find(p => p.id === pick.id);
+      if (!sourcePage) continue;
+
+      const hasElementorData = sourcePage.meta?._elementor_data;
+
+      if (isElementor && hasElementorData) {
+        // Elementor: parse _elementor_data, find text widgets, add link
+        let elData;
+        try {
+          elData = typeof hasElementorData === 'string' ? JSON.parse(hasElementorData) : hasElementorData;
+        } catch { continue; }
+
+        const originalJson = JSON.stringify(elData);
+        let modified = false;
+
+        const processElements = (elements) => {
+          if (!Array.isArray(elements) || modified) return;
+          for (const el of elements) {
+            if (modified) break;
+            if (el.widgetType === 'text-editor' && el.settings?.editor) {
+              const content = el.settings.editor;
+              if (content.includes(pick.anchor) && !content.includes(targetUrl)) {
+                // Replace first occurrence of anchor text with linked version
+                el.settings.editor = content.replace(
+                  pick.anchor,
+                  `<a href="${targetUrl}">${pick.anchor}</a>`
+                );
+                modified = true;
+              }
+            }
+            if (el.elements) processElements(el.elements);
+          }
+        };
+        processElements(elData);
+
+        if (!modified) continue;
+
+        // Snapshot for rollback
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', '_elementor_data',
+           originalJson.slice(0, 50000), JSON.stringify(elData).slice(0, 50000)]
+        );
+
+        const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elData), _elementor_css: '' } }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (writeResp.ok) {
+          linksAdded.push({
+            source_page_id: sourcePage.id,
+            source_title: sourcePage.title?.rendered || '',
+            source_url: sourcePage.link || '',
+            anchor: pick.anchor,
+            target_url: targetUrl,
+            reason: pick.reason,
+          });
+        }
+      } else {
+        // Classic editor
+        const content = sourcePage.content?.raw || sourcePage.content?.rendered || '';
+        if (!content.includes(pick.anchor) || content.includes(targetUrl)) continue;
+
+        const newContent = content.replace(
+          pick.anchor,
+          `<a href="${targetUrl}">${pick.anchor}</a>`
+        );
+
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', 'content',
+           content.slice(0, 50000), newContent.slice(0, 50000)]
+        );
+
+        const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: newContent }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (writeResp.ok) {
+          linksAdded.push({
+            source_page_id: sourcePage.id,
+            source_title: sourcePage.title?.rendered || '',
+            source_url: sourcePage.link || '',
+            anchor: pick.anchor,
+            target_url: targetUrl,
+            reason: pick.reason,
+          });
+        }
+      }
+    }
+
+    console.log(`[add-inbound] Added ${linksAdded.length} inbound links to "${targetTitle}"`);
+    res.json({
+      success: linksAdded.length > 0,
+      links_added: linksAdded,
+      count: linksAdded.length,
+      message: linksAdded.length === 0 ? 'Could not find matching anchor text in source pages' : undefined,
+    });
+  } catch (e) {
+    console.error('[add-inbound] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get change history for a project
 app.get('/api/projects/:projectId/wp-changes', async (req, res) => {
   try {
