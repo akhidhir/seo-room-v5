@@ -4256,6 +4256,37 @@
         openFixModal(targetPages);
       };
 
+      const [sendingToCopywriter, setSendingToCopywriter] = React.useState(null);
+      const handleSendToCopywriter = async (page, contentType = 'rewrite') => {
+        setSendingToCopywriter(page.id);
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              page_id: page.id,
+              page_url: page.url,
+              page_title: page.title,
+              content_type: contentType,
+              source: 'onpage-audit',
+              priority: page.wordCount < 300 ? 'critical' : page.wordCount < 500 ? 'high' : 'medium',
+              brief: page.issues?.filter(i => i.type === 'problem').map(i => i.text).join('; ') || '',
+              current_word_count: page.wordCount,
+              current_meta_title: page.metaTitle,
+              current_meta_desc: page.metaDesc,
+              current_focus_keyword: page.focusKeyword,
+            }),
+          });
+          if (resp.ok) {
+            alert(`"${page.title}" sent to Copywriter queue`);
+          } else {
+            const err = await resp.json();
+            alert(err.error || 'Failed to send');
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setSendingToCopywriter(null);
+      };
+
       const updateSuggestion = (id, field, value) => {
         setFixModal(prev => ({
           ...prev,
@@ -4538,6 +4569,12 @@
                                       <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback All Changes
                                     </button>
                                   )}
+                                  <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
+                                    disabled={sendingToCopywriter === page.id}>
+                                    <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />
+                                    {sendingToCopywriter === page.id ? 'Sending...' : (page.wordCount < 500 ? 'Send to Copywriter' : 'Send Meta to Copywriter')}
+                                  </button>
                                 </div>
                               </div>
                             </td>
@@ -5057,62 +5094,119 @@
 
     // ============ COPYWRITER PAGE ============
     function CopywriterPage({ stage }) {
-      const stageConfig = {
-        queue: {
-          title: 'Content Queue',
-          icon: 'fas fa-inbox',
-          description: 'Content requests from Action Plan waiting to be drafted',
-          emptyText: 'No content requests yet. Approve items in Action Plan to queue them here.',
-          emptyIcon: 'fas fa-inbox',
-          items: [
-            { id: 1, type: 'Suburb Page', target: 'plumber in leeming', keyword: 'plumber leeming', source: 'Website Audit', severity: 'critical', created: '2 hours ago' },
-            { id: 2, type: 'Meta Description', target: '/plumber-perth', keyword: 'plumber perth', source: 'GSC Audit', severity: 'medium', created: '3 hours ago' },
-            { id: 3, type: 'GBP Post', target: 'Weekly update', keyword: 'plumber near me', source: 'GBP Audit', severity: 'low', created: '1 day ago' },
-            { id: 4, type: 'Suburb Page', target: 'plumber in murdoch', keyword: 'plumber murdoch', source: 'Website Audit', severity: 'critical', created: '1 day ago' },
-            { id: 5, type: 'Service Page', target: 'Gas Fitting', keyword: 'gas fitter perth', source: 'Website Audit', severity: 'medium', created: '2 days ago' },
-          ]
-        },
-        drafts: {
-          title: 'Drafts',
-          icon: 'fas fa-pen',
-          description: 'AI-generated content ready for review and editing',
-          emptyText: 'No drafts yet. Generate drafts from Content Queue.',
-          emptyIcon: 'fas fa-pen',
-          items: [
-            { id: 10, type: 'Suburb Page', target: 'plumber in rossmoyne', keyword: 'plumber rossmoyne', status: 'ready', wordCount: 850, designSafe: true, created: '1 hour ago' },
-            { id: 11, type: 'Meta Description', target: '/hot-water-systems', keyword: 'hot water repair perth', status: 'rewrite_requested', wordCount: 155, designSafe: true, created: '4 hours ago' },
-          ]
-        },
-        approved: {
-          title: 'Approved',
-          icon: 'fas fa-check-circle',
-          description: 'Content approved and ready to publish',
-          emptyText: 'No approved content. Review and approve drafts first.',
-          emptyIcon: 'fas fa-check-circle',
-          items: [
-            { id: 20, type: 'Suburb Page', target: 'plumber in shelley', keyword: 'plumber shelley', destination: 'WordPress', designSafe: true, approvedBy: 'Ayad', approvedAt: '30 min ago' },
-          ]
-        },
-        published: {
-          title: 'Published',
-          icon: 'fas fa-paper-plane',
-          description: 'Live content with rollback capability',
-          emptyText: 'No published content yet.',
-          emptyIcon: 'fas fa-paper-plane',
-          items: [
-            { id: 30, type: 'Suburb Page', target: 'plumber in queens park', url: '/plumber-queens-park', publishedAt: 'Apr 20, 2026', status: 'live', hasScreenshots: true },
-          ]
+      const [items, setItems] = React.useState([]);
+      const [allItems, setAllItems] = React.useState([]);
+      const [loading, setLoading] = React.useState(true);
+      const [generating, setGenerating] = React.useState(null);
+      const [publishing, setPublishing] = React.useState(null);
+      const [previewItem, setPreviewItem] = React.useState(null);
+      const [expandedId, setExpandedId] = React.useState(null);
+
+      const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
+      const stageLabels = {
+        queue: { title: 'Content Queue', icon: 'fas fa-inbox', desc: 'Pages sent from On-Page Audit waiting to be drafted', empty: 'No content in queue. Send pages from On-Page Audit.' },
+        drafts: { title: 'Drafts', icon: 'fas fa-pen', desc: 'AI-generated content ready for review', empty: 'No drafts yet. Generate drafts from Content Queue.' },
+        approved: { title: 'Approved', icon: 'fas fa-check-circle', desc: 'Content approved and ready to publish to WordPress', empty: 'No approved content. Review and approve drafts first.' },
+        published: { title: 'Published', icon: 'fas fa-paper-plane', desc: 'Live content with rollback capability via Change History', empty: 'No published content yet.' },
+      };
+
+      const loadItems = async () => {
+        setLoading(true);
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue`);
+          if (resp.ok) {
+            const data = await resp.json();
+            setAllItems(data);
+            setItems(data.filter(d => d.stage === stageMap[stage]));
+          }
+        } catch (e) { console.error('Load content queue:', e); }
+        setLoading(false);
+      };
+      React.useEffect(() => { loadItems(); }, [projectId]);
+      React.useEffect(() => { setItems(allItems.filter(d => d.stage === stageMap[stage])); }, [stage, allItems]);
+
+      const counts = {
+        queue: allItems.filter(d => d.stage === 'queue').length,
+        drafts: allItems.filter(d => d.stage === 'drafts').length,
+        approved: allItems.filter(d => d.stage === 'approved').length,
+        published: allItems.filter(d => d.stage === 'published').length,
+      };
+
+      const handleGenerateDraft = async (item) => {
+        setGenerating(item.id);
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue/${item.id}/generate-draft`, { method: 'POST' });
+          if (resp.ok) { await loadItems(); }
+          else { const err = await resp.json(); alert(err.error || 'Draft generation failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setGenerating(null);
+      };
+
+      const handleGenerateAll = async () => {
+        const queueItems = allItems.filter(d => d.stage === 'queue');
+        for (const item of queueItems) {
+          await handleGenerateDraft(item);
         }
       };
 
-      const config = stageConfig[stage];
-      const items = config.items;
+      const handleApprove = async (item) => {
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue/${item.id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stage: 'approved', approved_by: 'Ayad', approved_at: new Date().toISOString() }),
+          });
+          if (resp.ok) await loadItems();
+        } catch (e) { alert('Error: ' + e.message); }
+      };
 
-      const severityStyle = (sev) => ({
+      const handlePublish = async (item) => {
+        if (!confirm(`Publish "${item.page_title}" to WordPress? This will update the live page.`)) return;
+        setPublishing(item.id);
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue/${item.id}/publish`, { method: 'POST' });
+          if (resp.ok) { await loadItems(); alert('Published successfully! Rollback available in Change History.'); }
+          else { const err = await resp.json(); alert(err.error || 'Publish failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setPublishing(null);
+      };
+
+      const handleDelete = async (item) => {
+        if (!confirm(`Remove "${item.page_title}" from content queue?`)) return;
+        try {
+          await fetch(`/api/projects/${projectId}/content-queue/${item.id}`, { method: 'DELETE' });
+          await loadItems();
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      const handleBackToQueue = async (item) => {
+        try {
+          const resp = await fetch(`/api/projects/${projectId}/content-queue/${item.id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stage: 'queue' }),
+          });
+          if (resp.ok) await loadItems();
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      const priorityStyle = (p) => ({
         critical: { background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
+        high: { background: 'rgba(249,115,22,0.15)', color: '#f97316', border: '1px solid rgba(249,115,22,0.3)' },
         medium: { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' },
         low: { background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' },
-      }[sev] || {});
+      }[p] || {});
+
+      const typeLabel = (t) => ({ rewrite: 'Content Rewrite', meta_only: 'Meta Tags', new_page: 'New Page' }[t] || t);
+      const config = stageLabels[stage];
+
+      const timeAgo = (d) => {
+        if (!d) return '';
+        const diff = Date.now() - new Date(d).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        return `${Math.floor(hrs / 24)}d ago`;
+      };
 
       return (
         <div>
@@ -5122,11 +5216,11 @@
                 <i className={config.icon} style={{ marginRight: 10, color: 'var(--accent)' }} />
                 {config.title}
               </h2>
-              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>{config.description}</p>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>{config.desc}</p>
             </div>
-            {stage === 'queue' && (
-              <button className="btn btn-primary" style={{ fontSize: 13 }}>
-                <i className="fas fa-magic" style={{ marginRight: 6 }} />Generate All Drafts
+            {stage === 'queue' && counts.queue > 0 && (
+              <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={handleGenerateAll} disabled={generating !== null}>
+                <i className="fas fa-magic" style={{ marginRight: 6 }} />Generate All Drafts ({counts.queue})
               </button>
             )}
           </div>
@@ -5134,12 +5228,12 @@
           {/* Pipeline progress bar */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' }}>
             {[
-              { key: 'queue', label: 'Queue', count: stageConfig.queue.items.length, icon: 'fas fa-inbox' },
-              { key: 'drafts', label: 'Drafts', count: stageConfig.drafts.items.length, icon: 'fas fa-pen' },
-              { key: 'approved', label: 'Approved', count: stageConfig.approved.items.length, icon: 'fas fa-check-circle' },
-              { key: 'published', label: 'Published', count: stageConfig.published.items.length, icon: 'fas fa-paper-plane' },
+              { key: 'queue', label: 'Queue', count: counts.queue, icon: 'fas fa-inbox', page: 'content-queue' },
+              { key: 'drafts', label: 'Drafts', count: counts.drafts, icon: 'fas fa-pen', page: 'drafts' },
+              { key: 'approved', label: 'Approved', count: counts.approved, icon: 'fas fa-check-circle', page: 'approved' },
+              { key: 'published', label: 'Published', count: counts.published, icon: 'fas fa-paper-plane', page: 'published' },
             ].map(s => (
-              <div key={s.key} style={{
+              <div key={s.key} onClick={() => setCurrentPage(s.page)} style={{
                 padding: '12px 16px', textAlign: 'center',
                 background: stage === s.key ? 'var(--accent)' : 'var(--card)',
                 color: stage === s.key ? 'white' : 'var(--text2)',
@@ -5152,96 +5246,132 @@
             ))}
           </div>
 
-          {items.length === 0 ? (
+          {loading ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              <i className={config.emptyIcon} style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div>{config.emptyText}</div>
+              <div className="spinner-large" style={{ margin: '0 auto 16px' }} />
+              <div>Loading content queue...</div>
+            </div>
+          ) : items.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className={config.icon} style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div>{config.empty}</div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {items.map(item => (
-                <div key={item.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                        <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', ...severityStyle(item.severity || 'low') }}>
-                          {item.type}
-                        </span>
-                        {item.designSafe !== undefined && (
-                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600,
-                            background: item.designSafe ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                            color: item.designSafe ? '#22c55e' : '#ef4444',
-                            border: item.designSafe ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(239,68,68,0.3)'
-                          }}>
-                            <i className={item.designSafe ? 'fas fa-shield-alt' : 'fas fa-exclamation-triangle'} style={{ marginRight: 4 }} />
-                            {item.designSafe ? 'Design Safe' : 'Design Warning'}
+              {items.map(item => {
+                const isExpanded = expandedId === item.id;
+                return (
+                <div key={item.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: 16, cursor: 'pointer' }} onClick={() => setExpandedId(isExpanded ? null : item.id)}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', ...priorityStyle(item.priority) }}>
+                            {item.priority}
                           </span>
-                        )}
-                        {item.status === 'rewrite_requested' && (
-                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>
-                            <i className="fas fa-redo" style={{ marginRight: 4 }} />Rewrite Requested
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(99,102,241,0.15)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)' }}>
+                            {typeLabel(item.content_type)}
                           </span>
-                        )}
-                        {item.status === 'live' && (
-                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
-                            <i className="fas fa-circle" style={{ marginRight: 4, fontSize: 6 }} />Live
-                          </span>
-                        )}
+                          {item.draft_word_count > 0 && (
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+                              <i className="fas fa-file-word" style={{ marginRight: 3 }} />{item.draft_word_count} words
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{item.page_title}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          {item.page_url && <span><i className="fas fa-link" style={{ marginRight: 4 }} />{item.page_url}</span>}
+                          {item.current_focus_keyword && <span><i className="fas fa-key" style={{ marginRight: 4 }} />{item.current_focus_keyword}</span>}
+                          <span><i className="fas fa-file-alt" style={{ marginRight: 4 }} />{item.current_word_count} words currently</span>
+                          <span><i className="fas fa-clock" style={{ marginRight: 4 }} />{timeAgo(item.created_at)}</span>
+                          {item.source && <span><i className="fas fa-clipboard" style={{ marginRight: 4 }} />From: {item.source}</span>}
+                        </div>
+                        {item.brief && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic' }}>Issues: {item.brief}</div>}
                       </div>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{item.target}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                        {item.keyword && <span><i className="fas fa-key" style={{ marginRight: 4 }} />{item.keyword}</span>}
-                        {item.source && <span><i className="fas fa-clipboard" style={{ marginRight: 4 }} />From: {item.source}</span>}
-                        {item.wordCount && <span><i className="fas fa-file-word" style={{ marginRight: 4 }} />{item.wordCount} words</span>}
-                        {item.destination && <span><i className="fas fa-upload" style={{ marginRight: 4 }} />→ {item.destination}</span>}
-                        {item.url && <span><i className="fas fa-link" style={{ marginRight: 4 }} />{item.url}</span>}
-                        {item.approvedBy && <span><i className="fas fa-user-check" style={{ marginRight: 4 }} />By {item.approvedBy}</span>}
-                        <span><i className="fas fa-clock" style={{ marginRight: 4 }} />{item.created || item.approvedAt || item.publishedAt}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginLeft: 16 }}>
-                      {stage === 'queue' && (
-                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 12px' }}>
-                          <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate Draft
-                        </button>
-                      )}
-                      {stage === 'drafts' && <>
-                        <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
-                          <i className="fas fa-eye" style={{ marginRight: 4 }} />Preview
-                        </button>
-                        <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--warning)', borderColor: 'var(--warning)' }}>
-                          <i className="fas fa-edit" style={{ marginRight: 4 }} />Edit
-                        </button>
-                        <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }}>
-                          <i className="fas fa-check" style={{ marginRight: 4 }} />Approve
-                        </button>
-                      </>}
-                      {stage === 'approved' && (
-                        <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }}>
-                          <i className="fas fa-paper-plane" style={{ marginRight: 4 }} />Publish
-                        </button>
-                      )}
-                      {stage === 'published' && <>
-                        {item.hasScreenshots && (
-                          <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--info)', borderColor: 'var(--info)' }}>
-                            <i className="fas fa-images" style={{ marginRight: 4 }} />Before/After
+                      <div style={{ display: 'flex', gap: 8, marginLeft: 16 }} onClick={e => e.stopPropagation()}>
+                        {stage === 'queue' && (
+                          <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 12px' }}
+                            onClick={() => handleGenerateDraft(item)} disabled={generating === item.id}>
+                            <i className={generating === item.id ? 'fas fa-spinner fa-spin' : 'fas fa-magic'} style={{ marginRight: 4 }} />
+                            {generating === item.id ? 'Generating...' : 'Generate Draft'}
                           </button>
                         )}
-                        <button className="btn btn-danger" style={{ fontSize: 12, padding: '6px 12px' }}>
-                          <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback
-                        </button>
-                      </>}
+                        {stage === 'drafts' && <>
+                          <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }} onClick={() => handleApprove(item)}>
+                            <i className="fas fa-check" style={{ marginRight: 4 }} />Approve
+                          </button>
+                          <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: '#f59e0b', borderColor: '#f59e0b' }}
+                            onClick={() => handleBackToQueue(item)}>
+                            <i className="fas fa-redo" style={{ marginRight: 4 }} />Regenerate
+                          </button>
+                        </>}
+                        {stage === 'approved' && (
+                          <button className="btn btn-success" style={{ fontSize: 12, padding: '6px 12px' }}
+                            onClick={() => handlePublish(item)} disabled={publishing === item.id}>
+                            <i className={publishing === item.id ? 'fas fa-spinner fa-spin' : 'fas fa-paper-plane'} style={{ marginRight: 4 }} />
+                            {publishing === item.id ? 'Publishing...' : 'Publish to WordPress'}
+                          </button>
+                        )}
+                        {stage !== 'published' && (
+                          <button className="btn" style={{ fontSize: 12, padding: '6px 12px', color: '#ef4444', borderColor: '#ef4444' }}
+                            onClick={() => handleDelete(item)}>
+                            <i className="fas fa-trash" style={{ marginRight: 4 }} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  {/* Expanded preview */}
+                  {isExpanded && (stage === 'drafts' || stage === 'approved' || stage === 'published') && item.draft_meta_title && (
+                    <div style={{ padding: '0 16px 16px', borderTop: '1px dashed var(--border)' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#ef4444', marginBottom: 6 }}>Current</div>
+                          <div style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: 12 }}>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>META TITLE</div>
+                            <div style={{ fontSize: 13, marginBottom: 8 }}>{item.current_meta_title || '(none)'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>META DESCRIPTION</div>
+                            <div style={{ fontSize: 13, marginBottom: 8 }}>{item.current_meta_desc || '(none)'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>FOCUS KEYWORD</div>
+                            <div style={{ fontSize: 13, marginBottom: 8 }}>{item.current_focus_keyword || '(none)'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>WORD COUNT</div>
+                            <div style={{ fontSize: 13 }}>{item.current_word_count}</div>
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#22c55e', marginBottom: 6 }}>AI Draft</div>
+                          <div style={{ background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: 12 }}>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>META TITLE</div>
+                            <div style={{ fontSize: 13, marginBottom: 8, color: '#22c55e' }}>{item.draft_meta_title}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>META DESCRIPTION</div>
+                            <div style={{ fontSize: 13, marginBottom: 8, color: '#22c55e' }}>{item.draft_meta_desc}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>FOCUS KEYWORD</div>
+                            <div style={{ fontSize: 13, marginBottom: 8, color: '#22c55e' }}>{item.draft_focus_keyword}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>WORD COUNT</div>
+                            <div style={{ fontSize: 13, color: '#22c55e' }}>{item.draft_word_count}</div>
+                          </div>
+                        </div>
+                      </div>
+                      {item.draft_content && (
+                        <div style={{ marginTop: 12 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>Content Preview</div>
+                          <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, maxHeight: 300, overflow: 'auto', fontSize: 13, lineHeight: 1.6 }}
+                            dangerouslySetInnerHTML={{ __html: item.draft_content }} />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
           {/* Design Protection notice */}
           <div style={{ marginTop: 24, padding: '14px 20px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 10, fontSize: 12, color: 'var(--text2)' }}>
             <i className="fas fa-shield-alt" style={{ color: '#22c55e', marginRight: 8 }} />
-            <strong style={{ color: '#22c55e' }}>Design Protection Active</strong> — All content is scanned before publishing. No styles, scripts, or layout changes allowed. Only clean semantic HTML that inherits your site's theme.
+            <strong style={{ color: '#22c55e' }}>Design Protection Active</strong> — All content changes go through wp_change_history for full rollback capability. No styles, scripts, or layout changes — only semantic HTML that inherits your site's theme.
           </div>
         </div>
       );

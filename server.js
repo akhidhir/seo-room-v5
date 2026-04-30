@@ -344,6 +344,37 @@ async function initDb() {
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
 
+    // Content queue for Copywriter pipeline
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_queue (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_id INTEGER,
+        page_url TEXT,
+        page_title TEXT,
+        content_type TEXT NOT NULL DEFAULT 'rewrite',
+        source TEXT DEFAULT 'onpage-audit',
+        priority TEXT DEFAULT 'medium',
+        brief TEXT,
+        current_content TEXT,
+        current_word_count INTEGER DEFAULT 0,
+        current_meta_title TEXT,
+        current_meta_desc TEXT,
+        current_focus_keyword TEXT,
+        draft_content TEXT,
+        draft_meta_title TEXT,
+        draft_meta_desc TEXT,
+        draft_focus_keyword TEXT,
+        draft_word_count INTEGER DEFAULT 0,
+        stage TEXT NOT NULL DEFAULT 'queue',
+        approved_by TEXT,
+        approved_at TIMESTAMPTZ,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
     // GBP tasks are manual (SEO Specialist) — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
@@ -2564,6 +2595,258 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     res.json({ success: true, rolled_back: chRes.rows.length });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COPYWRITER ====================
+
+// List content queue items
+app.get('/api/projects/:projectId/content-queue', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { stage } = req.query; // optional filter: queue, drafts, approved, published
+    let q = 'SELECT * FROM content_queue WHERE project_id=$1';
+    const params = [projectId];
+    if (stage) { q += ' AND stage=$2'; params.push(stage); }
+    q += ' ORDER BY created_at DESC';
+    const r = await pool.query(q, params);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add to content queue (from On-Page Audit or manually)
+app.post('/api/projects/:projectId/content-queue', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, page_url, page_title, content_type, source, priority, brief,
+            current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword } = req.body;
+    // Check for duplicate
+    if (page_id) {
+      const dup = await pool.query('SELECT id FROM content_queue WHERE project_id=$1 AND page_id=$2 AND stage != $3', [projectId, page_id, 'published']);
+      if (dup.rows.length > 0) return res.status(409).json({ error: 'Page already in content queue', existing_id: dup.rows[0].id });
+    }
+    const r = await pool.query(
+      `INSERT INTO content_queue (project_id, page_id, page_url, page_title, content_type, source, priority, brief,
+        current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [projectId, page_id, page_url, page_title, content_type || 'rewrite', source || 'onpage-audit',
+       priority || 'medium', brief, current_content, current_word_count || 0,
+       current_meta_title, current_meta_desc, current_focus_keyword]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update content queue item (edit draft, change stage, approve)
+app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
+                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type'];
+    for (const [k, v] of Object.entries(updates)) {
+      if (allowedFields.includes(k)) {
+        fields.push(`${k}=$${idx++}`);
+        vals.push(v);
+      }
+    }
+    if (fields.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+    fields.push(`updated_at=NOW()`);
+    vals.push(id);
+    const r = await pool.query(`UPDATE content_queue SET ${fields.join(',')} WHERE id=$${idx} RETURNING *`, vals);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete content queue item
+app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate AI draft for a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Build AI prompt based on content type
+    let systemPrompt, userPrompt;
+    if (item.content_type === 'rewrite') {
+      systemPrompt = `You are an expert SEO copywriter for a local Australian business: "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
+Your job is to rewrite thin/weak page content to be SEO-optimized, engaging, and locally relevant.
+Rules:
+- Write naturally — no keyword stuffing
+- Include the focus keyword naturally in the first paragraph, at least one H2, and naturally throughout
+- Target 800-1200 words for service pages, 500-800 for suburb pages
+- Use H2 and H3 subheadings to structure content
+- Include a clear call-to-action
+- Mention the suburb/location naturally
+- Write in Australian English
+- Return valid HTML content (no full page, just the body content with headings)
+- DO NOT change the page design or layout structure
+
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>}`;
+
+      userPrompt = `Rewrite this page for better SEO performance:
+
+Page: ${item.page_title} (${item.page_url})
+Current word count: ${item.current_word_count}
+Current focus keyword: ${item.current_focus_keyword || '(none)'}
+Current meta title: ${item.current_meta_title || '(none)'}
+Current meta description: ${item.current_meta_desc || '(none)'}
+${item.brief ? `\nBrief/Instructions: ${item.brief}` : ''}
+
+Current content (first 3000 chars):
+${(item.current_content || '').slice(0, 3000)}`;
+    } else if (item.content_type === 'meta_only') {
+      systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
+Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}`;
+      userPrompt = `Write optimized meta tags for:
+Page: ${item.page_title} (${item.page_url})
+Business: ${project.business_name || project.name} in ${project.location || 'Australia'}
+Industry: ${project.industry || 'services'}
+Current meta title: ${item.current_meta_title || '(none)'}
+Current meta description: ${item.current_meta_desc || '(none)'}
+Current focus keyword: ${item.current_focus_keyword || '(none)'}
+${item.brief ? `\nBrief: ${item.brief}` : ''}`;
+    } else {
+      // new_page
+      systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
+Write a complete new page with SEO-optimized content.
+Target 800-1200 words. Use H2/H3 headings, include CTAs, write in Australian English.
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>}`;
+      userPrompt = `Write a new page:
+Title: ${item.page_title}
+Target URL: ${item.page_url || '(to be determined)'}
+${item.brief ? `Brief: ${item.brief}` : 'Write comprehensive service/location content.'}`;
+    }
+
+    console.log(`[copywriter] Generating draft for item ${id}: ${item.page_title}`);
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: userPrompt }],
+      system: systemPrompt,
+    });
+    const raw = aiResp.content[0].text;
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: raw.slice(0, 500) });
+    }
+
+    // Save draft
+    const plainText = (parsed.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const wordCount = parsed.word_count || plainText.split(/\s+/).filter(Boolean).length;
+    const updated = await pool.query(
+      `UPDATE content_queue SET stage='drafts', draft_content=$1, draft_meta_title=$2, draft_meta_desc=$3,
+       draft_focus_keyword=$4, draft_word_count=$5, updated_at=NOW() WHERE id=$6 RETURNING *`,
+      [parsed.content || '', parsed.meta_title || '', parsed.meta_description || '', parsed.focus_keyword || '', wordCount, id]
+    );
+    console.log(`[copywriter] Draft generated: ${wordCount} words`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[copywriter] Draft error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Publish approved content to WordPress
+app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (item.stage !== 'approved') return res.status(400).json({ error: 'Item must be approved before publishing' });
+    if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID — cannot publish' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Snapshot current values for rollback
+    const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
+
+    // Build update payload
+    const payload = {};
+    const changes = [];
+
+    // Update content if we have a draft
+    if (item.draft_content && item.content_type !== 'meta_only') {
+      // Snapshot current content
+      const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { headers: authHeaders });
+      if (pageResp.ok) {
+        const pageData = await pageResp.json();
+        changes.push({ field: 'content', old: (pageData.content?.rendered || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+        payload.content = item.draft_content;
+      }
+    }
+
+    // Update meta
+    const metaPayload = {};
+    if (item.draft_meta_title) {
+      changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
+      metaPayload._yoast_wpseo_title = item.draft_meta_title;
+    }
+    if (item.draft_meta_desc) {
+      changes.push({ field: 'yoast_wpseo_metadesc', old: currentMeta.yoast_wpseo_metadesc || '', new: item.draft_meta_desc });
+      metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc;
+    }
+    if (item.draft_focus_keyword) {
+      changes.push({ field: 'yoast_wpseo_focuskw', old: currentMeta.yoast_wpseo_focuskw || '', new: item.draft_focus_keyword });
+      metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword;
+    }
+    if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
+
+    if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'Nothing to publish' });
+
+    // Try pages first, then posts
+    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!writeResp.ok) {
+      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    // Save to wp_change_history for rollback
+    for (const ch of changes) {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, item.page_id, item.page_url, item.page_title, 'copywriter', ch.field, ch.old, ch.new]
+      );
+    }
+
+    // Update stage to published
+    await pool.query(
+      `UPDATE content_queue SET stage='published', published_at=NOW(), updated_at=NOW() WHERE id=$1`,
+      [id]
+    );
+    console.log(`[copywriter] Published item ${id} to WordPress page ${item.page_id}`);
+    res.json({ success: true, changes: changes.length });
+  } catch (e) {
+    console.error('[copywriter] Publish error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
