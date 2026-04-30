@@ -4143,6 +4143,7 @@
       const [changeHistory, setChangeHistory] = useState([]);
       const [showHistory, setShowHistory] = useState(false);
       const [rollingBack, setRollingBack] = useState(null);
+      const [searchQuery, setSearchQuery] = useState('');
 
       const toggleSort = (col) => {
         if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
@@ -4222,6 +4223,17 @@
         });
       }, [pages, sortBy, sortDir]);
 
+      const filteredPages = useMemo(() => {
+        if (!searchQuery.trim()) return sortedPages;
+        const q = searchQuery.toLowerCase();
+        return sortedPages.filter(p =>
+          (p.title || '').toLowerCase().includes(q) ||
+          (p.url || '').toLowerCase().includes(q) ||
+          (p.focusKeyword || '').toLowerCase().includes(q) ||
+          (p.metaTitle || '').toLowerCase().includes(q)
+        );
+      }, [sortedPages, searchQuery]);
+
       const toggleSelect = (id, e) => {
         e.stopPropagation();
         setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -4254,6 +4266,37 @@
         const targetPages = pages.filter(p => selected.has(p.id));
         if (targetPages.length === 0) return;
         openFixModal(targetPages);
+      };
+
+      const [regenMeta, setRegenMeta] = React.useState(null);
+      const handleRegenMeta = async (page) => {
+        setRegenMeta(page.id);
+        try {
+          // Get AI suggestion
+          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pages: [page] }),
+          });
+          if (data?.suggestions?.length) {
+            const s = data.suggestions[0];
+            // Apply fix immediately
+            const fixResp = await api(`/projects/${project.id}/onpage-audit/fix`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fixes: [{
+                id: page.id, url: page.url, title: page.title,
+                new_meta_title: s.suggested_title,
+                new_meta_desc: s.suggested_desc,
+                new_focus_keyword: s.suggested_keyword,
+              }] }),
+            });
+            if (fixResp?.results) {
+              alert(`Meta regenerated for "${page.title}"`);
+              loadHistory();
+              runAudit(); // refresh to show updated meta
+            }
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setRegenMeta(null);
       };
 
       const [sendingToCopywriter, setSendingToCopywriter] = React.useState(null);
@@ -4437,6 +4480,23 @@
           )}
 
           {pages.length > 0 && (
+            <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+                <i className="fas fa-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 13 }} />
+                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search pages by name, URL, or keyword..."
+                  style={{ width: '100%', padding: '8px 12px 8px 34px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', fontSize: 13, outline: 'none' }} />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 12 }}>
+                    <i className="fas fa-times" />
+                  </button>
+                )}
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>{filteredPages.length} of {pages.length} pages</span>
+            </div>
+          )}
+
+          {pages.length > 0 && (
             <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
@@ -4461,7 +4521,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPages.map(page => {
+                  {filteredPages.map(page => {
                     const seo = yoastDot(page.yoastScore);
                     const problems = page.issues.filter(i => i.type === 'problem').length;
                     const warnings = page.issues.filter(i => i.type === 'warning').length;
@@ -4569,6 +4629,12 @@
                                       <i className="fas fa-undo" style={{ marginRight: 4 }} />Rollback All Changes
                                     </button>
                                   )}
+                                  <button className="btn" onClick={() => handleRegenMeta(page)}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#06b6d4', borderColor: '#06b6d4' }}
+                                    disabled={regenMeta === page.id}>
+                                    <i className={regenMeta === page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sync-alt'} style={{ marginRight: 4 }} />
+                                    {regenMeta === page.id ? 'Regenerating...' : 'Regenerate Meta'}
+                                  </button>
                                   <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
                                     disabled={sendingToCopywriter === page.id}>
