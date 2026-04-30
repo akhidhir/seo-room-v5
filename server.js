@@ -3682,13 +3682,15 @@ const AU_LOCATIONS = {
 
 app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
   const { projectId } = req.params;
-  const { seeds, country, state, city, is_local, package_size } = req.body;
+  const { seeds, country, state, city, is_local, package_size, exclude_keywords, min_volume } = req.body;
   // seeds: string[] of seed keywords
   // country: 'Australia' (future: others)
   // state: e.g. 'Western Australia'
   // city: e.g. 'Perth'
   // is_local: boolean — if true, append city/state to keywords
   // package_size: 10|20|30|40|50
+  // exclude_keywords: string[] — keywords to exclude (for "Fetch More")
+  // min_volume: number — minimum search volume filter
 
   if (!Array.isArray(seeds) || seeds.length === 0) return res.status(400).json({ error: 'Provide at least one seed keyword' });
   if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
@@ -3824,6 +3826,17 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
       }
     }
     let final = Object.values(kwMap);
+
+    // Exclude already-shown keywords (for "Fetch More")
+    if (Array.isArray(exclude_keywords) && exclude_keywords.length > 0) {
+      const excludeSet = new Set(exclude_keywords.map(k => k.toLowerCase()));
+      final = final.filter(kw => !excludeSet.has(kw.keyword.toLowerCase()));
+    }
+
+    // Filter by minimum volume
+    if (min_volume && min_volume > 0) {
+      final = final.filter(kw => (kw.volume || 0) >= min_volume);
+    }
 
     // Sort by volume descending
     final.sort((a, b) => (b.volume || 0) - (a.volume || 0));

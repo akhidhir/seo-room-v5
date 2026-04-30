@@ -5627,6 +5627,8 @@
       var [selected, setSelected] = React.useState([]);
       var [sending, setSending] = React.useState(false);
       var [sent, setSent] = React.useState(false);
+      var [minVolume, setMinVolume] = React.useState(0);
+      var [fetchingMore, setFetchingMore] = React.useState(false);
 
       // Pre-fill from project settings
       React.useEffect(function() {
@@ -5689,6 +5691,40 @@
         if (selected.length === results.keywords.length) setSelected([]);
         else setSelected(results.keywords.map(function(_, i) { return i; }));
       };
+
+      var handleFetchMore = async function() {
+        if (!results) return;
+        var seedList = seeds.split(/[\n,;]+/).map(function(s) { return s.trim(); }).filter(Boolean);
+        if (seedList.length === 0) return;
+        setFetchingMore(true);
+        try {
+          var existingKws = results.keywords.map(function(kw) { return kw.keyword; });
+          var data = await api('/projects/' + pid + '/keyword-research', {
+            method: 'POST',
+            body: { seeds: seedList, country: country, state: state, city: city, is_local: isLocal, package_size: packageSize, exclude_keywords: existingKws, min_volume: minVolume || 0 }
+          });
+          if (data.keywords && data.keywords.length > 0) {
+            setResults(function(prev) {
+              var merged = prev.keywords.concat(data.keywords);
+              return Object.assign({}, prev, { keywords: merged, total_found: (prev.total_found || 0) + (data.total_found || 0) });
+            });
+            // Select newly added
+            setSelected(function(prev) {
+              var offset = results.keywords.length;
+              var newIdxs = data.keywords.map(function(_, i) { return offset + i; });
+              return prev.concat(newIdxs);
+            });
+          } else {
+            alert('No additional keywords found. Try different seeds or broaden the location.');
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setFetchingMore(false);
+      };
+
+      // Filter displayed results by min volume
+      var filteredKeywords = results ? results.keywords.filter(function(kw) {
+        return minVolume <= 0 || (kw.volume || 0) >= minVolume;
+      }) : [];
 
       var handleSendToKeywords = async function() {
         if (!results || selected.length === 0) return;
@@ -5802,8 +5838,8 @@
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 } },
             [
               { label: 'KEYWORDS FOUND', value: results.total_found, color: 'var(--accent)' },
-              { label: 'SHOWING', value: results.keywords.length, color: '#10b981' },
-              { label: 'SELECTED', value: selected.length, color: '#f59e0b' },
+              { label: 'SHOWING', value: filteredKeywords.length, color: '#10b981' },
+              { label: 'SELECTED', value: selected.filter(function(i) { return minVolume <= 0 || (results.keywords[i] && (results.keywords[i].volume || 0) >= minVolume); }).length, color: '#f59e0b' },
               { label: 'LOCATION', value: results.location.split(',')[0], color: '#8b5cf6', small: true },
             ].map(function(s, i) {
               return React.createElement('div', { key: i, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' } },
@@ -5814,12 +5850,31 @@
           ),
 
           // Action bar
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
             React.createElement('div', { style: { display: 'flex', gap: 10, alignItems: 'center' } },
               React.createElement('button', {
                 onClick: toggleAll,
                 style: { padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontSize: 12, cursor: 'pointer' }
-              }, selected.length === results.keywords.length ? 'Deselect All' : 'Select All')
+              }, selected.length === results.keywords.length ? 'Deselect All' : 'Select All'),
+              // Min volume filter
+              React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)', marginLeft: 8 } }, 'Min volume:'),
+              React.createElement('input', {
+                type: 'number', value: minVolume || '', onChange: function(e) { setMinVolume(parseInt(e.target.value) || 0); },
+                placeholder: '0', min: 0,
+                style: { width: 70, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12, textAlign: 'center' }
+              }),
+              // Fetch More button
+              React.createElement('button', {
+                onClick: handleFetchMore, disabled: fetchingMore,
+                style: { padding: '6px 14px', borderRadius: 6, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', fontSize: 12, cursor: fetchingMore ? 'not-allowed' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }
+              },
+                fetchingMore ? React.createElement('i', { className: 'fas fa-spinner fa-spin' }) : React.createElement('i', { className: 'fas fa-plus' }),
+                fetchingMore ? 'Fetching...' : 'Fetch More'
+              ),
+              // Remove low volume
+              minVolume > 0 && React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+                '(' + (results.keywords.length - filteredKeywords.length) + ' hidden below ' + minVolume + ')'
+              )
             ),
             React.createElement('button', {
               onClick: handleSendToKeywords, disabled: sending || selected.length === 0 || sent,
@@ -5845,7 +5900,8 @@
                 )
               ),
               React.createElement('tbody', null,
-                results.keywords.map(function(kw, idx) {
+                filteredKeywords.map(function(kw) {
+                  var idx = results.keywords.indexOf(kw);
                   var isSelected = selected.indexOf(idx) !== -1;
                   var compColor = kw.competition === 'HIGH' ? '#ef4444' : (kw.competition === 'MEDIUM' ? '#f59e0b' : '#10b981');
                   return React.createElement('tr', {
