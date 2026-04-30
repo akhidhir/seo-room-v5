@@ -2764,6 +2764,60 @@ ${contentForAI.slice(0, 12000)}` }],
   }
 });
 
+// Update focus keyword on WordPress
+app.post('/api/projects/:projectId/onpage-audit/update-keyword', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, keyword } = req.body;
+    if (!page_id) return res.status(400).json({ error: 'page_id required' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress auth not configured' });
+
+    // Read current value for rollback
+    const currentMeta = await readWpYoastMeta(wpUrl, page_id, authHeaders);
+    const oldKeyword = currentMeta?._yoast_wpseo_focuskw || currentMeta?.yoast_wpseo_focuskw || '';
+
+    // Determine page type
+    let pageType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+    if (!pageResp.ok) {
+      pageType = 'posts';
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+    }
+    if (!pageResp.ok) return res.status(404).json({ error: 'Page not found in WordPress' });
+    const pageData = await pageResp.json();
+
+    // Write new keyword
+    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meta: { _yoast_wpseo_focuskw: keyword || '' } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    // Save to change history for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [projectId, page_id, pageData.link || '', pageData.title?.rendered || '', 'focus-keyword', '_yoast_wpseo_focuskw', oldKeyword, keyword || '']
+    );
+
+    console.log(`[onpage] Updated focus keyword for page ${page_id}: "${oldKeyword}" → "${keyword}"`);
+    res.json({ success: true, old: oldKeyword, new: keyword });
+  } catch (e) {
+    console.error('[onpage] Update keyword error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Add inbound links — find other pages and add links in them pointing TO this page
 app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
   try {

@@ -4144,6 +4144,26 @@
       const [showHistory, setShowHistory] = useState(false);
       const [rollingBack, setRollingBack] = useState(null);
       const [searchQuery, setSearchQuery] = useState('');
+      const [editingKeyword, setEditingKeyword] = useState({}); // { [pageId]: value }
+      const [savingKeyword, setSavingKeyword] = useState(null);
+
+      const handleSaveKeyword = async (page) => {
+        const newKw = (editingKeyword[page.id] || '').trim();
+        if (newKw === (page.focusKeyword || '')) { setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; }); return; }
+        setSavingKeyword(page.id);
+        try {
+          await api(`/projects/${project.id}/onpage-audit/update-keyword`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_id: page.id, keyword: newKw }),
+          });
+          // Update local state
+          setPages(prev => prev.map(p => p.id === page.id ? { ...p, focusKeyword: newKw } : p));
+          setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; });
+          loadHistory();
+        } catch (e) { alert('Failed to save keyword: ' + e.message); }
+        setSavingKeyword(null);
+      };
 
       const toggleSort = (col) => {
         if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
@@ -4546,8 +4566,29 @@
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             <i className={seo.icon} style={{ color: seo.color, fontSize: 12 }} />
                           </td>
-                          <td style={{ padding: '10px 10px', fontSize: 12, color: page.focusKeyword ? 'var(--text2)' : '#ef4444' }}>
-                            {page.focusKeyword || 'Not set'}
+                          <td style={{ padding: '10px 10px', fontSize: 12 }} onClick={e => e.stopPropagation()}>
+                            {editingKeyword.hasOwnProperty(page.id) ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input type="text" value={editingKeyword[page.id] || ''} autoFocus
+                                  onChange={e => setEditingKeyword(prev => ({ ...prev, [page.id]: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleSaveKeyword(page); if (e.key === 'Escape') setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; }); }}
+                                  style={{ width: 120, padding: '3px 6px', fontSize: 11, borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--card)', color: 'var(--text1)' }}
+                                  disabled={savingKeyword === page.id} />
+                                <button onClick={() => handleSaveKeyword(page)} disabled={savingKeyword === page.id}
+                                  style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', padding: 2, fontSize: 12 }}>
+                                  {savingKeyword === page.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <i className="fas fa-check" />}
+                                </button>
+                                <button onClick={() => setEditingKeyword(prev => { const n = {...prev}; delete n[page.id]; return n; })}
+                                  style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2, fontSize: 12 }}>
+                                  <i className="fas fa-times" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span style={{ color: page.focusKeyword ? 'var(--text2)' : '#ef4444', cursor: 'pointer' }}
+                                onClick={() => setEditingKeyword(prev => ({ ...prev, [page.id]: page.focusKeyword || '' }))}>
+                                {page.focusKeyword || 'Not set'} <i className="fas fa-pencil-alt" style={{ fontSize: 8, opacity: 0.5, marginLeft: 3 }} />
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center', color: page.wordCount < 500 ? '#ef4444' : page.wordCount < 800 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>
                             {page.wordCount}
