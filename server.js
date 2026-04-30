@@ -396,6 +396,32 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // Site pages — staging zone for new website content
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS site_pages (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_type TEXT NOT NULL,
+        page_name TEXT NOT NULL,
+        slug TEXT,
+        is_cornerstone BOOLEAN DEFAULT FALSE,
+        cluster_id TEXT,
+        keywords JSONB DEFAULT '[]',
+        internal_links JSONB DEFAULT '[]',
+        inbound_links JSONB DEFAULT '[]',
+        meta_title TEXT,
+        meta_description TEXT,
+        focus_keyword TEXT,
+        draft_content TEXT,
+        word_count INTEGER DEFAULT 0,
+        stage TEXT NOT NULL DEFAULT 'draft',
+        published_url TEXT,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
     // Content settings — tone, style, word count per project
     await client.query(`
       CREATE TABLE IF NOT EXISTS content_settings (
@@ -3918,6 +3944,316 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
     });
   } catch (e) {
     console.error('[kw-research] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== SITE PAGES (Staging Zone) ====================
+
+// Generate site map from Page Setup — cluster, detect cornerstones, plan internal links
+app.post('/api/projects/:projectId/site-pages/generate', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    // Get all assigned keywords from content_keywords
+    const kwResult = await pool.query(
+      `SELECT * FROM content_keywords WHERE project_id=$1 AND page_type IS NOT NULL AND page_type != 'unassigned' ORDER BY page_type, page_name`,
+      [projectId]
+    );
+    const keywords = kwResult.rows;
+    if (keywords.length === 0) return res.status(400).json({ error: 'No keywords assigned to pages yet. Go to Page Setup first.' });
+
+    // Get project info
+    const projResult = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    const project = projResult.rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Group keywords by page_type + page_name
+    const pageMap = {};
+    keywords.forEach(kw => {
+      const key = kw.page_type + '::' + (kw.page_name || 'unnamed');
+      if (!pageMap[key]) pageMap[key] = { type: kw.page_type, name: kw.page_name || 'unnamed', keywords: [] };
+      pageMap[key].keywords.push({ keyword: kw.keyword, volume: kw.search_volume || 0 });
+    });
+    const pages = Object.values(pageMap);
+
+    // Also include empty pages from nw_page_labels or project settings
+    // (empty pages are tracked in frontend state — they'll appear if they have keywords)
+
+    // Send to Haiku for clustering, cornerstone detection, and internal linking plan
+    const pagesSummary = pages.map((p, i) => `Page ${i + 1}: [${p.type}] "${p.name}" — Keywords: ${p.keywords.map(k => k.keyword + ' (' + k.volume + ')').join(', ')}`).join('\n');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: `You are an SEO content strategist. Analyze these pages for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
+
+PAGES:
+${pagesSummary}
+
+Return a JSON object with this exact structure:
+{
+  "pages": [
+    {
+      "page_index": 0,
+      "is_cornerstone": true/false,
+      "cluster_id": "cluster-name",
+      "focus_keyword": "best keyword for this page",
+      "suggested_slug": "/page-slug",
+      "suggested_meta_title": "Page Title | Brand (max 60 chars)",
+      "suggested_meta_description": "Description (max 155 chars)",
+      "internal_links": [
+        { "target_index": 2, "anchor_text": "anchor text to use", "context": "where in the content to place this link" }
+      ]
+    }
+  ],
+  "clusters": [
+    { "id": "cluster-name", "label": "Cluster Display Name", "cornerstone_index": 0 }
+  ]
+}
+
+Rules:
+- Cornerstone pages are broad topic hubs (e.g., main service pages). Cluster pages are specific subtopics that link to the cornerstone.
+- Every cluster page should link to its cornerstone. Cornerstones should link to their cluster pages.
+- Home page links to all cornerstones.
+- Focus keyword should be the highest-volume keyword assigned to that page.
+- Slugs should be SEO-friendly, lowercase, hyphenated.
+- Meta titles should include the primary keyword near the start.
+- Internal links should form a logical silo structure.
+- Return ONLY the JSON, no markdown.`
+      }]
+    });
+
+    let aiPlan;
+    try {
+      const text = aiResponse.content[0].text.trim();
+      aiPlan = JSON.parse(text.replace(/^```json?\n?/, '').replace(/\n?```$/, ''));
+    } catch (e) {
+      console.error('[site-pages] AI parse error:', e.message);
+      return res.status(500).json({ error: 'Failed to parse AI response' });
+    }
+
+    // Delete existing site_pages for this project
+    await pool.query('DELETE FROM site_pages WHERE project_id=$1', [projectId]);
+
+    // Insert pages from AI plan
+    const insertedPages = [];
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const plan = aiPlan.pages[i] || {};
+      const result = await pool.query(
+        `INSERT INTO site_pages (project_id, page_type, page_name, slug, is_cornerstone, cluster_id, keywords, internal_links, meta_title, meta_description, focus_keyword, stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft')
+         RETURNING *`,
+        [
+          projectId, page.type, page.name,
+          plan.suggested_slug || '/' + page.name.toLowerCase().replace(/\s+/g, '-'),
+          plan.is_cornerstone || false,
+          plan.cluster_id || null,
+          JSON.stringify(page.keywords),
+          JSON.stringify(plan.internal_links || []),
+          plan.suggested_meta_title || page.name,
+          plan.suggested_meta_description || '',
+          plan.focus_keyword || (page.keywords[0] ? page.keywords[0].keyword : '')
+        ]
+      );
+      insertedPages.push(result.rows[0]);
+    }
+
+    // Now resolve internal_links target_index → actual page IDs
+    for (const sp of insertedPages) {
+      if (sp.internal_links && sp.internal_links.length > 0) {
+        const resolved = sp.internal_links.map(link => ({
+          target_page_id: insertedPages[link.target_index] ? insertedPages[link.target_index].id : null,
+          target_page_name: insertedPages[link.target_index] ? insertedPages[link.target_index].page_name : '',
+          anchor_text: link.anchor_text,
+          context: link.context
+        })).filter(l => l.target_page_id);
+        await pool.query('UPDATE site_pages SET internal_links=$1 WHERE id=$2', [JSON.stringify(resolved), sp.id]);
+        sp.internal_links = resolved;
+      }
+    }
+
+    // Build inbound links (reverse of internal_links)
+    for (const sp of insertedPages) {
+      const inbound = [];
+      for (const other of insertedPages) {
+        if (other.id === sp.id) continue;
+        const linksToMe = (other.internal_links || []).filter(l => l.target_page_id === sp.id);
+        linksToMe.forEach(l => inbound.push({ source_page_id: other.id, source_page_name: other.page_name, anchor_text: l.anchor_text }));
+      }
+      if (inbound.length > 0) {
+        await pool.query('UPDATE site_pages SET inbound_links=$1 WHERE id=$2', [JSON.stringify(inbound), sp.id]);
+        sp.inbound_links = inbound;
+      }
+    }
+
+    res.json({ pages: insertedPages, clusters: aiPlan.clusters || [] });
+  } catch (e) {
+    console.error('[site-pages] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get all site pages for a project
+app.get('/api/projects/:projectId/site-pages', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM site_pages WHERE project_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name',
+      [req.params.projectId]
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update a site page (edit meta, content, stage)
+app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
+  try {
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name } = req.body;
+    const result = await pool.query(
+      `UPDATE site_pages SET
+        meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
+        focus_keyword=COALESCE($5, focus_keyword), draft_content=COALESCE($6, draft_content),
+        word_count=COALESCE($7, word_count), stage=COALESCE($8, stage), slug=COALESCE($9, slug),
+        is_cornerstone=COALESCE($10, is_cornerstone), page_name=COALESCE($11, page_name),
+        updated_at=NOW()
+       WHERE id=$1 AND project_id=$2 RETURNING *`,
+      [req.params.pageId, req.params.projectId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate content for a site page
+app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+
+    // Get all pages for linking context
+    const allPages = await pool.query('SELECT id, page_name, slug, is_cornerstone, cluster_id, focus_keyword FROM site_pages WHERE project_id=$1', [projectId]);
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get content settings for this page type
+    const settingsResult = await pool.query('SELECT * FROM content_settings WHERE project_id=$1 AND page_type=$2', [projectId, page.page_type]);
+    const settings = settingsResult.rows[0] || { target_word_count: 1500, tone: 'professional', style: 'informative' };
+
+    const linksContext = (page.internal_links || []).map(l => {
+      const target = allPages.rows.find(p => p.id === l.target_page_id);
+      return target ? `Link to "${target.page_name}" (${target.slug}) with anchor text "${l.anchor_text}" — ${l.context || 'naturally in context'}` : '';
+    }).filter(Boolean).join('\n');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
+
+PAGE: "${page.page_name}" (${page.page_type})
+FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
+TARGET KEYWORDS: ${(page.keywords || []).map(k => k.keyword).join(', ')}
+${page.is_cornerstone ? 'This is a CORNERSTONE page — it should be comprehensive and link to subtopic pages.' : 'This is a cluster page — it should link back to the cornerstone.'}
+
+META TITLE: ${page.meta_title}
+META DESCRIPTION: ${page.meta_description}
+
+INTERNAL LINKS TO INCLUDE:
+${linksContext || 'No internal links planned.'}
+
+REQUIREMENTS:
+- Target word count: ${settings.target_word_count} words
+- Tone: ${settings.tone}
+- Style: ${settings.style}
+${settings.tone_of_voice ? '- Brand voice: ' + settings.tone_of_voice : ''}
+- Include the focus keyword in the H1 and first paragraph
+- Use H2 and H3 subheadings naturally
+- Include internal links as HTML <a> tags with the specified anchor text and href
+- Write for SEO but make it read naturally for humans
+- Include a clear call to action
+- Do NOT include the <html>, <head>, or <body> tags — just the page content HTML starting with <h1>
+- Do NOT include any placeholder text — all content must be real and specific to this business
+
+Return ONLY the HTML content, no markdown wrapping.`
+      }]
+    });
+
+    const content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+
+    // Save to DB
+    await pool.query(
+      'UPDATE site_pages SET draft_content=$1, word_count=$2, stage=$3, updated_at=NOW() WHERE id=$4',
+      [content, wordCount, page.stage === 'draft' ? 'written' : page.stage, pageId]
+    );
+
+    res.json({ content, word_count: wordCount });
+  } catch (e) {
+    console.error('[site-pages] Content gen error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Publish a site page to WordPress
+app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+    if (!page.draft_content) return res.status(400).json({ error: 'No content to publish. Generate content first.' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url;
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured in project settings.' });
+
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured.' });
+
+    // Create page on WordPress
+    const wpType = page.page_type === 'blog' ? 'posts' : 'pages';
+    const wpResponse = await fetch(`${wpUrl}/wp-json/wp/v2/${wpType}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: page.page_name,
+        content: page.draft_content,
+        status: 'publish',
+        slug: (page.slug || '').replace(/^\//, ''),
+        meta: {
+          _yoast_wpseo_title: page.meta_title || '',
+          _yoast_wpseo_metadesc: page.meta_description || '',
+          _yoast_wpseo_focuskw: page.focus_keyword || ''
+        }
+      })
+    });
+
+    if (!wpResponse.ok) {
+      const err = await wpResponse.text();
+      return res.status(500).json({ error: 'WordPress publish failed: ' + err });
+    }
+    const wpPage = await wpResponse.json();
+
+    // Update stage and published URL
+    await pool.query(
+      'UPDATE site_pages SET stage=$1, published_url=$2, published_at=NOW(), updated_at=NOW() WHERE id=$3',
+      ['published', wpPage.link || wpUrl + page.slug, pageId]
+    );
+
+    // Record in wp_change_history for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1, $2, $3, $4, 'create', 'new_page', '', $5)`,
+      [projectId, wpPage.id, wpPage.link, page.page_name, 'Created via Site Staging']
+    );
+
+    res.json({ success: true, url: wpPage.link, wp_id: wpPage.id });
+  } catch (e) {
+    console.error('[site-pages] Publish error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
 });

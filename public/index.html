@@ -7,6 +7,7 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     * {
@@ -6757,6 +6758,395 @@
       );
     }
 
+    // ============ NEW WEBSITE — SITE STAGING (Visual Site Map) ============
+    function SiteStagingPage({ project }) {
+      var pid = project ? project.id : null;
+      var [pages, setPages] = React.useState([]);
+      var [clusters, setClusters] = React.useState([]);
+      var [loading, setLoading] = React.useState(false);
+      var [generating, setGenerating] = React.useState(false);
+      var [selectedPage, setSelectedPage] = React.useState(null);
+      var [generatingContent, setGeneratingContent] = React.useState(null); // page id being generated
+      var [publishing, setPublishing] = React.useState(null);
+      var [viewMode, setViewMode] = React.useState('graph'); // 'graph' | 'list'
+      var svgRef = React.useRef(null);
+      var containerRef = React.useRef(null);
+
+      var loadPages = async function() {
+        if (!pid) return;
+        setLoading(true);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages');
+          if (Array.isArray(data)) setPages(data);
+        } catch (e) { console.error(e); }
+        setLoading(false);
+      };
+      React.useEffect(function() { loadPages(); }, [pid]);
+
+      var handleGenerate = async function() {
+        setGenerating(true);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages/generate', { method: 'POST' });
+          if (data.pages) setPages(data.pages);
+          if (data.clusters) setClusters(data.clusters);
+        } catch (e) { alert('Error: ' + e.message); }
+        setGenerating(false);
+      };
+
+      var handleGenerateContent = async function(pageId) {
+        setGeneratingContent(pageId);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages/' + pageId + '/generate-content', { method: 'POST' });
+          if (data.content) {
+            setPages(function(prev) { return prev.map(function(p) { return p.id === pageId ? Object.assign({}, p, { draft_content: data.content, word_count: data.word_count, stage: 'written' }) : p; }); });
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setGeneratingContent(null);
+      };
+
+      var handlePublish = async function(pageId) {
+        if (!confirm('Publish this page to WordPress?')) return;
+        setPublishing(pageId);
+        try {
+          var data = await api('/projects/' + pid + '/site-pages/' + pageId + '/publish', { method: 'POST' });
+          if (data.success) {
+            setPages(function(prev) { return prev.map(function(p) { return p.id === pageId ? Object.assign({}, p, { stage: 'published', published_url: data.url }) : p; }); });
+            alert('Published! ' + data.url);
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setPublishing(null);
+      };
+
+      var stageColors = { draft: '#6b7280', written: '#3b82f6', reviewed: '#f59e0b', published: '#22c55e' };
+      var typeColors = { home: '#6366f1', service: '#22c55e', suburb: '#f59e0b', blog: '#3b82f6' };
+
+      // D3 force graph
+      React.useEffect(function() {
+        if (viewMode !== 'graph' || pages.length === 0 || !svgRef.current) return;
+
+        var svg = d3.select(svgRef.current);
+        svg.selectAll('*').remove();
+
+        var width = containerRef.current ? containerRef.current.clientWidth : 900;
+        var height = 600;
+        svg.attr('viewBox', '0 0 ' + width + ' ' + height);
+
+        // Build nodes and links
+        var nodes = pages.map(function(p, i) {
+          return {
+            id: p.id, index: i, name: p.page_name, type: p.page_type,
+            cornerstone: p.is_cornerstone, cluster: p.cluster_id,
+            stage: p.stage, wordCount: p.word_count || 0,
+            keywords: p.keywords || [], slug: p.slug,
+            x: width / 2 + (Math.random() - 0.5) * 200,
+            y: height / 2 + (Math.random() - 0.5) * 200
+          };
+        });
+
+        var links = [];
+        pages.forEach(function(p) {
+          (p.internal_links || []).forEach(function(link) {
+            var sourceIdx = nodes.findIndex(function(n) { return n.id === p.id; });
+            var targetIdx = nodes.findIndex(function(n) { return n.id === link.target_page_id; });
+            if (sourceIdx >= 0 && targetIdx >= 0) {
+              links.push({ source: sourceIdx, target: targetIdx, anchor: link.anchor_text });
+            }
+          });
+        });
+
+        // Zoom behavior
+        var g = svg.append('g');
+        var zoom = d3.zoom().scaleExtent([0.3, 3]).on('zoom', function(event) {
+          g.attr('transform', event.transform);
+        });
+        svg.call(zoom);
+
+        // Arrow marker
+        svg.append('defs').append('marker')
+          .attr('id', 'arrowhead').attr('viewBox', '0 -5 10 10')
+          .attr('refX', 28).attr('refY', 0)
+          .attr('markerWidth', 6).attr('markerHeight', 6)
+          .attr('orient', 'auto')
+          .append('path').attr('d', 'M0,-5L10,0L0,5')
+          .attr('fill', '#6b728080');
+
+        // Force simulation
+        var simulation = d3.forceSimulation(nodes)
+          .force('link', d3.forceLink(links).distance(150).strength(0.5))
+          .force('charge', d3.forceManyBody().strength(-400))
+          .force('center', d3.forceCenter(width / 2, height / 2))
+          .force('collision', d3.forceCollide(50));
+
+        // Links
+        var linkG = g.append('g').selectAll('line').data(links).enter().append('line')
+          .attr('stroke', '#6b728060').attr('stroke-width', 1.5)
+          .attr('marker-end', 'url(#arrowhead)');
+
+        // Link labels (anchor text)
+        var linkLabels = g.append('g').selectAll('text').data(links).enter().append('text')
+          .text(function(d) { return d.anchor || ''; })
+          .attr('font-size', 9).attr('fill', '#9ca3af').attr('text-anchor', 'middle')
+          .attr('dy', -6);
+
+        // Nodes
+        var nodeG = g.append('g').selectAll('g').data(nodes).enter().append('g')
+          .style('cursor', 'pointer')
+          .on('click', function(event, d) {
+            var page = pages.find(function(p) { return p.id === d.id; });
+            setSelectedPage(page);
+          })
+          .call(d3.drag()
+            .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
+            .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+          );
+
+        // Node circles
+        nodeG.append('circle')
+          .attr('r', function(d) { return d.cornerstone ? 28 : 20; })
+          .attr('fill', function(d) { return (typeColors[d.type] || '#6366f1') + '20'; })
+          .attr('stroke', function(d) { return typeColors[d.type] || '#6366f1'; })
+          .attr('stroke-width', function(d) { return d.cornerstone ? 3 : 1.5; });
+
+        // Stage indicator dot
+        nodeG.append('circle')
+          .attr('r', 5).attr('cx', function(d) { return d.cornerstone ? 20 : 14; }).attr('cy', function(d) { return d.cornerstone ? -20 : -14; })
+          .attr('fill', function(d) { return stageColors[d.stage] || '#6b7280'; });
+
+        // Node labels
+        nodeG.append('text')
+          .text(function(d) { return d.name.length > 18 ? d.name.substring(0, 16) + '...' : d.name; })
+          .attr('text-anchor', 'middle').attr('dy', function(d) { return d.cornerstone ? 42 : 34; })
+          .attr('font-size', 11).attr('font-weight', 600)
+          .attr('fill', 'var(--text)');
+
+        // Cornerstone badge
+        nodeG.filter(function(d) { return d.cornerstone; }).append('text')
+          .text('★').attr('text-anchor', 'middle').attr('dy', 5).attr('font-size', 14)
+          .attr('fill', typeColors.service);
+
+        simulation.on('tick', function() {
+          linkG.attr('x1', function(d) { return d.source.x; }).attr('y1', function(d) { return d.source.y; })
+            .attr('x2', function(d) { return d.target.x; }).attr('y2', function(d) { return d.target.y; });
+          linkLabels.attr('x', function(d) { return (d.source.x + d.target.x) / 2; })
+            .attr('y', function(d) { return (d.source.y + d.target.y) / 2; });
+          nodeG.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+        });
+
+        // Zoom to fit
+        setTimeout(function() {
+          svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(0, 0).scale(0.85));
+        }, 500);
+
+        return function() { simulation.stop(); };
+      }, [pages, viewMode]);
+
+      // Detail panel for selected page
+      var renderDetailPanel = function() {
+        if (!selectedPage) return null;
+        var sp = selectedPage;
+        return React.createElement('div', {
+          style: { position: 'fixed', top: 0, right: 0, width: 450, height: '100vh', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 999, overflowY: 'auto', padding: 24, boxShadow: '-4px 0 20px rgba(0,0,0,0.3)' }
+        },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+            React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 700 } }, sp.page_name),
+            React.createElement('button', { onClick: function() { setSelectedPage(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
+          ),
+          // Status badge
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' } },
+            React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
+            sp.is_cornerstone && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone'),
+            React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (typeColors[sp.page_type] || '#6366f1') + '20', color: typeColors[sp.page_type] || '#6366f1', fontWeight: 600 } }, sp.page_type)
+          ),
+          // Meta info
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4 } }, 'SLUG'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)', fontFamily: 'monospace', padding: '4px 8px', background: 'var(--bg)', borderRadius: 4 } }, sp.slug || '/'),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'META TITLE'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, sp.meta_title || '—'),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'META DESCRIPTION'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, sp.meta_description || '—'),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'FOCUS KEYWORD'),
+            React.createElement('div', { style: { fontSize: 13, color: '#22c55e', fontWeight: 600 } }, sp.focus_keyword || '—')
+          ),
+          // Keywords
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'KEYWORDS'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+              (sp.keywords || []).map(function(kw, i) {
+                return React.createElement('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' } },
+                  kw.keyword + (kw.volume ? ' (' + kw.volume + ')' : '')
+                );
+              })
+            )
+          ),
+          // Internal links
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'LINKS TO'),
+            (sp.internal_links || []).length > 0
+              ? (sp.internal_links || []).map(function(link, i) {
+                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)' } },
+                    React.createElement('span', { style: { color: '#3b82f6' } }, link.target_page_name || 'Page'),
+                    React.createElement('span', { style: { color: 'var(--text3)', margin: '0 6px' } }, '→'),
+                    React.createElement('span', { style: { color: 'var(--text)', fontStyle: 'italic' } }, '"' + link.anchor_text + '"')
+                  );
+                })
+              : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } }, 'No outbound links')
+          ),
+          // Inbound links
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'LINKED FROM'),
+            (sp.inbound_links || []).length > 0
+              ? (sp.inbound_links || []).map(function(link, i) {
+                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '4px 0' } },
+                    React.createElement('span', { style: { color: '#f59e0b' } }, link.source_page_name),
+                    React.createElement('span', { style: { color: 'var(--text3)', margin: '0 6px' } }, '→'),
+                    React.createElement('span', { style: { fontStyle: 'italic', color: 'var(--text)' } }, '"' + link.anchor_text + '"')
+                  );
+                })
+              : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } }, 'No inbound links')
+          ),
+          // Content preview
+          sp.draft_content && React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'CONTENT PREVIEW (' + (sp.word_count || 0) + ' words)'),
+            React.createElement('div', {
+              style: { fontSize: 12, lineHeight: 1.6, color: 'var(--text)', maxHeight: 300, overflowY: 'auto', padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' },
+              dangerouslySetInnerHTML: { __html: sp.draft_content }
+            })
+          ),
+          // Actions
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            sp.stage !== 'published' && !sp.draft_content && React.createElement('button', {
+              onClick: function() { handleGenerateContent(sp.id); },
+              disabled: generatingContent === sp.id,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
+            }, generatingContent === sp.id ? 'Writing...' : 'Write Content'),
+            sp.stage !== 'published' && sp.draft_content && React.createElement('button', {
+              onClick: function() { handleGenerateContent(sp.id); },
+              disabled: generatingContent === sp.id,
+              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #3b82f6', background: 'transparent', color: '#3b82f6', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
+            }, generatingContent === sp.id ? 'Rewriting...' : 'Rewrite'),
+            sp.draft_content && sp.stage !== 'published' && React.createElement('button', {
+              onClick: function() { handlePublish(sp.id); },
+              disabled: publishing === sp.id,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
+            }, publishing === sp.id ? 'Publishing...' : 'Publish to WP'),
+            sp.published_url && React.createElement('a', {
+              href: sp.published_url, target: '_blank',
+              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #22c55e', color: '#22c55e', fontWeight: 600, fontSize: 12, textDecoration: 'none' }
+            }, 'View Live')
+          )
+        );
+      };
+
+      if (!project) return React.createElement('div', null, 'Select a project');
+
+      return React.createElement('div', { style: { padding: '24px 32px' } },
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
+          React.createElement('div', null,
+            React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 } },
+              React.createElement('i', { className: 'fas fa-project-diagram', style: { color: 'var(--accent)' } }),
+              'Site Staging'
+            ),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 4 } },
+              pages.length > 0 ? pages.length + ' pages • ' + pages.filter(function(p) { return p.is_cornerstone; }).length + ' cornerstones • ' + pages.filter(function(p) { return p.stage === 'published'; }).length + ' published' : 'Generate your site map from Page Setup to get started.'
+            )
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            pages.length > 0 && React.createElement('div', { style: { display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' } },
+              React.createElement('button', {
+                onClick: function() { setViewMode('graph'); },
+                style: { padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'graph' ? 'var(--accent)' : 'var(--card)', color: viewMode === 'graph' ? '#fff' : 'var(--text3)' }
+              }, React.createElement('i', { className: 'fas fa-project-diagram', style: { marginRight: 4 } }), 'Graph'),
+              React.createElement('button', {
+                onClick: function() { setViewMode('list'); },
+                style: { padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'var(--card)', color: viewMode === 'list' ? '#fff' : 'var(--text3)' }
+              }, React.createElement('i', { className: 'fas fa-list', style: { marginRight: 4 } }), 'List')
+            ),
+            React.createElement('button', {
+              onClick: handleGenerate, disabled: generating,
+              style: { padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: generating ? 'wait' : 'pointer' }
+            }, generating ? 'Generating...' : (pages.length > 0 ? 'Regenerate' : 'Generate Site Map'))
+          )
+        ),
+
+        // Legend
+        pages.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
+          [{ label: 'Home', color: typeColors.home }, { label: 'Service', color: typeColors.service }, { label: 'Suburb', color: typeColors.suburb }, { label: 'Blog', color: typeColors.blog }].map(function(item) {
+            return React.createElement('div', { key: item.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
+              React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: item.color } }),
+              item.label
+            );
+          }),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
+            React.createElement('div', { style: { width: 14, height: 14, borderRadius: '50%', border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8 } }, '★'),
+            'Cornerstone'
+          ),
+          [{ label: 'Draft', color: stageColors.draft }, { label: 'Written', color: stageColors.written }, { label: 'Published', color: stageColors.published }].map(function(item) {
+            return React.createElement('div', { key: item.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
+              React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: item.color } }),
+              item.label
+            );
+          })
+        ),
+
+        // Graph view
+        viewMode === 'graph' && pages.length > 0 && React.createElement('div', {
+          ref: containerRef,
+          style: { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', position: 'relative' }
+        },
+          React.createElement('svg', { ref: svgRef, style: { width: '100%', height: 600 } }),
+          React.createElement('div', { style: { position: 'absolute', bottom: 12, right: 12, fontSize: 11, color: 'var(--text3)', background: 'var(--card)', padding: '4px 10px', borderRadius: 6 } },
+            'Scroll to zoom • Drag nodes • Click to inspect'
+          )
+        ),
+
+        // List view
+        viewMode === 'list' && pages.length > 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+          pages.map(function(sp) {
+            return React.createElement('div', {
+              key: sp.id,
+              onClick: function() { setSelectedPage(sp); },
+              style: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, cursor: 'pointer', transition: 'border-color 0.15s' }
+            },
+              React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', background: (typeColors[sp.page_type] || '#6366f1') + '20', border: '2px solid ' + (typeColors[sp.page_type] || '#6366f1'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 } },
+                sp.is_cornerstone ? '★' : React.createElement('i', { className: sp.page_type === 'home' ? 'fas fa-home' : sp.page_type === 'service' ? 'fas fa-briefcase' : sp.page_type === 'suburb' ? 'fas fa-map-marker-alt' : 'fas fa-blog', style: { color: typeColors[sp.page_type] } })
+              ),
+              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } }, sp.page_name),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } },
+                  sp.slug + ' • ' + (sp.keywords || []).length + ' keywords' + (sp.word_count ? ' • ' + sp.word_count + ' words' : '')
+                )
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } }, (sp.internal_links || []).length + ' links out'),
+                React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage)
+              )
+            );
+          })
+        ),
+
+        // Empty state
+        pages.length === 0 && !loading && React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
+          React.createElement('i', { className: 'fas fa-project-diagram', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16 } }),
+          React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 8 } }, 'No site map yet'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Assign keywords to pages in Page Setup, then generate your site map here.'),
+          React.createElement('button', {
+            onClick: handleGenerate, disabled: generating,
+            style: { padding: '10px 24px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }
+          }, generating ? 'Generating...' : 'Generate Site Map')
+        ),
+
+        loading && React.createElement('div', { style: { textAlign: 'center', padding: 60 } },
+          React.createElement('div', { className: 'spinner-large' }),
+          React.createElement('div', { style: { marginTop: 12, color: 'var(--text3)' } }, 'Loading site map...')
+        ),
+
+        // Detail side panel
+        renderDetailPanel()
+      );
+    }
+
     // ============ NEW WEBSITE — PIPELINE (Queue / Review / Publish) ============
     function NewWebsitePipelinePage({ stage, project }) {
       var pid = project ? project.id : null;
@@ -9836,6 +10226,8 @@ case 'action-plan':
             return <ContentKeywordsPage project={project} />;
           case 'nw-pages':
             return <NewWebsitePagesPage project={project} />;
+          case 'nw-staging':
+            return <SiteStagingPage project={project} />;
           case 'nw-queue':
             return <NewWebsitePipelinePage stage="queue" project={project} />;
           case 'nw-review':
@@ -9901,6 +10293,7 @@ case 'action-plan':
             { id: 'nw-research', label: 'Keyword Research', icon: 'fas fa-search' },
             { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
             { id: 'nw-pages', label: 'Page Setup', icon: 'fas fa-sitemap' },
+            { id: 'nw-staging', label: 'Site Staging', icon: 'fas fa-project-diagram' },
             { id: 'nw-queue', label: 'Draft Queue', icon: 'fas fa-pen' },
             { id: 'nw-review', label: 'Review & Approve', icon: 'fas fa-check-circle' },
             { id: 'nw-publish', label: 'Publish', icon: 'fas fa-rocket' },
