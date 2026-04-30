@@ -8402,7 +8402,7 @@
       const [gridRadius, setGridRadius] = useState(10);
       const [scanProgress, setScanProgress] = useState('');
 
-      const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [] });
+      const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: {} });
 
       // Load grid scans + audit data on mount
       useEffect(() => {
@@ -8423,7 +8423,12 @@
             const resp = await api(`/projects/${project.id}/audit-findings`);
             if (resp && resp.findings) gbpFindings = resp.findings.filter(f => f.pillar === 'gbp_external' || f.pillar === 'gbp');
           } catch(e) {}
-          setAuditInsights({ serviceAreas: Array.isArray(serviceAreas) ? serviceAreas : [], sitePages, gbpFindings });
+          let citations = {};
+          try {
+            const citResp = await api(`/projects/${project.id}/citations`);
+            if (citResp && citResp.statuses) citations = citResp.statuses;
+          } catch(e) {}
+          setAuditInsights({ serviceAreas: Array.isArray(serviceAreas) ? serviceAreas : [], sitePages, gbpFindings, citations });
         })();
       }, [project.id]);
 
@@ -8851,7 +8856,7 @@
                     const scanKey = `${kw.keyword}|||${kw.location}`;
                     const gridScanData = gridScans[scanKey];
                     const gridPointsData = gridScanData?.grid_points || [];
-                    // Dynamic advice from audit insights
+                    // Dynamic advice from audit insights — actions are { text, color } objects
                     const buildAdvice = (status, kwObj) => {
                       if (!status) return null;
                       const loc = (kwObj.location || '').toLowerCase().trim();
@@ -8868,6 +8873,19 @@
                       const napFindings = gbpFindings.filter(f => (f.category || '').toLowerCase().includes('nap') || (f.title || '').toLowerCase().includes('nap'));
                       const profileFindings = gbpFindings.filter(f => (f.category || '').toLowerCase().includes('profile') || (f.category || '').toLowerCase().includes('completeness'));
                       const criticalFindings = gbpFindings.filter(f => f.severity === 'critical');
+                      // Citation/directory data
+                      const citationStatuses = auditInsights.citations || {};
+                      const unlistedDirs = Object.entries(citationStatuses).length > 0
+                        ? Object.entries(citationStatuses).filter(([name, info]) => info.status === 'not_listed' || info.status === 'not_found').map(([name]) => name)
+                        : [];
+                      const listedDirs = Object.entries(citationStatuses).length > 0
+                        ? Object.entries(citationStatuses).filter(([name, info]) => info.status === 'listed' || info.status === 'found').map(([name]) => name)
+                        : [];
+
+                      const ok = (text) => ({ text, color: '#22c55e' });
+                      const bad = (text) => ({ text, color: '#ef4444' });
+                      const warn = (text) => ({ text, color: '#f59e0b' });
+                      const info = (text) => ({ text, color: 'var(--text2)' });
 
                       const base = {
                         'Dominant': { color: '#22c55e', icon: 'fa-trophy', title: 'You dominate this area' },
@@ -8882,66 +8900,77 @@
 
                       const actions = [];
                       if (status === 'No Scan') {
-                        actions.push('Click "Grid Scan" to run a SerpAPI Maps grid scan for all keywords');
+                        actions.push(info('Click "Grid Scan" to run a SerpAPI Maps grid scan for all keywords'));
                         return { ...base, actions };
                       }
                       if (status === 'Dominant' || status === 'Strong') {
-                        actions.push('Maintain review velocity — keep asking for reviews');
-                        if (reviewFindings.length > 0) actions.push('⚠ GBP Audit: ' + reviewFindings[0].title);
-                        actions.push('Monitor competitors entering this area');
-                        if (status === 'Dominant') actions.push('Focus efforts on weaker suburbs instead');
-                        if (inServiceArea) actions.push('✓ ' + kwObj.location + ' is in your GBP service areas');
-                        if (matchingPage) actions.push('✓ Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')'));
+                        actions.push(info('Maintain review velocity — keep asking for reviews'));
+                        if (reviewFindings.length > 0) actions.push(warn('GBP Audit: ' + reviewFindings[0].title));
+                        actions.push(info('Monitor competitors entering this area'));
+                        if (status === 'Dominant') actions.push(info('Focus efforts on weaker suburbs instead'));
+                        if (inServiceArea) actions.push(ok(kwObj.location + ' is in your GBP service areas'));
+                        if (matchingPage) actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')')));
+                        if (listedDirs.length > 0) actions.push(ok('Listed in ' + listedDirs.length + ' directories'));
                         return { ...base, actions };
                       }
 
                       // Competitive, Needs Work, Weak, Not Visible — actionable advice
                       // 1. Service area check
                       if (inServiceArea) {
-                        actions.push('✓ ' + kwObj.location + ' is in your GBP service areas');
+                        actions.push(ok(kwObj.location + ' is in your GBP service areas'));
                       } else {
-                        actions.push('✗ ' + kwObj.location + ' is NOT in your GBP service areas — add it in GBP dashboard');
+                        actions.push(bad(kwObj.location + ' is NOT in your GBP service areas — add it in GBP dashboard'));
                       }
                       // 2. Suburb page check
                       if (matchingPage) {
-                        actions.push('✓ Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')'));
+                        actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')')));
                       } else {
-                        actions.push('✗ No suburb page for ' + kwObj.location + ' — create one in Site Staging');
+                        actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Site Staging'));
                       }
-                      // 3. GBP audit findings
+                      // 3. Directories — show unlisted ones they should register on
+                      if (unlistedDirs.length > 0) {
+                        const topUnlisted = unlistedDirs.slice(0, 5);
+                        actions.push(bad('Not listed in ' + unlistedDirs.length + ' directories: ' + topUnlisted.join(', ') + (unlistedDirs.length > 5 ? ' +' + (unlistedDirs.length - 5) + ' more' : '')));
+                      }
+                      if (listedDirs.length > 0) {
+                        actions.push(ok('Listed in ' + listedDirs.length + ' directories: ' + listedDirs.slice(0, 4).join(', ') + (listedDirs.length > 4 ? ' +' + (listedDirs.length - 4) + ' more' : '')));
+                      }
+                      if (unlistedDirs.length === 0 && listedDirs.length === 0) {
+                        if (citationFindings.length > 0) {
+                          actions.push(warn('Citations: ' + citationFindings[0].title));
+                        } else {
+                          actions.push(info('Run a Citation Scan to check directory listings'));
+                        }
+                      }
+                      // 4. GBP audit findings
                       if (criticalFindings.length > 0) {
-                        actions.push('🔴 ' + criticalFindings.length + ' critical GBP issue' + (criticalFindings.length > 1 ? 's' : '') + ': ' + criticalFindings.slice(0, 2).map(f => f.title).join(', '));
-                      }
-                      if (citationFindings.length > 0) {
-                        actions.push('📋 Citations: ' + citationFindings[0].title);
-                      } else if (status !== 'Competitive') {
-                        actions.push('Build local citations in directories for this area');
+                        actions.push(bad(criticalFindings.length + ' critical GBP issue' + (criticalFindings.length > 1 ? 's' : '') + ': ' + criticalFindings.slice(0, 2).map(f => f.title).join(', ')));
                       }
                       if (napFindings.length > 0) {
-                        actions.push('⚠ NAP: ' + napFindings[0].title);
+                        actions.push(warn('NAP: ' + napFindings[0].title));
                       }
                       if (reviewFindings.length > 0) {
-                        actions.push('⭐ Reviews: ' + reviewFindings[0].title);
+                        actions.push(warn('Reviews: ' + reviewFindings[0].title));
                       } else {
-                        actions.push('Ask customers in ' + (kwObj.location || 'this area') + ' to leave reviews mentioning the suburb');
+                        actions.push(info('Ask customers in ' + (kwObj.location || 'this area') + ' to leave reviews mentioning the suburb'));
                       }
                       if (profileFindings.length > 0) {
-                        actions.push('📝 Profile: ' + profileFindings[0].title);
+                        actions.push(warn('Profile: ' + profileFindings[0].title));
                       }
-                      // 4. Status-specific extras
+                      // 5. Status-specific extras
                       if (status === 'Not Visible') {
-                        if (!inServiceArea) actions.push('This area may be outside your GBP service radius');
-                        actions.push('Post GBP updates targeting ' + (kwObj.location || 'this area'));
+                        if (!inServiceArea) actions.push(warn('This area may be outside your GBP service radius'));
+                        actions.push(info('Post GBP updates targeting ' + (kwObj.location || 'this area')));
                       }
                       if (status === 'Weak') {
-                        actions.push('Your GBP is detected but ranks too low for the local pack');
+                        actions.push(warn('Your GBP is detected but ranks too low for the local pack'));
                       }
                       if (status === 'Needs Work' || status === 'Competitive') {
-                        actions.push('Post GBP updates about jobs completed in ' + (kwObj.location || 'this area'));
+                        actions.push(info('Post GBP updates about jobs completed in ' + (kwObj.location || 'this area')));
                       }
                       // No-audit fallback
                       if (gbpFindings.length === 0 && actions.length < 3) {
-                        actions.push('Run a GBP Audit for detailed recommendations');
+                        actions.push(info('Run a GBP Audit for detailed recommendations'));
                       }
                       return { ...base, actions };
                     };
@@ -9023,12 +9052,18 @@
                                     <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
                                   </div>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                    {advice.actions.map((action, i) => (
-                                      <div key={i} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                                        <i className="fa-solid fa-arrow-right" style={{ fontSize: 9, marginTop: 4, color: advice.color, flexShrink: 0 }} />
-                                        <span>{action}</span>
+                                    {advice.actions.map((action, i) => {
+                                      const act = typeof action === 'string' ? { text: action, color: 'var(--text2)' } : action;
+                                      const isGreen = act.color === '#22c55e';
+                                      const isRed = act.color === '#ef4444';
+                                      const icon = isGreen ? 'fa-circle-check' : isRed ? 'fa-circle-xmark' : 'fa-arrow-right';
+                                      return (
+                                      <div key={i} style={{ fontSize: 12, color: act.color, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                        <i className={`fa-solid ${icon}`} style={{ fontSize: isGreen || isRed ? 11 : 9, marginTop: isGreen || isRed ? 2 : 4, color: act.color, flexShrink: 0 }} />
+                                        <span>{act.text}</span>
                                       </div>
-                                    ))}
+                                      );
+                                    })}
                                   </div>
                                   {hasData && (
                                     <div style={{ marginTop: 14, display: 'flex', gap: 16, fontSize: 11, color: 'var(--text3)' }}>
