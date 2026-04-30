@@ -375,6 +375,38 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // Content keywords — for new project keyword workflow
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_keywords (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        page_type TEXT DEFAULT 'unassigned',
+        page_name TEXT,
+        page_id INTEGER REFERENCES content_queue(id) ON DELETE SET NULL,
+        search_volume INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // Content settings — tone, style, word count per project
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_settings (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_type TEXT NOT NULL,
+        target_word_count INTEGER DEFAULT 1500,
+        tone TEXT DEFAULT 'professional',
+        style TEXT DEFAULT 'informative',
+        tone_of_voice TEXT,
+        wireframe_url TEXT,
+        factor_3 TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, page_type)
+      )
+    `).catch(() => {});
+
     // GBP tasks are manual (SEO Specialist) — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
@@ -3527,6 +3559,87 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     console.error('[copywriter] Publish error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ==================== CONTENT KEYWORDS ====================
+
+// List all keywords for a project
+app.get('/api/projects/:projectId/content-keywords', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM content_keywords WHERE project_id=$1 ORDER BY page_type, keyword', [req.params.projectId]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk add keywords (from CSV, paste, or manual)
+app.post('/api/projects/:projectId/content-keywords/bulk', async (req, res) => {
+  try {
+    const { keywords } = req.body; // array of { keyword, page_type?, page_name? }
+    if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+    const projectId = req.params.projectId;
+    const added = [];
+    for (const kw of keywords) {
+      const keyword = (kw.keyword || kw).toString().trim();
+      if (!keyword) continue;
+      // Skip duplicates
+      const exists = await pool.query('SELECT id FROM content_keywords WHERE project_id=$1 AND LOWER(keyword)=LOWER($2)', [projectId, keyword]);
+      if (exists.rows.length > 0) continue;
+      const r = await pool.query(
+        `INSERT INTO content_keywords (project_id, keyword, page_type, page_name) VALUES ($1,$2,$3,$4) RETURNING *`,
+        [projectId, keyword, kw.page_type || 'unassigned', kw.page_name || null]
+      );
+      added.push(r.rows[0]);
+    }
+    res.json({ success: true, added: added.length, keywords: added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update keyword (assign to page type, rename, etc.)
+app.put('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
+  try {
+    const { keyword, page_type, page_name, search_volume } = req.body;
+    const fields = []; const vals = []; let idx = 1;
+    if (keyword !== undefined) { fields.push(`keyword=$${idx++}`); vals.push(keyword); }
+    if (page_type !== undefined) { fields.push(`page_type=$${idx++}`); vals.push(page_type); }
+    if (page_name !== undefined) { fields.push(`page_name=$${idx++}`); vals.push(page_name); }
+    if (search_volume !== undefined) { fields.push(`search_volume=$${idx++}`); vals.push(search_volume); }
+    if (fields.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+    vals.push(req.params.id, req.params.projectId);
+    const r = await pool.query(`UPDATE content_keywords SET ${fields.join(',')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING *`, vals);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Keyword not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk update keywords (assign multiple to a page type)
+app.put('/api/projects/:projectId/content-keywords/bulk-assign', async (req, res) => {
+  try {
+    const { keyword_ids, page_type, page_name } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=$2 WHERE id = ANY($3) AND project_id=$4`,
+      [page_type, page_name || null, keyword_ids, req.params.projectId]
+    );
+    res.json({ success: true, updated: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete keyword
+app.delete('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_keywords WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk delete keywords
+app.post('/api/projects/:projectId/content-keywords/bulk-delete', async (req, res) => {
+  try {
+    const { keyword_ids } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query('DELETE FROM content_keywords WHERE id = ANY($1) AND project_id=$2', [keyword_ids, req.params.projectId]);
+    res.json({ success: true, deleted: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== GSC AUDIT ====================
