@@ -4298,6 +4298,7 @@
       const [linksResult, setLinksResult] = React.useState(null); // { pageId, type, links: [] }
 
       const [linkPreview, setLinkPreview] = useState(null); // { page, type, links, applying }
+      const [selectedPreviewLinks, setSelectedPreviewLinks] = useState([]); // indices of selected links
 
       const handleAddOutboundLinks = async (page) => {
         setAddingLinks('outbound-' + page.id);
@@ -4307,22 +4308,24 @@
           });
           if (data.success && data.links_added && data.links_added.length > 0) {
             setLinkPreview({ page: page, type: 'outbound', links: data.links_added, applying: false });
+            setSelectedPreviewLinks(data.links_added.map(function(_, i) { return i; })); // all selected by default
           } else { alert(data.message || 'No suitable link opportunities found'); }
         } catch (e) { alert('Error: ' + e.message); }
         setAddingLinks(null);
       };
 
       const handleApplyLinks = async () => {
-        if (!linkPreview) return;
+        if (!linkPreview || selectedPreviewLinks.length === 0) return;
         setLinkPreview(Object.assign({}, linkPreview, { applying: true }));
+        var chosen = selectedPreviewLinks.map(function(i) { return linkPreview.links[i]; });
+        var chosenUrls = chosen.map(function(l) { return l.url; });
         try {
           const data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
-            method: 'POST', body: { page_id: linkPreview.page.id },
+            method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenUrls },
           });
           if (data.success) {
             setLinksResult({ pageId: linkPreview.page.id, type: 'outbound', links: data.links_added });
             setExpandedPage(linkPreview.page.id);
-            // Update local outbound count
             var addedOut = data.links_added ? data.links_added.length : 0;
             setPages(function(prev) { return prev.map(function(p) {
               if (p.id === linkPreview.page.id) {
@@ -4332,6 +4335,7 @@
             }); });
             loadHistory();
             setLinkPreview(null);
+            setSelectedPreviewLinks([]);
           } else { alert(data.message || data.error || 'Failed to add links'); }
         } catch (e) { alert('Error: ' + e.message); }
       };
@@ -4911,42 +4915,71 @@
                   <i className="fas fa-link" style={{ marginRight: 8, color: '#3b82f6' }} />
                   Review Suggested Links
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
-                  {linkPreview.links.length} link{linkPreview.links.length !== 1 ? 's' : ''} suggested for "{linkPreview.page.title}"
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                    {linkPreview.links.length} link{linkPreview.links.length !== 1 ? 's' : ''} suggested for "{linkPreview.page.title}"
+                  </div>
+                  <label style={{ fontSize: 12, color: 'var(--text2)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input type="checkbox"
+                      checked={selectedPreviewLinks.length === linkPreview.links.length}
+                      onChange={function() {
+                        if (selectedPreviewLinks.length === linkPreview.links.length) {
+                          setSelectedPreviewLinks([]);
+                        } else {
+                          setSelectedPreviewLinks(linkPreview.links.map(function(_, i) { return i; }));
+                        }
+                      }}
+                      style={{ accentColor: '#3b82f6' }}
+                    />
+                    Select All
+                  </label>
                 </div>
 
                 {linkPreview.links.map(function(link, i) {
+                  var isSelected = selectedPreviewLinks.indexOf(i) !== -1;
                   return (
-                    <div key={i} style={{ background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', padding: 12, marginBottom: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                        <div>
-                          <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Anchor Text</div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>{link.anchor}</div>
-                        </div>
-                        {link.target_keyword && (
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Target Keyword</div>
-                            <div style={{ fontSize: 12, color: '#22c55e' }}>{link.target_keyword}</div>
+                    <div key={i} style={{ background: isSelected ? 'var(--bg)' : 'var(--card)', borderRadius: 8, border: '1px solid ' + (isSelected ? '#3b82f6' : 'var(--border)'), padding: 12, marginBottom: 8, opacity: isSelected ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.15s' }}
+                      onClick={function() {
+                        setSelectedPreviewLinks(function(prev) {
+                          var idx = prev.indexOf(i);
+                          if (idx !== -1) { return prev.filter(function(x) { return x !== i; }); }
+                          return prev.concat([i]);
+                        });
+                      }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        <input type="checkbox" checked={isSelected} readOnly style={{ marginTop: 2, accentColor: '#3b82f6', flexShrink: 0 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                            <div>
+                              <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Anchor Text</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>{link.anchor}</div>
+                            </div>
+                            {link.target_keyword && (
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Target Keyword</div>
+                                <div style={{ fontSize: 12, color: '#22c55e' }}>{link.target_keyword}</div>
+                              </div>
+                            )}
                           </div>
-                        )}
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
+                            <i className="fas fa-arrow-right" style={{ marginRight: 4, fontSize: 9 }} />
+                            {link.url}
+                          </div>
+                          {link.reason && (
+                            <div style={{ fontSize: 11, color: 'var(--text2)', fontStyle: 'italic' }}>{link.reason}</div>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
-                        <i className="fas fa-arrow-right" style={{ marginRight: 4, fontSize: 9 }} />
-                        {link.url}
-                      </div>
-                      {link.reason && (
-                        <div style={{ fontSize: 11, color: 'var(--text2)', fontStyle: 'italic' }}>{link.reason}</div>
-                      )}
                     </div>
                   );
                 })}
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-                  <button className="btn" onClick={function() { setLinkPreview(null); }} disabled={linkPreview.applying} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
-                  <button className="btn btn-primary" onClick={handleApplyLinks} disabled={linkPreview.applying} style={{ fontSize: 13, padding: '8px 20px' }}>
+                  <button className="btn" onClick={function() { setLinkPreview(null); setSelectedPreviewLinks([]); }} disabled={linkPreview.applying} style={{ fontSize: 13, padding: '8px 16px' }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={handleApplyLinks} disabled={linkPreview.applying || selectedPreviewLinks.length === 0} style={{ fontSize: 13, padding: '8px 20px' }}>
                     {linkPreview.applying
                       ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Applying...')
-                      : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Apply ' + linkPreview.links.length + ' Link' + (linkPreview.links.length !== 1 ? 's' : ''))}
+                      : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Apply ' + selectedPreviewLinks.length + ' of ' + linkPreview.links.length + ' Link' + (linkPreview.links.length !== 1 ? 's' : ''))}
                   </button>
                 </div>
               </div>

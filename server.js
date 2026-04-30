@@ -2518,7 +2518,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { page_id } = req.body;
+    const { page_id, selected_links } = req.body;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -2601,14 +2601,20 @@ app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => 
     }
     if (allPages.length === 0) return res.status(400).json({ error: 'No other pages found to link to' });
 
-    const linkTargets = allPages.map(p => {
+    let linkTargets = allPages.map(p => {
       const pm = p.meta || {};
       const sr = p.seoroom_yoast || {};
       const fk = pm._yoast_wpseo_focuskw || pm.yoast_wpseo_focuskw || sr.focus_keyword || '';
       return { title: p.title?.rendered || p.title, url: p.link || '', focus_keyword: fk };
     });
 
-    console.log(`[add-links] Page "${pageData.title?.rendered || pageData.title?.raw}", ${allPages.length} link targets, elementor=${!!elementorData}`);
+    // If selected_links provided (from preview approval), only target those URLs
+    if (Array.isArray(selected_links) && selected_links.length > 0) {
+      linkTargets = linkTargets.filter(t => selected_links.includes(t.url));
+      console.log(`[add-links] Filtered to ${linkTargets.length} selected targets: ${selected_links.join(', ')}`);
+    }
+
+    console.log(`[add-links] Page "${pageData.title?.rendered || pageData.title?.raw}", ${linkTargets.length} link targets, elementor=${!!elementorData}`);
 
     // Check if this is preview-only mode (suggest but don't apply)
     const previewOnly = req.body.preview === true;
