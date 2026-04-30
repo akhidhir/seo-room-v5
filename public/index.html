@@ -4269,6 +4269,7 @@
       };
 
       const [addingLinks, setAddingLinks] = React.useState(null);
+      const [linksResult, setLinksResult] = React.useState(null); // { pageId, pageUrl, links: [] }
       const handleAddLinks = async (page) => {
         if (!confirm(`Add internal links to "${page.title}"? This will modify the page content on WordPress (with rollback).`)) return;
         setAddingLinks(page.id);
@@ -4279,9 +4280,9 @@
           });
           const data = await resp.json();
           if (data.success) {
-            alert(`Added ${data.count} internal links:\n\n${data.links_added.map(l => `• "${l.anchor}" → ${l.url}`).join('\n')}`);
+            setLinksResult({ pageId: page.id, pageUrl: page.url, pageTitle: page.title, links: data.links_added });
+            setExpandedPage(page.id);
             loadHistory();
-            runAudit();
           } else {
             alert(data.message || data.error || 'Failed to add links');
           }
@@ -4597,6 +4598,13 @@
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
                             <td colSpan={8} style={{ padding: 0 }}>
                               <div style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                                {/* View Page link */}
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                                  <a href={page.url} target="_blank" rel="noopener noreferrer"
+                                    style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />View Page
+                                  </a>
+                                </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
                                   <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, border: '1px solid var(--border)' }}>
                                     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>Meta Title ({page.metaTitleLen} chars)</div>
@@ -4669,6 +4677,41 @@
                                     {sendingToCopywriter === page.id ? 'Sending...' : (page.wordCount < 500 ? 'Send to Copywriter' : 'Send Meta to Copywriter')}
                                   </button>
                                 </div>
+
+                                {/* Links Added Result Panel */}
+                                {linksResult && linksResult.pageId === page.id && (
+                                  <div style={{ marginTop: 14, background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: 14 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>
+                                        <i className="fas fa-link" style={{ marginRight: 6 }} />
+                                        {linksResult.links.length} Internal Links Added
+                                      </div>
+                                      <div style={{ display: 'flex', gap: 8 }}>
+                                        <a href={page.url} target="_blank" rel="noopener noreferrer"
+                                          style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none', padding: '4px 10px', border: '1px solid var(--accent)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                          <i className="fas fa-external-link-alt" style={{ fontSize: 9 }} />Check Page Design
+                                        </a>
+                                        <button onClick={() => setLinksResult(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}>
+                                          <i className="fas fa-times" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                      {linksResult.links.map((link, li) => (
+                                        <div key={li} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}>
+                                          <i className="fas fa-arrow-right" style={{ color: '#3b82f6', fontSize: 10, flexShrink: 0 }} />
+                                          <span style={{ fontWeight: 600, color: 'var(--text1)', minWidth: 120 }}>"{link.anchor}"</span>
+                                          <i className="fas fa-long-arrow-alt-right" style={{ color: 'var(--text3)', fontSize: 10 }} />
+                                          <a href={link.url} target="_blank" rel="noopener noreferrer"
+                                            style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {link.url} <i className="fas fa-external-link-alt" style={{ fontSize: 8, marginLeft: 3 }} />
+                                          </a>
+                                          {link.reason && <span style={{ color: 'var(--text3)', fontSize: 10, flexShrink: 0 }}>{link.reason}</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </td>
                           </tr>
