@@ -3615,6 +3615,19 @@ app.post('/api/projects/:projectId/content-keywords/bulk', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk update keywords (assign multiple to a page type) — MUST be before :id route
+app.put('/api/projects/:projectId/content-keywords/bulk-assign', async (req, res) => {
+  try {
+    const { keyword_ids, page_type, page_name } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=$2 WHERE id = ANY($3) AND project_id=$4`,
+      [page_type, page_name || null, keyword_ids, req.params.projectId]
+    );
+    res.json({ success: true, updated: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Update keyword (assign to page type, rename, etc.)
 app.put('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
   try {
@@ -3629,19 +3642,6 @@ app.put('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
     const r = await pool.query(`UPDATE content_keywords SET ${fields.join(',')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING *`, vals);
     if (r.rows.length === 0) return res.status(404).json({ error: 'Keyword not found' });
     res.json(r.rows[0]);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Bulk update keywords (assign multiple to a page type)
-app.put('/api/projects/:projectId/content-keywords/bulk-assign', async (req, res) => {
-  try {
-    const { keyword_ids, page_type, page_name } = req.body;
-    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
-    await pool.query(
-      `UPDATE content_keywords SET page_type=$1, page_name=$2 WHERE id = ANY($3) AND project_id=$4`,
-      [page_type, page_name || null, keyword_ids, req.params.projectId]
-    );
-    res.json({ success: true, updated: keyword_ids.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
