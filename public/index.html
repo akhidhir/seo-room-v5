@@ -4303,7 +4303,7 @@
       const handleSendToCopywriter = async (page, contentType = 'rewrite') => {
         setSendingToCopywriter(page.id);
         try {
-          const resp = await fetch(`/api/projects/${projectId}/content-queue`, {
+          const resp = await fetch(`/api/projects/${project.id}/content-queue`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
