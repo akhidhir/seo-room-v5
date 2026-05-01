@@ -8410,7 +8410,7 @@
       { name: 'Superpages', url: 'superpages.com.au', free: true, type: 'Standard' },
     ];
 
-    function MapsRankingsPage({ project }) {
+    function MapsRankingsPage({ project, setPage }) {
       const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
       const [syncing, setSyncing] = useState(false);
       const [mapsChecked, setMapsChecked] = useState(false);
@@ -8897,10 +8897,10 @@
                       const unlistedDirs = citDirs.filter(d => d.status === 'not_listed');
                       const hasCitationData = citDirs.length > 0;
 
-                      const ok = (text) => ({ text, color: '#22c55e' });
-                      const bad = (text) => ({ text, color: '#ef4444' });
-                      const warn = (text) => ({ text, color: '#f59e0b' });
-                      const info = (text) => ({ text, color: 'var(--text2)' });
+                      const ok = (text, link) => ({ text, color: '#22c55e', link });
+                      const bad = (text, link) => ({ text, color: '#ef4444', link });
+                      const warn = (text, link) => ({ text, color: '#f59e0b', link });
+                      const info = (text, link) => ({ text, color: 'var(--text2)', link });
 
                       const base = {
                         'Dominant': { color: '#22c55e', icon: 'fa-trophy', title: 'You dominate this area' },
@@ -8936,13 +8936,13 @@
                       if (inServiceArea) {
                         actions.push(ok(kwObj.location + ' is in your GBP service areas'));
                       } else {
-                        actions.push(bad(kwObj.location + ' is NOT in your GBP service areas — add it in GBP dashboard'));
+                        actions.push(bad(kwObj.location + ' is NOT in your GBP service areas — add it in Settings →', 'settings'));
                       }
                       // 2. Suburb page check
                       if (matchingPage) {
-                        actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')')));
+                        actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')'), 'nw-staging'));
                       } else {
-                        actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Site Staging'));
+                        actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Page Setup →', 'nw-pages'));
                       }
                       // 3. Directories — show checklist with real data
                       if (hasCitationData) {
@@ -9094,9 +9094,10 @@
                                       const isRed = act.color === '#ef4444';
                                       const icon = isGreen ? 'fa-circle-check' : isRed ? 'fa-circle-xmark' : 'fa-arrow-right';
                                       return (
-                                      <div key={i} style={{ fontSize: 12, color: act.color, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                      <div key={i} style={{ fontSize: 12, color: act.color, display: 'flex', alignItems: 'flex-start', gap: 8, cursor: act.link ? 'pointer' : 'default' }}
+                                           onClick={act.link && setPage ? (e) => { e.stopPropagation(); setPage(act.link); } : undefined}>
                                         <i className={`fa-solid ${icon}`} style={{ fontSize: isGreen || isRed ? 11 : 9, marginTop: isGreen || isRed ? 2 : 4, color: act.color, flexShrink: 0 }} />
-                                        <span>{act.text}</span>
+                                        <span style={act.link ? { textDecoration: 'underline', textDecorationStyle: 'dotted' } : undefined}>{act.text}</span>
                                       </div>
                                       );
                                     })}
@@ -10819,7 +10820,7 @@ case 'action-plan':
           case 'published-content':
             return <CopywriterPage stage="published" project={project} />;
           case 'maps-rankings':
-            return <MapsRankingsPage project={project} />;
+            return <MapsRankingsPage project={project} setPage={setPage} />;
           case 'serp-rankings':
             return <SERPRankingsPage project={project} />;
           case 'monthly-reports':
