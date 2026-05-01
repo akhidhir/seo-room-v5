@@ -9228,11 +9228,11 @@
               // Preview — opens real page with draft content injected
               !isPublished && hasDraft && React.createElement('button', {
                 onClick: () => {
-                  // Save current draft first, then open preview
+                  const tkn = localStorage.getItem('token') || '';
                   handleSaveEdit().then(() => {
-                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview', '_blank');
+                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
                   }).catch(() => {
-                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview', '_blank');
+                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
                   });
                 },
                 style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
