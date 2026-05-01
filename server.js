@@ -2423,26 +2423,46 @@ function getWpAuthHeaders(project) {
 }
 
 // Helper: read current Yoast meta from WordPress for a page/post
+// Returns { type, title, yoast_wpseo_title, ..., wpId } — wpId is the resolved numeric ID
 async function readWpYoastMeta(wpBase, pageId, authHeaders) {
-  // Try pages first, then posts
+  const parseWpData = (data, type) => {
+    const yoast = data.yoast_head_json || {};
+    const seoroom = data.seoroom_yoast || {};
+    const meta = data.meta || {};
+    return {
+      type,
+      wpId: data.id, // always numeric
+      title: data.title?.rendered || '',
+      yoast_wpseo_title: meta._yoast_wpseo_title || meta.yoast_wpseo_title || seoroom.title || yoast.title || '',
+      yoast_wpseo_metadesc: meta._yoast_wpseo_metadesc || meta.yoast_wpseo_metadesc || seoroom.description || yoast.description || '',
+      yoast_wpseo_focuskw: meta._yoast_wpseo_focuskw || meta.yoast_wpseo_focuskw || seoroom.focus_keyword || ''
+    };
+  };
+
+  // Try numeric ID lookup first
+  if (!isNaN(Number(pageId)) && Number(pageId) > 0) {
+    for (const type of ['pages', 'posts']) {
+      try {
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+          headers: authHeaders,
+          signal: AbortSignal.timeout(15000)
+        });
+        if (resp.ok) return parseWpData(await resp.json(), type);
+      } catch (e) { /* try next type */ }
+    }
+  }
+
+  // Fallback: slug-based lookup (handles site graph pages with slug IDs)
+  const slug = String(pageId).replace(/^\/|\/$/g, '').split('/').pop() || pageId;
   for (const type of ['pages', 'posts']) {
     try {
-      const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+      const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&per_page=1`, {
         headers: authHeaders,
         signal: AbortSignal.timeout(15000)
       });
       if (resp.ok) {
-        const data = await resp.json();
-        const yoast = data.yoast_head_json || {};
-        const seoroom = data.seoroom_yoast || {};
-        const meta = data.meta || {};
-        return {
-          type,
-          title: data.title?.rendered || '',
-          yoast_wpseo_title: meta._yoast_wpseo_title || meta.yoast_wpseo_title || seoroom.title || yoast.title || '',
-          yoast_wpseo_metadesc: meta._yoast_wpseo_metadesc || meta.yoast_wpseo_metadesc || seoroom.description || yoast.description || '',
-          yoast_wpseo_focuskw: meta._yoast_wpseo_focuskw || meta.yoast_wpseo_focuskw || seoroom.focus_keyword || ''
-        };
+        const items = await resp.json();
+        if (Array.isArray(items) && items.length > 0) return parseWpData(items[0], type);
       }
     } catch (e) { /* try next type */ }
   }
@@ -2558,7 +2578,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           await pool.query(
             `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
              VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
-            [projectId, fix.id, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
+            [projectId, current.wpId, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
           );
         }
 
@@ -2568,7 +2588,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
         if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
         if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
 
-        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${fix.id}`, {
+        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
           method: 'POST',
           headers: authHeaders,
           body: JSON.stringify({ meta }),

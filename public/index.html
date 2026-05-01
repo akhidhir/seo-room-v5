@@ -7684,11 +7684,11 @@
         const nodeCount = nodes.length;
 
         const sim = d3.forceSimulation(nodes)
-          .force('link', d3.forceLink(edges).id(d => d.id).distance(nodeCount > 30 ? 200 : 120))
-          .force('charge', d3.forceManyBody().strength(nodeCount > 30 ? -800 : -400))
+          .force('link', d3.forceLink(edges).id(d => d.id).distance(nodeCount > 30 ? 250 : 150))
+          .force('charge', d3.forceManyBody().strength(nodeCount > 30 ? -1200 : -600))
           .force('center', d3.forceCenter(width / 2, height / 2))
-          .force('collision', d3.forceCollide().radius(40))
-          .alpha(1).alphaDecay(0.01);
+          .force('collision', d3.forceCollide().radius(50))
+          .alpha(1).alphaDecay(0.02);
 
         const link = g.append('g').selectAll('line').data(edges).join('line')
           .attr('stroke', 'rgba(99,102,241,0.3)').attr('stroke-width', 1);
@@ -7727,24 +7727,23 @@
           .text(d => d.issues.length).attr('x', 10).attr('y', -5)
           .attr('text-anchor', 'middle').attr('font-size', 8).attr('fill', '#fff').attr('font-weight', 700);
 
-        let ticked = 0;
+        const zoomToFit = () => {
+          const pad = 80;
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          nodes.forEach(n => { if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x; if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y; });
+          const bw = maxX - minX + pad * 2;
+          const bh = maxY - minY + pad * 2;
+          const scale = Math.min(width / bw, height / bh, 0.85);
+          const tx = width / 2 - (minX + maxX) / 2 * scale;
+          const ty = height / 2 - (minY + maxY) / 2 * scale;
+          svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+        };
+
         sim.on('tick', () => {
           link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
           node.attr('transform', d => `translate(${d.x},${d.y})`);
-          ticked++;
-          // Zoom to fit after simulation settles
-          if (ticked === 200) {
-            const pad = 40;
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            nodes.forEach(n => { if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x; if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y; });
-            const bw = maxX - minX + pad * 2;
-            const bh = maxY - minY + pad * 2;
-            const scale = Math.min(width / bw, height / bh, 1);
-            const tx = width / 2 - (minX + maxX) / 2 * scale;
-            const ty = height / 2 - (minY + maxY) / 2 * scale;
-            svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
-          }
         });
+        sim.on('end', () => { zoomToFit(); });
 
         svg.on('click', () => setSelectedNode(null));
         return () => sim.stop();
@@ -7806,14 +7805,18 @@
           </div>
 
           {/* Stats cards */}
-          {graphData && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-              {[
-                { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
-                { label: 'ORPHAN PAGES', value: graphData.stats.orphans, color: graphData.stats.orphans > 0 ? '#f59e0b' : '#22c55e', icon: 'fa-unlink' },
-                { label: 'TOTAL ISSUES', value: graphData.stats.issues, color: graphData.stats.issues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
-                { label: 'HEALTHY', value: graphData.nodes.filter(n => n.issues.length === 0).length, color: '#22c55e', icon: 'fa-circle-check' },
-              ].map((s, i) => (
+          {graphData && (() => {
+            const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i.startsWith('Missing or short meta') || i === 'Missing H1 tag')).length;
+            const statsCards = [
+              { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
+              { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen' },
+              { label: 'ORPHAN PAGES', value: graphData.stats.orphans, color: graphData.stats.orphans > 0 ? '#f59e0b' : '#22c55e', icon: 'fa-unlink' },
+              { label: 'TOTAL ISSUES', value: graphData.stats.issues, color: graphData.stats.issues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
+              { label: 'HEALTHY', value: graphData.nodes.filter(n => n.issues.length === 0).length, color: '#22c55e', icon: 'fa-circle-check' },
+            ];
+            return (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+              {statsCards.map((s, i) => (
                 <div key={i} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
                   <div style={{ fontSize: 28, fontWeight: 800, color: s.color, marginTop: 4 }}>
@@ -7822,7 +7825,8 @@
                 </div>
               ))}
             </div>
-          )}
+            );
+          })()}
 
           {/* Fullscreen overlay */}
           {isFullscreen && viewMode === 'graph' && (
