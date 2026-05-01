@@ -4097,97 +4097,123 @@ Rules:
 });
 
 // ==================== OPTIMISE WEBSITE — SITE GRAPH ====================
+
+// Helper: run the actual site graph crawl
+async function crawlSiteGraph(project) {
+  const siteUrl = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const fullUrl = 'https://' + siteUrl;
+  const wpUrl = project.wordpress_url || null;
+
+  const pages = await discoverPages(fullUrl, wpUrl, getWpAuthHeaders(project));
+
+  const nodes = [];
+  const edges = [];
+  const urlToIdx = {};
+  pages.forEach((p, i) => { urlToIdx[p.url] = i; urlToIdx[p.url.replace(/\/$/, '')] = i; });
+
+  const batchSize = 5;
+  for (let b = 0; b < pages.length; b += batchSize) {
+    const batch = pages.slice(b, b + batchSize);
+    const results = await Promise.allSettled(batch.map(async (p) => {
+      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [] };
+      try {
+        const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const html = await resp.text();
+          const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+          node.meta_title = titleMatch ? titleMatch[1].trim() : '';
+          const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
+          node.meta_description = descMatch ? descMatch[1].trim() : '';
+          const h1Match = html.match(/<h1[^>]*>([^<]*)<\/h1>/i);
+          node.h1 = h1Match ? h1Match[1].trim() : '';
+          const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+          if (bodyMatch) {
+            const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
+            node.word_count = text.split(/\s+/).filter(w => w.length > 0).length;
+          }
+          const linkRegex = /href=["'](https?:\/\/[^"']*|\/[^"']*)/gi;
+          let lm;
+          const seenLinks = new Set();
+          while ((lm = linkRegex.exec(html)) !== null) {
+            let href = lm[1];
+            if (href.startsWith('/')) href = fullUrl + href;
+            const clean = href.replace(/\/$/, '').replace(/#.*$/, '').replace(/\?.*$/, '');
+            if (clean.includes(siteUrl) && !seenLinks.has(clean)) {
+              seenLinks.add(clean);
+              node.internal_links.push(clean);
+              const targetIdx = urlToIdx[clean] || urlToIdx[clean + '/'];
+              if (targetIdx !== undefined && targetIdx !== (b + batch.indexOf(p))) {
+                edges.push({ source: p.page_id, target: pages[targetIdx].page_id });
+              }
+            } else if (!clean.includes(siteUrl) && clean.startsWith('http')) {
+              node.external_links++;
+            }
+          }
+        }
+      } catch (e) { /* timeout or fetch error */ }
+      return node;
+    }));
+    for (const r of results) {
+      if (r.status === 'fulfilled') nodes.push(r.value);
+    }
+  }
+
+  const inboundMap = {};
+  edges.forEach(e => { inboundMap[e.target] = (inboundMap[e.target] || 0) + 1; });
+  nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
+
+  nodes.forEach(n => {
+    if (!n.meta_title || n.meta_title.length < 10) n.issues.push('Missing or short meta title');
+    if (!n.meta_description || n.meta_description.length < 50) n.issues.push('Missing or short meta description');
+    if (n.meta_title && n.meta_title.length > 60) n.issues.push('Meta title too long (' + n.meta_title.length + ' chars)');
+    if (n.meta_description && n.meta_description.length > 160) n.issues.push('Meta description too long (' + n.meta_description.length + ' chars)');
+    if (!n.h1) n.issues.push('Missing H1 tag');
+    if (n.word_count < 300) n.issues.push('Thin content (' + n.word_count + ' words)');
+    if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
+    if (n.inbound_count === 0) n.issues.push('Orphan page — no inbound links');
+  });
+
+  const orphans = nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '');
+  const issueCount = nodes.reduce((sum, n) => sum + n.issues.length, 0);
+
+  return { nodes, edges, stats: { total: nodes.length, orphans: orphans.length, issues: issueCount } };
+}
+
+// GET — return cached site graph if exists
 app.get('/api/projects/:projectId/site-graph', async (req, res) => {
+  try {
+    const cached = await pool.query(
+      `SELECT audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (cached.rows.length > 0) {
+      return res.json({ ...cached.rows[0].audit_data, scanned_at: cached.rows[0].completed_at });
+    }
+    res.json({ nodes: null, edges: null, stats: null, scanned_at: null });
+  } catch (e) {
+    console.error('[site-graph] GET Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST — fresh crawl, save to DB, return results
+app.post('/api/projects/:projectId/site-graph', async (req, res) => {
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    const project = proj.rows[0];
-    const siteUrl = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const fullUrl = 'https://' + siteUrl;
-    const wpUrl = project.wordpress_url || null;
 
-    // Discover all pages
-    const pages = await discoverPages(fullUrl, wpUrl, getWpAuthHeaders(project));
+    const data = await crawlSiteGraph(proj.rows[0]);
 
-    // Fetch each page and extract internal links + meta (parallel batches of 5)
-    const nodes = [];
-    const edges = [];
-    const urlToIdx = {};
-    pages.forEach((p, i) => { urlToIdx[p.url] = i; urlToIdx[p.url.replace(/\/$/, '')] = i; });
+    // Save to audits table
+    await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
+       VALUES ($1, 'site_graph', 'completed', $2, NOW(), NOW())`,
+      [req.params.projectId, JSON.stringify(data)]
+    );
 
-    const batchSize = 5;
-    for (let b = 0; b < pages.length; b += batchSize) {
-      const batch = pages.slice(b, b + batchSize);
-      const results = await Promise.allSettled(batch.map(async (p) => {
-        const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [] };
-        try {
-          const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
-          if (resp.ok) {
-            const html = await resp.text();
-            // Extract meta
-            const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-            node.meta_title = titleMatch ? titleMatch[1].trim() : '';
-            const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
-            node.meta_description = descMatch ? descMatch[1].trim() : '';
-            const h1Match = html.match(/<h1[^>]*>([^<]*)<\/h1>/i);
-            node.h1 = h1Match ? h1Match[1].trim() : '';
-            // Word count (strip HTML from body)
-            const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-            if (bodyMatch) {
-              const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
-              node.word_count = text.split(/\s+/).filter(w => w.length > 0).length;
-            }
-            // Extract internal links
-            const linkRegex = /href=["'](https?:\/\/[^"']*|\/[^"']*)/gi;
-            let lm;
-            const seenLinks = new Set();
-            while ((lm = linkRegex.exec(html)) !== null) {
-              let href = lm[1];
-              if (href.startsWith('/')) href = fullUrl + href;
-              const clean = href.replace(/\/$/, '').replace(/#.*$/, '').replace(/\?.*$/, '');
-              if (clean.includes(siteUrl) && !seenLinks.has(clean)) {
-                seenLinks.add(clean);
-                node.internal_links.push(clean);
-                const targetIdx = urlToIdx[clean] || urlToIdx[clean + '/'];
-                if (targetIdx !== undefined && targetIdx !== (b + batch.indexOf(p))) {
-                  edges.push({ source: p.page_id, target: pages[targetIdx].page_id });
-                }
-              } else if (!clean.includes(siteUrl) && clean.startsWith('http')) {
-                node.external_links++;
-              }
-            }
-          }
-        } catch (e) { /* timeout or fetch error */ }
-        return node;
-      }));
-      for (const r of results) {
-        if (r.status === 'fulfilled') nodes.push(r.value);
-      }
-    }
-
-    // Count inbound links
-    const inboundMap = {};
-    edges.forEach(e => { inboundMap[e.target] = (inboundMap[e.target] || 0) + 1; });
-    nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
-
-    // Detect issues
-    nodes.forEach(n => {
-      if (!n.meta_title || n.meta_title.length < 10) n.issues.push('Missing or short meta title');
-      if (!n.meta_description || n.meta_description.length < 50) n.issues.push('Missing or short meta description');
-      if (n.meta_title && n.meta_title.length > 60) n.issues.push('Meta title too long (' + n.meta_title.length + ' chars)');
-      if (n.meta_description && n.meta_description.length > 160) n.issues.push('Meta description too long (' + n.meta_description.length + ' chars)');
-      if (!n.h1) n.issues.push('Missing H1 tag');
-      if (n.word_count < 300) n.issues.push('Thin content (' + n.word_count + ' words)');
-      if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
-      if (n.inbound_count === 0) n.issues.push('Orphan page — no inbound links');
-    });
-
-    const orphans = nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '');
-    const issueCount = nodes.reduce((sum, n) => sum + n.issues.length, 0);
-
-    res.json({ nodes, edges, stats: { total: nodes.length, orphans: orphans.length, issues: issueCount } });
+    res.json({ ...data, scanned_at: new Date().toISOString() });
   } catch (e) {
-    console.error('[site-graph] Error:', e.message);
+    console.error('[site-graph] POST Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

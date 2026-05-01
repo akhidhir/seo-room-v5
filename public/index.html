@@ -7618,6 +7618,7 @@
     function OptimiseWebsitePage({ project, view, setPage }) {
       const [graphData, setGraphData] = useState(null);
       const [loading, setLoading] = useState(false);
+      const [scannedAt, setScannedAt] = useState(null);
       const [viewMode, setViewMode] = useState('graph'); // graph | list
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
@@ -7625,16 +7626,31 @@
       const zoomRef = React.useRef(null);
       const svgSelRef = React.useRef(null);
 
-      const loadGraph = async () => {
-        setLoading(true);
+      // Load cached data on mount
+      const loadCached = async () => {
         try {
           const data = await api(`/projects/${project.id}/site-graph`);
-          if (data && data.nodes) setGraphData(data);
-        } catch(e) { console.error('Site graph error:', e); }
+          if (data && data.nodes) {
+            setGraphData(data);
+            setScannedAt(data.scanned_at);
+          }
+        } catch(e) { console.error('Site graph load error:', e); }
+      };
+
+      // Fresh scan
+      const rescan = async () => {
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/site-graph`, { method: 'POST' });
+          if (data && data.nodes) {
+            setGraphData(data);
+            setScannedAt(data.scanned_at);
+          }
+        } catch(e) { console.error('Site graph scan error:', e); }
         setLoading(false);
       };
 
-      useEffect(() => { loadGraph(); }, [project.id]);
+      useEffect(() => { loadCached(); }, [project.id]);
 
       // D3 graph rendering
       useEffect(() => {
@@ -7723,6 +7739,19 @@
         );
       }
 
+      if (!graphData) {
+        return (
+          <div style={{ padding: '24px 32px', textAlign: 'center', marginTop: 60 }}>
+            <i className="fas fa-project-diagram" style={{ fontSize: 48, color: 'var(--text3)', marginBottom: 16 }} />
+            <h3 style={{ fontSize: 18, fontWeight: 700 }}>No site scan yet</h3>
+            <p style={{ color: 'var(--text3)', marginBottom: 20 }}>Scan your website to discover pages, find orphans, and detect SEO issues.</p>
+            <button onClick={rescan} style={{ padding: '10px 24px', fontSize: 14, fontWeight: 600, borderRadius: 8, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+              <i className="fas fa-search" style={{ marginRight: 6 }} />Scan Now
+            </button>
+          </div>
+        );
+      }
+
       return (
         <div style={{ padding: '24px 32px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -7734,6 +7763,7 @@
               {graphData && (
                 <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
                   {graphData.stats.total} pages · {graphData.stats.orphans} orphans · {graphData.stats.issues} issues
+                  {scannedAt && <span style={{ marginLeft: 8, fontSize: 11 }}>· Last scanned: {new Date(scannedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
                 </div>
               )}
             </div>
@@ -7744,7 +7774,7 @@
               <button onClick={() => setViewMode('list')} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? '#6366f1' : 'var(--card)', color: viewMode === 'list' ? '#fff' : 'var(--text2)' }}>
                 <i className="fas fa-list" style={{ marginRight: 4 }} />List
               </button>
-              <button onClick={loadGraph} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#fff' }}>
+              <button onClick={rescan} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#fff' }}>
                 <i className="fas fa-sync" style={{ marginRight: 4 }} />Rescan
               </button>
             </div>
@@ -7772,17 +7802,17 @@
           {/* Graph view */}
           {viewMode === 'graph' && (
             <div style={{ display: 'flex', gap: 16 }}>
-              <div ref={graphRef} style={{ flex: 1, minHeight: 500, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', position: 'relative' }}>
-                <div style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: 'var(--text3)' }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <div ref={graphRef} style={{ minHeight: 500, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' }} />
+                {/* Overlay controls — outside graphRef so D3 can't wipe them */}
+                <div style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none' }}>
                   Drag nodes · Click to inspect
                 </div>
-                {/* Legend */}
-                <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)' }}>
+                <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none' }}>
                   {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan + Issues' }].map((x, i) => (
                     <span key={i}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
                   ))}
                 </div>
-                {/* Zoom buttons */}
                 <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', gap: 4, zIndex: 10 }}>
                   <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
                     style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer', fontSize: 18, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
