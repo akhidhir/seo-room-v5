@@ -8420,7 +8420,7 @@
       const [gridRadius, setGridRadius] = useState(10);
       const [scanProgress, setScanProgress] = useState('');
 
-      const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: {} });
+      const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: [] });
 
       // Load grid scans + audit data on mount
       useEffect(() => {
@@ -8892,7 +8892,7 @@
                       const profileFindings = gbpFindings.filter(f => (f.category || '').toLowerCase().includes('profile') || (f.category || '').toLowerCase().includes('completeness'));
                       const criticalFindings = gbpFindings.filter(f => f.severity === 'critical');
                       // Citation/directory data — array of { name, url, status, listing_url, ... }
-                      const citDirs = auditInsights.citations || [];
+                      const citDirs = Array.isArray(auditInsights.citations) ? auditInsights.citations : [];
                       const listedDirs = citDirs.filter(d => d.status === 'listed');
                       const unlistedDirs = citDirs.filter(d => d.status === 'not_listed');
                       const hasCitationData = citDirs.length > 0;
