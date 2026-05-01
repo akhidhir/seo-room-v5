@@ -382,6 +382,12 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // Add missing columns for v5 copywriter features
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS target_keywords JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS ai_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS schema_markup JSONB`).catch(() => {});
+
     // Content keywords — for new project keyword workflow
     await client.query(`
       CREATE TABLE IF NOT EXISTS content_keywords (
@@ -3504,7 +3510,7 @@ app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Generate AI draft for a content queue item
+// Generate AI draft for a content queue item (enhanced with keyword context + internal linking)
 app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
   try {
     const { projectId, id } = req.params;
@@ -3512,23 +3518,36 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
+    // Get internal linking candidates
+    const pagesRes = await pool.query(
+      `SELECT DISTINCT page_url, page_title FROM content_queue
+       WHERE project_id=$1 AND stage='published' AND id != $2 ORDER BY page_title LIMIT 30`,
+      [projectId, id]
+    );
+
+    // Get target keywords if set
+    const targetKeywords = item.target_keywords || [];
+
     // Build AI prompt based on content type
     let systemPrompt, userPrompt;
     if (item.content_type === 'rewrite') {
       systemPrompt = `You are an expert SEO copywriter for a local Australian business: "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
 Your job is to rewrite thin/weak page content to be SEO-optimized, engaging, and locally relevant.
-Rules:
+
+RULES:
 - Write naturally — no keyword stuffing
-- Include the focus keyword naturally in the first paragraph, at least one H2, and naturally throughout
+- Include the focus keyword naturally in the first paragraph, at least one H2, and naturally throughout (3-8 times total)
 - Target 800-1200 words for service pages, 500-800 for suburb pages
 - Use H2 and H3 subheadings to structure content
-- Include a clear call-to-action
+- Include a clear call-to-action (CTA)
 - Mention the suburb/location naturally
 - Write in Australian English
 - Return valid HTML content (no full page, just the body content with headings)
 - DO NOT change the page design or layout structure
+- Include 2-3 internal links to other relevant pages naturally within the content
+- If given target keywords, weave them in naturally throughout the content
 
-Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>}`;
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}`;
 
       userPrompt = `Rewrite this page for better SEO performance:
 
@@ -3537,7 +3556,11 @@ Current word count: ${item.current_word_count}
 Current focus keyword: ${item.current_focus_keyword || '(none)'}
 Current meta title: ${item.current_meta_title || '(none)'}
 Current meta description: ${item.current_meta_desc || '(none)'}
+${targetKeywords.length > 0 ? `\nTarget keywords to include: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
 ${item.brief ? `\nBrief/Instructions: ${item.brief}` : ''}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
 
 Current content (first 3000 chars):
 ${(item.current_content || '').slice(0, 3000)}`;
@@ -3556,12 +3579,25 @@ ${item.brief ? `\nBrief: ${item.brief}` : ''}`;
       // new_page
       systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
 Write a complete new page with SEO-optimized content.
-Target 800-1200 words. Use H2/H3 headings, include CTAs, write in Australian English.
-Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>}`;
+
+RULES:
+- Target 800-1200 words
+- Use H2/H3 headings for structure
+- Include a clear call-to-action
+- Write in Australian English
+- Include 2-3 internal links to other relevant pages
+- Use target keywords naturally throughout
+- If any schema markup data is provided, include appropriate structured data
+
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}`;
       userPrompt = `Write a new page:
 Title: ${item.page_title}
 Target URL: ${item.page_url || '(to be determined)'}
-${item.brief ? `Brief: ${item.brief}` : 'Write comprehensive service/location content.'}`;
+${targetKeywords.length > 0 ? `Target keywords: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
+${item.brief ? `Brief: ${item.brief}` : 'Write comprehensive service/location content.'}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}`;
     }
 
     console.log(`[copywriter] Generating draft for item ${id}: ${item.page_title}`);
@@ -3585,8 +3621,9 @@ ${item.brief ? `Brief: ${item.brief}` : 'Write comprehensive service/location co
     const wordCount = parsed.word_count || plainText.split(/\s+/).filter(Boolean).length;
     const updated = await pool.query(
       `UPDATE content_queue SET stage='drafts', draft_content=$1, draft_meta_title=$2, draft_meta_desc=$3,
-       draft_focus_keyword=$4, draft_word_count=$5, updated_at=NOW() WHERE id=$6 RETURNING *`,
-      [parsed.content || '', parsed.meta_title || '', parsed.meta_description || '', parsed.focus_keyword || '', wordCount, id]
+       draft_focus_keyword=$4, draft_word_count=$5, ai_notes=$6, schema_markup=$7, updated_at=NOW() WHERE id=$8 RETURNING *`,
+      [parsed.content || '', parsed.meta_title || '', parsed.meta_description || '', parsed.focus_keyword || '',
+       wordCount, parsed.ai_notes || 'Generated draft', JSON.stringify(parsed.schema_markup || null), id]
     );
     console.log(`[copywriter] Draft generated: ${wordCount} words`);
     res.json(updated.rows[0]);
@@ -3680,6 +3717,559 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     res.json({ success: true, changes: changes.length });
   } catch (e) {
     console.error('[copywriter] Publish error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COPYWRITER ADVANCED ENDPOINTS ====================
+
+// Expand — add more content to existing draft
+app.post('/api/projects/:projectId/content-queue/:id/expand', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { projectId, id } = req.params;
+  const { target_words, target_keywords } = req.body;
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get pages for internal linking
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title
+        LIMIT 30
+      ) AS p`,
+      [projectId]
+    );
+
+    const kwList = (target_keywords || item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
+You will be given existing page content and asked to expand it with more sections.
+
+RULES:
+- Write naturally in Australian English
+- Add NEW sections that complement the existing content (don't repeat existing content)
+- Use H2 and H3 headings for structure
+- Incorporate the target keywords naturally
+- Include internal links where relevant
+- Write engaging, informative content
+- Target total page length: ${target_words || 1500} words
+
+OUTPUT FORMAT (respond in valid JSON only):
+{
+  "additional_html": "<h2>New Section</h2><p>...</p>... (HTML to APPEND after existing content)",
+  "ai_notes": "Brief summary of what was added and keywords used"
+}`;
+
+    const currentHtml = item.draft_content || item.current_content || '';
+    const currentWords = currentHtml.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length;
+
+    const userPrompt = `EXPAND this page with more content:
+URL: ${item.page_url}
+Title: ${item.page_title}
+Focus keyword: ${item.draft_focus_keyword || item.current_focus_keyword}
+Current word count: ${currentWords}
+Target total words: ${target_words || 1500}
+
+TARGET KEYWORDS TO INCLUDE:
+${kwList.length > 0 ? kwList.map(k => `- "${k}"`).join('\n') : '- Use keywords related to the page topic'}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+CURRENT CONTENT:
+${currentHtml.slice(0, 4000)}
+
+Add ${Math.max(300, (target_words || 1500) - currentWords)} more words of new content with new sections and headings.`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    });
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+    }
+
+    // Append new content to existing
+    const newContent = currentHtml + '\n' + (parsed.additional_html || '');
+    const newNotes = (item.ai_notes || '') + '\n--- Expanded ---\n' + (parsed.ai_notes || '');
+
+    const updated = await pool.query(
+      `UPDATE content_queue SET draft_content=$1, ai_notes=$2, updated_at=NOW() WHERE id=$3 AND project_id=$4 RETURNING *`,
+      [newContent, newNotes, id, projectId]
+    );
+
+    console.log(`[copywriter] Expanded draft ${id}: ${currentWords} → ${(newContent.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length)} words`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[copywriter] Expand error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Optimise — AI improve based on SEO tips (returns preview, doesn't save)
+app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { tips, missing_keywords, target_keywords, content_score, stats } = req.body;
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 30
+      ) AS p`,
+      [projectId]
+    );
+
+    const allMissing = (missing_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
+You will receive existing page content along with its content score, specific issues to fix, and target keywords. Your job is to rewrite the content to fix ALL issues and maximize SEO performance.
+
+CRITICAL RULES:
+- Keep ALL existing good content — don't remove paragraphs
+- Fix EVERY specific issue listed below
+- Write naturally in Australian English
+- Output clean HTML only: h2, h3, h4, p, ul, ol, li, a, strong, em
+- Focus keyword must appear 3-8 times naturally (not more, not less)
+- Naturally weave in ALL missing keywords listed below — they MUST appear at least once each
+- Meta title should be 50-60 characters, include the focus keyword
+- Meta description should be 140-160 characters with CTA
+
+OUTPUT FORMAT (respond in valid JSON only):
+{
+  "content_html": "<h2>...</h2><p>...</p>...",
+  "meta_title": "optimised meta title (50-60 chars)",
+  "meta_description": "optimised meta description (140-160 chars)",
+  "ai_notes": "Brief summary of changes made"
+}`;
+
+    const issueList = (tips || []).map(t => `- ${t.msg || t}`).join('\n');
+
+    const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
+
+PAGE: ${item.page_url}
+FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — need 3-8)
+
+CURRENT STATS:
+- Words: ${stats?.words || 0} (target: 800+)
+- H2 headings: ${stats?.h2s || 0} (target: 2+)
+- H3 subheadings: ${stats?.h3s || 0} (target: 1+)
+- Internal links: ${stats?.links || 0} (target: 2+)
+
+ISSUES TO FIX:
+${issueList || '- General optimisation needed'}
+
+TARGET KEYWORDS:
+${(target_keywords || []).map(k => `- "${k.keyword || k}"`).join('\n') || '- No target keywords set'}
+
+MISSING KEYWORDS (MUST add naturally):
+${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All keywords present'}
+
+PAGES FOR INTERNAL LINKING:
+${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+CURRENT CONTENT:
+${(item.draft_content || item.current_content || '').slice(0, 4000)}
+
+Rewrite the full content fixing all issues.`;
+
+    console.log(`[optimise] Starting AI optimisation for item ${id}`);
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    });
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+    }
+
+    // Return proposed changes as preview — don't save yet
+    const proposed = {
+      content_html: parsed.content_html || null,
+      meta_title: parsed.meta_title || null,
+      meta_description: parsed.meta_description || null,
+      ai_notes: parsed.ai_notes || 'Content improved',
+    };
+
+    // Compute stats for proposed content
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText = (item.draft_content || item.current_content || '').replace(/<[^>]+>/g, '');
+    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+
+    console.log(`[optimise] Preview ready: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply Optimise — user approved, save the proposed changes
+app.post('/api/projects/:projectId/content-queue/:id/apply-optimise', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { proposed } = req.body;
+  if (!proposed) return res.status(400).json({ error: 'No proposed changes' });
+
+  try {
+    const updated = await pool.query(
+      `UPDATE content_queue SET
+        draft_content=COALESCE($1, draft_content),
+        draft_meta_title=COALESCE($2, draft_meta_title),
+        draft_meta_desc=COALESCE($3, draft_meta_desc),
+        ai_notes=$4,
+        updated_at=NOW()
+       WHERE id=$5 AND project_id=$6 RETURNING *`,
+      [proposed.content_html, proposed.meta_title, proposed.meta_description,
+       `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId]
+    );
+    if (updated.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    console.log(`[apply-optimise] Applied optimisation to item ${id}`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[apply-optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Chat — Claude conversation about draft with optional edits
+app.post('/api/projects/:projectId/content-queue/:id/chat', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { projectId, id } = req.params;
+  const { message, history } = req.body; // history = [{role, content}, ...]
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get pages for internal linking context
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 20
+      ) AS p`,
+      [projectId]
+    );
+
+    const htmlContent = item.draft_content || item.current_content || '';
+    const plainText = htmlContent.replace(/<[^>]+>/g, '');
+    const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+    const focusKw = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase();
+
+    // Compute SEO score
+    const h2s = (htmlContent.match(/<h2[\s>]/gi) || []).length;
+    const h3s = (htmlContent.match(/<h3[\s>]/gi) || []).length;
+    const links = (htmlContent.match(/<a[\s>]/gi) || []).length;
+    const imgs = (htmlContent.match(/<img[\s>]/gi) || []).length;
+    let focusCount = 0;
+    if (focusKw) {
+      const textLower = plainText.toLowerCase();
+      let pos = 0;
+      while ((pos = textLower.indexOf(focusKw, pos)) !== -1) {
+        focusCount++;
+        pos += focusKw.length;
+      }
+    }
+
+    let score = 0;
+    const scoreTips = [];
+    if (wordCount >= 800) score += 15; else scoreTips.push(`Add words (have ${wordCount}, need 800+)`);
+    if (h2s >= 2) score += 15; else scoreTips.push(`Add H2s (have ${h2s}, need 2+)`);
+    if (h3s >= 1) score += 5; else scoreTips.push('Add H3s for structure');
+    if (links >= 2) score += 10; else scoreTips.push(`Add internal links (have ${links}, need 2+)`);
+    if (imgs >= 1) score += 5; else scoreTips.push('Add images');
+    if (focusCount >= 3 && focusCount <= 8) score += 20; else if (focusCount >= 1) score += 10; else if (focusKw) scoreTips.push(`Use focus keyword "${focusKw}" more`);
+    score = Math.min(100, Math.max(0, score + 20));
+
+    const systemPrompt = `SEO copywriter. Helping with "${item.page_title}" for "${project.business_name || project.name}".
+
+SCORE:${score}/100|${wordCount}w|${h2s}H2|${h3s}H3|${links}links|${imgs}img|"${focusKw}"${focusCount}x
+FIXES:${scoreTips.join(';') || 'OK'}
+Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
+
+You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
+
+Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.`;
+
+    // Build conversation history
+    const messages = [];
+    if (history && history.length > 0) {
+      for (const h of history.slice(-4)) {
+        messages.push({ role: h.role, content: h.content });
+      }
+    }
+    messages.push({ role: 'user', content: message });
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages
+    });
+
+    const text = response.content[0]?.text || '';
+    console.log('[chat] Response length:', text.length);
+
+    // Check if response contains JSON update
+    let updates = null;
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try {
+        updates = JSON.parse(jsonMatch[1]);
+        console.log('[chat] Parsed updates, keys:', Object.keys(updates));
+      } catch (e) {
+        console.error('[chat] JSON parse failed:', e.message);
+      }
+    }
+
+    // Return proposed changes WITHOUT applying
+    if (updates) {
+      const pendingChanges = { ops: updates.ops || [], itemId: id };
+      if (updates.content_html) pendingChanges.content_html = updates.content_html;
+      if (updates.meta_title) pendingChanges.meta_title = updates.meta_title;
+      if (updates.meta_description) pendingChanges.meta_description = updates.meta_description;
+      if (updates.focus_keyword) pendingChanges.focus_keyword = updates.focus_keyword;
+      if (updates.add_keywords) pendingChanges.add_keywords = updates.add_keywords;
+
+      return res.json({ reply: text, applied: false, pending: pendingChanges });
+    }
+
+    res.json({ reply: text, applied: false });
+  } catch (e) {
+    console.error('[chat] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply Chat — user approved chat-suggested changes
+app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { pending } = req.body;
+  if (!pending) return res.status(400).json({ error: 'No pending changes' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    let currentHtml = item.draft_content || item.current_content || '';
+    let contentChanged = false;
+
+    // Apply ops
+    if (pending.ops && Array.isArray(pending.ops)) {
+      for (const op of pending.ops) {
+        if (op.op === 'append' && op.html) {
+          currentHtml += '\n' + op.html;
+          contentChanged = true;
+        } else if (op.op === 'prepend' && op.html) {
+          currentHtml = op.html + '\n' + currentHtml;
+          contentChanged = true;
+        } else if (op.op === 'replace' && op.find && op.html) {
+          if (currentHtml.includes(op.find)) {
+            currentHtml = currentHtml.replace(op.find, op.html);
+            contentChanged = true;
+          }
+        } else if (op.op === 'insert_after' && op.find && op.html) {
+          const idx = currentHtml.indexOf(op.find);
+          if (idx !== -1) {
+            currentHtml = currentHtml.slice(0, idx + op.find.length) + '\n' + op.html + currentHtml.slice(idx + op.find.length);
+            contentChanged = true;
+          }
+        }
+      }
+    }
+    if (pending.content_html) {
+      currentHtml = pending.content_html;
+      contentChanged = true;
+    }
+
+    const setClauses = [];
+    const params = [];
+    let paramIdx = 1;
+    if (contentChanged) {
+      setClauses.push(`draft_content=$${paramIdx++}`);
+      params.push(currentHtml);
+    }
+    if (pending.meta_title) {
+      setClauses.push(`draft_meta_title=$${paramIdx++}`);
+      params.push(pending.meta_title);
+    }
+    if (pending.meta_description) {
+      setClauses.push(`draft_meta_desc=$${paramIdx++}`);
+      params.push(pending.meta_description);
+    }
+    if (pending.focus_keyword) {
+      setClauses.push(`draft_focus_keyword=$${paramIdx++}`);
+      params.push(pending.focus_keyword);
+    }
+
+    let result = item;
+    if (setClauses.length > 0) {
+      setClauses.push('updated_at=NOW()');
+      params.push(id, projectId);
+      const updated = await pool.query(
+        `UPDATE content_queue SET ${setClauses.join(', ')} WHERE id=$${paramIdx++} AND project_id=$${paramIdx++} RETURNING *`,
+        params
+      );
+      result = updated.rows[0];
+    }
+
+    // Add keywords if provided
+    if (pending.add_keywords && Array.isArray(pending.add_keywords)) {
+      const currentKws = result.target_keywords || [];
+      const newKws = [...new Set([...currentKws, ...pending.add_keywords])];
+      const updated = await pool.query(
+        'UPDATE content_queue SET target_keywords=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+        [JSON.stringify(newKws), id]
+      );
+      result = updated.rows[0];
+    }
+
+    console.log(`[apply-chat] Applied chat changes to item ${id}`);
+    res.json({ item: result, applied: true });
+  } catch (e) {
+    console.error('[apply-chat] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Re-optimise — refine with user feedback after initial optimise
+app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { feedback, current_proposed } = req.body;
+  if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 20
+      ) AS p`,
+      [projectId]
+    );
+
+    console.log(`[re-optimise] Feedback for item ${id}: "${feedback}"`);
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: `You are an expert SEO copywriter for "${project.business_name || project.name}". You previously optimised content and the user has feedback. Revise the content based on their feedback while keeping all SEO improvements.
+
+RULES:
+- Apply the user's feedback precisely
+- Keep Australian English
+- Keep all existing SEO improvements (keywords, headings, links)
+- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em
+- Focus keyword must appear 3-8 times
+
+OUTPUT FORMAT (JSON only):
+{
+  "content_html": "<h2>...</h2><p>...</p>...",
+  "meta_title": "revised meta title (50-60 chars)",
+  "meta_description": "revised meta description (140-160 chars)",
+  "ai_notes": "What was changed based on feedback"
+}`,
+      messages: [{ role: 'user', content: `USER FEEDBACK: ${feedback}
+
+CURRENT PROPOSED CONTENT (revise this):
+${current_proposed.content_html}
+
+CURRENT META TITLE: ${current_proposed.meta_title || ''}
+CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
+
+PAGES FOR INTERNAL LINKING:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+Apply the user's feedback and return the revised version.` }]
+    });
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+    }
+
+    const proposed = {
+      content_html: parsed.content_html || current_proposed.content_html,
+      meta_title: parsed.meta_title || current_proposed.meta_title,
+      meta_description: parsed.meta_description || current_proposed.meta_description,
+      ai_notes: parsed.ai_notes || 'Revised based on feedback',
+    };
+
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText = (item.draft_content || item.current_content || '').replace(/<[^>]+>/g, '');
+    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+
+    console.log(`[re-optimise] Revised item ${id}: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[re-optimise] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
