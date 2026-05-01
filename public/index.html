@@ -8942,7 +8942,7 @@
                       if (matchingPage) {
                         actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')'), 'nw-staging'));
                       } else {
-                        actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Page Setup →', 'nw-pages'));
+                        actions.push({ text: 'No suburb page for ' + kwObj.location + ' — click to create →', color: '#ef4444', createPage: { name: kwObj.location, keyword: kwObj.keyword, location: kwObj.location } });
                       }
                       // 3. Directories — show checklist with real data
                       if (hasCitationData) {
@@ -9093,11 +9093,30 @@
                                       const isGreen = act.color === '#22c55e';
                                       const isRed = act.color === '#ef4444';
                                       const icon = isGreen ? 'fa-circle-check' : isRed ? 'fa-circle-xmark' : 'fa-arrow-right';
+                                      const isClickable = act.link || act.createPage;
+                                      const handleClick = isClickable ? async (e) => {
+                                        e.stopPropagation();
+                                        if (act.createPage) {
+                                          const cp = act.createPage;
+                                          const resp = await api(`/projects/${project.id}/site-pages/quick-create`, {
+                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ page_name: cp.name, page_type: 'suburb', keyword: cp.keyword, location: cp.location })
+                                          });
+                                          if (resp && resp.id) {
+                                            // Refresh audit insights to reflect new page
+                                            const sp = await api(`/projects/${project.id}/site-pages`);
+                                            setAuditInsights(prev => ({ ...prev, sitePages: Array.isArray(sp) ? sp : [] }));
+                                            if (setPage) setPage('nw-staging');
+                                          }
+                                        } else if (act.link && setPage) {
+                                          setPage(act.link);
+                                        }
+                                      } : undefined;
                                       return (
-                                      <div key={i} style={{ fontSize: 12, color: act.color, display: 'flex', alignItems: 'flex-start', gap: 8, cursor: act.link ? 'pointer' : 'default' }}
-                                           onClick={act.link && setPage ? (e) => { e.stopPropagation(); setPage(act.link); } : undefined}>
+                                      <div key={i} style={{ fontSize: 12, color: act.color, display: 'flex', alignItems: 'flex-start', gap: 8, cursor: isClickable ? 'pointer' : 'default' }}
+                                           onClick={handleClick}>
                                         <i className={`fa-solid ${icon}`} style={{ fontSize: isGreen || isRed ? 11 : 9, marginTop: isGreen || isRed ? 2 : 4, color: act.color, flexShrink: 0 }} />
-                                        <span style={act.link ? { textDecoration: 'underline', textDecorationStyle: 'dotted' } : undefined}>{act.text}</span>
+                                        <span style={isClickable ? { textDecoration: 'underline', textDecorationStyle: 'dotted' } : undefined}>{act.text}</span>
                                       </div>
                                       );
                                     })}

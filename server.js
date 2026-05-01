@@ -4017,9 +4017,9 @@ Rules:
 - Cornerstone pages are broad topic hubs (e.g., main service pages). Cluster pages are specific subtopics that link to the cornerstone.
 - Every cluster page should link to its cornerstone. Cornerstones should link to their cluster pages.
 - Home page links to all cornerstones.
-- Focus keyword should be the highest-volume keyword assigned to that page.
-- Slugs should be SEO-friendly, lowercase, hyphenated.
-- Meta titles should include the primary keyword near the start.
+- Focus keyword should be the most relevant keyword to the page name/topic AND have good volume. It MUST relate to the page name.
+- Meta title and meta description MUST be specifically about the page name/topic, not generic.
+- Slugs should be SEO-friendly, lowercase, hyphenated, derived from the page name.
 - Internal links should form a logical silo structure.
 - Return ONLY the JSON, no markdown.`
       }]
@@ -4096,6 +4096,22 @@ Rules:
   }
 });
 
+// Quick-create a single site page (e.g. from Maps advice)
+app.post('/api/projects/:projectId/site-pages/quick-create', async (req, res) => {
+  try {
+    const { page_name, page_type, keyword, location } = req.body;
+    if (!page_name) return res.status(400).json({ error: 'page_name required' });
+    const slug = '/' + page_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const keywords = keyword ? JSON.stringify([{ keyword, location: location || '' }]) : '[]';
+    const result = await pool.query(
+      `INSERT INTO site_pages (project_id, page_type, page_name, slug, is_cornerstone, keywords, meta_title, meta_description, focus_keyword, stage)
+       VALUES ($1, $2, $3, $4, false, $5, $6, '', $7, 'draft') RETURNING *`,
+      [req.params.projectId, page_type || 'suburb', page_name, slug, keywords, page_name, keyword || '']
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Get all site pages for a project
 app.get('/api/projects/:projectId/site-pages', async (req, res) => {
   try {
@@ -4154,11 +4170,14 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
         role: 'user',
         content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
 
-PAGE: "${page.page_name}" (${page.page_type})
+CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
+
+PAGE TOPIC: "${page.page_name}" (${page.page_type})
 FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
 TARGET KEYWORDS: ${(page.keywords || []).map(k => k.keyword).join(', ')}
 ${page.is_cornerstone ? 'This is a CORNERSTONE page — it should be comprehensive and link to subtopic pages.' : 'This is a cluster page — it should link back to the cornerstone.'}
 
+SUGGESTED META (update to match "${page.page_name}" topic):
 META TITLE: ${page.meta_title}
 META DESCRIPTION: ${page.meta_description}
 
@@ -4166,6 +4185,7 @@ INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
 
 REQUIREMENTS:
+- The H1 MUST include "${page.page_name}" or a close variation
 - Target word count: ${settings.target_word_count} words
 - Tone: ${settings.tone}
 - Style: ${settings.style}
