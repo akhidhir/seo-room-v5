@@ -8950,13 +8950,6 @@
                       } else {
                         actions.push({ text: '__directories__', color: 'none', directories: TOP_DIRECTORIES.map(d => ({ ...d, status: 'unknown' })) });
                       }
-                      if (unlistedDirs.length === 0 && listedDirs.length === 0) {
-                        if (citationFindings.length > 0) {
-                          actions.push(warn('Citations: ' + citationFindings[0].title));
-                        }
-                        // Show directory checklist with links — no scan data, show all as unchecked
-                        actions.push({ text: '__directories__', color: 'none', directories: TOP_DIRECTORIES.map(d => ({ ...d, status: 'unknown' })) });
-                      }
                       // 4. GBP audit findings
                       if (criticalFindings.length > 0) {
                         actions.push(bad(criticalFindings.length + ' critical GBP issue' + (criticalFindings.length > 1 ? 's' : '') + ': ' + criticalFindings.slice(0, 2).map(f => f.title).join(', ')));
@@ -9087,7 +9080,7 @@
                                                    style={{ fontSize: 10, color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : '#6b7280', flexShrink: 0 }} />
                                                 <a href={'https://' + d.url} target="_blank" rel="noopener noreferrer"
                                                    style={{ color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : 'var(--text3)', textDecoration: 'none', fontSize: 11 }}
-                                                   onMouseEnter={e => e.target.style.textDecoration='underline'} onMouseLeave={e => e.target.style.textDecoration='none'}>
+                                                   onMouseEnter={(e) => { e.target.style.textDecoration = 'underline'; }} onMouseLeave={(e) => { e.target.style.textDecoration = 'none'; }}>
                                                   {d.name}
                                                 </a>
                                                 {d.free && d.status !== 'listed' && <span style={{ fontSize: 9, color: '#22c55e', opacity: 0.7 }}>FREE</span>}
