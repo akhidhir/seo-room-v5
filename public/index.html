@@ -7622,6 +7622,8 @@
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
       const graphRef = React.useRef(null);
+      const zoomRef = React.useRef(null);
+      const svgSelRef = React.useRef(null);
 
       const loadGraph = async () => {
         setLoading(true);
@@ -7649,6 +7651,8 @@
         const g = svg.append('g');
         const zoom = d3.zoom().scaleExtent([0.3, 3]).on('zoom', (e) => g.attr('transform', e.transform));
         svg.call(zoom);
+        zoomRef.current = zoom;
+        svgSelRef.current = svg;
 
         const nodes = graphData.nodes.map(n => ({ ...n }));
         const edges = graphData.edges.map(e => ({ source: e.source, target: e.target }));
@@ -7770,13 +7774,20 @@
             <div style={{ display: 'flex', gap: 16 }}>
               <div ref={graphRef} style={{ flex: 1, minHeight: 500, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', position: 'relative' }}>
                 <div style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: 'var(--text3)' }}>
-                  Scroll to zoom · Drag nodes · Click to inspect
+                  Drag nodes · Click to inspect
                 </div>
                 {/* Legend */}
                 <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)' }}>
                   {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan + Issues' }].map((x, i) => (
                     <span key={i}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
                   ))}
+                </div>
+                {/* Zoom buttons */}
+                <div style={{ position: 'absolute', bottom: 12, left: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
+                    style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                  <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 0.7); }}
+                    style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text2)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
                 </div>
               </div>
               {/* Side panel — selected node details */}
