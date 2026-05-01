@@ -9026,7 +9026,7 @@
 
       useEffect(() => { loadItems(); }, [pid, stage]);
       useEffect(() => {
-        if (pid) api(`/projects/${pid}/templates`).then(d => setPageTemplates(d?.templates || [])).catch(() => {});
+        if (pid) api(`/projects/${pid}/templates`).then(d => setPageTemplates(Array.isArray(d) ? d : d?.templates || [])).catch(() => {});
       }, [pid]);
 
       const counts = {
@@ -9509,7 +9509,7 @@
                     const r = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
                       method: 'POST', body: { template_id: parseInt(templateId) }
                     });
-                    if (r.success) {
+                    if (r.ok || r.success) {
                       const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
                       if (fresh) setSelectedItem(fresh);
                     } else { alert(r.error || 'Failed to apply template'); }
@@ -11882,7 +11882,7 @@
         setLoadingTemplates(true);
         try {
           const data = await api(`/projects/${pid}/templates`);
-          setTemplates(data?.templates || []);
+          setTemplates(Array.isArray(data) ? data : data?.templates || []);
         } catch (e) { console.error('loadTemplates', e); }
         finally { setLoadingTemplates(false); }
       };
@@ -11896,8 +11896,9 @@
             method: 'POST',
             body: { url: importUrl.trim(), page_type: importType, name: importName.trim() || undefined },
           });
-          if (res?.template) {
-            setTemplates(prev => [...prev, res.template]);
+          const tmpl = res?.template || (res?.id ? res : null);
+          if (tmpl) {
+            setTemplates(prev => [...prev, tmpl]);
             setImportUrl('');
             setImportName('');
           }
