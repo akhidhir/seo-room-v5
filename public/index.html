@@ -7622,6 +7622,7 @@
       const [viewMode, setViewMode] = useState('graph'); // graph | list
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
+      const [isFullscreen, setIsFullscreen] = useState(false);
       const graphRef = React.useRef(null);
       const zoomRef = React.useRef(null);
       const svgSelRef = React.useRef(null);
@@ -7652,13 +7653,20 @@
 
       useEffect(() => { loadCached(); }, [project.id]);
 
+      // Escape key exits fullscreen
+      useEffect(() => {
+        const handleKey = (e) => { if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false); };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+      }, [isFullscreen]);
+
       // D3 graph rendering
       useEffect(() => {
         if (!graphData || viewMode !== 'graph' || !graphRef.current) return;
         const container = graphRef.current;
         container.innerHTML = '';
         const width = container.clientWidth || 900;
-        const height = 500;
+        const height = isFullscreen ? window.innerHeight - 60 : 500;
 
         const svg = d3.select(container).append('svg')
           .attr('width', width).attr('height', height)
@@ -7723,7 +7731,7 @@
 
         svg.on('click', () => setSelectedNode(null));
         return () => sim.stop();
-      }, [graphData, viewMode]);
+      }, [graphData, viewMode, isFullscreen]);
 
       const filtered = graphData ? (filter === 'orphans' ? graphData.nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') : filter === 'issues' ? graphData.nodes.filter(n => n.issues.length > 0) : graphData.nodes) : [];
 
@@ -7799,8 +7807,59 @@
             </div>
           )}
 
+          {/* Fullscreen overlay */}
+          {isFullscreen && viewMode === 'graph' && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+                    <i className="fas fa-project-diagram" style={{ color: '#6366f1', marginRight: 8 }} />Site Map
+                  </h3>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>{graphData.stats.total} pages · {graphData.stats.orphans} orphans · {graphData.stats.issues} issues</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan+Issues' }].map((x, i) => (
+                    <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
+                  ))}
+                  <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
+                    style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}>+</button>
+                  <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 0.7); }}
+                    style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                  <button onClick={() => setIsFullscreen(false)} style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 4 }}>
+                    <i className="fas fa-compress" />
+                  </button>
+                </div>
+              </div>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <div ref={graphRef} style={{ width: '100%', height: '100%' }} />
+                {selectedNode && (
+                  <div style={{ position: 'absolute', top: 16, right: 16, width: 300, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', padding: 16, zIndex: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <h4 style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>{selectedNode.title}</h4>
+                      <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-times" /></button>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, wordBreak: 'break-all' }}>{selectedNode.url}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11 }}>
+                      <div><strong>Words:</strong> {selectedNode.word_count}</div>
+                      <div><strong>Inbound:</strong> {selectedNode.inbound_count}</div>
+                      <div><strong>Internal:</strong> {selectedNode.internal_links.length}</div>
+                      <div><strong>External:</strong> {selectedNode.external_links}</div>
+                    </div>
+                    {selectedNode.issues.length > 0 && (
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#ef4444' }}>
+                        {selectedNode.issues.map((issue, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 2 }}><i className="fas fa-circle-xmark" style={{ fontSize: 10, marginTop: 2 }} />{issue}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Graph view */}
-          {viewMode === 'graph' && (
+          {viewMode === 'graph' && !isFullscreen && (
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ flex: 1, position: 'relative' }}>
                 <div ref={graphRef} style={{ minHeight: 500, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' }} />
@@ -7818,6 +7877,10 @@
                     style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer', fontSize: 18, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                   <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 0.7); }}
                     style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer', fontSize: 18, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                  <button onClick={() => setIsFullscreen(true)}
+                    style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-expand" />
+                  </button>
                 </div>
               </div>
               {/* Side panel — selected node details */}
