@@ -8489,7 +8489,7 @@
       );
     }
 
-    function CopywriterPage({ stage, project }) {
+    function CopywriterPage({ stage, project, setPage }) {
       const [items, setItems] = React.useState([]);
       const [allItems, setAllItems] = React.useState([]);
       const [loading, setLoading] = React.useState(true);
@@ -8625,12 +8625,12 @@
           {/* Pipeline progress bar */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' }}>
             {[
-              { key: 'queue', label: 'Queue', count: counts.queue, icon: 'fas fa-inbox', page: 'content-queue' },
-              { key: 'drafts', label: 'Drafts', count: counts.drafts, icon: 'fas fa-pen', page: 'drafts' },
-              { key: 'approved', label: 'Approved', count: counts.approved, icon: 'fas fa-check-circle', page: 'approved' },
-              { key: 'published', label: 'Published', count: counts.published, icon: 'fas fa-paper-plane', page: 'published' },
+              { key: 'queue', label: 'Queue', count: counts.queue, icon: 'fas fa-inbox', page: 'ow-queue' },
+              { key: 'drafts', label: 'Drafts', count: counts.drafts, icon: 'fas fa-pen', page: 'ow-drafts' },
+              { key: 'approved', label: 'Approved', count: counts.approved, icon: 'fas fa-check-circle', page: 'ow-approved' },
+              { key: 'published', label: 'Published', count: counts.published, icon: 'fas fa-paper-plane', page: 'ow-published' },
             ].map(s => (
-              <div key={s.key} onClick={() => setCurrentPage(s.page)} style={{
+              <div key={s.key} onClick={() => setPage && setPage(s.page)} style={{
                 padding: '12px 16px', textAlign: 'center',
                 background: stage === s.key ? 'var(--accent)' : 'var(--card)',
                 color: stage === s.key ? 'white' : 'var(--text2)',
@@ -11710,7 +11710,13 @@ case 'action-plan':
           case 'ow-issues':
             return <SiteIssuesPage project={project} setPage={setActiveTab} />;
           case 'ow-queue':
-            return <CopywriterPage stage="queue" project={project} />;
+            return <CopywriterPage stage="queue" project={project} setPage={setActiveTab} />;
+          case 'ow-drafts':
+            return <CopywriterPage stage="drafts" project={project} setPage={setActiveTab} />;
+          case 'ow-approved':
+            return <CopywriterPage stage="approved" project={project} setPage={setActiveTab} />;
+          case 'ow-published':
+            return <CopywriterPage stage="published" project={project} setPage={setActiveTab} />;
           case 'maps-rankings':
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
           case 'serp-rankings':
@@ -11771,6 +11777,9 @@ case 'action-plan':
             { id: 'ow-sitemap', label: 'Site Map', icon: 'fas fa-project-diagram' },
             { id: 'ow-issues', label: 'Issues', icon: 'fas fa-exclamation-triangle' },
             { id: 'ow-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
+            { id: 'ow-drafts', label: 'Drafts', icon: 'fas fa-pen' },
+            { id: 'ow-approved', label: 'Approved', icon: 'fas fa-check-circle' },
+            { id: 'ow-published', label: 'Published', icon: 'fas fa-paper-plane' },
           ]},
         ]},
         { section: 'REPORTS', items: [
