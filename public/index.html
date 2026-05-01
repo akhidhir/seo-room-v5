@@ -2551,17 +2551,30 @@
       const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
 
+      const loadFindings = async () => {
+        setLoading(true); setError('');
+        try {
+          const data = await api(`/projects/${project.id}/audit-findings?pillar=gbp`);
+          if (Array.isArray(data)) setFindings(data);
+        } catch (e) { setError(e.message); }
+        finally { setLoading(false); }
+      };
+
       useEffect(() => {
         if (project) {
-          setLoading(true);
-          api(`/projects/${project.id}/audit-findings?pillar=gbp`)
-            .then(data => { if (Array.isArray(data)) setFindings(data); })
-            .catch(e => setError(e.message))
-            .finally(() => setLoading(false));
-          // Load profile summary
+          loadFindings();
           api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
         }
       }, [project?.id]);
+
+      const runAudit = async () => {
+        setLoading(true); setError('');
+        try {
+          await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
+          // Reload findings after audit completes
+          await loadFindings();
+        } catch (err) { setError(err.message); setLoading(false); }
+      };
 
       const updateStatus = async (id, status) => {
         try {
