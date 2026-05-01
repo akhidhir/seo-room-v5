@@ -8441,10 +8441,10 @@
             const resp = await api(`/projects/${project.id}/audit-findings`);
             if (resp && resp.findings) gbpFindings = resp.findings.filter(f => f.pillar === 'gbp_external' || f.pillar === 'gbp');
           } catch(e) {}
-          let citations = {};
+          let citations = [];
           try {
             const citResp = await api(`/projects/${project.id}/citations`);
-            if (citResp && citResp.statuses) citations = citResp.statuses;
+            if (citResp && Array.isArray(citResp.directories)) citations = citResp.directories;
           } catch(e) {}
           setAuditInsights({ serviceAreas: Array.isArray(serviceAreas) ? serviceAreas : [], sitePages, gbpFindings, citations });
         })();
@@ -8891,14 +8891,11 @@
                       const napFindings = gbpFindings.filter(f => (f.category || '').toLowerCase().includes('nap') || (f.title || '').toLowerCase().includes('nap'));
                       const profileFindings = gbpFindings.filter(f => (f.category || '').toLowerCase().includes('profile') || (f.category || '').toLowerCase().includes('completeness'));
                       const criticalFindings = gbpFindings.filter(f => f.severity === 'critical');
-                      // Citation/directory data
-                      const citationStatuses = auditInsights.citations || {};
-                      const unlistedDirs = Object.entries(citationStatuses).length > 0
-                        ? Object.entries(citationStatuses).filter(([name, info]) => info.status === 'not_listed' || info.status === 'not_found').map(([name]) => name)
-                        : [];
-                      const listedDirs = Object.entries(citationStatuses).length > 0
-                        ? Object.entries(citationStatuses).filter(([name, info]) => info.status === 'listed' || info.status === 'found').map(([name]) => name)
-                        : [];
+                      // Citation/directory data — array of { name, url, status, listing_url, ... }
+                      const citDirs = auditInsights.citations || [];
+                      const listedDirs = citDirs.filter(d => d.status === 'listed');
+                      const unlistedDirs = citDirs.filter(d => d.status === 'not_listed');
+                      const hasCitationData = citDirs.length > 0;
 
                       const ok = (text) => ({ text, color: '#22c55e' });
                       const bad = (text) => ({ text, color: '#ef4444' });
@@ -8928,12 +8925,8 @@
                         if (status === 'Dominant') actions.push(info('Focus efforts on weaker suburbs instead'));
                         if (inServiceArea) actions.push(ok(kwObj.location + ' is in your GBP service areas'));
                         if (matchingPage) actions.push(ok('Suburb page exists: ' + matchingPage.page_name + (matchingPage.stage === 'published' ? ' (published)' : ' (' + (matchingPage.stage || 'draft') + ')')));
-                        if (listedDirs.length > 0 || unlistedDirs.length > 0) {
-                          const dirList = TOP_DIRECTORIES.map(d => {
-                            const citEntry = citationStatuses[d.name];
-                            return { ...d, status: citEntry ? (citEntry.status === 'listed' || citEntry.status === 'found' ? 'listed' : 'not_listed') : 'unknown', listing_url: citEntry?.listing_url };
-                          });
-                          actions.push({ text: '__directories__', color: 'none', directories: dirList });
+                        if (hasCitationData) {
+                          actions.push({ text: '__directories__', color: 'none', directories: citDirs });
                         }
                         return { ...base, actions };
                       }
@@ -8951,13 +8944,11 @@
                       } else {
                         actions.push(bad('No suburb page for ' + kwObj.location + ' — create one in Site Staging'));
                       }
-                      // 3. Directories — show checklist with real scan data
-                      if (unlistedDirs.length > 0 || listedDirs.length > 0) {
-                        const dirList = TOP_DIRECTORIES.map(d => {
-                          const citEntry = citationStatuses[d.name];
-                          return { ...d, status: citEntry ? (citEntry.status === 'listed' || citEntry.status === 'found' ? 'listed' : 'not_listed') : 'unknown', listing_url: citEntry?.listing_url };
-                        });
-                        actions.push({ text: '__directories__', color: 'none', directories: dirList });
+                      // 3. Directories — show checklist with real data
+                      if (hasCitationData) {
+                        actions.push({ text: '__directories__', color: 'none', directories: citDirs });
+                      } else {
+                        actions.push({ text: '__directories__', color: 'none', directories: TOP_DIRECTORIES.map(d => ({ ...d, status: 'unknown' })) });
                       }
                       if (unlistedDirs.length === 0 && listedDirs.length === 0) {
                         if (citationFindings.length > 0) {
