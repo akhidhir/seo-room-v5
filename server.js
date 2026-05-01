@@ -3757,7 +3757,7 @@ RULES:
 - Use H2 and H3 subheadings to structure content
 - Include a clear call-to-action (CTA)
 - Mention the suburb/location naturally
-- Write in Australian English
+- Write in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Return valid HTML content (no full page, just the body content with headings)
 - DO NOT change the page design or layout structure
 - Include 2-3 internal links to other relevant pages naturally within the content
@@ -3802,7 +3802,7 @@ RULES:
 - Target 800-1200 words
 - Use H2/H3 headings for structure
 - Include a clear call-to-action
-- Write in Australian English
+- Write in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Include 2-3 internal links to other relevant pages
 - Use target keywords naturally throughout
 - If any schema markup data is provided, include appropriate structured data
@@ -3970,7 +3970,7 @@ app.post('/api/projects/:projectId/content-queue/:id/expand', async (req, res) =
 You will be given existing page content and asked to expand it with more sections.
 
 RULES:
-- Write naturally in Australian English
+- Write naturally in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Add NEW sections that complement the existing content (don't repeat existing content)
 - Use H2 and H3 headings for structure
 - Incorporate the target keywords naturally
@@ -4116,7 +4116,7 @@ SCORING SYSTEM (you must hit EVERY threshold):
 MANDATORY:
 - Hit ALL thresholds above — this is how the score reaches 90+
 - Keep existing good content, expand it substantially
-- Australian English only
+- Australian English ONLY — use "optimise" not "optimize", "colour" not "color", "centre" not "center", "specialise" not "specialize", "organisation" not "organization", "behaviour" not "behavior", "analyse" not "analyze", "licence" (noun), "defence", "favour", "labour", "programme" (not "program" for plans/events). This is MANDATORY for every word in the output.
 - Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div
 - Every <a> MUST have a real href from the linking pages provided
 - Add an <img> tag with descriptive alt text where a relevant image should go
@@ -4378,7 +4378,7 @@ Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
 
 You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
 
-Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.${buildCopywriterContext(project, item)}`;
+Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English ONLY (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings).${buildCopywriterContext(project, item)}`;
 
     // Build conversation history
     const messages = [];
@@ -4553,7 +4553,7 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
 RULES:
 - Apply the user's feedback precisely
-- Keep Australian English
+- Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em
 - Focus keyword must appear 3-8 times
