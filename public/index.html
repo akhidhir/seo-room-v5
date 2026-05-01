@@ -4259,8 +4259,9 @@
         setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
       };
       const selectAllFixable = () => {
-        if (selected.size === fixablePages.length) setSelected(new Set());
-        else setSelected(new Set(fixablePages.map(p => p.id)));
+        const pool = statFilter ? filteredPages.filter(hasProblems) : fixablePages;
+        if (selected.size === pool.length) setSelected(new Set());
+        else setSelected(new Set(pool.map(p => p.id)));
       };
 
       // Open fix modal — get AI suggestions
@@ -4527,7 +4528,7 @@
                 { label: 'Missing Meta', value: overallStats.missingMeta, color: overallStats.missingMeta > 0 ? '#ef4444' : '#22c55e', filter: 'missingMeta' },
                 { label: 'No Focus KW', value: overallStats.noFocus, color: overallStats.noFocus > 0 ? '#ef4444' : '#22c55e', filter: 'noFocus' },
               ].map(s => (
-                <div key={s.label} onClick={() => s.filter && setStatFilter(statFilter === s.filter ? null : s.filter)} style={{ background: statFilter === s.filter ? 'rgba(99,102,241,0.15)' : 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: statFilter === s.filter ? '2px solid var(--accent)' : '1px solid var(--border)', cursor: s.filter ? 'pointer' : 'default', transition: 'all 0.15s' }}>
+                <div key={s.label} onClick={() => { if (s.filter) { setStatFilter(statFilter === s.filter ? null : s.filter); setSelected(new Set()); } }} style={{ background: statFilter === s.filter ? 'rgba(99,102,241,0.15)' : 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: statFilter === s.filter ? '2px solid var(--accent)' : '1px solid var(--border)', cursor: s.filter ? 'pointer' : 'default', transition: 'all 0.15s' }}>
                   <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
                   <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
                 </div>
@@ -4550,7 +4551,7 @@
               </div>
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>{statFilter ? `${filteredPages.length} of ${pages.length} pages` : `${filteredPages.length} of ${pages.length} pages`}</span>
               {statFilter && (
-                <button onClick={() => setStatFilter(null)} style={{ fontSize: 12, padding: '4px 10px', background: 'rgba(99,102,241,0.15)', border: '1px solid var(--accent)', borderRadius: 6, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button onClick={() => { setStatFilter(null); setSelected(new Set()); }} style={{ fontSize: 12, padding: '4px 10px', background: 'rgba(99,102,241,0.15)', border: '1px solid var(--accent)', borderRadius: 6, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <i className="fas fa-times" style={{ fontSize: 10 }} /> Clear filter
                 </button>
               )}
@@ -4563,7 +4564,7 @@
                 <thead>
                   <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <th style={{ padding: '10px 8px', width: 36, textAlign: 'center' }}>
-                      <input type="checkbox" checked={selected.size > 0 && selected.size === fixablePages.length} onChange={selectAllFixable} style={{ cursor: 'pointer' }} title="Select all fixable pages" />
+                      <input type="checkbox" checked={selected.size > 0 && selected.size === (statFilter ? filteredPages.filter(hasProblems) : fixablePages).length} onChange={selectAllFixable} style={{ cursor: 'pointer' }} title="Select all fixable pages" />
                     </th>
                     {[
                       { key: 'page', label: 'Page', align: 'left', width: undefined },
