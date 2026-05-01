@@ -9369,9 +9369,9 @@
               selectedItem.page_url && React.createElement('button', {
                 className: 'btn btn-small',
                 style: { background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.3)' },
-                onClick: async () => {
+                onClick: async (e) => {
                   const pageUrl = selectedItem.page_url.startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
-                  const btn = event.target.closest('button');
+                  const btn = e.currentTarget;
                   const origText = btn.textContent;
                   btn.textContent = 'Capturing...';
                   btn.disabled = true;
