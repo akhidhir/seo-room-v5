@@ -4595,173 +4595,114 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     }
     let html = await resp.text();
 
-    // Inject draft content — find content container and replace its inner HTML
-    // Helper: given a starting position after an opening tag, find matching close
-    function findClosingTag(src, startPos, tagName) {
-      let depth = 1;
-      let pos = startPos;
-      const openRe = new RegExp(`<${tagName}[\\s>]`, 'gi');
-      const closeRe = new RegExp(`</${tagName}\\s*>`, 'gi');
-      while (depth > 0 && pos < src.length) {
-        openRe.lastIndex = pos;
-        closeRe.lastIndex = pos;
-        const nextOpen = openRe.exec(src);
-        const nextClose = closeRe.exec(src);
-        if (!nextClose) return -1;
-        if (nextOpen && nextOpen.index < nextClose.index) {
-          depth++;
-          pos = nextOpen.index + nextOpen[0].length;
-        } else {
-          depth--;
-          if (depth === 0) return nextClose.index;
-          pos = nextClose.index + nextClose[0].length;
-        }
-      }
-      return -1;
-    }
-
-    // CSS class patterns to search for (in priority order)
-    const classPatterns = [
-      'entry-content', 'post-content', 'page-content', 'article-content',
-      'content-area', 'site-content', 'main-content', 'the-content',
-      'td-post-content', 'blog-content', 'single-content'
-    ];
-
-    let injected = false;
-
-    // Strategy 1: search for common content class names using indexOf (faster, more reliable than regex)
-    for (const cls of classPatterns) {
-      // Search for all occurrences — skip ones inside <script> or <style> tags
-      let searchFrom = 0;
-      while (searchFrom < html.length) {
-        const idx = html.indexOf(cls, searchFrom);
-        if (idx === -1) break;
-
-        // Walk backwards to find the opening < of this tag
-        let tagStart = html.lastIndexOf('<', idx);
-        if (tagStart === -1) { searchFrom = idx + cls.length; continue; }
-
-        // Get the tag name
-        const tagMatch = html.slice(tagStart).match(/^<(\w+)/);
-        if (!tagMatch) { searchFrom = idx + cls.length; continue; }
-        const tagName = tagMatch[1].toLowerCase();
-
-        // Skip if inside script, style, noscript, or comment
-        if (['script', 'style', 'noscript', 'link', 'meta'].includes(tagName)) {
-          searchFrom = idx + cls.length;
-          continue;
-        }
-
-        // Find the end of the opening tag (the >)
-        const tagEnd = html.indexOf('>', tagStart);
-        if (tagEnd === -1) { searchFrom = idx + cls.length; continue; }
-
-        const contentStart = tagEnd + 1;
-        const closeIdx = findClosingTag(html, contentStart, tagName);
-        if (closeIdx === -1) { searchFrom = idx + cls.length; continue; }
-
-        // Wrap draft in a styled container that fits the page
-        const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
-        html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
-        injected = true;
-        console.log(`[preview] Injected via class "${cls}" (tag: ${tagName})`);
-        break;
-      }
-      if (injected) break;
-    }
-
-    // Strategy 2: find <article> tag
-    if (!injected) {
-      const articleMatch = html.match(/<article[^>]*>/i);
-      if (articleMatch) {
-        const contentStart = articleMatch.index + articleMatch[0].length;
-        const closeIdx = findClosingTag(html, contentStart, 'article');
-        if (closeIdx !== -1) {
-          const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
-          html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
-          injected = true;
-          console.log('[preview] Injected via <article> tag');
-        }
-      }
-    }
-
-    // Strategy 3: find <main> tag
-    if (!injected) {
-      const mainMatch = html.match(/<main[^>]*>/i);
-      if (mainMatch) {
-        const contentStart = mainMatch.index + mainMatch[0].length;
-        const closeIdx = findClosingTag(html, contentStart, 'main');
-        if (closeIdx !== -1) {
-          const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
-          html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
-          injected = true;
-          console.log('[preview] Injected via <main> tag');
-        }
-      }
-    }
-
-    // Strategy 4: replace everything between </header> or </nav> and <footer
-    if (!injected) {
-      const headerEnd = html.search(/<\/header>/i);
-      const footerStart = html.search(/<footer/i);
-      if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
-        const insertPoint = html.indexOf('>', headerEnd) + 1;
-        const wrappedDraft = `<div style="max-width:800px;margin:40px auto;padding:40px 20px;font-size:16px;line-height:1.8;min-height:60vh">${draftContent}</div>`;
-        html = html.slice(0, insertPoint) + '\n' + wrappedDraft + '\n' + html.slice(footerStart);
-        injected = true;
-        console.log('[preview] Injected between </header> and <footer>');
-      }
-    }
-
-    if (!injected) {
-      // Debug: log all class names found in the page
-      const allClasses = [...new Set((html.match(/class="[^"]{3,60}"/gi) || []).map(c => c.slice(7, -1)))];
-      console.log('[preview] WARNING: Could not find content container.');
-      console.log('[preview] Classes found:', allClasses.slice(0, 80).join(' | '));
-      // Also log tag structure around body
-      const bodyIdx = html.search(/<body/i);
-      if (bodyIdx !== -1) {
-        const snippet = html.slice(bodyIdx, bodyIdx + 2000).replace(/\s+/g, ' ');
-        console.log('[preview] Body snippet:', snippet.slice(0, 1500));
-      }
-    }
-
-    // Replace meta title
-    if (draftTitle) {
-      html = html.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
-    }
-    // Replace meta description
-    if (draftDesc) {
-      html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
-    }
-
-    // Make all relative URLs absolute
+    // Strategy: extract head (CSS/fonts), header/nav, footer from live page
+    // Then build a new page: site head + site header + draft content + site footer
+    // This preserves the site's look (fonts, colors, nav, footer) without destroying layout
     const baseUrl = new URL(pageUrl);
     const base = baseUrl.origin;
-    html = html.replace(/(href|src|action)=["']\//g, `$1="${base}/`);
 
-    // Add base tag for relative resources
-    html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${base}/">`);
+    // Extract <head> contents
+    const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+    let headContent = headMatch ? headMatch[1] : '';
 
-    // Add preview banner
-    const banner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3)">
-      <span>📋 DRAFT PREVIEW — This is how your content will look on the live page</span>
-      <span style="opacity:0.7;font-size:12px">Content injected into real page design</span>
-    </div>
-    <div style="height:44px"></div>`;
-    html = html.replace(/<body([^>]*)>/i, `<body$1>${banner}`);
+    // Extract <header> block (nav, logo, etc.)
+    let headerBlock = '';
+    const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
+    if (headerMatch) headerBlock = headerMatch[0];
 
-    // Disable all links and forms in preview
-    html = html.replace('</body>', `<script>
-      document.addEventListener('click', function(e) {
-        if (e.target.closest('a')) { e.preventDefault(); e.stopPropagation(); }
-      }, true);
-      document.querySelectorAll('form').forEach(function(f) { f.onsubmit = function(e) { e.preventDefault(); }; });
-    </script></body>`);
+    // Extract <footer> block
+    let footerBlock = '';
+    const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
+    if (footerMatch) footerBlock = footerMatch[0];
 
-    console.log(`[preview] Rendered preview for "${item.page_title}", injected=${injected}`);
+    // Extract body classes for theme styling
+    const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
+    const bodyClasses = bodyClassMatch ? bodyClassMatch[1] : '';
+
+    // Replace meta title in head
+    if (draftTitle) {
+      headContent = headContent.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+    }
+    if (draftDesc) {
+      headContent = headContent.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
+    }
+
+    // Make relative URLs absolute in all parts
+    const fixUrls = (s) => s.replace(/(href|src|action)=["']\//g, `$1="${base}/`);
+    headContent = fixUrls(headContent);
+    headerBlock = fixUrls(headerBlock);
+    footerBlock = fixUrls(footerBlock);
+
+    // Build the preview page
+    const previewHtml = `<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <base href="${base}/">
+  ${headContent}
+  <style>
+    .seo-preview-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+      background: linear-gradient(135deg, #a855f7, #6366f1); color: #fff;
+      padding: 10px 20px; font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.3);
+    }
+    .seo-preview-spacer { height: 44px; }
+    .seo-draft-content {
+      max-width: 900px; margin: 40px auto; padding: 40px 30px;
+      font-size: 16px; line-height: 1.9;
+    }
+    .seo-draft-content h1, .seo-draft-content h2, .seo-draft-content h3, .seo-draft-content h4 { margin-top: 1.5em; margin-bottom: 0.5em; }
+    .seo-draft-content h2 { font-size: 28px; }
+    .seo-draft-content h3 { font-size: 22px; }
+    .seo-draft-content p { margin-bottom: 1em; }
+    .seo-draft-content img { max-width: 100%; height: auto; border-radius: 8px; margin: 20px 0; }
+    .seo-draft-content a { color: #2563eb; text-decoration: underline; }
+    .seo-draft-content ul, .seo-draft-content ol { margin: 1em 0; padding-left: 2em; }
+    .seo-draft-content li { margin-bottom: 0.5em; }
+    .seo-draft-meta {
+      max-width: 900px; margin: 20px auto 0; padding: 16px 30px;
+      background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 8px; font-size: 14px;
+    }
+    .seo-draft-meta .meta-title { font-size: 20px; color: #1a0dab; font-weight: 600; margin-bottom: 4px; }
+    .seo-draft-meta .meta-url { font-size: 13px; color: #006621; margin-bottom: 4px; }
+    .seo-draft-meta .meta-desc { font-size: 14px; color: #545454; }
+    .seo-draft-meta .meta-label { font-size: 11px; color: #888; text-transform: uppercase; font-weight: 600; margin-bottom: 8px; }
+  </style>
+</head>
+<body class="${bodyClasses}">
+  <div class="seo-preview-banner">
+    <span>\u{1F4CB} DRAFT PREVIEW — Content rendered with your site's design</span>
+    <span style="opacity:0.7;font-size:12px">Header &amp; footer from live site</span>
+  </div>
+  <div class="seo-preview-spacer"></div>
+
+  ${headerBlock}
+
+  <div class="seo-draft-meta">
+    <div class="meta-label">Google Search Preview</div>
+    <div class="meta-title">${draftTitle || item.page_title || ''}</div>
+    <div class="meta-url">${pageUrl}</div>
+    <div class="meta-desc">${draftDesc || ''}</div>
+  </div>
+
+  <div class="seo-draft-content entry-content">
+    ${draftContent}
+  </div>
+
+  ${footerBlock}
+
+  <script>
+    document.addEventListener('click', function(e) {
+      if (e.target.closest('a')) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+  </script>
+</body>
+</html>`;
+
+    console.log(`[preview] Built preview for "${item.page_title}" with header=${!!headerMatch}, footer=${!!footerMatch}`);
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(previewHtml);
   } catch (e) {
     console.error('[preview] Error:', e.message);
     res.status(500).send('Preview error: ' + e.message);
