@@ -4409,6 +4409,8 @@ Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
 
 You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
 
+SELECTED TEXT HANDLING: When the user's message includes [SELECTED TEXT: "..."], they have highlighted that specific text in the editor. Your job is to rewrite ONLY that text based on their instruction. For selected text rewrites, use: \`\`\`json{"ops":[{"op":"replace","find":"<the selected text>","html":"<your rewrite>"}]}\`\`\`
+
 Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English ONLY (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings).${buildCopywriterContext(project, item)}`;
 
     // Build conversation history

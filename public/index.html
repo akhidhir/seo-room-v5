@@ -41,6 +41,69 @@
       line-height: 1.5;
     }
 
+    /* Quill editor — bigger, more readable text */
+    .ql-editor {
+      font-size: 17px !important;
+      line-height: 1.8 !important;
+      padding: 24px 28px !important;
+      color: var(--text) !important;
+      min-height: 400px;
+    }
+    .ql-editor h2 {
+      font-size: 26px !important;
+      font-weight: 700 !important;
+      margin: 28px 0 12px !important;
+      color: #fff !important;
+    }
+    .ql-editor h3 {
+      font-size: 21px !important;
+      font-weight: 600 !important;
+      margin: 22px 0 10px !important;
+      color: #e4e4e7 !important;
+    }
+    .ql-editor p {
+      margin-bottom: 14px !important;
+    }
+    .ql-editor a {
+      color: var(--accent) !important;
+      text-decoration: underline !important;
+    }
+    .ql-editor ul, .ql-editor ol {
+      margin-bottom: 14px !important;
+      padding-left: 24px !important;
+    }
+    .ql-editor li {
+      margin-bottom: 6px !important;
+    }
+    .ql-container.ql-snow {
+      border: none !important;
+      background: var(--bg) !important;
+      border-radius: 0 0 8px 8px !important;
+    }
+    .ql-toolbar.ql-snow {
+      border: none !important;
+      border-bottom: 1px solid var(--border) !important;
+      background: var(--card) !important;
+      border-radius: 8px 8px 0 0 !important;
+    }
+    .ql-toolbar .ql-stroke {
+      stroke: var(--text2) !important;
+    }
+    .ql-toolbar .ql-fill {
+      fill: var(--text2) !important;
+    }
+    .ql-toolbar .ql-picker-label {
+      color: var(--text2) !important;
+    }
+    .ql-toolbar button:hover .ql-stroke,
+    .ql-toolbar .ql-active .ql-stroke {
+      stroke: var(--accent) !important;
+    }
+    .ql-toolbar button:hover .ql-fill,
+    .ql-toolbar .ql-active .ql-fill {
+      fill: var(--accent) !important;
+    }
+
     html, body, #root {
       height: 100%;
       width: 100%;
@@ -9302,64 +9365,10 @@
                   });
                 },
                 style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
-              // Expand / Generate More
-              !isPublished && hasDraft && React.createElement('button', {
-                onClick: () => setShowExpandPopup(true), disabled: expandingContent,
-                style: { padding: '8px 16px', background: '#06b6d4', color: '#fff', border: 'none', borderRadius: 8, cursor: expandingContent ? 'wait' : 'pointer', fontSize: 14 }
-              }, expandingContent ?
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Expanding...') :
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-pen-nib', style: { marginRight: 6 } }), 'Generate More')
-              ),
-              // Generate / Regenerate
-              !isPublished && React.createElement('button', {
-                onClick: () => { if (!generating && (!hasDraft || confirm('Regenerate will rewrite this draft. Continue?'))) handleGenerateDraft(selectedItem); },
-                disabled: !!generating,
-                style: { padding: '8px 16px', background: generating ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, cursor: generating ? 'wait' : 'pointer', fontSize: 14 }
-              }, generating === selectedItem.id ?
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Generating...') :
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-rotate', style: { marginRight: 6 } }), hasDraft ? 'Regenerate' : 'Generate Draft')
-              )
+              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview')
             )
           ),
 
-          // Expand content popup
-          showExpandPopup && React.createElement('div', {
-            onClick: () => setShowExpandPopup(false),
-            style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }
-          },
-            React.createElement('div', { onClick: e => e.stopPropagation(),
-              style: { background: 'var(--card)', borderRadius: 12, padding: 28, border: '1px solid var(--border)', width: 420, maxWidth: '90vw' }
-            },
-              React.createElement('h3', { style: { marginTop: 0, marginBottom: 16, fontSize: 18 } },
-                React.createElement('i', { className: 'fa-solid fa-pen-nib', style: { marginRight: 8, color: '#06b6d4' } }), 'Generate More Content'
-              ),
-              React.createElement('div', { style: { fontSize: 14, color: 'var(--text2)', marginBottom: 16 } }, 'Claude will add new sections to expand your draft.'),
-              React.createElement('div', { style: { marginBottom: 16 } },
-                React.createElement('label', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 8 } }, 'Target total word count:'),
-                React.createElement('div', { style: { display: 'flex', gap: 8 } },
-                  [1000, 1500, 2000, 2500, 3000].map(w => React.createElement('button', {
-                    key: w, onClick: () => setExpandWords(w),
-                    style: { fontSize: 13, padding: '6px 14px', background: expandWords === w ? '#06b6d4' : 'var(--bg3)', color: expandWords === w ? '#fff' : 'var(--text)',
-                      border: 'none', borderRadius: 6, cursor: 'pointer', flex: 1 }
-                  }, w))
-                ),
-                React.createElement('input', { type: 'number', value: expandWords, onChange: e => setExpandWords(parseInt(e.target.value) || 1500),
-                  placeholder: 'Or type custom...',
-                  style: { width: '100%', padding: 8, marginTop: 8, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } })
-              ),
-              targetKeywords.length > 0 && React.createElement('div', { style: { marginBottom: 16, padding: '8px 12px', background: 'rgba(6,182,212,0.1)', borderRadius: 6, fontSize: 13, color: 'var(--text2)' } },
-                React.createElement('i', { className: 'fa-solid fa-bullseye', style: { color: '#06b6d4', marginRight: 6 } }),
-                'Using ', React.createElement('strong', null, targetKeywords.length), ' target keywords'
-              ),
-              React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
-                React.createElement('button', { onClick: () => setShowExpandPopup(false), style: { background: 'var(--bg3)', fontSize: 14, padding: '8px 20px', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Cancel'),
-                React.createElement('button', { onClick: handleExpand, style: { background: '#06b6d4', fontSize: 14, padding: '8px 20px', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer' } },
-                  React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'Generate'
-                )
-              )
-            )
-          ),
 
           // Optimise preview modal
           optimisePreview && React.createElement(OptimisePreviewModal, {
@@ -9431,81 +9440,6 @@
                 React.createElement('i', { className: 'fas fa-upload', style: { marginRight: 6 } }),
                 selectedItem.wireframe_image ? 'Replace Image' : 'Upload Wireframe'
               ),
-              // Capture full-page screenshot button
-              selectedItem.page_url && React.createElement('button', {
-                className: 'btn btn-small',
-                style: { background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.3)' },
-                onClick: async (e) => {
-                  const pageUrl = selectedItem.page_url.startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
-                  const btn = e.currentTarget;
-                  const origText = btn.textContent;
-                  btn.textContent = 'Capturing...';
-                  btn.disabled = true;
-                  try {
-                    const r = await api(`/projects/${project.id}/screenshot`, { method: 'POST', body: { url: pageUrl } });
-                    if (r.image) {
-                      // Compress via canvas to stay under Anthropic 5MB limit
-                      const img = new Image();
-                      img.onload = async () => {
-                        const maxW = 1400;
-                        let w = img.width, h = img.height;
-                        if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
-                        const canvas = document.createElement('canvas');
-                        canvas.width = w; canvas.height = h;
-                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                        const compressed = canvas.toDataURL('image/jpeg', 0.8);
-                        const base64 = compressed.split(',')[1];
-                        setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: 'image/jpeg' }));
-                        await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
-                          method: 'PUT', body: { wireframe_image: base64, wireframe_mime: 'image/jpeg' }
-                        }).catch(() => {});
-                        btn.textContent = origText;
-                        btn.disabled = false;
-                        // Also analyze wireframe structure
-                        const pUrl = (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
-                        if (pUrl) {
-                          try {
-                            const wfData = await api(`/projects/${project.id}/analyze-wireframe`, { method: 'POST', body: { url: pUrl } });
-                            if (wfData.wireframe) {
-                              setSelectedItem(prev => ({ ...prev, page_wireframe: wfData.wireframe }));
-                              await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { page_wireframe: wfData.wireframe } }).catch(() => {});
-                            }
-                          } catch (wfErr) { console.log('Wireframe analysis optional:', wfErr); }
-                        }
-                      };
-                      img.onerror = () => { alert('Failed to process screenshot'); btn.textContent = origText; btn.disabled = false; };
-                      img.src = `data:${r.mime || 'image/png'};base64,${r.image}`;
-                      return; // onload handles the rest
-                    } else { alert(r.error || 'Screenshot failed'); }
-                  } catch (e) { alert('Error: ' + e.message); }
-                  btn.textContent = origText;
-                  btn.disabled = false;
-                }
-              },
-                React.createElement('i', { className: 'fas fa-camera', style: { marginRight: 6 } }), 'Capture Page'
-              ),
-              // Standalone analyze wireframe button
-              React.createElement('button', {
-                className: 'btn btn-small',
-                style: { background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.3)' },
-                onClick: async (e) => {
-                  const btn = e.currentTarget;
-                  btn.disabled = true; btn.textContent = 'Analyzing...';
-                  const pUrl = (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
-                  try {
-                    const wfData = await api(`/projects/${project.id}/analyze-wireframe`, { method: 'POST', body: { url: pUrl } });
-                    if (wfData.wireframe) {
-                      setSelectedItem(prev => ({ ...prev, page_wireframe: wfData.wireframe }));
-                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { page_wireframe: wfData.wireframe } }).catch(() => {});
-                    } else { alert(wfData.error || 'Analysis failed'); }
-                  } catch (err) { alert('Error: ' + err.message); }
-                  btn.textContent = ''; btn.disabled = false;
-                  // Re-render will show the button text
-                  btn.innerHTML = '<i class="fas fa-sitemap" style="margin-right:6px"></i>Analyze Layout';
-                }
-              },
-                React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Analyze Layout'
-              ),
               selectedItem.wireframe_image && React.createElement('button', {
                 className: 'btn btn-small',
                 style: { background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
@@ -9517,31 +9451,6 @@
                 }
               },
                 React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 4 } }), 'Remove'
-              ),
-              // Generate Skeleton button — the key workflow button
-              React.createElement('button', {
-                className: 'btn btn-small',
-                style: { background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#fff', border: 'none', fontWeight: 600 },
-                onClick: async (e) => {
-                  const btn = e.currentTarget;
-                  btn.disabled = true;
-                  btn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:6px"></i>Generating Skeleton...';
-                  try {
-                    const r = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/generate-skeleton`, { method: 'POST' });
-                    if (r.skeleton) {
-                      setSelectedItem(prev => ({ ...prev, draft_content: r.skeleton, page_wireframe: prev.page_wireframe || 'Skeleton generated from screenshot' }));
-                      // Refresh the item from server
-                      const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
-                      if (fresh) setSelectedItem(fresh);
-                    } else {
-                      alert(r.error || 'Failed to generate skeleton');
-                    }
-                  } catch (err) { alert('Error: ' + err.message); }
-                  btn.disabled = false;
-                  btn.innerHTML = '<i class="fas fa-bone" style="margin-right:6px"></i>Generate Skeleton';
-                }
-              },
-                React.createElement('i', { className: 'fas fa-bone', style: { marginRight: 6 } }), 'Generate Skeleton'
               ),
               // Apply Template dropdown — always show
               React.createElement('select', {
@@ -9677,7 +9586,16 @@
           !isPublished && hasDraft && React.createElement(ChatPanel, {
             project: project,
             item: { ...selectedItem, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword, target_keywords: targetKeywords, comments: comments },
-            onItemUpdate: handleItemUpdate
+            onItemUpdate: handleItemUpdate,
+            onGetSelection: () => {
+              const editorEl = document.querySelector('.ql-editor');
+              if (!editorEl) return '';
+              const sel = window.getSelection();
+              if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return '';
+              const range = sel.getRangeAt(0);
+              if (!editorEl.contains(range.commonAncestorContainer)) return '';
+              return sel.toString().trim();
+            }
           }),
 
           // Change History panel (published items only)
@@ -9840,12 +9758,13 @@
     }
 
     // ============ CHATPANEL (v4 port) ============
-    function ChatPanel({ project, item, onItemUpdate }) {
+    function ChatPanel({ project, item, onItemUpdate, onGetSelection }) {
       const [messages, setMessages] = useState([]);
       const [input, setInput] = useState('');
       const [sending, setSending] = useState(false);
       const [collapsed, setCollapsed] = useState(true);
       const [applyingIdx, setApplyingIdx] = useState(null);
+      const [selectedText, setSelectedText] = useState('');
       const chatEndRef = useRef(null);
       const pid = project ? project.id : null;
 
@@ -9898,11 +9817,15 @@
       function sendMsg(msg) {
         if (!msg.trim() || sending || !item || !pid) return;
         setInput('');
+        let finalMsg = msg;
+        if (selectedText) {
+          finalMsg = `[SELECTED TEXT: "${selectedText}"]\n\nUser instruction: ${msg}`;
+        }
         setMessages(prev => [...prev, { role: 'user', content: msg }]);
         setSending(true);
         const history = messages.map(m => ({ role: m.role, content: m.content }));
         api('/projects/' + pid + '/content-queue/' + item.id + '/chat', {
-          method: 'POST', body: { message: msg, history }
+          method: 'POST', body: { message: finalMsg, history }
         }).then(r => { handleChatResponse(r); setSending(false); })
           .catch(e => { setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + e.message }]); setSending(false); });
       }
@@ -10018,8 +9941,31 @@
           ),
           React.createElement('div', { ref: chatEndRef })
         ),
+        // Selection badge
+        selectedText && React.createElement('div', { style: { padding: '8px 12px', background: 'rgba(99,102,241,0.1)', borderBottom: '1px solid var(--border)', fontSize: 12 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flex: 1 } },
+              React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)', fontSize: 11 } }),
+              React.createElement('span', { style: { color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, selectedText)
+            ),
+            React.createElement('button', {
+              onClick: () => setSelectedText(''),
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding: 0, fontSize: 14 }
+            }, '✕')
+          )
+        ),
         // Input
         React.createElement('div', { style: { padding: '10px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
+          React.createElement('button', {
+            onClick: () => {
+              if (onGetSelection) {
+                const text = onGetSelection();
+                if (text) setSelectedText(text);
+              }
+            },
+            title: 'Grab selected text from editor',
+            style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: '0 8px', fontSize: 14 }
+          }, React.createElement('i', { className: 'fa-solid fa-hand-pointer' })),
           React.createElement('input', {
             value: input, onChange: e => setInput(e.target.value),
             onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
