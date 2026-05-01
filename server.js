@@ -4555,6 +4555,146 @@ Apply the user's feedback and return the revised version.`, item) }]
   }
 });
 
+// Live preview — fetch real page, inject draft content, return full HTML for iframe rendering
+app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).send('Not found');
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const draftContent = item.draft_content || item.current_content || '';
+    const draftTitle = item.draft_meta_title || item.page_title || '';
+    const draftDesc = item.draft_meta_desc || '';
+
+    // Build the page URL
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) {
+      pageUrl = 'https://' + (project.domain || '') + pageUrl;
+    }
+
+    if (!pageUrl) {
+      // No live page — render standalone preview
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${draftTitle}</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}
+        h1,h2,h3{color:#1a1a1a}img{max-width:100%;height:auto;border-radius:8px}a{color:#2563eb}</style>
+        </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
+    }
+
+    // Fetch the live page
+    console.log(`[preview] Fetching live page: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) {
+      return res.status(502).send(`Failed to fetch live page: ${resp.status}`);
+    }
+    let html = await resp.text();
+
+    // Inject draft content — try common WordPress content selectors
+    const contentSelectors = [
+      // Elementor
+      { open: /<div[^>]*class="[^"]*elementor-widget-theme-post-content[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*elementor-widget-container[^"]*"[^>]*>/i,
+        close: /<\/div>\s*<\/div>\s*<\/div>/i, tag: 'div' },
+      // Standard WP
+      { open: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
+      { open: /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: null, tag: 'article' },
+      { open: /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
+      { open: /<div[^>]*class="[^"]*page-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
+      { open: /<div[^>]*class="[^"]*content-area[^"]*"[^>]*>/i, close: null, tag: 'div' },
+      { open: /<main[^>]*>/i, close: null, tag: 'main' },
+    ];
+
+    let injected = false;
+    for (const sel of contentSelectors) {
+      const openMatch = html.match(sel.open);
+      if (!openMatch) continue;
+
+      const startIdx = openMatch.index + openMatch[0].length;
+      // Find the matching close tag — count nesting
+      const tag = sel.tag;
+      let depth = 1;
+      let i = startIdx;
+      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tag}>`, 'gi');
+
+      while (depth > 0 && i < html.length) {
+        openRe.lastIndex = i;
+        closeRe.lastIndex = i;
+        const nextOpen = openRe.exec(html);
+        const nextClose = closeRe.exec(html);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          i = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            // Replace content between startIdx and nextClose.index
+            html = html.slice(0, startIdx) + '\n' + draftContent + '\n' + html.slice(nextClose.index);
+            injected = true;
+            break;
+          }
+          i = nextClose.index + nextClose[0].length;
+        }
+      }
+      if (injected) break;
+    }
+
+    if (!injected) {
+      // Fallback: try to replace inside <body> after first header/nav
+      const bodyMatch = html.match(/<body[^>]*>/i);
+      if (bodyMatch) {
+        console.log('[preview] Could not find content container, using body fallback');
+      }
+    }
+
+    // Replace meta title
+    if (draftTitle) {
+      html = html.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+    }
+    // Replace meta description
+    if (draftDesc) {
+      html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
+    }
+
+    // Make all relative URLs absolute
+    const baseUrl = new URL(pageUrl);
+    const base = baseUrl.origin;
+    html = html.replace(/(href|src|action)=["']\//g, `$1="${base}/`);
+
+    // Add base tag for relative resources
+    html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${base}/">`);
+
+    // Add preview banner
+    const banner = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3)">
+      <span>📋 DRAFT PREVIEW — This is how your content will look on the live page</span>
+      <span style="opacity:0.7;font-size:12px">Content injected into real page design</span>
+    </div>
+    <div style="height:44px"></div>`;
+    html = html.replace(/<body([^>]*)>/i, `<body$1>${banner}`);
+
+    // Disable all links and forms in preview
+    html = html.replace('</body>', `<script>
+      document.addEventListener('click', function(e) {
+        if (e.target.closest('a')) { e.preventDefault(); e.stopPropagation(); }
+      }, true);
+      document.querySelectorAll('form').forEach(function(f) { f.onsubmit = function(e) { e.preventDefault(); }; });
+    </script></body>`);
+
+    console.log(`[preview] Rendered preview for "${item.page_title}", injected=${injected}`);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (e) {
+    console.error('[preview] Error:', e.message);
+    res.status(500).send('Preview error: ' + e.message);
+  }
+});
+
 // Full-page screenshot capture — uses Google PageSpeed API (returns screenshot in response)
 app.post('/api/projects/:projectId/screenshot', async (req, res) => {
   req.setTimeout(90000);
