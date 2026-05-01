@@ -4643,26 +4643,22 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4000,
+      max_tokens: 8000,
       system: `You are an expert SEO copywriter for "${project.business_name || project.name}". You previously optimised content and the user has feedback. Revise the content based on their feedback while keeping all SEO improvements.
 
 RULES:
-- Apply the user's feedback precisely
+- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
 - Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em
 - Focus keyword must appear 3-8 times
+- Write like a human, not AI — no banned phrases
 
-OUTPUT FORMAT (JSON only):
-{
-  "content_html": "<h2>...</h2><p>...</p>...",
-  "meta_title": "revised meta title (50-60 chars)",
-  "meta_description": "revised meta description (140-160 chars)",
-  "ai_notes": "What was changed based on feedback"
-}${buildCopywriterContext(project, item)}`,
+YOU MUST RESPOND WITH ONLY A JSON OBJECT. No text before or after. No markdown code blocks. Just the raw JSON:
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "revised (50-60 chars)", "meta_description": "revised (140-160 chars)", "ai_notes": "What changed"}${buildCopywriterContext(project, item)}`,
       messages: [{ role: 'user', content: buildUserContent(`USER FEEDBACK: ${feedback}
 
-CURRENT PROPOSED CONTENT (revise this):
+CURRENT PROPOSED CONTENT (revise this — apply feedback then return the FULL revised content):
 ${current_proposed.content_html}
 
 CURRENT META TITLE: ${current_proposed.meta_title || ''}
@@ -4671,16 +4667,48 @@ CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
 PAGES FOR INTERNAL LINKING:
 ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
 
-Apply the user's feedback and return the revised version.`, item) }]
+Respond with ONLY the JSON object. No other text.`, item) }]
     });
 
     const text = response.content[0]?.text || '';
     let parsed;
     try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      parsed = JSON.parse(jsonMatch[0]);
+      // Try parsing directly first (we asked for raw JSON)
+      const trimmed = text.trim();
+      if (trimmed.startsWith('{')) {
+        // Find matching closing brace
+        let depth = 0, end = -1;
+        for (let i = 0; i < trimmed.length; i++) {
+          if (trimmed[i] === '{') depth++;
+          else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        parsed = JSON.parse(trimmed.slice(0, end + 1));
+      } else {
+        // Try markdown code block
+        const codeMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeMatch) {
+          parsed = JSON.parse(codeMatch[1]);
+        } else {
+          // Find first { and match braces
+          const start = trimmed.indexOf('{');
+          if (start === -1) throw new Error('No JSON');
+          let depth2 = 0, end2 = -1;
+          for (let i = start; i < trimmed.length; i++) {
+            if (trimmed[i] === '{') depth2++;
+            else if (trimmed[i] === '}') { depth2--; if (depth2 === 0) { end2 = i; break; } }
+          }
+          parsed = JSON.parse(trimmed.slice(start, end2 + 1));
+        }
+      }
     } catch (e) {
-      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+      console.error('[re-optimise] Parse failed:', e.message, 'Raw start:', text.slice(0, 200));
+      // Last resort: if there's HTML in the response, use it as content
+      if (text.includes('<h2') || text.includes('<p>')) {
+        const htmlStart = text.indexOf('<');
+        parsed = { content_html: text.slice(htmlStart), ai_notes: 'Revised (raw extraction)', meta_title: current_proposed.meta_title, meta_description: current_proposed.meta_description };
+      } else {
+        return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
+      }
     }
 
     const proposed = {

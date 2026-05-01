@@ -104,6 +104,25 @@
       fill: var(--accent) !important;
     }
 
+    /* Content preview in optimise modal */
+    .content-preview h2 {
+      font-size: 24px !important;
+      font-weight: 700 !important;
+      margin: 24px 0 10px !important;
+      color: #fff !important;
+    }
+    .content-preview h3 {
+      font-size: 20px !important;
+      font-weight: 600 !important;
+      margin: 18px 0 8px !important;
+    }
+    .content-preview p {
+      margin-bottom: 12px !important;
+    }
+    .content-preview a {
+      color: var(--accent) !important;
+    }
+
     html, body, #root {
       height: 100%;
       width: 100%;
@@ -10022,7 +10041,7 @@
       },
         React.createElement('div', {
           onClick: e => e.stopPropagation(),
-          style: { background: 'var(--card)', borderRadius: 12, padding: 28, border: '1px solid var(--border)', width: 750, maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto' }
+          style: { background: 'var(--card)', borderRadius: 12, padding: 32, border: '1px solid var(--border)', width: '95vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto' }
         },
           React.createElement('h3', { style: { marginTop: 0, marginBottom: 16, fontSize: 18 } },
             React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 8, color: '#f59e0b' } }), 'AI Optimisation Preview'
@@ -10066,9 +10085,9 @@
             React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 } }, preview.proposed.ai_notes)
           ),
           // Content preview
-          React.createElement('div', { style: { marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 300, overflowY: 'auto' } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 } }, 'Proposed Content'),
-            React.createElement('div', { className: 'content-preview', style: { fontSize: 14, lineHeight: 1.7, color: 'var(--text)' }, dangerouslySetInnerHTML: { __html: preview.proposed.content_html } })
+          React.createElement('div', { style: { marginBottom: 16, padding: 24, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: '50vh', overflowY: 'auto' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12 } }, 'Proposed Content'),
+            React.createElement('div', { className: 'content-preview', style: { fontSize: 17, lineHeight: 1.8, color: 'var(--text)' }, dangerouslySetInnerHTML: { __html: preview.proposed.content_html } })
           ),
           // Feedback / Re-optimise
           React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
