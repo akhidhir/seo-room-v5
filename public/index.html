@@ -7614,6 +7614,277 @@
       );
     }
 
+    // ============ OPTIMISE WEBSITE PAGE ============
+    function OptimiseWebsitePage({ project, view, setPage }) {
+      const [graphData, setGraphData] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [viewMode, setViewMode] = useState('graph'); // graph | list
+      const [selectedNode, setSelectedNode] = useState(null);
+      const [filter, setFilter] = useState('all'); // all | orphans | issues
+      const graphRef = useRef(null);
+
+      const loadGraph = async () => {
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/site-graph`);
+          if (data && data.nodes) setGraphData(data);
+        } catch(e) { console.error('Site graph error:', e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadGraph(); }, [project.id]);
+
+      // D3 graph rendering
+      useEffect(() => {
+        if (!graphData || viewMode !== 'graph' || !graphRef.current) return;
+        const container = graphRef.current;
+        container.innerHTML = '';
+        const width = container.clientWidth || 900;
+        const height = 500;
+
+        const svg = d3.select(container).append('svg')
+          .attr('width', width).attr('height', height)
+          .style('background', 'rgba(0,0,0,0.1)').style('border-radius', '8px');
+
+        const g = svg.append('g');
+        const zoom = d3.zoom().scaleExtent([0.3, 3]).on('zoom', (e) => g.attr('transform', e.transform));
+        svg.call(zoom);
+
+        const nodes = graphData.nodes.map(n => ({ ...n }));
+        const edges = graphData.edges.map(e => ({ source: e.source, target: e.target }));
+
+        const sim = d3.forceSimulation(nodes)
+          .force('link', d3.forceLink(edges).id(d => d.id).distance(80))
+          .force('charge', d3.forceManyBody().strength(-200))
+          .force('center', d3.forceCenter(width / 2, height / 2))
+          .force('collision', d3.forceCollide().radius(30));
+
+        const link = g.append('g').selectAll('line').data(edges).join('line')
+          .attr('stroke', 'rgba(99,102,241,0.3)').attr('stroke-width', 1);
+
+        const node = g.append('g').selectAll('g').data(nodes).join('g')
+          .call(d3.drag().on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+            .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+        const getColor = (n) => {
+          if (n.issues.length > 0 && n.inbound_count === 0) return '#ef4444'; // orphan + issues
+          if (n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') return '#f59e0b'; // orphan
+          if (n.issues.length > 0) return '#3b82f6'; // has issues
+          return '#22c55e'; // healthy
+        };
+
+        node.append('circle')
+          .attr('r', d => d.slug === 'home' || d.slug === '' ? 18 : 12)
+          .attr('fill', d => getColor(d))
+          .attr('stroke', d => d.issues.length > 0 ? '#ef4444' : 'transparent')
+          .attr('stroke-width', d => d.issues.length > 0 ? 2 : 0)
+          .attr('opacity', 0.85)
+          .style('cursor', 'pointer')
+          .on('click', (e, d) => { e.stopPropagation(); setSelectedNode(d); });
+
+        node.append('text')
+          .text(d => d.title.length > 18 ? d.title.substring(0, 16) + '...' : d.title)
+          .attr('text-anchor', 'middle').attr('dy', d => (d.slug === 'home' || d.slug === '' ? 30 : 24))
+          .attr('font-size', 9).attr('fill', 'var(--text2)');
+
+        // Issue count badge
+        node.filter(d => d.issues.length > 0).append('circle')
+          .attr('r', 7).attr('cx', 10).attr('cy', -8)
+          .attr('fill', '#ef4444');
+        node.filter(d => d.issues.length > 0).append('text')
+          .text(d => d.issues.length).attr('x', 10).attr('y', -5)
+          .attr('text-anchor', 'middle').attr('font-size', 8).attr('fill', '#fff').attr('font-weight', 700);
+
+        sim.on('tick', () => {
+          link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+        svg.on('click', () => setSelectedNode(null));
+        return () => sim.stop();
+      }, [graphData, viewMode]);
+
+      const filtered = graphData ? (filter === 'orphans' ? graphData.nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') : filter === 'issues' ? graphData.nodes.filter(n => n.issues.length > 0) : graphData.nodes) : [];
+
+      if (loading) {
+        return (
+          <div className="audit-loading-overlay">
+            <div style={{ textAlign: 'center' }}>
+              <div className="spinner-large" />
+              <h3 style={{ marginTop: 16 }}>Crawling your website...</h3>
+              <p style={{ color: 'var(--text3)' }}>Discovering pages, extracting links, detecting issues</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ padding: '24px 32px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <i className="fas fa-wand-magic-sparkles" style={{ color: '#8b5cf6' }} />
+                Optimise Website
+              </h2>
+              {graphData && (
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
+                  {graphData.stats.total} pages · {graphData.stats.orphans} orphans · {graphData.stats.issues} issues
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setViewMode('graph')} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: viewMode === 'graph' ? '#6366f1' : 'var(--card)', color: viewMode === 'graph' ? '#fff' : 'var(--text2)' }}>
+                <i className="fas fa-project-diagram" style={{ marginRight: 4 }} />Graph
+              </button>
+              <button onClick={() => setViewMode('list')} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? '#6366f1' : 'var(--card)', color: viewMode === 'list' ? '#fff' : 'var(--text2)' }}>
+                <i className="fas fa-list" style={{ marginRight: 4 }} />List
+              </button>
+              <button onClick={loadGraph} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#fff' }}>
+                <i className="fas fa-sync" style={{ marginRight: 4 }} />Rescan
+              </button>
+            </div>
+          </div>
+
+          {/* Stats cards */}
+          {graphData && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+              {[
+                { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
+                { label: 'ORPHAN PAGES', value: graphData.stats.orphans, color: graphData.stats.orphans > 0 ? '#f59e0b' : '#22c55e', icon: 'fa-unlink' },
+                { label: 'TOTAL ISSUES', value: graphData.stats.issues, color: graphData.stats.issues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
+                { label: 'HEALTHY', value: graphData.nodes.filter(n => n.issues.length === 0).length, color: '#22c55e', icon: 'fa-circle-check' },
+              ].map((s, i) => (
+                <div key={i} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: s.color, marginTop: 4 }}>
+                    <i className={`fas ${s.icon}`} style={{ fontSize: 16, marginRight: 6, opacity: 0.6 }} />{s.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Graph view */}
+          {viewMode === 'graph' && (
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div ref={graphRef} style={{ flex: 1, minHeight: 500, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', position: 'relative' }}>
+                <div style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: 'var(--text3)' }}>
+                  Scroll to zoom · Drag nodes · Click to inspect
+                </div>
+                {/* Legend */}
+                <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)' }}>
+                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan + Issues' }].map((x, i) => (
+                    <span key={i}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
+                  ))}
+                </div>
+              </div>
+              {/* Side panel — selected node details */}
+              {selectedNode && (
+                <div style={{ width: 300, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', padding: 16, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h4 style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>{selectedNode.title}</h4>
+                    <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-times" /></button>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 12, wordBreak: 'break-all' }}>{selectedNode.url}</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                    <div style={{ background: 'rgba(99,102,241,0.1)', borderRadius: 6, padding: 8, textAlign: 'center' }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: '#6366f1' }}>{selectedNode.word_count}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>Words</div>
+                    </div>
+                    <div style={{ background: 'rgba(99,102,241,0.1)', borderRadius: 6, padding: 8, textAlign: 'center' }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: selectedNode.inbound_count === 0 ? '#ef4444' : '#6366f1' }}>{selectedNode.inbound_count}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>Inbound Links</div>
+                    </div>
+                    <div style={{ background: 'rgba(99,102,241,0.1)', borderRadius: 6, padding: 8, textAlign: 'center' }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: '#6366f1' }}>{selectedNode.internal_links.length}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>Internal Links</div>
+                    </div>
+                    <div style={{ background: 'rgba(99,102,241,0.1)', borderRadius: 6, padding: 8, textAlign: 'center' }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: '#6366f1' }}>{selectedNode.external_links}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>External Links</div>
+                    </div>
+                  </div>
+                  {selectedNode.meta_title && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Title:</strong> <span style={{ color: selectedNode.meta_title.length > 60 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_title} ({selectedNode.meta_title.length})</span></div>}
+                  {selectedNode.meta_description && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Description:</strong> <span style={{ color: selectedNode.meta_description.length > 160 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_description.substring(0, 80)}... ({selectedNode.meta_description.length})</span></div>}
+                  {selectedNode.h1 && <div style={{ fontSize: 11, marginBottom: 12 }}><strong>H1:</strong> {selectedNode.h1}</div>}
+                  {selectedNode.issues.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
+                        <i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />{selectedNode.issues.length} Issue{selectedNode.issues.length > 1 ? 's' : ''}
+                      </div>
+                      {selectedNode.issues.map((issue, i) => (
+                        <div key={i} style={{ fontSize: 11, color: '#ef4444', display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 4 }}>
+                          <i className="fas fa-circle-xmark" style={{ fontSize: 10, marginTop: 2 }} />{issue}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* List view */}
+          {viewMode === 'list' && graphData && (
+            <div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                {['all', 'orphans', 'issues'].map(f => (
+                  <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: filter === f ? '#6366f1' : 'var(--card)', color: filter === f ? '#fff' : 'var(--text2)', textTransform: 'capitalize' }}>
+                    {f === 'all' ? `All (${graphData.nodes.length})` : f === 'orphans' ? `Orphans (${graphData.stats.orphans})` : `Issues (${graphData.nodes.filter(n => n.issues.length > 0).length})`}
+                  </button>
+                ))}
+              </div>
+              <div style={{ background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                      <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Page</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Words</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Inbound</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Internal</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Issues</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((n, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '10px 14px' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text3)' }}>/{n.slug}</div>
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', color: n.word_count < 300 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.word_count}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', color: n.inbound_count === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.inbound_count}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', color: n.internal_links.length === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.internal_links.length}</td>
+                        <td style={{ padding: '10px 14px' }}>
+                          {n.issues.length === 0 ? (
+                            <span style={{ color: '#22c55e', fontSize: 12 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Healthy</span>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              {n.issues.map((issue, j) => (
+                                <span key={j} style={{ fontSize: 11, color: '#ef4444' }}><i className="fas fa-xmark" style={{ marginRight: 4, fontSize: 9 }} />{issue}</span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!graphData && !loading && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-spider" style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
+              <p>Click Rescan to crawl your website and build the site map</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function CopywriterPage({ stage, project }) {
       const [items, setItems] = React.useState([]);
       const [allItems, setAllItems] = React.useState([]);
@@ -9106,7 +9377,6 @@
                                             // Refresh audit insights to reflect new page
                                             const sp = await api(`/projects/${project.id}/site-pages`);
                                             setAuditInsights(prev => ({ ...prev, sitePages: Array.isArray(sp) ? sp : [] }));
-                                            if (setPage) setPage('nw-staging');
                                           }
                                         } else if (act.link && setPage) {
                                           setPage(act.link);
@@ -10830,14 +11100,13 @@ case 'action-plan':
             return <NewWebsitePipelinePage stage="review" project={project} />;
           case 'nw-publish':
             return <NewWebsitePipelinePage stage="publish" project={project} />;
-          case 'content-queue':
-            return <CopywriterPage stage="queue" project={project} />;
-          case 'drafts':
-            return <CopywriterPage stage="drafts" project={project} />;
-          case 'approved-content':
-            return <CopywriterPage stage="approved" project={project} />;
-          case 'published-content':
-            return <CopywriterPage stage="published" project={project} />;
+          case 'ow-project':
+          case 'ow-sitemap':
+            return <OptimiseWebsitePage project={project} view="sitemap" setPage={setActiveTab} />;
+          case 'ow-issues':
+            return <OptimiseWebsitePage project={project} view="issues" setPage={setActiveTab} />;
+          case 'ow-queue':
+            return <OptimiseWebsitePage project={project} view="queue" setPage={setActiveTab} />;
           case 'maps-rankings':
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
           case 'serp-rankings':
@@ -10894,10 +11163,11 @@ case 'action-plan':
             { id: 'nw-review', label: 'Review & Approve', icon: 'fas fa-check-circle' },
             { id: 'nw-publish', label: 'Publish', icon: 'fas fa-rocket' },
           ]},
-          { id: 'content-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
-          { id: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
-          { id: 'approved-content', label: 'Approved', icon: 'fas fa-check-circle' },
-          { id: 'published-content', label: 'Published', icon: 'fas fa-paper-plane' },
+          { id: 'ow-project', label: 'Optimise Website', icon: 'fas fa-wand-magic-sparkles', expandable: true, children: [
+            { id: 'ow-sitemap', label: 'Site Map', icon: 'fas fa-project-diagram' },
+            { id: 'ow-issues', label: 'Issues', icon: 'fas fa-exclamation-triangle' },
+            { id: 'ow-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
+          ]},
         ]},
         { section: 'REPORTS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
