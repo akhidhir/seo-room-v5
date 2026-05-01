@@ -4534,7 +4534,7 @@ app.post('/api/projects/:projectId/screenshot', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'URL required' });
   try {
     // thum.io: free full-page screenshot API, returns image directly
-    const thumbUrl = `https://image.thum.io/get/width/1400/crop/2000/noanimate/${encodeURIComponent(url)}`;
+    const thumbUrl = `https://image.thum.io/get/width/1400/crop/2000/noanimate/${url}`;
     console.log(`[screenshot] Capturing via thum.io: ${url}`);
     const resp = await fetch(thumbUrl, { signal: AbortSignal.timeout(45000) });
     if (!resp.ok) return res.status(500).json({ error: `Screenshot service failed: ${resp.status}` });
