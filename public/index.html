@@ -11543,6 +11543,9 @@
         gscProperty: '',
         gbpLocationId: '',
         gbpLocationName: '',
+        toneOfVoice: '',
+        pageWireframe: '',
+        customerPersona: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
@@ -11579,6 +11582,9 @@
               gscProperty: data.project.gsc_property || '',
               gbpLocationId: data.project.gbp_location_id || '',
               gbpLocationName: data.project.gbp_location_name || '',
+              toneOfVoice: data.project.tone_of_voice || '',
+              pageWireframe: data.project.page_wireframe || '',
+              customerPersona: data.project.customer_persona || '',
             });
           }
           // Load available GSC sites and GBP locations
@@ -11599,7 +11605,12 @@
           if (!pid) { setError('No project selected'); setSaving(false); return; }
           await api(`/projects/${pid}`, {
             method: 'PUT',
-            body: formData,
+            body: {
+              ...formData,
+              tone_of_voice: formData.toneOfVoice,
+              page_wireframe: formData.pageWireframe,
+              customer_persona: formData.customerPersona,
+            },
           });
           setError('');
           setSaved(true);
@@ -12062,6 +12073,51 @@
               <button className="btn btn-secondary btn-small" onClick={handleAddCompetitor}>
                 <i className="fas fa-plus"></i> Add
               </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '8px' }}>
+              <i className="fas fa-pen-fancy" style={{ marginRight: 8, color: '#8b5cf6' }} />Copywriter Settings
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
+              Optional — when set, these guide all AI copywriting (drafts, optimise, chat, expand). Leave blank to use defaults.
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Tone of Voice</label>
+              <textarea
+                className="form-input"
+                value={formData.toneOfVoice}
+                onChange={(e) => setFormData(prev => ({ ...prev, toneOfVoice: e.target.value }))}
+                placeholder="e.g., Professional yet approachable. Use active voice. Avoid jargon. Speak like a trusted local expert."
+                rows={3}
+                style={{ resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Page Wireframe / Structure</label>
+              <textarea
+                className="form-input"
+                value={formData.pageWireframe}
+                onChange={(e) => setFormData(prev => ({ ...prev, pageWireframe: e.target.value }))}
+                placeholder={"e.g.,\nH1: Service + Location\nIntro paragraph (2-3 sentences)\nH2: What is [Service]?\nH2: Benefits\n- 4 bullet points\nH2: Why Choose Us\nH2: Service Areas\nCTA paragraph"}
+                rows={5}
+                style={{ resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Customer Persona</label>
+              <textarea
+                className="form-input"
+                value={formData.customerPersona}
+                onChange={(e) => setFormData(prev => ({ ...prev, customerPersona: e.target.value }))}
+                placeholder="e.g., Homeowners aged 30-55 in Perth suburbs. They want reliable, licensed tradespeople. Price-conscious but value quality. Often searching on mobile after an urgent issue."
+                rows={3}
+                style={{ resize: 'vertical', fontFamily: 'inherit' }}
+              />
             </div>
           </div>
 

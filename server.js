@@ -342,6 +342,9 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_page_labels JSONB DEFAULT '{}'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tone_of_voice TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS customer_persona TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -615,6 +618,9 @@ app.put('/api/projects/:id', async (req, res) => {
   const nw_business_type = b.nw_business_type;
   const nw_notes = b.nw_notes;
   const nw_page_labels = b.nw_page_labels;
+  const tone_of_voice = b.tone_of_voice ?? b.toneOfVoice;
+  const page_wireframe = b.page_wireframe ?? b.pageWireframe;
+  const customer_persona = b.customer_persona ?? b.customerPersona;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -637,7 +643,10 @@ app.put('/api/projects/:id', async (req, res) => {
            nw_location=COALESCE($22, nw_location),
            nw_business_type=COALESCE($23, nw_business_type),
            nw_notes=COALESCE($24, nw_notes),
-           nw_page_labels=COALESCE($25::jsonb, nw_page_labels)
+           nw_page_labels=COALESCE($25::jsonb, nw_page_labels),
+           tone_of_voice=$26,
+           page_wireframe=$27,
+           customer_persona=$28
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -648,7 +657,10 @@ app.put('/api/projects/:id', async (req, res) => {
        wp_username || null, wp_app_password || null,
        map_services !== undefined ? map_services : null, map_custom_suburbs !== undefined ? map_custom_suburbs : null,
        nw_name || null, nw_domain || null, nw_industry || null, nw_location || null, nw_business_type || null, nw_notes || null,
-       nw_page_labels ? JSON.stringify(nw_page_labels) : null]
+       nw_page_labels ? JSON.stringify(nw_page_labels) : null,
+       tone_of_voice !== undefined ? tone_of_voice : null,
+       page_wireframe !== undefined ? page_wireframe : null,
+       customer_persona !== undefined ? customer_persona : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -3588,6 +3600,29 @@ app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Helper: build copywriter context block from project settings (tone, wireframe, persona)
+// Returns a string to inject into AI prompts — empty string if none set
+function buildCopywriterContext(project) {
+  const parts = [];
+  if (project.tone_of_voice) {
+    parts.push(`TONE OF VOICE (MUST follow strictly):
+${project.tone_of_voice}
+You MUST write in this exact tone. Every sentence should reflect this voice.`);
+  }
+  if (project.page_wireframe) {
+    parts.push(`PAGE WIREFRAME / STRUCTURE (MUST follow strictly):
+${project.page_wireframe}
+You MUST follow this page structure exactly. Use the sections and order specified above.`);
+  }
+  if (project.customer_persona) {
+    parts.push(`TARGET CUSTOMER PERSONA (MUST address):
+${project.customer_persona}
+Write directly to this persona. Address their pain points, needs, and language.`);
+  }
+  if (parts.length === 0) return '';
+  return '\n\n=== COPYWRITER SETTINGS (these override general defaults) ===\n' + parts.join('\n\n') + '\n=== END COPYWRITER SETTINGS ===\n';
+}
+
 // Helper: fetch live page content for Elementor or when WP REST content is thin
 async function fetchLivePageContent(pageUrl, project, pageId) {
   let content = '';
@@ -3683,7 +3718,8 @@ RULES:
 - Include 2-3 internal links to other relevant pages naturally within the content
 - If given target keywords, weave them in naturally throughout the content
 
-Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}`;
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}
+${buildCopywriterContext(project)}`;
 
       userPrompt = `Rewrite this page for better SEO performance:
 
@@ -3702,7 +3738,8 @@ Current content (first 3000 chars):
 ${(currentContent || '').slice(0, 3000)}`;
     } else if (item.content_type === 'meta_only') {
       systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
-Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}`;
+Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}
+${buildCopywriterContext(project)}`;
       userPrompt = `Write optimized meta tags for:
 Page: ${item.page_title} (${item.page_url})
 Business: ${project.business_name || project.name} in ${project.location || 'Australia'}
@@ -3725,7 +3762,8 @@ RULES:
 - Use target keywords naturally throughout
 - If any schema markup data is provided, include appropriate structured data
 
-Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}`;
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}
+${buildCopywriterContext(project)}`;
       userPrompt = `Write a new page:
 Title: ${item.page_title}
 Target URL: ${item.page_url || '(to be determined)'}
@@ -3899,7 +3937,8 @@ OUTPUT FORMAT (respond in valid JSON only):
 {
   "additional_html": "<h2>New Section</h2><p>...</p>... (HTML to APPEND after existing content)",
   "ai_notes": "Brief summary of what was added and keywords used"
-}`;
+}
+${buildCopywriterContext(project)}`;
 
     const currentHtml = item.draft_content || item.current_content || '';
     const currentWords = currentHtml.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length;
@@ -4025,7 +4064,9 @@ OUTPUT FORMAT (respond in valid JSON only):
   "meta_title": "optimised meta title (50-60 chars)",
   "meta_description": "optimised meta description (140-160 chars)",
   "ai_notes": "List which numbered issues you fixed and how"
-}`;
+}
+${buildCopywriterContext(project)}`;
+
 
     const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
 
@@ -4196,7 +4237,7 @@ Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
 
 You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
 
-Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.`;
+Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.${buildCopywriterContext(project)}`;
 
     // Build conversation history
     const messages = [];
@@ -4382,7 +4423,7 @@ OUTPUT FORMAT (JSON only):
   "meta_title": "revised meta title (50-60 chars)",
   "meta_description": "revised meta description (140-160 chars)",
   "ai_notes": "What was changed based on feedback"
-}`,
+}${buildCopywriterContext(project)}`,
       messages: [{ role: 'user', content: `USER FEEDBACK: ${feedback}
 
 CURRENT PROPOSED CONTENT (revise this):
