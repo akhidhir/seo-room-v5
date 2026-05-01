@@ -9365,10 +9365,27 @@
                   try {
                     const r = await api(`/projects/${project.id}/screenshot`, { method: 'POST', body: { url: pageUrl } });
                     if (r.image) {
-                      setSelectedItem(prev => ({ ...prev, wireframe_image: r.image, wireframe_mime: 'image/jpeg' }));
-                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
-                        method: 'PUT', body: { wireframe_image: r.image, wireframe_mime: 'image/jpeg' }
-                      }).catch(() => {});
+                      // Compress via canvas to stay under Anthropic 5MB limit
+                      const img = new Image();
+                      img.onload = async () => {
+                        const maxW = 1400;
+                        let w = img.width, h = img.height;
+                        if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const compressed = canvas.toDataURL('image/jpeg', 0.8);
+                        const base64 = compressed.split(',')[1];
+                        setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: 'image/jpeg' }));
+                        await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                          method: 'PUT', body: { wireframe_image: base64, wireframe_mime: 'image/jpeg' }
+                        }).catch(() => {});
+                        btn.textContent = origText;
+                        btn.disabled = false;
+                      };
+                      img.onerror = () => { alert('Failed to process screenshot'); btn.textContent = origText; btn.disabled = false; };
+                      img.src = `data:${r.mime || 'image/png'};base64,${r.image}`;
+                      return; // onload handles the rest
                     } else { alert(r.error || 'Screenshot failed'); }
                   } catch (e) { alert('Error: ' + e.message); }
                   btn.textContent = origText;

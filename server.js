@@ -4526,26 +4526,26 @@ Apply the user's feedback and return the revised version.`, item) }]
   }
 });
 
-// Full-page screenshot capture via Google PageSpeed API
+// Full-page screenshot capture — uses thum.io (free, fast, full-page)
 app.post('/api/projects/:projectId/screenshot', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
   try {
-    // Use Google PageSpeed API — it returns a full screenshot
-    const apiKey = process.env.PAGESPEED_API_KEY || '';
-    const psUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=desktop&category=performance${apiKey ? '&key=' + apiKey : ''}`;
-    console.log(`[screenshot] Capturing: ${url}`);
-    const resp = await fetch(psUrl, { signal: AbortSignal.timeout(30000) });
-    if (!resp.ok) return res.status(500).json({ error: `PageSpeed API failed: ${resp.status}` });
-    const data = await resp.json();
-    // Extract the full screenshot from the audit
-    const screenshot = data?.lighthouseResult?.audits?.['final-screenshot']?.details?.data
-      || data?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
-    if (!screenshot) return res.status(500).json({ error: 'No screenshot in PageSpeed response' });
-    // screenshot is a data URL like "data:image/jpeg;base64,..."
-    const base64 = screenshot.replace(/^data:[^;]+;base64,/, '');
-    console.log(`[screenshot] Captured ${url}: ${Math.round(base64.length / 1024)}KB`);
-    res.json({ image: base64, mime: 'image/jpeg' });
+    // thum.io: free full-page screenshot API, returns image directly
+    const thumbUrl = `https://image.thum.io/get/width/1400/crop/2000/noanimate/${encodeURIComponent(url)}`;
+    console.log(`[screenshot] Capturing via thum.io: ${url}`);
+    const resp = await fetch(thumbUrl, { signal: AbortSignal.timeout(45000) });
+    if (!resp.ok) return res.status(500).json({ error: `Screenshot service failed: ${resp.status}` });
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const base64 = buffer.toString('base64');
+    // Check size — Anthropic limit is 5MB
+    if (buffer.length > 4.5 * 1024 * 1024) {
+      console.log(`[screenshot] Image too large (${Math.round(buffer.length / 1024)}KB), compressing not possible server-side without sharp`);
+    }
+    console.log(`[screenshot] Captured ${url}: ${Math.round(buffer.length / 1024)}KB`);
+    res.json({ image: base64, mime: 'image/png' });
   } catch (e) {
     console.error('[screenshot] Error:', e.message);
     res.status(500).json({ error: e.message });
