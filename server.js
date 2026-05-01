@@ -345,6 +345,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tone_of_voice TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS customer_persona TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS writer_voice TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -640,6 +641,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const tone_of_voice = b.tone_of_voice ?? b.toneOfVoice;
   const page_wireframe = b.page_wireframe ?? b.pageWireframe;
   const customer_persona = b.customer_persona ?? b.customerPersona;
+  const writer_voice = b.writer_voice ?? b.writerVoice;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -665,7 +667,8 @@ app.put('/api/projects/:id', async (req, res) => {
            nw_page_labels=COALESCE($25::jsonb, nw_page_labels),
            tone_of_voice=$26,
            page_wireframe=$27,
-           customer_persona=$28
+           customer_persona=$28,
+           writer_voice=$29
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -679,7 +682,8 @@ app.put('/api/projects/:id', async (req, res) => {
        nw_page_labels ? JSON.stringify(nw_page_labels) : null,
        tone_of_voice !== undefined ? tone_of_voice : null,
        page_wireframe !== undefined ? page_wireframe : null,
-       customer_persona !== undefined ? customer_persona : null]
+       customer_persona !== undefined ? customer_persona : null,
+       writer_voice !== undefined ? writer_voice : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -3638,6 +3642,11 @@ This describes the visual layout and design structure of the page. You MUST writ
   // Note: if a wireframe IMAGE is uploaded, it's handled separately via getWireframeImageBlocks()
   if (item && item.wireframe_image && !wireframe) {
     parts.push(`PAGE WIREFRAME: A wireframe image has been provided (see the image in this message). You MUST write content that matches the visual layout and design structure shown in that image exactly.`);
+  }
+  if (project.writer_voice) {
+    parts.push(`WRITER VOICE / STYLE (MUST follow):
+${project.writer_voice}
+Adopt this writing style and perspective throughout. This defines HOW you write — sentence structure, vocabulary level, and how you address the reader.`);
   }
   if (project.customer_persona) {
     parts.push(`TARGET CUSTOMER PERSONA (MUST address):

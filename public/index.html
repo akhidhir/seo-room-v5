@@ -11930,6 +11930,7 @@
         gbpLocationId: '',
         gbpLocationName: '',
         toneOfVoice: '',
+        writerVoice: '',
         customerPersona: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
@@ -11977,6 +11978,7 @@
               gbpLocationId: data.project.gbp_location_id || '',
               gbpLocationName: data.project.gbp_location_name || '',
               toneOfVoice: data.project.tone_of_voice || '',
+              writerVoice: data.project.writer_voice || '',
               customerPersona: data.project.customer_persona || '',
             });
           }
@@ -12048,6 +12050,7 @@
             body: {
               ...formData,
               tone_of_voice: formData.toneOfVoice,
+              writer_voice: formData.writerVoice,
               customer_persona: formData.customerPersona,
             },
           });
@@ -12525,11 +12528,49 @@
 
             <div className="form-group">
               <label className="form-label">Tone of Voice</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {['Professional', 'Friendly', 'Authoritative', 'Conversational', 'Technical', 'Casual', 'Empathetic', 'Urgent'].map(t =>
+                  <button key={t} type="button" onClick={() => {
+                    const current = formData.toneOfVoice || '';
+                    if (current.toLowerCase().includes(t.toLowerCase())) return;
+                    setFormData(prev => ({ ...prev, toneOfVoice: current ? current + ', ' + t.toLowerCase() : t }));
+                  }} style={{
+                    padding: '4px 10px', fontSize: 11, borderRadius: 12, cursor: 'pointer', border: '1px solid var(--border)',
+                    background: (formData.toneOfVoice || '').toLowerCase().includes(t.toLowerCase()) ? 'var(--accent)' : 'var(--bg)',
+                    color: (formData.toneOfVoice || '').toLowerCase().includes(t.toLowerCase()) ? '#fff' : 'var(--text2)',
+                    fontWeight: 600
+                  }}>{t}</button>
+                )}
+              </div>
               <textarea
                 className="form-input"
                 value={formData.toneOfVoice}
                 onChange={(e) => setFormData(prev => ({ ...prev, toneOfVoice: e.target.value }))}
                 placeholder="e.g., Professional yet approachable. Use active voice. Avoid jargon. Speak like a trusted local expert."
+                rows={3}
+                style={{ resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Writer Voice</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {['Expert guide', 'Friendly local', 'Premium consultant', 'No-nonsense tradesperson', 'Helpful neighbour', 'Industry specialist'].map(v =>
+                  <button key={v} type="button" onClick={() => {
+                    setFormData(prev => ({ ...prev, writerVoice: v }));
+                  }} style={{
+                    padding: '4px 10px', fontSize: 11, borderRadius: 12, cursor: 'pointer', border: '1px solid var(--border)',
+                    background: formData.writerVoice === v ? '#8b5cf6' : 'var(--bg)',
+                    color: formData.writerVoice === v ? '#fff' : 'var(--text2)',
+                    fontWeight: 600
+                  }}>{v}</button>
+                )}
+              </div>
+              <textarea
+                className="form-input"
+                value={formData.writerVoice}
+                onChange={(e) => setFormData(prev => ({ ...prev, writerVoice: e.target.value }))}
+                placeholder="e.g., Write as a knowledgeable expert who explains complex topics simply. Use 'we' and 'our team'. Address the reader as 'you'. Keep sentences short and punchy."
                 rows={3}
                 style={{ resize: 'vertical', fontFamily: 'inherit' }}
               />
