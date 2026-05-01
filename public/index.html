@@ -8202,8 +8202,10 @@
             const errMsg = r?.error || 'Unknown error';
             // Parse WP-specific errors for user-friendly messages
             let friendly = errMsg;
-            if (errMsg.includes('401') || errMsg.includes('not allowed')) friendly = 'WordPress rejected the edit — check that the WP user has Administrator/Editor role and the Application Password is correct.';
+            if (errMsg.includes('already match')) friendly = 'No changes needed — the current values already match the suggestions.';
+            else if (errMsg.includes('401') || errMsg.includes('not allowed')) friendly = 'WordPress rejected the edit — check that the WP user has Administrator/Editor role and the Application Password is correct.';
             else if (errMsg.includes('not found')) friendly = 'Page not found in WordPress — try rescanning the site.';
+            else if (errMsg.includes('seoroom-helper')) friendly = 'WordPress accepted the request but the meta fields were not actually updated. You may need to install the seoroom-helper plugin to enable Yoast meta writes via REST API.';
             else if (errMsg.includes('not configured')) friendly = errMsg;
             setApplyResult({ success: false, message: friendly });
           }
@@ -8246,10 +8248,17 @@
                     new_focus_keyword: s.suggested_keyword
                   }]}
                 });
-                if (fixData.results && fixData.results[0]?.success) {
+                const r = fixData.results && fixData.results[0];
+                if (r?.success) {
                   setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'fixed' }));
+                } else {
+                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
+                  console.error(`[bulk-fix] Failed for ${node.id}: ${r?.error}`);
                 }
-              } catch(e) { console.error(e); }
+              } catch(e) {
+                setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
+                console.error(e);
+              }
             }
           }
         } catch(e) { console.error(e); }
@@ -8369,14 +8378,17 @@
                             {meta.fix === 'copywriter' && cwSent && (
                               <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />{fixing['cw-' + n.id] === 'exists' ? 'Already in Queue' : 'Sent'}</span>
                             )}
-                            {meta.fix === 'onpage' && !fixing['meta-' + n.id] && (
-                              <button onClick={() => handleAiSuggest(n)} disabled={aiLoading[n.id]}
+                            {meta.fix === 'onpage' && (!fixing['meta-' + n.id] || fixing['meta-' + n.id] === 'error') && (
+                              <button onClick={() => { setFixing(prev => { const c = {...prev}; delete c['meta-' + n.id]; return c; }); handleAiSuggest(n); }} disabled={aiLoading[n.id]}
                                 style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: aiLoading[n.id] ? 'default' : 'pointer', background: aiLoading[n.id] ? 'var(--border)' : '#6366f1', color: '#fff', opacity: aiLoading[n.id] ? 0.7 : 1 }}>
-                                {aiLoading[n.id] ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />AI Fix</>}
+                                {aiLoading[n.id] ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />{fixing['meta-' + n.id] === 'error' ? 'Retry' : 'AI Fix'}</>}
                               </button>
                             )}
                             {meta.fix === 'onpage' && fixing['meta-' + n.id] === 'fixed' && (
                               <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Fixed</span>
+                            )}
+                            {meta.fix === 'onpage' && fixing['meta-' + n.id] === 'error' && (
+                              <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}><i className="fas fa-circle-xmark" style={{ marginRight: 4 }} />Failed</span>
                             )}
                           </td>
                         </tr>

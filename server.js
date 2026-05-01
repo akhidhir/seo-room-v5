@@ -2569,11 +2569,62 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
         }
 
         if (changes.length === 0) {
-          results.push({ id: fix.id, success: true, message: 'No changes needed' });
+          results.push({ id: fix.id, success: false, skipped: true, error: 'No changes needed — values already match' });
           continue;
         }
 
-        // Save each field change to history
+        // 3. Write new values to WordPress — try meta approach first, fall back to yoast_meta
+        const meta = {};
+        if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
+        if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
+        if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
+
+        console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
+
+        let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ meta }),
+          signal: AbortSignal.timeout(15000)
+        });
+
+        // If meta write fails with 401/403, try yoast_meta wrapper (some Yoast versions expose this)
+        if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+          console.log(`[onpage-fix] Meta write failed (${writeResp.status}), trying yoast_meta wrapper...`);
+          const yoastPayload = {};
+          if (fix.new_meta_title) yoastPayload.yoast_wpseo_title = fix.new_meta_title;
+          if (fix.new_meta_desc) yoastPayload.yoast_wpseo_metadesc = fix.new_meta_desc;
+          if (fix.new_focus_keyword) yoastPayload.yoast_wpseo_focuskw = fix.new_focus_keyword;
+
+          writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ yoast_meta: yoastPayload }),
+            signal: AbortSignal.timeout(15000)
+          });
+        }
+
+        if (!writeResp.ok) {
+          const errText = await writeResp.text();
+          console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
+          results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
+          continue;
+        }
+
+        // 4. Verify write succeeded by reading back
+        const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+        const verified = verify && (
+          (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) ||
+          (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc)
+        );
+
+        if (!verified) {
+          console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
+          results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The seoroom-helper plugin may be needed to register Yoast meta fields for REST API writes.' });
+          continue;
+        }
+
+        // Save each field change to history ONLY after verified write
         for (const ch of changes) {
           await pool.query(
             `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
@@ -2582,27 +2633,8 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           );
         }
 
-        // 3. Write new values to WordPress
-        const meta = {};
-        if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
-        if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
-        if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
-
-        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify({ meta }),
-          signal: AbortSignal.timeout(15000)
-        });
-
-        if (!writeResp.ok) {
-          const errText = await writeResp.text();
-          results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
-          continue;
-        }
-
         results.push({ id: fix.id, success: true, changes: changes.length });
-        console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields)`);
+        console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields) — verified ✓`);
       } catch (e) {
         results.push({ id: fix.id, success: false, error: e.message });
       }
