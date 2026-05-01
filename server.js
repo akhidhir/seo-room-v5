@@ -1465,8 +1465,8 @@ Return ONLY a JSON array:
 
 async function serpApiSearch(params) {
   if (!SERPAPI_KEY) throw new Error('SERPAPI_KEY not configured');
-  // Filter out undefined/null values to avoid sending them as strings
-  const cleanParams = Object.fromEntries(Object.entries({ ...params, api_key: SERPAPI_KEY }).filter(([_, v]) => v != null));
+  // Filter out undefined/null/empty values to avoid sending them as strings
+  const cleanParams = Object.fromEntries(Object.entries({ ...params, api_key: SERPAPI_KEY }).filter(([_, v]) => v != null && v !== ''));
   const searchParams = new URLSearchParams(cleanParams);
   const resp = await fetch(`https://serpapi.com/search.json?${searchParams}`);
   if (!resp.ok) {

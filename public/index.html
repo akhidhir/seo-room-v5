@@ -1613,6 +1613,7 @@
       const [expandedCats, setExpandedCats] = useState({0: true});
       const [savedActionItems, setSavedActionItems] = useState([]);
       const removedKeysRef = React.useRef(new Set());
+      const pollRef = React.useRef(null);
 
       // Reset addedActions when section changes (different section = different table keys)
       useEffect(() => {
@@ -1726,14 +1727,35 @@
         }
       }, [report, savedActionItems, section]);
 
-      useEffect(() => { if (project) checkStatus(); }, [project?.id, auditKey]);
+      useEffect(() => {
+        if (project) checkStatus();
+        return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+      }, [project?.id, auditKey]);
+
+      const startPolling = (pid, ak) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+          try {
+            const data = await api(`/projects/${pid}/audits/${ak}/status`);
+            if (data.status === 'completed') {
+              clearInterval(pollRef.current); pollRef.current = null;
+              if (data.report) setReport(data.report);
+              setLoading(false);
+            } else if (data.status === 'failed') {
+              clearInterval(pollRef.current); pollRef.current = null;
+              setError(data.error || 'Audit failed');
+              setLoading(false);
+            }
+          } catch (e) { clearInterval(pollRef.current); pollRef.current = null; setLoading(false); }
+        }, 5000);
+      };
 
       const checkStatus = async () => {
         try {
           const data = await api(`/projects/${project.id}/audits/${auditKey}/status`);
           if (data.status === 'running') {
             setLoading(true);
-            startPolling();
+            startPolling(project.id, auditKey);
           } else if (data.status === 'completed' && data.report) {
             setReport(data.report);
           } else if (data.status === 'failed' && data.error) {
@@ -1742,28 +1764,11 @@
         } catch (e) {}
       };
 
-      const startPolling = () => {
-        const pollInterval = setInterval(async () => {
-          try {
-            const data = await api(`/projects/${project.id}/audits/${auditKey}/status`);
-            if (data.status === 'completed') {
-              clearInterval(pollInterval);
-              if (data.report) setReport(data.report);
-              setLoading(false);
-            } else if (data.status === 'failed') {
-              clearInterval(pollInterval);
-              setError(data.error || 'Audit failed');
-              setLoading(false);
-            }
-          } catch (e) { clearInterval(pollInterval); setLoading(false); }
-        }, 5000);
-      };
-
       const runAudit = async () => {
         setLoading(true); setError(''); setReport('');
         try {
           await api(`/projects/${project.id}/audits/${auditKey}/run`, { method: 'POST' });
-          startPolling();
+          startPolling(project.id, auditKey);
         } catch (err) { setError(err.message); setLoading(false); }
       };
 
@@ -2546,46 +2551,17 @@
       const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
 
-      useEffect(() => { if (project) checkStatus(); }, [project?.id]);
-
-      const checkStatus = async () => {
-        try {
-          const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
-          if (data.status === 'running') {
-            setLoading(true);
-            startPolling();
-          } else if (data.status === 'completed' && data.report) {
-            setReport(data.report);
-          } else if (data.status === 'failed' && data.error) {
-            setError(data.error);
-          }
-        } catch (e) {}
-      };
-
-      const startPolling = () => {
-        const pollInterval = setInterval(async () => {
-          try {
-            const data = await api(`/projects/${project.id}/audits/gbp-external/status`);
-            if (data.status === 'completed') {
-              clearInterval(pollInterval);
-              if (data.report) setReport(data.report);
-              setLoading(false);
-            } else if (data.status === 'failed') {
-              clearInterval(pollInterval);
-              setError(data.error || 'Audit failed');
-              setLoading(false);
-            }
-          } catch (e) { clearInterval(pollInterval); setLoading(false); }
-        }, 5000);
-      };
-
-      const runAudit = async () => {
-        setLoading(true); setError(''); setReport('');
-        try {
-          await api(`/projects/${project.id}/audits/gbp-external/run`, { method: 'POST' });
-          startPolling();
-        } catch (err) { setError(err.message); setLoading(false); }
-      };
+      useEffect(() => {
+        if (project) {
+          setLoading(true);
+          api(`/projects/${project.id}/audit-findings?pillar=gbp`)
+            .then(data => { if (Array.isArray(data)) setFindings(data); })
+            .catch(e => setError(e.message))
+            .finally(() => setLoading(false));
+          // Load profile summary
+          api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
+        }
+      }, [project?.id]);
 
       const updateStatus = async (id, status) => {
         try {
@@ -2990,7 +2966,7 @@
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
-          const data = await api(`/speed-audit/${project?.id || 1}/run`, { method: 'POST' });
+          const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           setSpeedResults(data.results || []);
           // Auto-populate CWV data from batch results
           const cwvMap = {};
@@ -3001,20 +2977,13 @@
       };
 
       const optimizePage = async (pageId) => {
-        setOptimizingPages(prev => new Set([...prev, pageId]));
-        try {
-          await api(`/speed-audit/${project?.id || 1}/optimize/${pageId}`, { method: 'POST', body: { max_width: 1200, quality: 82, webp: true } });
-          // Re-run audit for this page to show updated data
-          const updated = await api(`/speed-audit/${project?.id || 1}/page/${pageId}`);
-          setSpeedResults(prev => prev.map(r => r.page_id === pageId ? { ...r, ...updated } : r));
-        } catch (err) { setSpeedError(err.message); }
-        finally { setOptimizingPages(prev => { const s = new Set(prev); s.delete(pageId); return s; }); }
+        setSpeedError('Image optimization is coming soon — this feature is not yet available.');
       };
 
       const runPageSpeed = async (url, pageId) => {
         setPsLoading(pageId);
         try {
-          const data = await api(`/speed-audit/${project?.id || 1}/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
+          const data = await api(`/speed-audit/${project.id}/pagespeed?url=${encodeURIComponent(url)}&strategy=mobile`);
           setPageSpeedData(prev => ({ ...prev, [pageId]: data.cwv }));
         } catch (err) { setSpeedError(err.message); }
         finally { setPsLoading(null); }
@@ -3369,7 +3338,7 @@
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
-          const data = await api(`/speed-audit/${project?.id || 1}/run`, { method: 'POST' });
+          const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           setSpeedResults(data.results || []);
         } catch (err) { setSpeedError(err.message); }
         finally { setSpeedLoading(false); }
