@@ -4850,135 +4850,214 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   }
 });
 
-// Generate content skeleton from wireframe image — vision AI analyzes screenshot, produces HTML template
+// Generate content skeleton — HTML-first: fetch real page DOM, strip text content, keep structure
 app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (req, res) => {
-  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  req.setTimeout(120000);
-  res.setTimeout(120000);
+  req.setTimeout(60000);
+  res.setTimeout(60000);
   const { projectId, id } = req.params;
   try {
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
-    // Need wireframe image OR page_url to screenshot
-    let imageBase64 = item.wireframe_image;
-    let imageMime = item.wireframe_mime || 'image/jpeg';
+    // Build page URL
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
+    if (!pageUrl) return res.status(400).json({ error: 'No page URL set' });
 
-    if (!imageBase64) {
-      // Try to capture screenshot first
-      const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
-      if (!pageUrl) return res.status(400).json({ error: 'No wireframe image and no page URL — capture page first' });
-
-      const apiKey = process.env.PAGESPEED_API_KEY;
-      if (!apiKey) return res.status(400).json({ error: 'No wireframe image — click Capture Page first' });
-
-      console.log(`[skeleton] No wireframe image, capturing via PageSpeed: ${pageUrl}`);
-      const psiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(pageUrl)}&category=PERFORMANCE&strategy=MOBILE&key=${apiKey}`;
-      const psiResp = await fetch(psiUrl, { signal: AbortSignal.timeout(60000) });
-      const psiData = await psiResp.json();
-      const screenshot = psiData?.lighthouseResult?.audits?.['final-screenshot']?.details?.data
-        || psiData?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
-      if (!screenshot) return res.status(400).json({ error: 'Could not capture page screenshot — click Capture Page manually first' });
-
-      imageBase64 = screenshot.replace(/^data:[^;]+;base64,/, '');
-      imageMime = 'image/jpeg';
-      // Save for future use
-      await pool.query('UPDATE content_queue SET wireframe_image=$1, wireframe_mime=$2 WHERE id=$3', [imageBase64, imageMime, id]);
-    }
-
-    // Strip data: prefix if present
-    const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
-
-    // Also fetch the live HTML to get real CSS classes and structure
-    let liveHtmlSnippet = '';
-    const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
-    if (pageUrl) {
-      try {
-        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' } });
-        if (resp.ok) {
-          const fullHtml = await resp.text();
-          // Extract the middle content (between header and footer) to give AI the real structure
-          const headerEnd = fullHtml.search(/<\/header>/i);
-          const footerStart = fullHtml.search(/<footer/i);
-          const middle = fullHtml.slice(
-            headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
-            footerStart !== -1 ? footerStart : fullHtml.length
-          );
-          liveHtmlSnippet = middle.slice(0, 8000); // cap for token limits
-        }
-      } catch (e) { console.log('[skeleton] Could not fetch live HTML:', e.message); }
-    }
-
-    const focusKw = item.draft_focus_keyword || item.current_focus_keyword || '';
-    const targetKws = [];
-    try {
-      const kwRows = (await pool.query('SELECT keyword FROM rank_keywords WHERE project_id=$1', [projectId])).rows;
-      kwRows.forEach(r => targetKws.push(r.keyword));
-    } catch(e) {}
-
-    console.log(`[skeleton] Generating skeleton from wireframe image for item ${id}`);
-
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
-      system: `You are an expert web designer and SEO copywriter. You analyze webpage screenshots and produce HTML content skeletons that exactly match the visual layout.
-
-Your job: Look at the screenshot of a webpage, identify every visual section and its layout, then produce an HTML skeleton with placeholder text that matches the design exactly.
-
-RULES:
-- Identify EVERY visual section from top to bottom: hero banners, two-column layouts, image+text blocks, feature grids, CTA bars, FAQ accordions, testimonial sections, etc.
-- For each section, produce the correct HTML structure
-- Use these CSS classes for layout:
-  * .wf-hero — hero/banner sections (full-width, centered)
-  * .wf-columns — multi-column layouts (flexbox, side by side)
-  * .wf-col — individual column inside .wf-columns
-  * .wf-cta — call-to-action bars
-  * .wf-btn — CTA buttons
-  * .wf-features — feature/service grids
-  * .wf-feature-item — individual feature card
-  * .wf-faq — FAQ section
-  * .wf-testimonial — testimonial block
-- Use real heading tags (h1, h2, h3) matching what you see
-- Put [IMAGE: description of what image shows] where images appear
-- Put placeholder text that describes what content goes there, with approximate word count: e.g. "[~80 words about the service benefits]"
-- Mark each section with <!-- SECTION N: TYPE --> comments
-- Include the EXACT number of sections you see — don't add or remove any
-- If you see a two-column layout with image on left and text on right, produce that exact structure
-
-${liveHtmlSnippet ? `\nHere is the actual HTML source of the page content area. Use the real CSS classes and structure from this HTML where possible:\n<source_html>\n${liveHtmlSnippet}\n</source_html>` : ''}
-
-OUTPUT: Return ONLY the HTML skeleton. No JSON wrapping. No explanation. Just the HTML.`,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: imageMime, data: cleanBase64 } },
-          { type: 'text', text: `Analyze this webpage screenshot and produce an HTML content skeleton that matches its visual layout exactly.
-
-Business: ${project.business_name || project.name}
-Industry: ${project.industry || 'service'}
-Focus keyword: ${focusKw}
-${targetKws.length ? 'Target keywords: ' + targetKws.slice(0, 10).join(', ') : ''}
-
-Produce the HTML skeleton with placeholder text for each section. Match the exact layout — columns, image positions, heading hierarchy, CTAs — everything you see in the screenshot.` }
-        ]
-      }]
+    console.log(`[skeleton] Fetching live page: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
     });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch page: ${resp.status}` });
+    const html = await resp.text();
 
-    let skeleton = response.content[0]?.text || '';
-
-    // Clean up — remove any markdown code fences if AI wrapped it
-    skeleton = skeleton.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-
-    console.log(`[skeleton] Generated skeleton: ${skeleton.length} chars, ${(skeleton.match(/<!-- SECTION/g) || []).length} sections`);
-
-    // Save as draft content and wireframe text description
-    await pool.query(
-      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2 WHERE id=$3',
-      [skeleton, `SKELETON GENERATED FROM SCREENSHOT\n${(skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).join('\n')}`, id]
+    // Extract content between </header> and <footer>
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
     );
 
-    res.json({ skeleton, sections: (skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).length });
+    // Parse top-level blocks (section, div, main, article) with depth tracking
+    const blockRegex = /<(section|div|main|article)([^>]*)>/gi;
+    const blocks = [];
+    let match;
+    while ((match = blockRegex.exec(middleHtml)) !== null) {
+      const tag = match[1].toLowerCase();
+      const attrs = match[2];
+      const blockStart = match.index;
+      let depth = 1, pos = match.index + match[0].length;
+      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        openRe.lastIndex = pos; closeRe.lastIndex = pos;
+        const nO = openRe.exec(middleHtml);
+        const nC = closeRe.exec(middleHtml);
+        if (!nC) break;
+        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+        else {
+          depth--;
+          if (depth === 0) {
+            const blockEnd = nC.index + nC[0].length;
+            const blockContent = middleHtml.slice(blockStart, blockEnd);
+            const textContent = blockContent.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            if (textContent.length >= 10) {
+              blocks.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent });
+              blockRegex.lastIndex = blockEnd;
+            }
+            break;
+          }
+          pos = nC.index + nC[0].length;
+        }
+      }
+    }
+
+    console.log(`[skeleton] Found ${blocks.length} content blocks`);
+
+    // Helper: strip text from HTML but keep structure, images, links, headings
+    function stripToSkeleton(blockHtml, sectionNum) {
+      let skeleton = blockHtml;
+
+      // Extract all images with their src and alt for preservation
+      const imgSrcs = [];
+      skeleton.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (m, src) => {
+        const altMatch = m.match(/alt=["']([^"']*?)["']/i);
+        imgSrcs.push({ src, alt: altMatch ? altMatch[1] : '' });
+        return m;
+      });
+
+      // Classify block type
+      const h1s = (skeleton.match(/<h1[^>]*>/gi) || []).length;
+      const h2s = (skeleton.match(/<h2[^>]*>/gi) || []).length;
+      const h3s = (skeleton.match(/<h3[^>]*>/gi) || []).length;
+      const imgs = (skeleton.match(/<img[^>]*>/gi) || []).length;
+      const lists = (skeleton.match(/<(ul|ol)[^>]*>/gi) || []).length;
+      const forms = (skeleton.match(/<form[^>]*>/gi) || []).length;
+      const hasBgImage = /background.*url|bg-img|ban-img|hero|banner/i.test(skeleton.slice(0, 500));
+      const hasColumns = /col-|column|grid|flex|row|wp-block-columns/i.test(skeleton.slice(0, 1000));
+      const text = skeleton.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const wordCount = text.split(/\s+/).length;
+
+      // Detect inner columns (child divs that are side-by-side)
+      const innerDivs = skeleton.match(/<div[^>]*class="[^"]*col[^"]*"[^>]*>/gi) || [];
+      const colCount = innerDivs.length || (hasColumns ? 2 : 1);
+
+      // Determine section type
+      let sectionType = 'content';
+      if (hasBgImage && wordCount < 100) sectionType = 'hero-banner';
+      else if (forms) sectionType = 'form-cta';
+      else if (imgs > 0 && (hasColumns || colCount > 1)) sectionType = 'image-text-columns';
+      else if (imgs > 2 && wordCount < 100) sectionType = 'image-gallery';
+      else if (lists && wordCount > 50) sectionType = 'feature-list';
+      else if (wordCount < 80 && (skeleton.match(/<a[^>]*>/gi) || []).length > 0) sectionType = 'cta-bar';
+      else if (wordCount > 200) sectionType = 'long-content';
+      else sectionType = 'short-content';
+
+      // Extract heading text (keep original)
+      const headings = [];
+      skeleton.replace(/<h([1-6])([^>]*)>([\s\S]*?)<\/h\1>/gi, (m, level, attrs, inner) => {
+        headings.push({ level, text: inner.replace(/<[^>]+>/g, '').trim() });
+        return m;
+      });
+
+      // Build the skeleton HTML based on type
+      let out = `<!-- SECTION ${sectionNum}: ${sectionType.toUpperCase()} -->\n`;
+
+      if (sectionType === 'hero-banner') {
+        out += `<div class="wf-hero">\n`;
+        if (headings.length) out += `  <h${headings[0].level}>${headings[0].text}</h${headings[0].level}>\n`;
+        else out += `  <h1>[HERO HEADING]</h1>\n`;
+        out += `  <p>[~30 words hero subtext — brief intro or tagline]</p>\n`;
+        if (imgs > 0) out += `  <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[hero image]'}">\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'image-text-columns') {
+        out += `<div class="wf-columns">\n`;
+        // Determine if image is left or right by checking order in HTML
+        const firstImgPos = skeleton.search(/<img/i);
+        const firstTextPos = skeleton.search(/<(p|h[2-6])/i);
+        const imgFirst = firstImgPos < firstTextPos;
+
+        if (imgFirst) {
+          out += `  <div class="wf-col">\n`;
+          out += `    <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[section image]'}">\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col">\n`;
+          headings.forEach(h => { out += `    <h${h.level}>${h.text}</h${h.level}>\n`; });
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — describe this section's content]</p>\n`;
+          out += `  </div>\n`;
+        } else {
+          out += `  <div class="wf-col">\n`;
+          headings.forEach(h => { out += `    <h${h.level}>${h.text}</h${h.level}>\n`; });
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — describe this section's content]</p>\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col">\n`;
+          out += `    <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[section image]'}">\n`;
+          out += `  </div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'feature-list') {
+        headings.forEach(h => { out += `<h${h.level}>${h.text}</h${h.level}>\n`; });
+        // Count list items
+        const liCount = (skeleton.match(/<li/gi) || []).length;
+        out += `<ul>\n`;
+        for (let i = 0; i < Math.max(3, liCount); i++) {
+          out += `  <li>[Feature/benefit ${i + 1} — ~15 words]</li>\n`;
+        }
+        out += `</ul>\n`;
+      } else if (sectionType === 'cta-bar') {
+        out += `<div class="wf-cta">\n`;
+        if (headings.length) out += `  <h${headings[0].level}>${headings[0].text}</h${headings[0].level}>\n`;
+        out += `  <p>[~20 words CTA text]</p>\n`;
+        out += `  <a href="#" class="wf-btn">[CTA Button Text]</a>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'form-cta') {
+        out += `<div class="wf-cta">\n`;
+        headings.forEach(h => { out += `  <h${h.level}>${h.text}</h${h.level}>\n`; });
+        out += `  <p>[~20 words — form intro text]</p>\n`;
+        out += `  <p><em>[Contact form / enquiry form appears here — not editable]</em></p>\n`;
+        out += `</div>\n`;
+      } else {
+        // long-content or short-content — keep headings, replace body text
+        headings.forEach(h => { out += `<h${h.level}>${h.text}</h${h.level}>\n`; });
+        if (headings.length === 0 && h2s === 0) out += `<h2>[Section Heading]</h2>\n`;
+
+        // Estimate paragraph count
+        const pCount = Math.max(1, (skeleton.match(/<p[^>]*>/gi) || []).length);
+        const wordsPerP = Math.max(40, Math.round(wordCount / pCount));
+        for (let i = 0; i < pCount; i++) {
+          out += `<p>[~${wordsPerP} words — paragraph ${i + 1} content]</p>\n`;
+        }
+        // Keep images in position
+        imgSrcs.forEach(img => {
+          out += `<img src="${img.src}" alt="${img.alt || '[image]'}">\n`;
+        });
+      }
+
+      out += `<!-- /SECTION ${sectionNum} -->\n`;
+      return out;
+    }
+
+    // Build the full skeleton
+    let skeleton = '';
+    blocks.forEach((block, i) => {
+      skeleton += stripToSkeleton(block.html, i + 1) + '\n';
+    });
+
+    // Build wireframe description for AI context
+    const sectionSummary = (skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).join('\n');
+
+    console.log(`[skeleton] Built skeleton: ${skeleton.length} chars, ${blocks.length} sections`);
+
+    // Save as draft content + wireframe description
+    await pool.query(
+      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2 WHERE id=$3',
+      [skeleton, `PAGE SKELETON (${blocks.length} sections from live HTML):\n${sectionSummary}`, id]
+    );
+
+    res.json({ skeleton, sections: blocks.length });
   } catch (e) {
     console.error('[skeleton] Error:', e.message);
     res.status(500).json({ error: e.message });
