@@ -4150,8 +4150,17 @@ ${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All ke
 PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
 ${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
 
-CURRENT CONTENT (${actualWords} words):
+${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? `SKELETON TEMPLATE (fill in placeholders, preserve ALL HTML structure):
 ${contentToOptimise.slice(0, 12000)}
+
+CRITICAL: This is a SKELETON with placeholders. You MUST:
+- Keep the EXACT HTML structure (all divs, classes, section comments)
+- Replace ONLY the placeholder text like "[~80 words about...]" with real content
+- Keep all .wf-columns, .wf-col, .wf-hero, .wf-cta divs exactly as they are
+- Keep all [IMAGE: ...] tags as <img> tags with descriptive alt text
+- Do NOT flatten the structure into plain paragraphs
+- The layout structure is sacred — only the text content changes` : `CURRENT CONTENT (${actualWords} words):
+${contentToOptimise.slice(0, 12000)}`}
 
 CRITICAL REMINDERS:
 - You MUST produce at least 2,000 words. Write 18+ substantial paragraphs of 3-5 sentences each. This is NON-NEGOTIABLE.
@@ -4838,6 +4847,141 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   } catch (e) {
     console.error('[preview] Error:', e.message);
     res.status(500).send('Preview error: ' + e.message);
+  }
+});
+
+// Generate content skeleton from wireframe image — vision AI analyzes screenshot, produces HTML template
+app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Need wireframe image OR page_url to screenshot
+    let imageBase64 = item.wireframe_image;
+    let imageMime = item.wireframe_mime || 'image/jpeg';
+
+    if (!imageBase64) {
+      // Try to capture screenshot first
+      const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+      if (!pageUrl) return res.status(400).json({ error: 'No wireframe image and no page URL — capture page first' });
+
+      const apiKey = process.env.PAGESPEED_API_KEY;
+      if (!apiKey) return res.status(400).json({ error: 'No wireframe image — click Capture Page first' });
+
+      console.log(`[skeleton] No wireframe image, capturing via PageSpeed: ${pageUrl}`);
+      const psiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(pageUrl)}&category=PERFORMANCE&strategy=MOBILE&key=${apiKey}`;
+      const psiResp = await fetch(psiUrl, { signal: AbortSignal.timeout(60000) });
+      const psiData = await psiResp.json();
+      const screenshot = psiData?.lighthouseResult?.audits?.['final-screenshot']?.details?.data
+        || psiData?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
+      if (!screenshot) return res.status(400).json({ error: 'Could not capture page screenshot — click Capture Page manually first' });
+
+      imageBase64 = screenshot.replace(/^data:[^;]+;base64,/, '');
+      imageMime = 'image/jpeg';
+      // Save for future use
+      await pool.query('UPDATE content_queue SET wireframe_image=$1, wireframe_mime=$2 WHERE id=$3', [imageBase64, imageMime, id]);
+    }
+
+    // Strip data: prefix if present
+    const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+
+    // Also fetch the live HTML to get real CSS classes and structure
+    let liveHtmlSnippet = '';
+    const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+    if (pageUrl) {
+      try {
+        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' } });
+        if (resp.ok) {
+          const fullHtml = await resp.text();
+          // Extract the middle content (between header and footer) to give AI the real structure
+          const headerEnd = fullHtml.search(/<\/header>/i);
+          const footerStart = fullHtml.search(/<footer/i);
+          const middle = fullHtml.slice(
+            headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+            footerStart !== -1 ? footerStart : fullHtml.length
+          );
+          liveHtmlSnippet = middle.slice(0, 8000); // cap for token limits
+        }
+      } catch (e) { console.log('[skeleton] Could not fetch live HTML:', e.message); }
+    }
+
+    const focusKw = item.draft_focus_keyword || item.current_focus_keyword || '';
+    const targetKws = [];
+    try {
+      const kwRows = (await pool.query('SELECT keyword FROM rank_keywords WHERE project_id=$1', [projectId])).rows;
+      kwRows.forEach(r => targetKws.push(r.keyword));
+    } catch(e) {}
+
+    console.log(`[skeleton] Generating skeleton from wireframe image for item ${id}`);
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      system: `You are an expert web designer and SEO copywriter. You analyze webpage screenshots and produce HTML content skeletons that exactly match the visual layout.
+
+Your job: Look at the screenshot of a webpage, identify every visual section and its layout, then produce an HTML skeleton with placeholder text that matches the design exactly.
+
+RULES:
+- Identify EVERY visual section from top to bottom: hero banners, two-column layouts, image+text blocks, feature grids, CTA bars, FAQ accordions, testimonial sections, etc.
+- For each section, produce the correct HTML structure
+- Use these CSS classes for layout:
+  * .wf-hero — hero/banner sections (full-width, centered)
+  * .wf-columns — multi-column layouts (flexbox, side by side)
+  * .wf-col — individual column inside .wf-columns
+  * .wf-cta — call-to-action bars
+  * .wf-btn — CTA buttons
+  * .wf-features — feature/service grids
+  * .wf-feature-item — individual feature card
+  * .wf-faq — FAQ section
+  * .wf-testimonial — testimonial block
+- Use real heading tags (h1, h2, h3) matching what you see
+- Put [IMAGE: description of what image shows] where images appear
+- Put placeholder text that describes what content goes there, with approximate word count: e.g. "[~80 words about the service benefits]"
+- Mark each section with <!-- SECTION N: TYPE --> comments
+- Include the EXACT number of sections you see — don't add or remove any
+- If you see a two-column layout with image on left and text on right, produce that exact structure
+
+${liveHtmlSnippet ? `\nHere is the actual HTML source of the page content area. Use the real CSS classes and structure from this HTML where possible:\n<source_html>\n${liveHtmlSnippet}\n</source_html>` : ''}
+
+OUTPUT: Return ONLY the HTML skeleton. No JSON wrapping. No explanation. Just the HTML.`,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: imageMime, data: cleanBase64 } },
+          { type: 'text', text: `Analyze this webpage screenshot and produce an HTML content skeleton that matches its visual layout exactly.
+
+Business: ${project.business_name || project.name}
+Industry: ${project.industry || 'service'}
+Focus keyword: ${focusKw}
+${targetKws.length ? 'Target keywords: ' + targetKws.slice(0, 10).join(', ') : ''}
+
+Produce the HTML skeleton with placeholder text for each section. Match the exact layout — columns, image positions, heading hierarchy, CTAs — everything you see in the screenshot.` }
+        ]
+      }]
+    });
+
+    let skeleton = response.content[0]?.text || '';
+
+    // Clean up — remove any markdown code fences if AI wrapped it
+    skeleton = skeleton.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+
+    console.log(`[skeleton] Generated skeleton: ${skeleton.length} chars, ${(skeleton.match(/<!-- SECTION/g) || []).length} sections`);
+
+    // Save as draft content and wireframe text description
+    await pool.query(
+      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2 WHERE id=$3',
+      [skeleton, `SKELETON GENERATED FROM SCREENSHOT\n${(skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).join('\n')}`, id]
+    );
+
+    res.json({ skeleton, sections: (skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).length });
+  } catch (e) {
+    console.error('[skeleton] Error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

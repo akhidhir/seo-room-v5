@@ -1066,6 +1066,19 @@
     .metric-footer dd {
       color: var(--text2);
     }
+
+    /* Wireframe skeleton layout classes — render in editor + preview */
+    .wf-columns { display: flex; gap: 20px; align-items: flex-start; margin: 16px 0; flex-wrap: wrap; }
+    .wf-col { flex: 1; min-width: 200px; }
+    .wf-col img { width: 100%; border-radius: 8px; }
+    .wf-hero { text-align: center; padding: 24px 16px; margin-bottom: 16px; background: rgba(99,102,241,0.05); border-radius: 8px; border: 1px dashed rgba(99,102,241,0.2); }
+    .wf-hero h1 { font-size: 28px; margin-bottom: 8px; }
+    .wf-cta { text-align: center; padding: 20px; margin: 16px 0; background: rgba(34,197,94,0.05); border-radius: 8px; border: 1px dashed rgba(34,197,94,0.2); }
+    .wf-btn { display: inline-block; padding: 10px 24px; background: var(--accent); color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600; margin-top: 8px; }
+    .wf-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 16px 0; }
+    .wf-feature-item { padding: 16px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid var(--border); }
+    .wf-faq { margin: 16px 0; }
+    .wf-testimonial { padding: 16px; margin: 12px 0; border-left: 3px solid var(--accent); background: rgba(99,102,241,0.03); border-radius: 0 8px 8px 0; font-style: italic; }
   </style>
 </head>
 <body>
@@ -9451,6 +9464,31 @@
                 }
               },
                 React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 4 } }), 'Remove'
+              ),
+              // Generate Skeleton button — the key workflow button
+              React.createElement('button', {
+                className: 'btn btn-small',
+                style: { background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#fff', border: 'none', fontWeight: 600 },
+                onClick: async (e) => {
+                  const btn = e.currentTarget;
+                  btn.disabled = true;
+                  btn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:6px"></i>Generating Skeleton...';
+                  try {
+                    const r = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/generate-skeleton`, { method: 'POST' });
+                    if (r.skeleton) {
+                      setSelectedItem(prev => ({ ...prev, draft_content: r.skeleton, page_wireframe: prev.page_wireframe || 'Skeleton generated from screenshot' }));
+                      // Refresh the item from server
+                      const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
+                      if (fresh) setSelectedItem(fresh);
+                    } else {
+                      alert(r.error || 'Failed to generate skeleton');
+                    }
+                  } catch (err) { alert('Error: ' + err.message); }
+                  btn.disabled = false;
+                  btn.innerHTML = '<i class="fas fa-bone" style="margin-right:6px"></i>Generate Skeleton';
+                }
+              },
+                React.createElement('i', { className: 'fas fa-bone', style: { marginRight: 6 } }), 'Generate Skeleton'
               )
             ),
 
