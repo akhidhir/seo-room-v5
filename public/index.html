@@ -9105,21 +9105,32 @@
         await loadItems();
       };
 
-      // AI Optimise
+      // AI Optimise — sends all score tips (issues) to the server for AI to fix
       const handleOptimise = async () => {
         if (!selectedItem || !pid || optimising) return;
         setOptimising(true);
         try {
+          // Send ALL tips including success ones — server filters to issues only
           const tips = scoreData?.tips || [];
-          const missingKws = (scoreData?.keywordAnalysis || []).filter(k => k.count === 0);
+          const allKwAnalysis = scoreData?.keywordAnalysis || [];
+          const missingKws = allKwAnalysis.filter(k => k.count === 0);
+          const usedKws = allKwAnalysis.filter(k => k.count > 0);
           const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/optimise', {
             method: 'POST',
             body: {
               tips: tips,
               missing_keywords: missingKws.map(k => k.keyword),
-              target_keywords: targetKeywords,
+              target_keywords: targetKeywords.map(k => typeof k === 'string' ? { keyword: k } : k),
               content_score: scoreData?.score || 0,
-              stats: { ...(scoreData?.stats || {}), focus_keyword_count: scoreData?.focusCount || 0 }
+              stats: {
+                words: scoreData?.stats?.words || 0,
+                h2s: scoreData?.stats?.h2s || 0,
+                h3s: scoreData?.stats?.h3s || 0,
+                links: scoreData?.stats?.links || 0,
+                imgs: scoreData?.stats?.imgs || 0,
+                paragraphs: scoreData?.stats?.paragraphs || 0,
+                focus_keyword_count: scoreData?.focusCount || 0
+              }
             }
           });
           if (r.error) { alert('Optimise failed: ' + r.error); }
@@ -9190,7 +9201,9 @@
                 React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
               ),
               React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
-              React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)' } }, selectedItem.page_url)
+              React.createElement('a', { href: selectedItem.page_url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', selectedItem.page_url
+              )
             ),
             React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
               // AI Optimise button

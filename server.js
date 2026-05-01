@@ -3588,6 +3588,49 @@ app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Helper: fetch live page content for Elementor or when WP REST content is thin
+async function fetchLivePageContent(pageUrl, project, pageId) {
+  let content = '';
+  const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+  // Try WP REST API first
+  if (wpBase && pageId) {
+    const authHeaders = getWpAuthHeaders(project);
+    for (const type of ['pages', 'posts']) {
+      try {
+        const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (wpRes.ok) {
+          const wpData = await wpRes.json();
+          content = wpData.content?.rendered || '';
+          break;
+        }
+      } catch (e) { /* try next */ }
+    }
+  }
+  // If content is thin (Elementor), fetch live HTML
+  const plainText = content.replace(/<[^>]+>/g, '').trim();
+  const wc = plainText ? plainText.split(/\s+/).length : 0;
+  if (wc < 50 && pageUrl) {
+    try {
+      const liveRes = await fetch(pageUrl);
+      if (liveRes.ok) {
+        const liveHtml = await liveRes.text();
+        const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                          liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                          liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+        if (mainMatch) {
+          const liveText = mainMatch[1].replace(/<[^>]+>/g, '').trim();
+          if (liveText.split(/\s+/).length > wc) {
+            content = mainMatch[1];
+          }
+        }
+      }
+    } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
+  }
+  return content;
+}
+
 // Generate AI draft for a content queue item (enhanced with keyword context + internal linking)
 app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
   try {
@@ -3595,6 +3638,21 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Auto-fetch content if missing or thin
+    let currentContent = item.current_content || '';
+    const currentPlain = currentContent.replace(/<[^>]+>/g, '').trim();
+    const currentWc = currentPlain ? currentPlain.split(/\s+/).length : 0;
+    if (currentWc < 50 && item.page_url) {
+      console.log(`[generate-draft] Content thin (${currentWc} words), fetching live content for ${item.page_url}`);
+      currentContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const newWc = currentContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+      if (newWc > currentWc) {
+        // Update stored content
+        await pool.query('UPDATE content_queue SET current_content=$1, current_word_count=$2 WHERE id=$3', [currentContent, newWc, id]);
+        console.log(`[generate-draft] Updated stored content: ${currentWc} → ${newWc} words`);
+      }
+    }
 
     // Get internal linking candidates
     const pagesRes = await pool.query(
@@ -3641,7 +3699,7 @@ Pages available for internal linking:
 ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
 
 Current content (first 3000 chars):
-${(item.current_content || '').slice(0, 3000)}`;
+${(currentContent || '').slice(0, 3000)}`;
     } else if (item.content_type === 'meta_only') {
       systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
 Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}`;
@@ -3911,6 +3969,22 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
+    // Auto-fetch content if thin
+    let contentToOptimise = item.draft_content || item.current_content || '';
+    const contentPlain = contentToOptimise.replace(/<[^>]+>/g, '').trim();
+    const contentWc = contentPlain ? contentPlain.split(/\s+/).length : 0;
+    if (contentWc < 50 && item.page_url) {
+      console.log(`[optimise] Content thin (${contentWc} words), fetching live content`);
+      const liveContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const liveWc = liveContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+      if (liveWc > contentWc) {
+        contentToOptimise = liveContent;
+        // Store it for future use
+        await pool.query('UPDATE content_queue SET current_content=$1, current_word_count=$2 WHERE id=$3', [liveContent, liveWc, id]);
+        console.log(`[optimise] Fetched live content: ${contentWc} → ${liveWc} words`);
+      }
+    }
+
     const pagesRes = await pool.query(
       `SELECT page_url, page_title FROM (
         SELECT DISTINCT page_url, page_title FROM content_queue
@@ -3921,28 +3995,39 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 
     const allMissing = (missing_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
 
+    // Build numbered issue list from tips — filter out success items
+    const issueItems = (tips || []).filter(t => {
+      const type = t.type || '';
+      const msg = t.msg || (typeof t === 'string' ? t : '');
+      return type !== 'success' && type !== 'good' && !msg.startsWith('Great') && msg.length > 0;
+    });
+    const numberedIssues = issueItems.map((t, i) => `${i + 1}. [${(t.type || 'fix').toUpperCase()}] ${t.msg || t}`).join('\n');
+
     const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
-You will receive existing page content along with its content score, specific issues to fix, and target keywords. Your job is to rewrite the content to fix ALL issues and maximize SEO performance.
+
+You will receive existing page content along with numbered issues from its SEO content score panel. You MUST fix EVERY numbered issue. Do NOT skip any.
 
 CRITICAL RULES:
-- Keep ALL existing good content — don't remove paragraphs
-- Fix EVERY specific issue listed below
+- Fix EVERY numbered issue below — each one directly affects the content score
+- Keep ALL existing good content — don't remove paragraphs or sections
+- EXPAND content substantially — add new H2/H3 sections, paragraphs, FAQs, local info
 - Write naturally in Australian English
 - Output clean HTML only: h2, h3, h4, p, ul, ol, li, a, strong, em
 - Focus keyword must appear 3-8 times naturally (not more, not less)
 - Naturally weave in ALL missing keywords listed below — they MUST appear at least once each
-- Meta title should be 50-60 characters, include the focus keyword
-- Meta description should be 140-160 characters with CTA
+- Add internal links using <a href="URL">anchor text</a> to the pages listed below
+- Meta title: 50-60 characters, include focus keyword
+- Meta description: 140-160 characters, include CTA and focus keyword
 
 OUTPUT FORMAT (respond in valid JSON only):
 {
   "content_html": "<h2>...</h2><p>...</p>...",
   "meta_title": "optimised meta title (50-60 chars)",
   "meta_description": "optimised meta description (140-160 chars)",
-  "ai_notes": "Brief summary of changes made"
+  "ai_notes": "List which numbered issues you fixed and how"
 }`;
 
-    const issueList = (tips || []).map(t => `- ${t.msg || t}`).join('\n');
+    const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
 
     const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
 
@@ -3950,33 +4035,34 @@ PAGE: ${item.page_url}
 FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — need 3-8)
 
 CURRENT STATS:
-- Words: ${stats?.words || 0} (target: 800+)
-- H2 headings: ${stats?.h2s || 0} (target: 2+)
-- H3 subheadings: ${stats?.h3s || 0} (target: 1+)
-- Internal links: ${stats?.links || 0} (target: 2+)
+- Words: ${actualWords} (target: 1500+)
+- H2 headings: ${stats?.h2s || 0} (target: 3+)
+- H3 subheadings: ${stats?.h3s || 0} (target: 2+)
+- Internal links: ${stats?.links || 0} (target: 3+)
+- Images: ${stats?.imgs || 0} (target: 1+)
 
-ISSUES TO FIX:
-${issueList || '- General optimisation needed'}
+ISSUES TO FIX (you MUST address ALL of these):
+${numberedIssues || '1. General optimisation needed — expand content, improve structure, add keywords'}
 
-TARGET KEYWORDS:
-${(target_keywords || []).map(k => `- "${k.keyword || k}"`).join('\n') || '- No target keywords set'}
+TARGET KEYWORDS TO INCLUDE:
+${(target_keywords || []).map(k => `- "${typeof k === 'string' ? k : k.keyword || k}"`).join('\n') || '- No target keywords set'}
 
 MISSING KEYWORDS (MUST add naturally):
 ${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All keywords present'}
 
-PAGES FOR INTERNAL LINKING:
-${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
+${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
 
-CURRENT CONTENT:
-${(item.draft_content || item.current_content || '').slice(0, 4000)}
+CURRENT CONTENT (${actualWords} words):
+${contentToOptimise.slice(0, 6000)}
 
-Rewrite the full content fixing all issues.`;
+Rewrite the FULL content fixing ALL numbered issues above. The output must be substantially longer and better structured than the input.`;
 
-    console.log(`[optimise] Starting AI optimisation for item ${id}`);
+    console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix`);
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4000,
+      max_tokens: 8000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     });
@@ -4005,8 +4091,8 @@ Rewrite the full content fixing all issues.`;
     const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
     const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
 
-    const currentText = (item.draft_content || item.current_content || '').replace(/<[^>]+>/g, '');
-    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+    const currentText2 = contentToOptimise.replace(/<[^>]+>/g, '');
+    const currentWords = currentText2.trim() ? currentText2.trim().split(/\s+/).length : 0;
 
     console.log(`[optimise] Preview ready: ${currentWords} → ${proposedWords} words`);
     res.json({
