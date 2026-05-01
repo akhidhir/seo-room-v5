@@ -4106,6 +4106,41 @@ async function crawlSiteGraph(project) {
 
   const pages = await discoverPages(fullUrl, wpUrl, getWpAuthHeaders(project));
 
+  // Resolve slug-based page_ids to numeric WordPress IDs
+  const authHeaders = getWpAuthHeaders(project);
+  if (wpUrl && authHeaders) {
+    const wpBase = wpUrl.replace(/\/$/, '');
+    const slugToId = {};
+    try {
+      for (const type of ['pages', 'posts']) {
+        let page = 1;
+        while (page <= 5) {
+          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          if (!resp.ok) break;
+          const items = await resp.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          items.forEach(item => {
+            slugToId[item.slug] = item.id;
+            if (item.link) {
+              const linkSlug = item.link.replace(fullUrl, '').replace(/^\/|\/$/g, '') || 'home';
+              slugToId[linkSlug] = item.id;
+            }
+          });
+          if (items.length < 100) break;
+          page++;
+        }
+      }
+    } catch (e) { console.log('[site-graph] WP ID resolution failed:', e.message); }
+
+    // Update pages with numeric IDs
+    for (const p of pages) {
+      if (isNaN(Number(p.page_id))) {
+        const wpId = slugToId[p.slug] || slugToId[p.page_id];
+        if (wpId) p.page_id = String(wpId);
+      }
+    }
+  }
+
   const nodes = [];
   const edges = [];
   const urlToIdx = {};
