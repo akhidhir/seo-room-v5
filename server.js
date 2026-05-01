@@ -4089,7 +4089,7 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 You will receive page content and its SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
 
 SCORING SYSTEM (you must hit EVERY threshold):
-1. WORDS: 25 points if 1,500+ words. You MUST write at least 1,600 words of content. Count them.
+1. WORDS: 25 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
 2. H2 HEADINGS: 15 points if 3+ H2s. You MUST include at least 4 <h2> tags.
 3. H3 SUBHEADINGS: 5 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
 4. INTERNAL LINKS: 10 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
@@ -4145,7 +4145,7 @@ CURRENT CONTENT (${actualWords} words):
 ${contentToOptimise.slice(0, 12000)}
 
 CRITICAL REMINDERS:
-- You MUST produce at least 1,600 words. Count your paragraphs — aim for 15+ substantial paragraphs.
+- You MUST produce at least 2,000 words. Write 18+ substantial paragraphs of 3-5 sentences each. This is NON-NEGOTIABLE.
 - Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear EXACTLY 5 times in the entire content. NOT 4, NOT 6, NOT 12. EXACTLY 5.
 - After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
 - Rewrite the FULL content fixing ALL numbered issues above.`;
@@ -4154,7 +4154,7 @@ CRITICAL REMINDERS:
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
+      max_tokens: 16000,
       system: systemPrompt,
       messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
     });
