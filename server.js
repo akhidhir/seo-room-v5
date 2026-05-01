@@ -4142,9 +4142,13 @@ PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
 ${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
 
 CURRENT CONTENT (${actualWords} words):
-${contentToOptimise.slice(0, 6000)}
+${contentToOptimise.slice(0, 12000)}
 
-Rewrite the FULL content fixing ALL numbered issues above. The output must be substantially longer and better structured than the input.`;
+CRITICAL REMINDERS:
+- You MUST produce at least 1,600 words. Count your paragraphs — aim for 15+ substantial paragraphs.
+- Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear EXACTLY 5 times in the entire content. NOT 4, NOT 6, NOT 12. EXACTLY 5.
+- After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
+- Rewrite the FULL content fixing ALL numbered issues above.`;
 
     console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix`);
 
@@ -4164,9 +4168,34 @@ Rewrite the FULL content fixing ALL numbered issues above. The output must be su
       return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
     }
 
+    // Post-process: enforce focus keyword count (3-8 range, target 5)
+    let finalHtml = parsed.content_html || '';
+    const focusKw = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase().trim();
+    if (focusKw && finalHtml) {
+      const kwRegex = new RegExp(focusKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      const matches = finalHtml.match(kwRegex) || [];
+      if (matches.length > 8) {
+        // Too many — replace excess with synonyms/variations
+        let count = 0;
+        const maxKeep = 5;
+        finalHtml = finalHtml.replace(kwRegex, (match) => {
+          count++;
+          if (count <= maxKeep) return match; // Keep first 5
+          // Replace with variation — just remove the match and use surrounding context
+          const words = match.split(/\s+/);
+          if (words.length > 2) {
+            // Multi-word: use partial or rephrase
+            return words.slice(0, Math.ceil(words.length / 2)).join(' ') + ' services';
+          }
+          return 'our services';
+        });
+        console.log(`[optimise] Post-process: reduced focus keyword from ${matches.length}x to ~${maxKeep}x`);
+      }
+    }
+
     // Return proposed changes as preview — don't save yet
     const proposed = {
-      content_html: parsed.content_html || null,
+      content_html: finalHtml,
       meta_title: parsed.meta_title || null,
       meta_description: parsed.meta_description || null,
       ai_notes: parsed.ai_notes || 'Content improved',
