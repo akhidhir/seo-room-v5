@@ -8974,6 +8974,17 @@
       const [scoreData, setScoreData] = useState(null);
       const [targetKeywords, setTargetKeywords] = useState([]);
       const [comments, setComments] = useState([]);
+      // v4 features
+      const [optimising, setOptimising] = useState(false);
+      const [optimisePreview, setOptimisePreview] = useState(null);
+      const [applyingOptimise, setApplyingOptimise] = useState(false);
+      const [expandingContent, setExpandingContent] = useState(false);
+      const [showExpandPopup, setShowExpandPopup] = useState(false);
+      const [expandWords, setExpandWords] = useState(1500);
+      const [generating, setGenerating] = useState(null); // item id being generated
+      const [batchSelected, setBatchSelected] = useState(new Set());
+      const [batchGenerating, setBatchGenerating] = useState(false);
+      const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
 
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
@@ -9016,12 +9027,13 @@
         });
         setTargetKeywords((item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword));
         setComments(item.comments || []);
+        setOptimisePreview(null);
       };
 
       const handleSaveEdit = async () => {
         if (!selectedItem || !pid) return;
         try {
-          await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
+          const updated = await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
             method: 'PUT',
             body: {
               draft_content: editContent,
@@ -9030,22 +9042,22 @@
               draft_focus_keyword: editMeta.focus_keyword,
               target_keywords: targetKeywords,
               comments: comments,
-              stage: stage
+              stage: selectedItem.stage
             }
           });
+          if (updated && !updated.error) {
+            setSelectedItem(prev => ({ ...prev, ...updated, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword }));
+          }
           await loadItems();
-          setSelectedItem(null);
         } catch (e) { alert('Error saving: ' + e.message); }
       };
 
       const handleApprove = async (item) => {
         if (!pid) return;
         try {
-          await api('/projects/' + pid + '/content-queue/' + item.id, {
-            method: 'PUT',
-            body: { stage: 'approved' }
-          });
+          await api('/projects/' + pid + '/content-queue/' + item.id, { method: 'PUT', body: { stage: 'approved' } });
           await loadItems();
+          if (selectedItem && selectedItem.id === item.id) setSelectedItem(null);
         } catch (e) { alert('Error: ' + e.message); }
       };
 
@@ -9053,70 +9065,281 @@
         if (!pid || !confirm('Publish to WordPress?')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/publish', { method: 'POST' });
-          if (data && !data.error) { await loadItems(); alert('Published!'); }
+          if (data && !data.error) { await loadItems(); alert('Published!'); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
           else { alert(data?.error || 'Publish failed'); }
         } catch (e) { alert('Error: ' + e.message); }
       };
 
+      // Generate Draft for a queue item
+      const handleGenerateDraft = async (item) => {
+        if (!pid || generating) return;
+        setGenerating(item.id);
+        try {
+          const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/generate-draft', { method: 'POST' });
+          if (data && !data.error) {
+            await loadItems();
+            if (selectedItem && selectedItem.id === item.id) {
+              setSelectedItem(data);
+              setEditContent(data.draft_content || '');
+              setEditMeta({ meta_title: data.draft_meta_title || '', meta_desc: data.draft_meta_desc || '', focus_keyword: data.draft_focus_keyword || '' });
+            }
+          } else { alert(data?.error || 'Generate failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setGenerating(null);
+      };
+
+      // Batch generate drafts for selected queue items
+      const handleBatchGenerate = async () => {
+        if (!pid || batchSelected.size === 0 || batchGenerating) return;
+        setBatchGenerating(true);
+        const ids = [...batchSelected];
+        setBatchProgress({ done: 0, total: ids.length });
+        for (let i = 0; i < ids.length; i++) {
+          try {
+            await api('/projects/' + pid + '/content-queue/' + ids[i] + '/generate-draft', { method: 'POST' });
+          } catch (e) { console.error('Batch generate error for', ids[i], e); }
+          setBatchProgress({ done: i + 1, total: ids.length });
+        }
+        setBatchGenerating(false);
+        setBatchSelected(new Set());
+        await loadItems();
+      };
+
+      // AI Optimise
+      const handleOptimise = async () => {
+        if (!selectedItem || !pid || optimising) return;
+        setOptimising(true);
+        try {
+          const tips = scoreData?.tips || [];
+          const missingKws = (scoreData?.keywordAnalysis || []).filter(k => k.count === 0);
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/optimise', {
+            method: 'POST',
+            body: {
+              tips: tips,
+              missing_keywords: missingKws.map(k => k.keyword),
+              target_keywords: targetKeywords,
+              content_score: scoreData?.score || 0,
+              stats: { ...(scoreData?.stats || {}), focus_keyword_count: scoreData?.focusCount || 0 }
+            }
+          });
+          if (r.error) { alert('Optimise failed: ' + r.error); }
+          else if (r.preview) { setOptimisePreview(r); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setOptimising(false);
+      };
+
+      // Apply optimise
+      const handleApplyOptimise = async () => {
+        if (!optimisePreview || !pid) return;
+        setApplyingOptimise(true);
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + (optimisePreview.item_id || selectedItem.id) + '/apply-optimise', {
+            method: 'POST', body: { proposed: optimisePreview.proposed }
+          });
+          if (r && !r.error) {
+            setSelectedItem(r);
+            setEditContent(r.draft_content || '');
+            setEditMeta({ meta_title: r.draft_meta_title || '', meta_desc: r.draft_meta_desc || '', focus_keyword: r.draft_focus_keyword || '' });
+            setOptimisePreview(null);
+            await loadItems();
+          } else { alert(r?.error || 'Apply failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setApplyingOptimise(false);
+      };
+
+      // Expand content
+      const handleExpand = async () => {
+        if (!selectedItem || !pid || expandingContent) return;
+        setExpandingContent(true);
+        setShowExpandPopup(false);
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/expand', {
+            method: 'POST', body: { target_words: expandWords, target_keywords: targetKeywords }
+          });
+          if (r && !r.error) {
+            setSelectedItem(r);
+            setEditContent(r.draft_content || '');
+            await loadItems();
+          } else { alert(r?.error || 'Expand failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setExpandingContent(false);
+      };
+
+      // Handle item update from ChatPanel
+      const handleItemUpdate = (updatedItem) => {
+        setSelectedItem(updatedItem);
+        setEditContent(updatedItem.draft_content || cleanWpHtml(updatedItem.current_content) || '');
+        setEditMeta({
+          meta_title: updatedItem.draft_meta_title || updatedItem.current_meta_title || '',
+          meta_desc: updatedItem.draft_meta_desc || updatedItem.current_meta_desc || '',
+          focus_keyword: updatedItem.draft_focus_keyword || updatedItem.current_focus_keyword || ''
+        });
+        loadItems();
+      };
+
       if (selectedItem) {
-        // Detail view: editor with score panel and chat
-        return React.createElement('div', { style: { display: 'flex', gap: 24, height: '100%', overflow: 'hidden' } },
-          React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto' } },
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' } },
-              React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 700 } }, selectedItem.page_title),
-              React.createElement('div', { style: { display: 'flex', gap: 8 } },
-                React.createElement('button', { onClick: () => setSelectedItem(null), style: { padding: '8px 16px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' } }, 'Back to List'),
-                React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } }, 'Save Changes'),
-                stage === 'drafts' && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } }, 'Approve'),
-                stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } }, 'Publish')
+        const isPublished = selectedItem.stage === 'published';
+        const hasDraft = !!(selectedItem.draft_content);
+
+        // Detail view: editor with score panel, chat, optimise
+        return React.createElement('div', null,
+          // Header with action buttons
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 } },
+            React.createElement('div', null,
+              React.createElement('a', { href: '#', onClick: e => { e.preventDefault(); setSelectedItem(null); }, style: { color: 'var(--accent)', fontSize: 14, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 } },
+                React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
+              ),
+              React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
+              React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)' } }, selectedItem.page_url)
+            ),
+            React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+              // AI Optimise button
+              !isPublished && hasDraft && React.createElement('button', {
+                onClick: handleOptimise, disabled: optimising,
+                style: { background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
+                  border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer',
+                  boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
+              }, optimising ?
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Optimising...') :
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Optimise')
+              ),
+              // Save
+              !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
+                React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
+              ),
+              // Approve
+              selectedItem.stage === 'drafts' && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
+              // Publish
+              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Publish'),
+              // Expand / Generate More
+              !isPublished && hasDraft && React.createElement('button', {
+                onClick: () => setShowExpandPopup(true), disabled: expandingContent,
+                style: { padding: '8px 16px', background: '#06b6d4', color: '#fff', border: 'none', borderRadius: 8, cursor: expandingContent ? 'wait' : 'pointer', fontSize: 14 }
+              }, expandingContent ?
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Expanding...') :
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-pen-nib', style: { marginRight: 6 } }), 'Generate More')
+              ),
+              // Generate / Regenerate
+              !isPublished && React.createElement('button', {
+                onClick: () => { if (!generating && (!hasDraft || confirm('Regenerate will rewrite this draft. Continue?'))) handleGenerateDraft(selectedItem); },
+                disabled: !!generating,
+                style: { padding: '8px 16px', background: generating ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 8, cursor: generating ? 'wait' : 'pointer', fontSize: 14 }
+              }, generating === selectedItem.id ?
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Generating...') :
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-rotate', style: { marginRight: 6 } }), hasDraft ? 'Regenerate' : 'Generate Draft')
+              )
+            )
+          ),
+
+          // Expand content popup
+          showExpandPopup && React.createElement('div', {
+            onClick: () => setShowExpandPopup(false),
+            style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+          },
+            React.createElement('div', { onClick: e => e.stopPropagation(),
+              style: { background: 'var(--card)', borderRadius: 12, padding: 28, border: '1px solid var(--border)', width: 420, maxWidth: '90vw' }
+            },
+              React.createElement('h3', { style: { marginTop: 0, marginBottom: 16, fontSize: 18 } },
+                React.createElement('i', { className: 'fa-solid fa-pen-nib', style: { marginRight: 8, color: '#06b6d4' } }), 'Generate More Content'
+              ),
+              React.createElement('div', { style: { fontSize: 14, color: 'var(--text2)', marginBottom: 16 } }, 'Claude will add new sections to expand your draft.'),
+              React.createElement('div', { style: { marginBottom: 16 } },
+                React.createElement('label', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 8 } }, 'Target total word count:'),
+                React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  [1000, 1500, 2000, 2500, 3000].map(w => React.createElement('button', {
+                    key: w, onClick: () => setExpandWords(w),
+                    style: { fontSize: 13, padding: '6px 14px', background: expandWords === w ? '#06b6d4' : 'var(--bg3)', color: expandWords === w ? '#fff' : 'var(--text)',
+                      border: 'none', borderRadius: 6, cursor: 'pointer', flex: 1 }
+                  }, w))
+                ),
+                React.createElement('input', { type: 'number', value: expandWords, onChange: e => setExpandWords(parseInt(e.target.value) || 1500),
+                  placeholder: 'Or type custom...',
+                  style: { width: '100%', padding: 8, marginTop: 8, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } })
+              ),
+              targetKeywords.length > 0 && React.createElement('div', { style: { marginBottom: 16, padding: '8px 12px', background: 'rgba(6,182,212,0.1)', borderRadius: 6, fontSize: 13, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fa-solid fa-bullseye', style: { color: '#06b6d4', marginRight: 6 } }),
+                'Using ', React.createElement('strong', null, targetKeywords.length), ' target keywords'
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
+                React.createElement('button', { onClick: () => setShowExpandPopup(false), style: { background: 'var(--bg3)', fontSize: 14, padding: '8px 20px', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Cancel'),
+                React.createElement('button', { onClick: handleExpand, style: { background: '#06b6d4', fontSize: 14, padding: '8px 20px', border: 'none', color: '#fff', borderRadius: 6, cursor: 'pointer' } },
+                  React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'Generate'
+                )
+              )
+            )
+          ),
+
+          // Optimise preview modal
+          optimisePreview && React.createElement(OptimisePreviewModal, {
+            preview: optimisePreview, item: selectedItem, project: project, scoreData: scoreData,
+            applyingOptimise: applyingOptimise, onApply: handleApplyOptimise,
+            onReject: () => setOptimisePreview(null), onUpdate: setOptimisePreview
+          }),
+
+          // AI Notes
+          selectedItem.ai_notes && React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'AI Strategy Notes'),
+            React.createElement('div', { style: { color: 'var(--text2)', fontSize: 14, lineHeight: 1.6 } }, selectedItem.ai_notes)
+          ),
+
+          // Meta info card
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+              React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Title'),
+                React.createElement('input', { value: editMeta.meta_title, onChange: e => setEditMeta(prev => ({ ...prev, meta_title: e.target.value })),
+                  readOnly: isPublished,
+                  style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } }),
+                React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_title || '').length + ' / 60 chars')
+              ),
+              React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Focus Keyword'),
+                React.createElement('input', { value: editMeta.focus_keyword, onChange: e => setEditMeta(prev => ({ ...prev, focus_keyword: e.target.value })),
+                  readOnly: isPublished,
+                  style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#22c55e', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontWeight: 600 } })
               )
             ),
-            React.createElement('div', { style: { marginBottom: 20 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, color: 'var(--text3)', marginBottom: 6, textTransform: 'uppercase', fontWeight: 600 } }, 'Meta Title'),
-              React.createElement('input', {
-                value: editMeta.meta_title,
-                onChange: e => setEditMeta(prev => ({ ...prev, meta_title: e.target.value })),
-                style: { width: '100%', padding: '8px 12px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 }
-              })
+            React.createElement('div', { style: { marginTop: 16 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Description'),
+              React.createElement('textarea', { value: editMeta.meta_desc, onChange: e => setEditMeta(prev => ({ ...prev, meta_desc: e.target.value })),
+                readOnly: isPublished, rows: 2,
+                style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit' } }),
+              React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
+            )
+          ),
+
+          // Content editor + Score panel side by side
+          React.createElement('div', { style: { display: 'flex', gap: 20, alignItems: 'flex-start' } },
+            React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+              React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' } },
+                React.createElement(QuillEditor, {
+                  value: editContent,
+                  onChange: isPublished ? undefined : setEditContent,
+                  readOnly: isPublished,
+                  initialComments: comments,
+                  onCommentsChange: isPublished ? undefined : setComments
+                })
+              )
             ),
-            React.createElement('div', { style: { marginBottom: 20 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, color: 'var(--text3)', marginBottom: 6, textTransform: 'uppercase', fontWeight: 600 } }, 'Meta Description'),
-              React.createElement('textarea', {
-                value: editMeta.meta_desc,
-                onChange: e => setEditMeta(prev => ({ ...prev, meta_desc: e.target.value })),
-                rows: 2,
-                style: { width: '100%', padding: '8px 12px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontFamily: 'inherit', resize: 'vertical' }
-              })
-            ),
-            React.createElement('div', { style: { marginBottom: 20 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, color: 'var(--text3)', marginBottom: 6, textTransform: 'uppercase', fontWeight: 600 } }, 'Focus Keyword'),
-              React.createElement('input', {
-                value: editMeta.focus_keyword,
-                onChange: e => setEditMeta(prev => ({ ...prev, focus_keyword: e.target.value })),
-                style: { width: '100%', padding: '8px 12px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 }
-              })
-            ),
-            React.createElement('div', null,
-              React.createElement('label', { style: { display: 'block', fontSize: 12, color: 'var(--text3)', marginBottom: 6, textTransform: 'uppercase', fontWeight: 600 } }, 'Content'),
-              React.createElement(QuillEditor, {
-                value: editContent,
-                onChange: setEditContent,
-                initialComments: comments,
-                onCommentsChange: setComments
+            React.createElement('div', { style: { width: 300, minWidth: 300, position: 'sticky', top: 20 } },
+              React.createElement(ContentScorePanel, {
+                content: editContent,
+                focusKeyword: editMeta.focus_keyword,
+                keywords: project?.keywords || [],
+                targetKeywords: targetKeywords,
+                onAddKeyword: (kw) => !targetKeywords.includes(kw) && setTargetKeywords([...targetKeywords, kw]),
+                onRemoveKeyword: (kw) => setTargetKeywords(targetKeywords.filter(k => k !== kw)),
+                onScoreChange: setScoreData
               })
             )
           ),
-          React.createElement('div', { style: { width: 340, borderLeft: '1px solid var(--border)', paddingLeft: 24, overflow: 'auto' } },
-            React.createElement(ContentScorePanel, {
-              content: editContent,
-              focusKeyword: editMeta.focus_keyword,
-              keywords: project?.keywords || [],
-              targetKeywords: targetKeywords,
-              onAddKeyword: (kw) => !targetKeywords.includes(kw) && setTargetKeywords([...targetKeywords, kw]),
-              onRemoveKeyword: (kw) => setTargetKeywords(targetKeywords.filter(k => k !== kw)),
-              onScoreChange: setScoreData
-            })
-          )
+
+          // Chat panel (floating)
+          !isPublished && hasDraft && React.createElement(ChatPanel, {
+            project: project,
+            item: { ...selectedItem, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword, target_keywords: targetKeywords, comments: comments },
+            onItemUpdate: handleItemUpdate
+          })
         );
       }
 
@@ -9129,6 +9352,7 @@
           ),
           React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: 0 } }, stageLabels[stage].desc)
         ),
+        // Stage tabs
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' } },
           [
             { key: 'queue', label: 'Queue', icon: 'fas fa-inbox' },
@@ -9146,26 +9370,387 @@
             React.createElement('span', { style: { marginLeft: 6, fontSize: 11, opacity: 0.7 } }, '(' + counts[s.key] + ')')
           ))
         ),
+        // Batch generate bar (queue only)
+        stage === 'queue' && items.length > 0 && React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, padding: '10px 16px', background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+            React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text2)', cursor: 'pointer' } },
+              React.createElement('input', { type: 'checkbox', checked: batchSelected.size === items.length && items.length > 0,
+                onChange: () => {
+                  if (batchSelected.size === items.length) setBatchSelected(new Set());
+                  else setBatchSelected(new Set(items.map(i => i.id)));
+                }
+              }), 'Select All'
+            ),
+            batchSelected.size > 0 && React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, batchSelected.size + ' selected')
+          ),
+          batchSelected.size > 0 && React.createElement('button', {
+            onClick: handleBatchGenerate, disabled: batchGenerating,
+            style: { padding: '8px 16px', background: batchGenerating ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: batchGenerating ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600 }
+          }, batchGenerating ?
+            React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Generating ' + batchProgress.done + '/' + batchProgress.total + '...') :
+            React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'Generate ' + batchSelected.size + ' Drafts')
+          )
+        ),
+        // Items list
         loading ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
           React.createElement('div', { className: 'spinner-large', style: { margin: '0 auto 16px' } }),
           'Loading...'
         ) : items.length === 0 ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
           'No content in this stage.'
         ) : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
-          items.map(item => React.createElement('div', { key: item.id, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, cursor: 'pointer' }, onClick: () => handleSelectItem(item) },
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'start' } },
-              React.createElement('div', null,
-                React.createElement('div', { style: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, item.page_title),
-                React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, item.page_url),
-                item.draft_word_count && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4 } },
-                  React.createElement('i', { className: 'fas fa-file-word', style: { marginRight: 4 } }), item.draft_word_count, ' words'
+          items.map(item => React.createElement('div', { key: item.id, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 },
+            onClick: () => handleSelectItem(item) },
+            // Checkbox for queue items
+            stage === 'queue' && React.createElement('input', { type: 'checkbox', checked: batchSelected.has(item.id),
+              onClick: e => e.stopPropagation(),
+              onChange: () => {
+                const next = new Set(batchSelected);
+                if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                setBatchSelected(next);
+              },
+              style: { width: 18, height: 18, cursor: 'pointer' }
+            }),
+            React.createElement('div', { style: { flex: 1 } },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'start' } },
+                React.createElement('div', null,
+                  React.createElement('div', { style: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, item.page_title),
+                  React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, item.page_url),
+                  item.draft_word_count > 0 && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4 } },
+                    React.createElement('i', { className: 'fas fa-file-word', style: { marginRight: 4 } }), item.draft_word_count, ' words'
+                  )
+                ),
+                React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  // Generate Draft button (queue only, no draft yet)
+                  stage === 'queue' && !item.draft_content && React.createElement('button', {
+                    onClick: (e) => { e.stopPropagation(); handleGenerateDraft(item); },
+                    disabled: !!generating,
+                    style: { padding: '6px 12px', background: generating === item.id ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: generating ? 'wait' : 'pointer', fontSize: 12 }
+                  }, generating === item.id ?
+                    React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Generating...') :
+                    React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 4 } }), 'Generate')
+                  ),
+                  // Stage-specific action
+                  stage === 'drafts' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleApprove(item); }, style: { padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Approve'),
+                  stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handlePublish(item); }, style: { padding: '6px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Publish')
                 )
-              ),
-              React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleApprove(item); }, style: { padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
-                stage === 'drafts' ? 'Approve' : stage === 'approved' ? 'Publish' : 'View'
               )
             )
           ))
+        )
+      );
+    }
+
+    // ============ CHATPANEL (v4 port) ============
+    function ChatPanel({ project, item, onItemUpdate }) {
+      const [messages, setMessages] = useState([]);
+      const [input, setInput] = useState('');
+      const [sending, setSending] = useState(false);
+      const [collapsed, setCollapsed] = useState(true);
+      const [applyingIdx, setApplyingIdx] = useState(null);
+      const chatEndRef = useRef(null);
+      const pid = project ? project.id : null;
+
+      useEffect(() => {
+        if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }, [messages]);
+
+      useEffect(() => { setMessages([]); }, [item?.id]);
+
+      const suggestions = useMemo(() => {
+        if (!item) return [];
+        const html = item.draft_content || item.current_content || '';
+        const plain = html.replace(/<[^>]+>/g, '');
+        const words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+        const h2s = (html.match(/<h2[\s>]/gi) || []).length;
+        const h3s = (html.match(/<h3[\s>]/gi) || []).length;
+        const links = (html.match(/<a[\s>]/gi) || []).length;
+        const imgs = (html.match(/<img[\s>]/gi) || []).length;
+        const fk = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase();
+        const lower = plain.toLowerCase();
+        let fkCount = 0;
+        if (fk) { let p = 0; while ((p = lower.indexOf(fk, p)) !== -1) { fkCount++; p += fk.length; } }
+        const tKws = (item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword);
+        const kwMissing = tKws.filter(k => !lower.includes(k.toLowerCase()));
+
+        const s = [];
+        if (words < 1500) s.push({ icon: 'fa-pen', label: 'Add ' + (1500 - words) + ' words', msg: 'Add ' + (1500 - words) + ' more words. Add new sections about services, FAQs, or local area info.', pts: words >= 800 ? 10 : 25 });
+        if (h2s < 3) s.push({ icon: 'fa-heading', label: 'Add ' + (3 - h2s) + ' H2 headings', msg: 'Add ' + (3 - h2s) + ' more H2 headings with relevant keywords.', pts: h2s >= 1 ? 7 : 15 });
+        if (h3s < 2) s.push({ icon: 'fa-list', label: 'Add H3 subheadings', msg: 'Add H3 subheadings under existing H2s for better structure.', pts: 5 });
+        if (links < 3) s.push({ icon: 'fa-link', label: 'Add ' + (3 - links) + ' internal links', msg: 'Add ' + (3 - links) + ' more internal links to other pages on the site.', pts: links >= 1 ? 5 : 10 });
+        if (imgs < 1) s.push({ icon: 'fa-image', label: 'Add an image tag', msg: 'Add an <img> placeholder tag for an image.', pts: 5 });
+        if (fk && fkCount < 3) s.push({ icon: 'fa-bullseye', label: 'Use "' + (item.draft_focus_keyword || item.current_focus_keyword) + '" ' + (3 - fkCount) + 'x more', msg: 'Add the focus keyword ' + (3 - fkCount) + ' more times naturally.', pts: fkCount >= 1 ? 10 : 20 });
+        if (kwMissing.length > 0) s.push({ icon: 'fa-tags', label: 'Use ' + kwMissing.length + ' missing keywords', msg: 'Incorporate these missing keywords: ' + kwMissing.slice(0, 10).join(', '), pts: Math.round((kwMissing.length / Math.max(tKws.length, 1)) * 20) });
+        const unresolvedComments = (item.comments || []).filter(c => !c.resolved);
+        if (unresolvedComments.length > 0) s.push({ icon: 'fa-comment', label: 'Fix ' + unresolvedComments.length + ' comment(s)', msg: 'Address and fix all ' + unresolvedComments.length + ' unresolved comments.', pts: 0 });
+        return s.sort((a, b) => b.pts - a.pts).slice(0, 5);
+      }, [item]);
+
+      function handleChatResponse(r) {
+        if (r.error) {
+          setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + r.error }]);
+        } else {
+          setMessages(prev => [...prev, {
+            role: 'assistant', content: r.reply, applied: r.applied || false,
+            pending: r.pending || null, change_summary: r.change_summary || null
+          }]);
+        }
+      }
+
+      function sendMsg(msg) {
+        if (!msg.trim() || sending || !item || !pid) return;
+        setInput('');
+        setMessages(prev => [...prev, { role: 'user', content: msg }]);
+        setSending(true);
+        const history = messages.map(m => ({ role: m.role, content: m.content }));
+        api('/projects/' + pid + '/content-queue/' + item.id + '/chat', {
+          method: 'POST', body: { message: msg, history }
+        }).then(r => { handleChatResponse(r); setSending(false); })
+          .catch(e => { setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + e.message }]); setSending(false); });
+      }
+
+      async function applyPending(msgIdx) {
+        const msg = messages[msgIdx];
+        if (!msg?.pending || !item?.id || !pid) return;
+        setApplyingIdx(msgIdx);
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + item.id + '/apply-chat', {
+            method: 'POST', body: { pending: msg.pending }
+          });
+          if (r.error) { alert('Apply failed: ' + r.error); }
+          else if (r.item && onItemUpdate) {
+            onItemUpdate(r.item);
+            setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, applied: true, pending: null } : m));
+          }
+        } catch (e) { alert('Apply error: ' + e.message); }
+        setApplyingIdx(null);
+      }
+
+      function send() {
+        if (!input.trim()) return;
+        sendMsg(input.trim());
+      }
+
+      if (collapsed) {
+        return React.createElement('button', {
+          onClick: () => setCollapsed(false),
+          title: 'Chat with Claude',
+          style: { position: 'fixed', bottom: 20, right: 20, width: 56, height: 56, borderRadius: '50%',
+            background: 'var(--accent)', border: 'none', color: '#fff', fontSize: 22, cursor: 'pointer',
+            boxShadow: '0 4px 16px rgba(99,102,241,0.4)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+        }, React.createElement('i', { className: 'fa-solid fa-comment-dots' }));
+      }
+
+      return React.createElement('div', {
+        style: { position: 'fixed', bottom: 20, right: 20, width: 400, height: 520, borderRadius: 12,
+          background: 'var(--card)', border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          zIndex: 900, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+      },
+        // Header
+        React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--accent)', color: '#fff' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: 'fa-solid fa-robot' }),
+            React.createElement('span', { style: { fontWeight: 700, fontSize: 14 } }, 'Claude Assistant')
+          ),
+          React.createElement('button', { onClick: () => setCollapsed(true), style: { background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 18, padding: 0 } }, '✕')
+        ),
+        // Context bar
+        React.createElement('div', { style: { padding: '8px 12px', fontSize: 11, color: 'var(--text3)', background: 'var(--bg)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' } },
+          React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-file-lines', style: { marginRight: 6 } }), item?.page_title || 'No item selected'),
+          React.createElement('span', null, 'Knows your score & content')
+        ),
+        // Messages
+        React.createElement('div', { style: { flex: 1, overflowY: 'auto', padding: 12 } },
+          messages.length === 0 && React.createElement('div', { style: { padding: '16px 8px' } },
+            suggestions.length > 0 ? React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 } }, 'Quick fixes (tap to run)'),
+              suggestions.map((s, i) => React.createElement('button', {
+                key: i, onClick: () => sendMsg(s.msg), disabled: sending,
+                style: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 12px', marginBottom: 6,
+                  background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer',
+                  color: 'var(--text)', fontSize: 13, textAlign: 'left' }
+              },
+                React.createElement('i', { className: 'fa-solid ' + s.icon, style: { color: 'var(--accent)', fontSize: 14, minWidth: 18 } }),
+                React.createElement('span', { style: { flex: 1 } }, s.label),
+                s.pts > 0 && React.createElement('span', { style: { fontSize: 11, color: '#22c55e', fontWeight: 700 } }, '+' + s.pts + 'pts')
+              ))
+            ) : React.createElement('div', { style: { textAlign: 'center', padding: 20, color: '#22c55e', fontSize: 14 } },
+              React.createElement('i', { className: 'fa-solid fa-check-circle', style: { fontSize: 28, marginBottom: 8, display: 'block' } }),
+              'Score looks good! Ask me anything.'
+            )
+          ),
+          messages.map((m, i) => React.createElement('div', { key: i, style: { marginBottom: 12, display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' } },
+            React.createElement('div', {
+              style: { maxWidth: '85%', padding: '10px 14px', borderRadius: 12, fontSize: 13, lineHeight: 1.5,
+                background: m.role === 'user' ? 'var(--accent)' : 'var(--bg)',
+                color: m.role === 'user' ? '#fff' : 'var(--text)',
+                borderBottomRightRadius: m.role === 'user' ? 4 : 12,
+                borderBottomLeftRadius: m.role === 'user' ? 12 : 4,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+            }, (m.content || '').replace(/```json[\s\S]*?```/g, '').trim() || (m.pending ? 'I have changes ready:' : '')),
+            m.pending && !m.applied && React.createElement('div', {
+              style: { maxWidth: '85%', marginTop: 6, padding: '10px 12px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8 }
+            },
+              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#f59e0b', marginBottom: 6 } },
+                React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 4 } }), 'Proposed Changes:'
+              ),
+              (m.change_summary || []).map((s, si) => React.createElement('div', { key: si, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', display: 'flex', alignItems: 'center', gap: 6 } },
+                React.createElement('i', { className: 'fa-solid fa-circle', style: { fontSize: 4, color: '#f59e0b' } }), s
+              )),
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+                React.createElement('button', { onClick: () => applyPending(i), disabled: applyingIdx === i,
+                  style: { flex: 1, padding: '6px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700 }
+                }, applyingIdx === i ?
+                  React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Applying...') :
+                  React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 4 } }), 'Apply Changes')
+                ),
+                React.createElement('button', { onClick: () => setMessages(prev => prev.map((msg, mi) => mi === i ? { ...msg, pending: null } : msg)),
+                  style: { padding: '6px 12px', background: 'var(--bg2)', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                }, 'Reject')
+              )
+            ),
+            m.applied && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 } },
+              React.createElement('i', { className: 'fa-solid fa-check-circle' }), ' Changes applied'
+            )
+          )),
+          sending && React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', marginBottom: 12 } },
+            React.createElement('div', { style: { padding: '10px 14px', borderRadius: 12, background: 'var(--bg)', fontSize: 13, color: 'var(--text3)', borderBottomLeftRadius: 4 } },
+              React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Thinking...'
+            )
+          ),
+          React.createElement('div', { ref: chatEndRef })
+        ),
+        // Input
+        React.createElement('div', { style: { padding: '10px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
+          React.createElement('input', {
+            value: input, onChange: e => setInput(e.target.value),
+            onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
+            placeholder: 'Ask Claude...', disabled: sending,
+            style: { flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, outline: 'none' }
+          }),
+          React.createElement('button', {
+            onClick: send, disabled: sending || !input.trim(),
+            style: { background: 'var(--accent)', border: 'none', color: '#fff', borderRadius: 8, padding: '0 14px',
+              cursor: sending || !input.trim() ? 'not-allowed' : 'pointer', fontSize: 14, opacity: sending || !input.trim() ? 0.5 : 1 }
+          }, React.createElement('i', { className: 'fa-solid fa-paper-plane' }))
+        )
+      );
+    }
+
+    // ============ OPTIMISE PREVIEW MODAL (v4 port) ============
+    function OptimisePreviewModal({ preview, item, project, scoreData, applyingOptimise, onApply, onReject, onUpdate }) {
+      const [feedback, setFeedback] = useState('');
+      const [reOptimising, setReOptimising] = useState(false);
+      const [metaTitle, setMetaTitle] = useState(preview.proposed.meta_title || '');
+      const [metaDesc, setMetaDesc] = useState(preview.proposed.meta_description || '');
+      const pid = project ? project.id : null;
+
+      useEffect(() => {
+        setMetaTitle(preview.proposed.meta_title || '');
+        setMetaDesc(preview.proposed.meta_description || '');
+      }, [preview]);
+
+      function handleApply() {
+        preview.proposed.meta_title = metaTitle;
+        preview.proposed.meta_description = metaDesc;
+        onApply();
+      }
+
+      async function reOptimise() {
+        if (!feedback.trim() || reOptimising || !pid) return;
+        setReOptimising(true);
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + preview.item_id + '/re-optimise', {
+            method: 'POST',
+            body: { feedback, current_proposed: preview.proposed, stats: scoreData?.stats, content_score: scoreData?.score }
+          });
+          if (r.error) alert('Re-optimise failed: ' + r.error);
+          else if (r.preview) { onUpdate(r); setFeedback(''); }
+        } catch (e) { alert(e.message); }
+        setReOptimising(false);
+      }
+
+      const currentContent = item ? (item.draft_content || item.current_content || '') : '';
+
+      return React.createElement('div', {
+        onClick: onReject,
+        style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+      },
+        React.createElement('div', {
+          onClick: e => e.stopPropagation(),
+          style: { background: 'var(--card)', borderRadius: 12, padding: 28, border: '1px solid var(--border)', width: 750, maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto' }
+        },
+          React.createElement('h3', { style: { marginTop: 0, marginBottom: 16, fontSize: 18 } },
+            React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 8, color: '#f59e0b' } }), 'AI Optimisation Preview'
+          ),
+          // Stats comparison
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 } },
+            [
+              { label: 'Words', before: preview.stats?.current?.words || 0, after: preview.stats?.proposed?.words || 0 },
+              { label: 'H2s', before: (currentContent.match(/<h2/gi) || []).length, after: preview.stats?.proposed?.h2s || 0 },
+              { label: 'H3s', before: (currentContent.match(/<h3/gi) || []).length, after: preview.stats?.proposed?.h3s || 0 },
+            ].map(s => {
+              const diff = s.after - s.before;
+              return React.createElement('div', { key: s.label, style: { background: 'var(--bg)', borderRadius: 8, padding: 12, textAlign: 'center', border: '1px solid var(--border)' } },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 } }, s.label),
+                React.createElement('div', { style: { fontSize: 20, fontWeight: 700 } }, s.before, ' ', React.createElement('i', { className: 'fa-solid fa-arrow-right', style: { fontSize: 12, color: 'var(--text3)', margin: '0 4px' } }), ' ', s.after),
+                diff !== 0 && React.createElement('div', { style: { fontSize: 12, color: diff > 0 ? '#22c55e' : '#ef4444', marginTop: 4 } }, (diff > 0 ? '+' : '') + diff)
+              );
+            })
+          ),
+          // Editable Meta Title
+          React.createElement('div', { style: { marginBottom: 12, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
+              React.createElement('span', null, 'Meta Title'),
+              React.createElement('span', { style: { color: metaTitle.length > 60 ? '#ef4444' : metaTitle.length >= 50 ? '#22c55e' : '#f59e0b' } }, metaTitle.length + '/60')
+            ),
+            React.createElement('input', { value: metaTitle, onChange: e => setMetaTitle(e.target.value),
+              style: { width: '100%', padding: 8, background: 'var(--card)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontWeight: 600 } })
+          ),
+          // Editable Meta Description
+          React.createElement('div', { style: { marginBottom: 12, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
+              React.createElement('span', null, 'Meta Description'),
+              React.createElement('span', { style: { color: metaDesc.length > 160 ? '#ef4444' : metaDesc.length >= 140 ? '#22c55e' : '#f59e0b' } }, metaDesc.length + '/160')
+            ),
+            React.createElement('textarea', { value: metaDesc, onChange: e => setMetaDesc(e.target.value), rows: 2,
+              style: { width: '100%', padding: 8, background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical' } })
+          ),
+          // AI Notes
+          preview.proposed.ai_notes && React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'rgba(245,158,11,0.1)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)' } },
+            React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 4 } }, 'AI Notes'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 } }, preview.proposed.ai_notes)
+          ),
+          // Content preview
+          React.createElement('div', { style: { marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 300, overflowY: 'auto' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 } }, 'Proposed Content'),
+            React.createElement('div', { className: 'content-preview', style: { fontSize: 14, lineHeight: 1.7, color: 'var(--text)' }, dangerouslySetInnerHTML: { __html: preview.proposed.content_html } })
+          ),
+          // Feedback / Re-optimise
+          React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 } }, 'Feedback for AI'),
+            React.createElement('div', { style: { display: 'flex', gap: 8 } },
+              React.createElement('input', { value: feedback, onChange: e => setFeedback(e.target.value),
+                onKeyDown: e => e.key === 'Enter' && reOptimise(),
+                placeholder: 'e.g. make title shorter, add more about emergency services...',
+                style: { flex: 1, padding: 8, background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 } }),
+              React.createElement('button', { onClick: reOptimise, disabled: !feedback.trim() || reOptimising,
+                style: { background: '#f59e0b', fontSize: 13, padding: '8px 16px', whiteSpace: 'nowrap', border: 'none', color: '#fff', borderRadius: 6, cursor: !feedback.trim() || reOptimising ? 'not-allowed' : 'pointer' }
+              }, reOptimising ?
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Revising...') :
+                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-rotate', style: { marginRight: 4 } }), 'Re-optimise')
+              )
+            )
+          ),
+          // Action buttons
+          React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
+            React.createElement('button', { onClick: onReject, style: { background: 'var(--bg3)', fontSize: 14, padding: '8px 20px', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Reject'),
+            React.createElement('button', { onClick: handleApply, disabled: applyingOptimise,
+              style: { background: '#22c55e', fontSize: 14, padding: '8px 20px', border: 'none', color: '#fff', borderRadius: 6, cursor: applyingOptimise ? 'wait' : 'pointer' }
+            }, applyingOptimise ?
+              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Applying...') :
+              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Apply Changes')
+            )
+          )
         )
       );
     }
