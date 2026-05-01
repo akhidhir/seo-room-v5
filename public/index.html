@@ -9601,21 +9601,7 @@
             )
           ),
 
-          // Chat panel (floating)
-          !isPublished && hasDraft && React.createElement(ChatPanel, {
-            project: project,
-            item: { ...selectedItem, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword, target_keywords: targetKeywords, comments: comments },
-            onItemUpdate: handleItemUpdate,
-            onGetSelection: () => {
-              const editorEl = document.querySelector('.ql-editor');
-              if (!editorEl) return '';
-              const sel = window.getSelection();
-              if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return '';
-              const range = sel.getRangeAt(0);
-              if (!editorEl.contains(range.commonAncestorContainer)) return '';
-              return sel.toString().trim();
-            }
-          }),
+          // ChatPanel removed — replaced by chat inside OptimisePreviewModal
 
           // Change History panel (published items only)
           isPublished && (() => {
@@ -9776,236 +9762,19 @@
       );
     }
 
-    // ============ CHATPANEL (v4 port) ============
-    function ChatPanel({ project, item, onItemUpdate, onGetSelection }) {
+    // ChatPanel removed — chat is now inside OptimisePreviewModal
+
+    // ============ OPTIMISE PREVIEW MODAL — Split-panel chat editor ============
+    function OptimisePreviewModal({ preview, item, project, scoreData, applyingOptimise, onApply, onReject, onUpdate }) {
       const [messages, setMessages] = useState([]);
       const [input, setInput] = useState('');
       const [sending, setSending] = useState(false);
-      const [collapsed, setCollapsed] = useState(true);
-      const [applyingIdx, setApplyingIdx] = useState(null);
       const [selectedText, setSelectedText] = useState('');
-      const chatEndRef = useRef(null);
-      const pid = project ? project.id : null;
-
-      useEffect(() => {
-        if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-      }, [messages]);
-
-      useEffect(() => { setMessages([]); }, [item?.id]);
-
-      const suggestions = useMemo(() => {
-        if (!item) return [];
-        const html = item.draft_content || item.current_content || '';
-        const plain = html.replace(/<[^>]+>/g, '');
-        const words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
-        const h2s = (html.match(/<h2[\s>]/gi) || []).length;
-        const h3s = (html.match(/<h3[\s>]/gi) || []).length;
-        const links = (html.match(/<a[\s>]/gi) || []).length;
-        const imgs = (html.match(/<img[\s>]/gi) || []).length;
-        const fk = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase();
-        const lower = plain.toLowerCase();
-        let fkCount = 0;
-        if (fk) { let p = 0; while ((p = lower.indexOf(fk, p)) !== -1) { fkCount++; p += fk.length; } }
-        const tKws = (item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword);
-        const kwMissing = tKws.filter(k => !lower.includes(k.toLowerCase()));
-
-        const s = [];
-        if (words < 1500) s.push({ icon: 'fa-pen', label: 'Add ' + (1500 - words) + ' words', msg: 'Add ' + (1500 - words) + ' more words. Add new sections about services, FAQs, or local area info.', pts: words >= 800 ? 10 : 25 });
-        if (h2s < 3) s.push({ icon: 'fa-heading', label: 'Add ' + (3 - h2s) + ' H2 headings', msg: 'Add ' + (3 - h2s) + ' more H2 headings with relevant keywords.', pts: h2s >= 1 ? 7 : 15 });
-        if (h3s < 2) s.push({ icon: 'fa-list', label: 'Add H3 subheadings', msg: 'Add H3 subheadings under existing H2s for better structure.', pts: 5 });
-        if (links < 3) s.push({ icon: 'fa-link', label: 'Add ' + (3 - links) + ' internal links', msg: 'Add ' + (3 - links) + ' more internal links to other pages on the site.', pts: links >= 1 ? 5 : 10 });
-        if (imgs < 1) s.push({ icon: 'fa-image', label: 'Add an image tag', msg: 'Add an <img> placeholder tag for an image.', pts: 5 });
-        if (fk && fkCount < 3) s.push({ icon: 'fa-bullseye', label: 'Use "' + (item.draft_focus_keyword || item.current_focus_keyword) + '" ' + (3 - fkCount) + 'x more', msg: 'Add the focus keyword ' + (3 - fkCount) + ' more times naturally.', pts: fkCount >= 1 ? 10 : 20 });
-        if (kwMissing.length > 0) s.push({ icon: 'fa-tags', label: 'Use ' + kwMissing.length + ' missing keywords', msg: 'Incorporate these missing keywords: ' + kwMissing.slice(0, 10).join(', '), pts: Math.round((kwMissing.length / Math.max(tKws.length, 1)) * 20) });
-        const unresolvedComments = (item.comments || []).filter(c => !c.resolved);
-        if (unresolvedComments.length > 0) s.push({ icon: 'fa-comment', label: 'Fix ' + unresolvedComments.length + ' comment(s)', msg: 'Address and fix all ' + unresolvedComments.length + ' unresolved comments.', pts: 0 });
-        return s.sort((a, b) => b.pts - a.pts).slice(0, 5);
-      }, [item]);
-
-      function handleChatResponse(r) {
-        if (r.error) {
-          setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + r.error }]);
-        } else {
-          setMessages(prev => [...prev, {
-            role: 'assistant', content: r.reply, applied: r.applied || false,
-            pending: r.pending || null, change_summary: r.change_summary || null
-          }]);
-        }
-      }
-
-      function sendMsg(msg) {
-        if (!msg.trim() || sending || !item || !pid) return;
-        setInput('');
-        let finalMsg = msg;
-        if (selectedText) {
-          finalMsg = `[SELECTED TEXT: "${selectedText}"]\n\nUser instruction: ${msg}`;
-        }
-        setMessages(prev => [...prev, { role: 'user', content: msg }]);
-        setSending(true);
-        const history = messages.map(m => ({ role: m.role, content: m.content }));
-        api('/projects/' + pid + '/content-queue/' + item.id + '/chat', {
-          method: 'POST', body: { message: finalMsg, history }
-        }).then(r => { handleChatResponse(r); setSending(false); })
-          .catch(e => { setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + e.message }]); setSending(false); });
-      }
-
-      async function applyPending(msgIdx) {
-        const msg = messages[msgIdx];
-        if (!msg?.pending || !item?.id || !pid) return;
-        setApplyingIdx(msgIdx);
-        try {
-          const r = await api('/projects/' + pid + '/content-queue/' + item.id + '/apply-chat', {
-            method: 'POST', body: { pending: msg.pending }
-          });
-          if (r.error) { alert('Apply failed: ' + r.error); }
-          else if (r.item && onItemUpdate) {
-            onItemUpdate(r.item);
-            setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, applied: true, pending: null } : m));
-          }
-        } catch (e) { alert('Apply error: ' + e.message); }
-        setApplyingIdx(null);
-      }
-
-      function send() {
-        if (!input.trim()) return;
-        sendMsg(input.trim());
-      }
-
-      if (collapsed) {
-        return React.createElement('button', {
-          onClick: () => setCollapsed(false),
-          title: 'Chat with Claude',
-          style: { position: 'fixed', bottom: 20, right: 20, width: 56, height: 56, borderRadius: '50%',
-            background: 'var(--accent)', border: 'none', color: '#fff', fontSize: 22, cursor: 'pointer',
-            boxShadow: '0 4px 16px rgba(99,102,241,0.4)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }
-        }, React.createElement('i', { className: 'fa-solid fa-comment-dots' }));
-      }
-
-      return React.createElement('div', {
-        style: { position: 'fixed', bottom: 20, right: 20, width: 400, height: 520, borderRadius: 12,
-          background: 'var(--card)', border: '1px solid var(--border)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-          zIndex: 900, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-      },
-        // Header
-        React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--accent)', color: '#fff' } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            React.createElement('i', { className: 'fa-solid fa-robot' }),
-            React.createElement('span', { style: { fontWeight: 700, fontSize: 14 } }, 'Claude Assistant')
-          ),
-          React.createElement('button', { onClick: () => setCollapsed(true), style: { background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 18, padding: 0 } }, '✕')
-        ),
-        // Context bar
-        React.createElement('div', { style: { padding: '8px 12px', fontSize: 11, color: 'var(--text3)', background: 'var(--bg)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' } },
-          React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-file-lines', style: { marginRight: 6 } }), item?.page_title || 'No item selected'),
-          React.createElement('span', null, 'Knows your score & content')
-        ),
-        // Messages
-        React.createElement('div', { style: { flex: 1, overflowY: 'auto', padding: 12 } },
-          messages.length === 0 && React.createElement('div', { style: { padding: '16px 8px' } },
-            suggestions.length > 0 ? React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 } }, 'Quick fixes (tap to run)'),
-              suggestions.map((s, i) => React.createElement('button', {
-                key: i, onClick: () => sendMsg(s.msg), disabled: sending,
-                style: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 12px', marginBottom: 6,
-                  background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer',
-                  color: 'var(--text)', fontSize: 13, textAlign: 'left' }
-              },
-                React.createElement('i', { className: 'fa-solid ' + s.icon, style: { color: 'var(--accent)', fontSize: 14, minWidth: 18 } }),
-                React.createElement('span', { style: { flex: 1 } }, s.label),
-                s.pts > 0 && React.createElement('span', { style: { fontSize: 11, color: '#22c55e', fontWeight: 700 } }, '+' + s.pts + 'pts')
-              ))
-            ) : React.createElement('div', { style: { textAlign: 'center', padding: 20, color: '#22c55e', fontSize: 14 } },
-              React.createElement('i', { className: 'fa-solid fa-check-circle', style: { fontSize: 28, marginBottom: 8, display: 'block' } }),
-              'Score looks good! Ask me anything.'
-            )
-          ),
-          messages.map((m, i) => React.createElement('div', { key: i, style: { marginBottom: 12, display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' } },
-            React.createElement('div', {
-              style: { maxWidth: '85%', padding: '10px 14px', borderRadius: 12, fontSize: 13, lineHeight: 1.5,
-                background: m.role === 'user' ? 'var(--accent)' : 'var(--bg)',
-                color: m.role === 'user' ? '#fff' : 'var(--text)',
-                borderBottomRightRadius: m.role === 'user' ? 4 : 12,
-                borderBottomLeftRadius: m.role === 'user' ? 12 : 4,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
-            }, (m.content || '').replace(/```json[\s\S]*?```/g, '').trim() || (m.pending ? 'I have changes ready:' : '')),
-            m.pending && !m.applied && React.createElement('div', {
-              style: { maxWidth: '85%', marginTop: 6, padding: '10px 12px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8 }
-            },
-              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#f59e0b', marginBottom: 6 } },
-                React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 4 } }), 'Proposed Changes:'
-              ),
-              (m.change_summary || []).map((s, si) => React.createElement('div', { key: si, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', display: 'flex', alignItems: 'center', gap: 6 } },
-                React.createElement('i', { className: 'fa-solid fa-circle', style: { fontSize: 4, color: '#f59e0b' } }), s
-              )),
-              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
-                React.createElement('button', { onClick: () => applyPending(i), disabled: applyingIdx === i,
-                  style: { flex: 1, padding: '6px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700 }
-                }, applyingIdx === i ?
-                  React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Applying...') :
-                  React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 4 } }), 'Apply Changes')
-                ),
-                React.createElement('button', { onClick: () => setMessages(prev => prev.map((msg, mi) => mi === i ? { ...msg, pending: null } : msg)),
-                  style: { padding: '6px 12px', background: 'var(--bg2)', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
-                }, 'Reject')
-              )
-            ),
-            m.applied && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 } },
-              React.createElement('i', { className: 'fa-solid fa-check-circle' }), ' Changes applied'
-            )
-          )),
-          sending && React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', marginBottom: 12 } },
-            React.createElement('div', { style: { padding: '10px 14px', borderRadius: 12, background: 'var(--bg)', fontSize: 13, color: 'var(--text3)', borderBottomLeftRadius: 4 } },
-              React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Thinking...'
-            )
-          ),
-          React.createElement('div', { ref: chatEndRef })
-        ),
-        // Selection badge
-        selectedText && React.createElement('div', { style: { padding: '8px 12px', background: 'rgba(99,102,241,0.1)', borderBottom: '1px solid var(--border)', fontSize: 12 } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' } },
-            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flex: 1 } },
-              React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)', fontSize: 11 } }),
-              React.createElement('span', { style: { color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, selectedText)
-            ),
-            React.createElement('button', {
-              onClick: () => setSelectedText(''),
-              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding: 0, fontSize: 14 }
-            }, '✕')
-          )
-        ),
-        // Input
-        React.createElement('div', { style: { padding: '10px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
-          React.createElement('button', {
-            onClick: () => {
-              if (onGetSelection) {
-                const text = onGetSelection();
-                if (text) setSelectedText(text);
-              }
-            },
-            title: 'Grab selected text from editor',
-            style: { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: '0 8px', fontSize: 14 }
-          }, React.createElement('i', { className: 'fa-solid fa-hand-pointer' })),
-          React.createElement('input', {
-            value: input, onChange: e => setInput(e.target.value),
-            onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
-            placeholder: 'Ask Claude...', disabled: sending,
-            style: { flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, outline: 'none' }
-          }),
-          React.createElement('button', {
-            onClick: send, disabled: sending || !input.trim(),
-            style: { background: 'var(--accent)', border: 'none', color: '#fff', borderRadius: 8, padding: '0 14px',
-              cursor: sending || !input.trim() ? 'not-allowed' : 'pointer', fontSize: 14, opacity: sending || !input.trim() ? 0.5 : 1 }
-          }, React.createElement('i', { className: 'fa-solid fa-paper-plane' }))
-        )
-      );
-    }
-
-    // ============ OPTIMISE PREVIEW MODAL (v4 port) ============
-    function OptimisePreviewModal({ preview, item, project, scoreData, applyingOptimise, onApply, onReject, onUpdate }) {
-      const [feedback, setFeedback] = useState('');
-      const [reOptimising, setReOptimising] = useState(false);
       const [metaTitle, setMetaTitle] = useState(preview.proposed.meta_title || '');
       const [metaDesc, setMetaDesc] = useState(preview.proposed.meta_description || '');
+      const [showMeta, setShowMeta] = useState(false);
+      const chatEndRef = useRef(null);
+      const contentRef = useRef(null);
       const pid = project ? project.id : null;
 
       useEffect(() => {
@@ -10013,106 +9782,285 @@
         setMetaDesc(preview.proposed.meta_description || '');
       }, [preview]);
 
+      // Auto-scroll chat
+      useEffect(() => {
+        if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }, [messages, sending]);
+
+      // Initial AI message from ai_notes
+      useEffect(() => {
+        if (preview.proposed.ai_notes && messages.length === 0) {
+          setMessages([{ role: 'assistant', content: preview.proposed.ai_notes }]);
+        }
+      }, []);
+
       function handleApply() {
         preview.proposed.meta_title = metaTitle;
         preview.proposed.meta_description = metaDesc;
         onApply();
       }
 
-      async function reOptimise() {
-        if (!feedback.trim() || reOptimising || !pid) return;
-        setReOptimising(true);
+      // Grab selected text from content preview
+      function grabSelection() {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+        const range = sel.getRangeAt(0);
+        const container = contentRef.current;
+        if (container && container.contains(range.commonAncestorContainer)) {
+          const text = sel.toString().trim();
+          if (text) setSelectedText(text);
+        }
+      }
+
+      async function sendMessage() {
+        const msg = input.trim();
+        if (!msg || sending || !pid) return;
+        setInput('');
+
+        let finalMsg = msg;
+        let displayMsg = msg;
+        if (selectedText) {
+          finalMsg = `[HIGHLIGHTED TEXT: "${selectedText}"]\n\nInstruction: ${msg}`;
+          displayMsg = msg;
+        }
+
+        setMessages(prev => [...prev, {
+          role: 'user', content: displayMsg,
+          selection: selectedText || null
+        }]);
+        setSelectedText('');
+        setSending(true);
+
         try {
           const r = await api('/projects/' + pid + '/content-queue/' + preview.item_id + '/re-optimise', {
             method: 'POST',
-            body: { feedback, current_proposed: preview.proposed, stats: scoreData?.stats, content_score: scoreData?.score }
+            body: {
+              feedback: finalMsg,
+              current_proposed: preview.proposed,
+              stats: scoreData?.stats,
+              content_score: scoreData?.score
+            }
           });
-          if (r.error) alert('Re-optimise failed: ' + r.error);
-          else if (r.preview) { onUpdate(r); setFeedback(''); }
-        } catch (e) { alert(e.message); }
-        setReOptimising(false);
+          if (r.error) {
+            setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + r.error }]);
+          } else if (r.preview) {
+            onUpdate(r);
+            setMetaTitle(r.proposed?.meta_title || metaTitle);
+            setMetaDesc(r.proposed?.meta_description || metaDesc);
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: r.proposed?.ai_notes || 'Changes applied to the preview.',
+              revised: true
+            }]);
+          }
+        } catch (e) {
+          setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + e.message }]);
+        }
+        setSending(false);
       }
 
       const currentContent = item ? (item.draft_content || item.current_content || '') : '';
 
+      // Stats data
+      const statsData = [
+        { label: 'Words', before: preview.stats?.current?.words || 0, after: preview.stats?.proposed?.words || 0 },
+        { label: 'H2s', before: (currentContent.match(/<h2/gi) || []).length, after: preview.stats?.proposed?.h2s || 0 },
+        { label: 'H3s', before: (currentContent.match(/<h3/gi) || []).length, after: preview.stats?.proposed?.h3s || 0 },
+      ];
+
       return React.createElement('div', {
         onClick: onReject,
-        style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+        style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }
       },
         React.createElement('div', {
           onClick: e => e.stopPropagation(),
-          style: { background: 'var(--card)', borderRadius: 12, padding: 32, border: '1px solid var(--border)', width: '95vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto' }
+          style: { background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', width: '96vw', maxWidth: 1500, height: '93vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }
         },
-          React.createElement('h3', { style: { marginTop: 0, marginBottom: 16, fontSize: 18 } },
-            React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 8, color: '#f59e0b' } }), 'AI Optimisation Preview'
-          ),
-          // Stats comparison
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 } },
-            [
-              { label: 'Words', before: preview.stats?.current?.words || 0, after: preview.stats?.proposed?.words || 0 },
-              { label: 'H2s', before: (currentContent.match(/<h2/gi) || []).length, after: preview.stats?.proposed?.h2s || 0 },
-              { label: 'H3s', before: (currentContent.match(/<h3/gi) || []).length, after: preview.stats?.proposed?.h3s || 0 },
-            ].map(s => {
-              const diff = s.after - s.before;
-              return React.createElement('div', { key: s.label, style: { background: 'var(--bg)', borderRadius: 8, padding: 12, textAlign: 'center', border: '1px solid var(--border)' } },
-                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 } }, s.label),
-                React.createElement('div', { style: { fontSize: 20, fontWeight: 700 } }, s.before, ' ', React.createElement('i', { className: 'fa-solid fa-arrow-right', style: { fontSize: 12, color: 'var(--text3)', margin: '0 4px' } }), ' ', s.after),
-                diff !== 0 && React.createElement('div', { style: { fontSize: 12, color: diff > 0 ? '#22c55e' : '#ef4444', marginTop: 4 } }, (diff > 0 ? '+' : '') + diff)
-              );
-            })
-          ),
-          // Editable Meta Title
-          React.createElement('div', { style: { marginBottom: 12, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
-              React.createElement('span', null, 'Meta Title'),
-              React.createElement('span', { style: { color: metaTitle.length > 60 ? '#ef4444' : metaTitle.length >= 50 ? '#22c55e' : '#f59e0b' } }, metaTitle.length + '/60')
+          // ── Top bar ──
+          React.createElement('div', { style: { padding: '14px 24px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+              React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { color: '#f59e0b', fontSize: 18 } }),
+              React.createElement('span', { style: { fontSize: 17, fontWeight: 700, color: 'var(--text)' } }, 'AI Content Editor'),
+              // Stats pills
+              statsData.map(s => {
+                const diff = s.after - s.before;
+                return React.createElement('span', { key: s.label, style: { fontSize: 12, padding: '4px 10px', background: 'var(--bg)', borderRadius: 20, border: '1px solid var(--border)', color: 'var(--text2)', marginLeft: 4 } },
+                  s.label + ': ' + s.before + ' → ' + s.after,
+                  diff !== 0 ? ' (' + (diff > 0 ? '+' : '') + diff + ')' : ''
+                );
+              })
             ),
-            React.createElement('input', { value: metaTitle, onChange: e => setMetaTitle(e.target.value),
-              style: { width: '100%', padding: 8, background: 'var(--card)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontWeight: 600 } })
+            React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              React.createElement('button', {
+                onClick: () => setShowMeta(!showMeta),
+                style: { background: showMeta ? 'var(--accent)' : 'var(--bg)', border: '1px solid var(--border)', color: showMeta ? '#fff' : 'var(--text2)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }
+              }, React.createElement('i', { className: 'fa-solid fa-tags', style: { marginRight: 4 } }), 'Meta'),
+              React.createElement('button', { onClick: onReject, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: '0 4px' } }, '×')
+            )
           ),
-          // Editable Meta Description
-          React.createElement('div', { style: { marginBottom: 12, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
-              React.createElement('span', null, 'Meta Description'),
-              React.createElement('span', { style: { color: metaDesc.length > 160 ? '#ef4444' : metaDesc.length >= 140 ? '#22c55e' : '#f59e0b' } }, metaDesc.length + '/160')
+
+          // ── Meta fields (collapsible) ──
+          showMeta && React.createElement('div', { style: { padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', display: 'flex', gap: 16, flexShrink: 0 } },
+            React.createElement('div', { style: { flex: 1 } },
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
+                React.createElement('span', null, 'Meta Title'),
+                React.createElement('span', { style: { color: metaTitle.length > 60 ? '#ef4444' : metaTitle.length >= 50 ? '#22c55e' : '#f59e0b' } }, metaTitle.length + '/60')
+              ),
+              React.createElement('input', { value: metaTitle, onChange: e => setMetaTitle(e.target.value),
+                style: { width: '100%', padding: '8px 10px', background: 'var(--card)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontWeight: 600 } })
             ),
-            React.createElement('textarea', { value: metaDesc, onChange: e => setMetaDesc(e.target.value), rows: 2,
-              style: { width: '100%', padding: 8, background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical' } })
+            React.createElement('div', { style: { flex: 1.5 } },
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'flex', justifyContent: 'space-between' } },
+                React.createElement('span', null, 'Meta Description'),
+                React.createElement('span', { style: { color: metaDesc.length > 160 ? '#ef4444' : metaDesc.length >= 140 ? '#22c55e' : '#f59e0b' } }, metaDesc.length + '/160')
+              ),
+              React.createElement('input', { value: metaDesc, onChange: e => setMetaDesc(e.target.value),
+                style: { width: '100%', padding: '8px 10px', background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } })
+            )
           ),
-          // AI Notes
-          preview.proposed.ai_notes && React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'rgba(245,158,11,0.1)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)' } },
-            React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 4 } }, 'AI Notes'),
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 } }, preview.proposed.ai_notes)
-          ),
-          // Content preview
-          React.createElement('div', { style: { marginBottom: 16, padding: 24, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: '50vh', overflowY: 'auto' } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12 } }, 'Proposed Content'),
-            React.createElement('div', { className: 'content-preview', style: { fontSize: 17, lineHeight: 1.8, color: 'var(--text)' }, dangerouslySetInnerHTML: { __html: preview.proposed.content_html } })
-          ),
-          // Feedback / Re-optimise
-          React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' } },
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 } }, 'Feedback for AI'),
-            React.createElement('div', { style: { display: 'flex', gap: 8 } },
-              React.createElement('input', { value: feedback, onChange: e => setFeedback(e.target.value),
-                onKeyDown: e => e.key === 'Enter' && reOptimise(),
-                placeholder: 'e.g. make title shorter, add more about emergency services...',
-                style: { flex: 1, padding: 8, background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 } }),
-              React.createElement('button', { onClick: reOptimise, disabled: !feedback.trim() || reOptimising,
-                style: { background: '#f59e0b', fontSize: 13, padding: '8px 16px', whiteSpace: 'nowrap', border: 'none', color: '#fff', borderRadius: 6, cursor: !feedback.trim() || reOptimising ? 'not-allowed' : 'pointer' }
-              }, reOptimising ?
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Revising...') :
-                React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-rotate', style: { marginRight: 4 } }), 'Re-optimise')
+
+          // ── Main split panel ──
+          React.createElement('div', { style: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } },
+
+            // ── LEFT: Content preview ──
+            React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', minWidth: 0 } },
+              // Hint bar
+              React.createElement('div', { style: { padding: '8px 20px', background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+                React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)' } }),
+                'Highlight any text below, then tell the AI what to change'
+              ),
+              // Content
+              React.createElement('div', {
+                ref: contentRef,
+                onMouseUp: grabSelection,
+                style: { flex: 1, overflowY: 'auto', padding: '28px 32px' }
+              },
+                React.createElement('div', {
+                  className: 'content-preview',
+                  style: { fontSize: 17, lineHeight: 1.85, color: 'var(--text)', maxWidth: 780 },
+                  dangerouslySetInnerHTML: { __html: preview.proposed.content_html }
+                })
+              )
+            ),
+
+            // ── RIGHT: Chat panel ──
+            React.createElement('div', { style: { width: 420, minWidth: 360, display: 'flex', flexDirection: 'column', background: 'var(--bg)' } },
+              // Chat header
+              React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--card)', flexShrink: 0 } },
+                React.createElement('i', { className: 'fa-solid fa-comments', style: { color: '#f59e0b', fontSize: 16 } }),
+                React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: 'var(--text)' } }, 'Chat with AI'),
+                React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 'auto' } }, 'Iterate until perfect')
+              ),
+
+              // Messages area
+              React.createElement('div', { style: { flex: 1, overflowY: 'auto', padding: 16, minHeight: 0 } },
+                messages.length === 0 && React.createElement('div', { style: { textAlign: 'center', padding: '40px 20px', color: 'var(--text3)' } },
+                  React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { fontSize: 32, marginBottom: 12, display: 'block', color: '#f59e0b', opacity: 0.5 } }),
+                  React.createElement('div', { style: { fontSize: 14, marginBottom: 8 } }, 'AI has optimised your content'),
+                  React.createElement('div', { style: { fontSize: 13 } }, 'Review it on the left. Ask me to change anything.')
+                ),
+
+                messages.map((m, i) => React.createElement('div', {
+                  key: i,
+                  style: { marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }
+                },
+                  // Selection badge above user message
+                  m.selection && React.createElement('div', {
+                    style: { maxWidth: '88%', marginBottom: 4, padding: '5px 10px', background: 'rgba(99,102,241,0.15)', borderRadius: 8, fontSize: 12, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6 }
+                  },
+                    React.createElement('i', { className: 'fa-solid fa-highlighter', style: { fontSize: 10 } }),
+                    React.createElement('span', { style: { fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 250 } },
+                      '"' + m.selection + '"'
+                    )
+                  ),
+                  // Message bubble
+                  React.createElement('div', {
+                    style: {
+                      maxWidth: '88%', padding: '12px 16px', borderRadius: 14, fontSize: 14, lineHeight: 1.6,
+                      background: m.role === 'user' ? 'var(--accent)' : 'var(--card)',
+                      color: m.role === 'user' ? '#fff' : 'var(--text)',
+                      borderBottomRightRadius: m.role === 'user' ? 4 : 14,
+                      borderBottomLeftRadius: m.role === 'user' ? 14 : 4,
+                      border: m.role === 'assistant' ? '1px solid var(--border)' : 'none',
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+                    }
+                  }, m.content),
+                  // "Content updated" badge for AI revisions
+                  m.revised && React.createElement('div', {
+                    style: { marginTop: 4, fontSize: 11, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 4 }
+                  },
+                    React.createElement('i', { className: 'fa-solid fa-check-circle' }), 'Preview updated'
+                  )
+                )),
+
+                // Typing indicator
+                sending && React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', marginBottom: 12 } },
+                  React.createElement('div', { style: { padding: '12px 16px', borderRadius: 14, background: 'var(--card)', border: '1px solid var(--border)', fontSize: 14, color: 'var(--text3)', borderBottomLeftRadius: 4 } },
+                    React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Revising content...'
+                  )
+                ),
+                React.createElement('div', { ref: chatEndRef })
+              ),
+
+              // Selection badge
+              selectedText && React.createElement('div', { style: { padding: '8px 14px', background: 'rgba(99,102,241,0.12)', borderTop: '1px solid var(--border)', fontSize: 13, flexShrink: 0 } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' } },
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },
+                    React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)', fontSize: 12, flexShrink: 0 } }),
+                    React.createElement('span', { style: { color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' } },
+                      '"' + selectedText + '"'
+                    )
+                  ),
+                  React.createElement('button', {
+                    onClick: () => setSelectedText(''),
+                    style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding: 0, fontSize: 16, flexShrink: 0 }
+                  }, '×')
+                )
+              ),
+
+              // Input area
+              React.createElement('div', { style: { padding: '12px 14px', borderTop: '1px solid var(--border)', background: 'var(--card)', flexShrink: 0 } },
+                React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  React.createElement('textarea', {
+                    value: input, onChange: e => setInput(e.target.value),
+                    onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } },
+                    placeholder: 'Tell the AI what to change...',
+                    disabled: sending,
+                    rows: 2,
+                    style: { flex: 1, padding: '10px 14px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 15, outline: 'none', resize: 'none', fontFamily: 'inherit', lineHeight: 1.5 }
+                  }),
+                  React.createElement('button', {
+                    onClick: sendMessage, disabled: sending || !input.trim(),
+                    style: { background: '#f59e0b', border: 'none', color: '#fff', borderRadius: 10, padding: '0 18px', alignSelf: 'flex-end',
+                      cursor: sending || !input.trim() ? 'not-allowed' : 'pointer', fontSize: 16, opacity: sending || !input.trim() ? 0.5 : 1, height: 42 }
+                  }, React.createElement('i', { className: 'fa-solid fa-paper-plane' }))
+                ),
+                // Quick suggestions
+                React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
+                  ['Make it shorter', 'More conversational', 'Add a CTA', 'Stronger intro'].map(s =>
+                    React.createElement('button', {
+                      key: s, onClick: () => { setInput(s); },
+                      style: { padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 16, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }
+                    }, s)
+                  )
+                )
               )
             )
           ),
-          // Action buttons
-          React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
-            React.createElement('button', { onClick: onReject, style: { background: 'var(--bg3)', fontSize: 14, padding: '8px 20px', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Reject'),
+
+          // ── Bottom action bar ──
+          React.createElement('div', { style: { padding: '12px 24px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0, background: 'var(--card)' } },
+            React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)', marginRight: 'auto' } },
+              messages.filter(m => m.revised).length > 0 ? messages.filter(m => m.revised).length + ' revision(s) made' : 'Review content and chat to refine'
+            ),
+            React.createElement('button', { onClick: onReject, style: { background: 'var(--bg3)', fontSize: 14, padding: '10px 24px', border: 'none', color: 'var(--text)', borderRadius: 8, cursor: 'pointer' } },
+              React.createElement('i', { className: 'fa-solid fa-xmark', style: { marginRight: 6 } }), 'Discard'
+            ),
             React.createElement('button', { onClick: handleApply, disabled: applyingOptimise,
-              style: { background: '#22c55e', fontSize: 14, padding: '8px 20px', border: 'none', color: '#fff', borderRadius: 6, cursor: applyingOptimise ? 'wait' : 'pointer' }
+              style: { background: '#22c55e', fontSize: 14, padding: '10px 24px', border: 'none', color: '#fff', borderRadius: 8, cursor: applyingOptimise ? 'wait' : 'pointer', fontWeight: 600 }
             }, applyingOptimise ?
               React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Applying...') :
-              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Apply Changes')
+              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Apply to Draft')
             )
           )
         )
