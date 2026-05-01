@@ -8015,6 +8015,11 @@
       const [fixing, setFixing] = useState({});
       const [linkingPage, setLinkingPage] = useState(null);
       const [sending, setSending] = useState({});
+      const [aiSuggestions, setAiSuggestions] = useState({}); // { pageId: { suggested_title, suggested_desc, suggested_keyword } }
+      const [aiLoading, setAiLoading] = useState({});
+      const [previewPage, setPreviewPage] = useState(null); // node being previewed
+      const [applying, setApplying] = useState({});
+      const [activeFilter, setActiveFilter] = useState(null); // null = show all, or issue key string
 
       useEffect(() => {
         (async () => {
@@ -8129,6 +8134,105 @@
         setSending(prev => ({ ...prev, [pageNode.id]: false }));
       };
 
+      // AI suggest meta fix for a page
+      const handleAiSuggest = async (pageNode) => {
+        setAiLoading(prev => ({ ...prev, [pageNode.id]: true }));
+        try {
+          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pages: [{
+              id: pageNode.id,
+              title: pageNode.title,
+              url: pageNode.url,
+              metaTitle: pageNode.meta_title,
+              metaDesc: pageNode.meta_description,
+              focusKeyword: '',
+              h1: pageNode.h1,
+              wordCount: pageNode.word_count,
+              issues: pageNode.issues.map(i => ({ type: 'problem', text: i }))
+            }]})
+          });
+          if (data.suggestions && data.suggestions.length > 0) {
+            const s = data.suggestions[0];
+            setAiSuggestions(prev => ({ ...prev, [pageNode.id]: s }));
+            setPreviewPage(pageNode);
+          }
+        } catch(e) { console.error('AI suggest error:', e); }
+        setAiLoading(prev => ({ ...prev, [pageNode.id]: false }));
+      };
+
+      // Apply AI fix to WordPress
+      const handleApplyFix = async (pageNode) => {
+        const s = aiSuggestions[pageNode.id];
+        if (!s) return;
+        setApplying(prev => ({ ...prev, [pageNode.id]: true }));
+        try {
+          const data = await api(`/projects/${project.id}/onpage-audit/fix`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fixes: [{
+              id: pageNode.id,
+              url: pageNode.url,
+              title: pageNode.title,
+              new_meta_title: s.suggested_title,
+              new_meta_desc: s.suggested_desc,
+              new_focus_keyword: s.suggested_keyword
+            }]})
+          });
+          if (data.results && data.results[0]?.success) {
+            setFixing(prev => ({ ...prev, ['meta-' + pageNode.id]: 'fixed' }));
+            setPreviewPage(null);
+          }
+        } catch(e) { console.error('Apply fix error:', e); }
+        setApplying(prev => ({ ...prev, [pageNode.id]: false }));
+      };
+
+      // Bulk AI fix for selected onpage pages
+      const handleBulkAiFix = async (nodes) => {
+        const toFix = nodes.filter(n => !fixing['meta-' + n.id]);
+        if (!toFix.length) return;
+        setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = true); return n; });
+        try {
+          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pages: toFix.map(n => ({
+              id: n.id, title: n.title, url: n.url,
+              metaTitle: n.meta_title, metaDesc: n.meta_description, focusKeyword: '',
+              h1: n.h1, wordCount: n.word_count,
+              issues: n.issues.map(i => ({ type: 'problem', text: i }))
+            }))})
+          });
+          if (data.suggestions) {
+            const newSugg = {};
+            data.suggestions.forEach(s => { newSugg[s.id] = s; });
+            setAiSuggestions(prev => ({ ...prev, ...newSugg }));
+            // Auto-apply all
+            for (const s of data.suggestions) {
+              const node = toFix.find(n => n.id === s.id);
+              if (!node) continue;
+              try {
+                const fixData = await api(`/projects/${project.id}/onpage-audit/fix`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ fixes: [{
+                    id: node.id, url: node.url, title: node.title,
+                    new_meta_title: s.suggested_title,
+                    new_meta_desc: s.suggested_desc,
+                    new_focus_keyword: s.suggested_keyword
+                  }]})
+                });
+                if (fixData.results && fixData.results[0]?.success) {
+                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'fixed' }));
+                }
+              } catch(e) { console.error(e); }
+            }
+          }
+        } catch(e) { console.error(e); }
+        setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = false); return n; });
+      };
+
       const totalIssues = Object.values(issueGroups).reduce((sum, arr) => sum + arr.length, 0);
       const groupEntries = Object.entries(issueGroups).sort((a, b) => b[1].length - a[1].length);
 
@@ -8146,23 +8250,32 @@
             </div>
           </div>
 
-          {/* Summary cards */}
+          {/* Summary cards — clickable filter */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, marginBottom: 24 }}>
             {groupEntries.map(([key, nodes]) => {
               const meta = getIssueMeta(key);
+              const isActive = activeFilter === key;
               return (
-                <div key={key} style={{ background: 'var(--card)', borderRadius: 8, padding: '12px 14px', border: '1px solid var(--border)', borderLeft: `3px solid ${meta.color}` }}>
+                <div key={key} onClick={() => setActiveFilter(isActive ? null : key)}
+                  style={{ background: isActive ? `${meta.color}20` : 'var(--card)', borderRadius: 8, padding: '12px 14px', border: isActive ? `2px solid ${meta.color}` : '1px solid var(--border)', borderLeft: `3px solid ${meta.color}`, cursor: 'pointer', transition: 'all 0.15s', transform: isActive ? 'scale(1.02)' : 'none' }}>
                   <div style={{ fontSize: 24, fontWeight: 800, color: meta.color }}>
                     <i className={`fas ${meta.icon}`} style={{ fontSize: 14, marginRight: 6, opacity: 0.6 }} />{nodes.length}
                   </div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>{key}</div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: isActive ? 'var(--text)' : 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>{key}</div>
                 </div>
               );
             })}
           </div>
 
+          {activeFilter && (
+            <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>Showing: <strong style={{ color: 'var(--text)' }}>{activeFilter}</strong></span>
+              <button onClick={() => setActiveFilter(null)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, textDecoration: 'underline' }}>Show All</button>
+            </div>
+          )}
+
           {/* Issue groups */}
-          {groupEntries.map(([key, nodes]) => {
+          {groupEntries.filter(([key]) => !activeFilter || activeFilter === key).map(([key, nodes]) => {
             const meta = getIssueMeta(key);
             const sel = getSelected(key, nodes);
             return (
@@ -8176,8 +8289,8 @@
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     {meta.fix === 'onpage' && (
-                      <button onClick={() => setPage('onpage-audit')} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
-                        <i className="fas fa-wrench" style={{ marginRight: 4 }} />{meta.label}
+                      <button onClick={() => handleBulkAiFix(nodes)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+                        <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />AI Fix All ({nodes.length})
                       </button>
                     )}
                   </div>
@@ -8233,11 +8346,14 @@
                             {meta.fix === 'copywriter' && cwSent && (
                               <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />{fixing['cw-' + n.id] === 'exists' ? 'Already in Queue' : 'Sent'}</span>
                             )}
-                            {meta.fix === 'onpage' && (
-                              <button onClick={() => setPage('onpage-audit')}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
-                                <i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix
+                            {meta.fix === 'onpage' && !fixing['meta-' + n.id] && (
+                              <button onClick={() => handleAiSuggest(n)} disabled={aiLoading[n.id]}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: aiLoading[n.id] ? 'default' : 'pointer', background: aiLoading[n.id] ? 'var(--border)' : '#6366f1', color: '#fff', opacity: aiLoading[n.id] ? 0.7 : 1 }}>
+                                {aiLoading[n.id] ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />AI Fix</>}
                               </button>
+                            )}
+                            {meta.fix === 'onpage' && fixing['meta-' + n.id] === 'fixed' && (
+                              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Fixed</span>
                             )}
                           </td>
                         </tr>
@@ -8246,7 +8362,7 @@
                   </tbody>
                 </table>
                 {/* Bulk actions for selected */}
-                {sel.length > 0 && (meta.fix === 'links' || meta.fix === 'copywriter') && (
+                {sel.length > 0 && (
                   <div style={{ padding: '10px 16px', background: 'var(--bg)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>{sel.length} selected</span>
                     {meta.fix === 'links' && (
@@ -8261,6 +8377,12 @@
                         <i className="fas fa-pen" style={{ marginRight: 4 }} />Send All to Copywriter
                       </button>
                     )}
+                    {meta.fix === 'onpage' && (
+                      <button onClick={() => handleBulkAiFix(sel)}
+                        style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+                        <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />AI Fix Selected ({sel.length})
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -8272,6 +8394,55 @@
               <i className="fas fa-circle-check" style={{ fontSize: 48, color: '#22c55e', marginBottom: 16 }} />
               <h3 style={{ fontSize: 18, fontWeight: 700, color: '#22c55e' }}>All Clear</h3>
               <p>No issues detected across {graphData.stats.total} pages.</p>
+            </div>
+          )}
+
+          {/* AI Fix Preview Modal */}
+          {previewPage && aiSuggestions[previewPage.id] && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setPreviewPage(null)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, width: 600, maxHeight: '80vh', overflow: 'auto', padding: 24, border: '1px solid var(--border)' }}
+                onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+                    <i className="fas fa-wand-magic-sparkles" style={{ color: '#6366f1', marginRight: 8 }} />AI Fix Preview
+                  </h3>
+                  <button onClick={() => setPreviewPage(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-times" /></button>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{previewPage.title}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16 }}>{previewPage.url}</div>
+
+                {[
+                  { label: 'Meta Title', current: previewPage.meta_title, suggested: aiSuggestions[previewPage.id].suggested_title },
+                  { label: 'Meta Description', current: previewPage.meta_description, suggested: aiSuggestions[previewPage.id].suggested_desc },
+                  { label: 'Focus Keyword', current: '(not set)', suggested: aiSuggestions[previewPage.id].suggested_keyword },
+                ].map((field, i) => (
+                  <div key={i} style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>{field.label}</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1, padding: '8px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', fontSize: 12 }}>
+                        <div style={{ fontSize: 9, fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>CURRENT {field.current ? `(${field.current.length})` : ''}</div>
+                        {field.current || <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>Empty</span>}
+                      </div>
+                      <div style={{ flex: 1, padding: '8px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', fontSize: 12 }}>
+                        <div style={{ fontSize: 9, fontWeight: 600, color: '#22c55e', marginBottom: 4 }}>SUGGESTED {field.suggested ? `(${field.suggested.length})` : ''}</div>
+                        {field.suggested || <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>No change</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+                  <button onClick={() => setPreviewPage(null)}
+                    style={{ padding: '8px 16px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                  <button onClick={() => handleApplyFix(previewPage)} disabled={applying[previewPage.id]}
+                    style={{ padding: '8px 16px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none', background: applying[previewPage.id] ? 'var(--border)' : '#22c55e', color: '#fff', cursor: applying[previewPage.id] ? 'default' : 'pointer' }}>
+                    {applying[previewPage.id] ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Applying...</> : <><i className="fas fa-check" style={{ marginRight: 4 }} />Apply to WordPress</>}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
