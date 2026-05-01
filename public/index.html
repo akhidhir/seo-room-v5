@@ -7681,11 +7681,15 @@
         const nodes = graphData.nodes.map(n => ({ ...n }));
         const edges = graphData.edges.map(e => ({ source: e.source, target: e.target }));
 
+        const nodeCount = nodes.length;
+        const linkDist = nodeCount > 30 ? 140 : nodeCount > 15 ? 110 : 80;
+        const chargeStr = nodeCount > 30 ? -400 : nodeCount > 15 ? -300 : -200;
+
         const sim = d3.forceSimulation(nodes)
-          .force('link', d3.forceLink(edges).id(d => d.id).distance(80))
-          .force('charge', d3.forceManyBody().strength(-200))
+          .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDist))
+          .force('charge', d3.forceManyBody().strength(chargeStr))
           .force('center', d3.forceCenter(width / 2, height / 2))
-          .force('collision', d3.forceCollide().radius(30));
+          .force('collision', d3.forceCollide().radius(35));
 
         const link = g.append('g').selectAll('line').data(edges).join('line')
           .attr('stroke', 'rgba(99,102,241,0.3)').attr('stroke-width', 1);
@@ -7724,9 +7728,23 @@
           .text(d => d.issues.length).attr('x', 10).attr('y', -5)
           .attr('text-anchor', 'middle').attr('font-size', 8).attr('fill', '#fff').attr('font-weight', 700);
 
+        let ticked = 0;
         sim.on('tick', () => {
           link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
           node.attr('transform', d => `translate(${d.x},${d.y})`);
+          ticked++;
+          // Zoom to fit after simulation settles
+          if (ticked === 120) {
+            const pad = 40;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            nodes.forEach(n => { if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x; if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y; });
+            const bw = maxX - minX + pad * 2;
+            const bh = maxY - minY + pad * 2;
+            const scale = Math.min(width / bw, height / bh, 1);
+            const tx = width / 2 - (minX + maxX) / 2 * scale;
+            const ty = height / 2 - (minY + maxY) / 2 * scale;
+            svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+          }
         });
 
         svg.on('click', () => setSelectedNode(null));
@@ -7983,6 +8001,287 @@
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
               <i className="fas fa-spider" style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
               <p>Click Rescan to crawl your website and build the site map</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============ SITE ISSUES PAGE (triage view) ============
+    function SiteIssuesPage({ project, setPage }) {
+      const [graphData, setGraphData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [selected, setSelected] = useState({});
+      const [fixing, setFixing] = useState({});
+      const [linkingPage, setLinkingPage] = useState(null);
+      const [sending, setSending] = useState({});
+
+      useEffect(() => {
+        (async () => {
+          try {
+            const data = await api(`/projects/${project.id}/site-graph`);
+            if (data && data.nodes) setGraphData(data);
+          } catch(e) { console.error(e); }
+          setLoading(false);
+        })();
+      }, [project.id]);
+
+      if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner-large" /></div>;
+      if (!graphData || !graphData.nodes) return (
+        <div style={{ padding: '24px 32px', textAlign: 'center', marginTop: 60 }}>
+          <i className="fas fa-exclamation-triangle" style={{ fontSize: 48, color: 'var(--text3)', marginBottom: 16 }} />
+          <h3 style={{ fontSize: 18, fontWeight: 700 }}>No scan data</h3>
+          <p style={{ color: 'var(--text3)', marginBottom: 20 }}>Run a site scan from the Site Map page first.</p>
+          <button onClick={() => setPage('ow-sitemap')} style={{ padding: '10px 24px', fontSize: 14, fontWeight: 600, borderRadius: 8, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+            <i className="fas fa-project-diagram" style={{ marginRight: 6 }} />Go to Site Map
+          </button>
+        </div>
+      );
+
+      // Group issues by type
+      const issueGroups = {};
+      graphData.nodes.forEach(n => {
+        n.issues.forEach(issue => {
+          const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
+          if (!issueGroups[key]) issueGroups[key] = [];
+          issueGroups[key].push(n);
+        });
+      });
+
+      const ISSUE_META = {
+        'Missing or short meta title': { icon: 'fa-heading', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'manual', label: 'Manual Fix Required' },
+        'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter' },
+        'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links' },
+        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links' },
+      };
+
+      const getIssueMeta = (key) => {
+        for (const [pattern, meta] of Object.entries(ISSUE_META)) {
+          if (key.startsWith(pattern)) return meta;
+        }
+        return { icon: 'fa-circle-exclamation', color: '#ef4444', fix: 'manual', label: 'Manual Fix' };
+      };
+
+      const toggleSelect = (groupKey, nodeId) => {
+        setSelected(prev => {
+          const group = prev[groupKey] || {};
+          return { ...prev, [groupKey]: { ...group, [nodeId]: !group[nodeId] } };
+        });
+      };
+
+      const selectAll = (groupKey, nodes) => {
+        const allSelected = nodes.every(n => (selected[groupKey] || {})[n.id]);
+        setSelected(prev => {
+          const group = {};
+          if (!allSelected) nodes.forEach(n => { group[n.id] = true; });
+          return { ...prev, [groupKey]: group };
+        });
+      };
+
+      const getSelected = (groupKey, nodes) => nodes.filter(n => (selected[groupKey] || {})[n.id]);
+
+      // Add internal links action
+      const handleAddLinks = async (pageNode) => {
+        setLinkingPage(pageNode.id);
+        try {
+          await api(`/projects/${project.id}/onpage-audit/add-links`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_id: pageNode.id })
+          });
+          setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+        } catch(e) {
+          console.error('Link error:', e);
+          setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
+        }
+        setLinkingPage(null);
+      };
+
+      // Send to copywriter
+      const handleSendCopywriter = async (pageNode) => {
+        setSending(prev => ({ ...prev, [pageNode.id]: true }));
+        try {
+          await api(`/projects/${project.id}/content-queue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              page_id: pageNode.id,
+              page_url: pageNode.url,
+              page_title: pageNode.title,
+              content_type: 'optimise',
+              source: 'site-issues',
+              priority: 'high',
+              brief: `Thin content (${pageNode.word_count} words). Expand to 800+ words with relevant, keyword-rich content.`
+            })
+          });
+          setFixing(prev => ({ ...prev, ['cw-' + pageNode.id]: 'sent' }));
+        } catch(e) {
+          if (e.message && e.message.includes('409')) {
+            setFixing(prev => ({ ...prev, ['cw-' + pageNode.id]: 'exists' }));
+          } else {
+            console.error(e);
+          }
+        }
+        setSending(prev => ({ ...prev, [pageNode.id]: false }));
+      };
+
+      const totalIssues = Object.values(issueGroups).reduce((sum, arr) => sum + arr.length, 0);
+      const groupEntries = Object.entries(issueGroups).sort((a, b) => b[1].length - a[1].length);
+
+      return (
+        <div style={{ padding: '24px 32px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444' }} />
+                Site Issues
+              </h2>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
+                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0).length} pages · {groupEntries.length} issue types
+              </div>
+            </div>
+          </div>
+
+          {/* Summary cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, marginBottom: 24 }}>
+            {groupEntries.map(([key, nodes]) => {
+              const meta = getIssueMeta(key);
+              return (
+                <div key={key} style={{ background: 'var(--card)', borderRadius: 8, padding: '12px 14px', border: '1px solid var(--border)', borderLeft: `3px solid ${meta.color}` }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: meta.color }}>
+                    <i className={`fas ${meta.icon}`} style={{ fontSize: 14, marginRight: 6, opacity: 0.6 }} />{nodes.length}
+                  </div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>{key}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Issue groups */}
+          {groupEntries.map(([key, nodes]) => {
+            const meta = getIssueMeta(key);
+            const sel = getSelected(key, nodes);
+            return (
+              <div key={key} style={{ background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', marginBottom: 16, overflow: 'hidden' }}>
+                {/* Group header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: `${meta.color}15`, borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <i className={`fas ${meta.icon}`} style={{ color: meta.color, fontSize: 14 }} />
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{key}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{nodes.length} page{nodes.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {meta.fix === 'onpage' && (
+                      <button onClick={() => setPage('onpage-audit')} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+                        <i className="fas fa-wrench" style={{ marginRight: 4 }} />{meta.label}
+                      </button>
+                    )}
+                    {meta.fix === 'manual' && (
+                      <span style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                        <i className="fas fa-hand" style={{ marginRight: 4 }} />{meta.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* Pages table */}
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg)' }}>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', width: 30 }}>
+                        <input type="checkbox" checked={nodes.length > 0 && nodes.every(n => (selected[key] || {})[n.id])} onChange={() => selectAll(key, nodes)} style={{ cursor: 'pointer' }} />
+                      </th>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)' }}>Page</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', width: 80 }}>Words</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', width: 80 }}>Inbound</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', width: 80 }}>Outbound</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', width: 160 }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nodes.map(n => {
+                      const isLinked = fixing[n.id] === 'linked';
+                      const isLinking = linkingPage === n.id;
+                      const cwSent = fixing['cw-' + n.id] === 'sent' || fixing['cw-' + n.id] === 'exists';
+                      const isSending = sending[n.id];
+                      return (
+                        <tr key={n.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '8px 12px' }}>
+                            <input type="checkbox" checked={!!(selected[key] || {})[n.id]} onChange={() => toggleSelect(key, n.id)} style={{ cursor: 'pointer' }} />
+                          </td>
+                          <td style={{ padding: '8px 12px' }}>
+                            <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{n.slug || '/'}</div>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: n.word_count < 300 ? '#ef4444' : 'var(--text2)' }}>{n.word_count}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: n.inbound_count === 0 ? '#ef4444' : 'var(--text2)' }}>{n.inbound_count}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: n.internal_links.length === 0 ? '#ef4444' : 'var(--text2)' }}>{n.internal_links.length}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                            {meta.fix === 'links' && !isLinked && (
+                              <button onClick={() => handleAddLinks(n)} disabled={isLinking}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isLinking ? 'default' : 'pointer', background: isLinking ? 'var(--border)' : '#3b82f6', color: '#fff', opacity: isLinking ? 0.7 : 1 }}>
+                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Linking...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />Add Links</>}
+                              </button>
+                            )}
+                            {meta.fix === 'links' && isLinked && (
+                              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Links Added</span>
+                            )}
+                            {meta.fix === 'copywriter' && !cwSent && (
+                              <button onClick={() => handleSendCopywriter(n)} disabled={isSending}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isSending ? 'default' : 'pointer', background: isSending ? 'var(--border)' : '#8b5cf6', color: '#fff', opacity: isSending ? 0.7 : 1 }}>
+                                {isSending ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 4 }} />Send to Copywriter</>}
+                              </button>
+                            )}
+                            {meta.fix === 'copywriter' && cwSent && (
+                              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />{fixing['cw-' + n.id] === 'exists' ? 'Already in Queue' : 'Sent'}</span>
+                            )}
+                            {meta.fix === 'onpage' && (
+                              <button onClick={() => setPage('onpage-audit')}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+                                <i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix
+                              </button>
+                            )}
+                            {meta.fix === 'manual' && (
+                              <a href={n.url} target="_blank" rel="noopener noreferrer" style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, background: 'rgba(239,68,68,0.1)', color: '#ef4444', textDecoration: 'none' }}>
+                                <i className="fas fa-external-link" style={{ marginRight: 4 }} />View Page
+                              </a>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {/* Bulk actions for selected */}
+                {sel.length > 0 && (meta.fix === 'links' || meta.fix === 'copywriter') && (
+                  <div style={{ padding: '10px 16px', background: 'var(--bg)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>{sel.length} selected</span>
+                    {meta.fix === 'links' && (
+                      <button onClick={async () => { for (const n of sel) { await handleAddLinks(n); } }}
+                        style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>
+                        <i className="fas fa-link" style={{ marginRight: 4 }} />Add Links to All
+                      </button>
+                    )}
+                    {meta.fix === 'copywriter' && (
+                      <button onClick={async () => { for (const n of sel) { await handleSendCopywriter(n); } }}
+                        style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#8b5cf6', color: '#fff' }}>
+                        <i className="fas fa-pen" style={{ marginRight: 4 }} />Send All to Copywriter
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {groupEntries.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-circle-check" style={{ fontSize: 48, color: '#22c55e', marginBottom: 16 }} />
+              <h3 style={{ fontSize: 18, fontWeight: 700, color: '#22c55e' }}>All Clear</h3>
+              <p>No issues detected across {graphData.stats.total} pages.</p>
             </div>
           )}
         </div>
@@ -11208,7 +11507,7 @@ case 'action-plan':
           case 'ow-sitemap':
             return <OptimiseWebsitePage project={project} view="sitemap" setPage={setActiveTab} />;
           case 'ow-issues':
-            return <OptimiseWebsitePage project={project} view="issues" setPage={setActiveTab} />;
+            return <SiteIssuesPage project={project} setPage={setActiveTab} />;
           case 'ow-queue':
             return <OptimiseWebsitePage project={project} view="queue" setPage={setActiveTab} />;
           case 'maps-rankings':
