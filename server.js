@@ -4915,7 +4915,67 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
       }
     }
 
-    console.log(`[skeleton] Found ${blocks.length} content blocks`);
+    console.log(`[skeleton] Found ${blocks.length} top-level blocks`);
+
+    // If a single block contains most of the text, drill into its children instead
+    // This handles pages like Gold PC where DIV#content wraps all sections
+    const totalText = blocks.reduce((sum, b) => sum + b.textLen, 0);
+    const bigBlock = blocks.find(b => b.textLen > totalText * 0.7 && blocks.length <= 5);
+    if (bigBlock) {
+      console.log(`[skeleton] Block "${bigBlock.tag}" has ${bigBlock.textLen}/${totalText} chars — drilling into children`);
+      const innerHtml = bigBlock.html;
+      // Re-parse inside this block: find direct children (section, div, main, article)
+      // Skip the outer tag itself by starting after the first >
+      const innerStart = innerHtml.indexOf('>') + 1;
+      const innerEnd = innerHtml.lastIndexOf('</');
+      const innerContent = innerHtml.slice(innerStart, innerEnd > innerStart ? innerEnd : innerHtml.length);
+
+      const innerBlocks = [];
+      const innerRegex = /<(section|div|main|article)([^>]*)>/gi;
+      let im;
+      while ((im = innerRegex.exec(innerContent)) !== null) {
+        const itag = im[1].toLowerCase();
+        const iattrs = im[2];
+        const iStart = im.index;
+        let idepth = 1, ipos = im.index + im[0].length;
+        const ioRe = new RegExp(`<${itag}[\\s>]`, 'gi');
+        const icRe = new RegExp(`</${itag}\\s*>`, 'gi');
+        while (idepth > 0 && ipos < innerContent.length) {
+          ioRe.lastIndex = ipos; icRe.lastIndex = ipos;
+          const inO = ioRe.exec(innerContent);
+          const inC = icRe.exec(innerContent);
+          if (!inC) break;
+          if (inO && inO.index < inC.index) { idepth++; ipos = inO.index + inO[0].length; }
+          else {
+            idepth--;
+            if (idepth === 0) {
+              const iEnd = inC.index + inC[0].length;
+              const iBlock = innerContent.slice(iStart, iEnd);
+              const iText = iBlock.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+              if (iText.length >= 10) {
+                innerBlocks.push({ html: iBlock, attrs: iattrs, tag: itag, textLen: iText.length, text: iText });
+                innerRegex.lastIndex = iEnd;
+              }
+              break;
+            }
+            ipos = inC.index + inC[0].length;
+          }
+        }
+      }
+
+      if (innerBlocks.length > blocks.length) {
+        // Also keep non-big blocks (like hero banner) that came before/after
+        const heroBlocks = blocks.filter(b => b !== bigBlock);
+        // Put hero blocks first, then inner blocks
+        const heroBefore = heroBlocks.filter(b => blocks.indexOf(b) < blocks.indexOf(bigBlock));
+        const heroAfter = heroBlocks.filter(b => blocks.indexOf(b) > blocks.indexOf(bigBlock));
+        blocks.length = 0;
+        blocks.push(...heroBefore, ...innerBlocks, ...heroAfter);
+        console.log(`[skeleton] Drilled into ${innerBlocks.length} inner blocks (+ ${heroBlocks.length} outer blocks)`);
+      }
+    }
+
+    console.log(`[skeleton] Final: ${blocks.length} content blocks`);
 
     // Helper: strip text from HTML but keep structure, images, links, headings
     function stripToSkeleton(blockHtml, sectionNum) {
@@ -4937,7 +4997,7 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
       const lists = (skeleton.match(/<(ul|ol)[^>]*>/gi) || []).length;
       const forms = (skeleton.match(/<form[^>]*>/gi) || []).length;
       const hasBgImage = /background.*url|bg-img|ban-img|hero|banner/i.test(skeleton.slice(0, 500));
-      const hasColumns = /col-|column|grid|flex|row|wp-block-columns/i.test(skeleton.slice(0, 1000));
+      const hasColumns = /col-\w+-\d|col-\d|column|wp-block-columns/i.test(skeleton);
       const text = skeleton.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
       const wordCount = text.split(/\s+/).length;
 
@@ -4950,6 +5010,7 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
       if (hasBgImage && wordCount < 100) sectionType = 'hero-banner';
       else if (forms) sectionType = 'form-cta';
       else if (imgs > 0 && (hasColumns || colCount > 1)) sectionType = 'image-text-columns';
+      else if (hasColumns && wordCount < 150) sectionType = 'multi-column-cta';
       else if (imgs > 2 && wordCount < 100) sectionType = 'image-gallery';
       else if (lists && wordCount > 50) sectionType = 'feature-list';
       else if (wordCount < 80 && (skeleton.match(/<a[^>]*>/gi) || []).length > 0) sectionType = 'cta-bar';
@@ -5018,6 +5079,20 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
         headings.forEach(h => { out += `  <h${h.level}>${h.text}</h${h.level}>\n`; });
         out += `  <p>[~20 words — form intro text]</p>\n`;
         out += `  <p><em>[Contact form / enquiry form appears here — not editable]</em></p>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'multi-column-cta') {
+        // Multi-column CTA section (e.g. 3-column with images)
+        const colMatches = skeleton.match(/col-\w+-(\d+)/gi) || [];
+        const colSizes = colMatches.map(c => parseInt(c.match(/\d+$/)[0]));
+        const numCols = colSizes.length || 3;
+        out += `<div class="wf-columns">\n`;
+        for (let ci = 0; ci < Math.min(numCols, 6); ci++) {
+          out += `  <div class="wf-col">\n`;
+          if (imgSrcs[ci]) out += `    <img src="${imgSrcs[ci].src}" alt="${imgSrcs[ci].alt || '[image]'}">\n`;
+          if (headings[ci]) out += `    <h${headings[ci].level}>${headings[ci].text}</h${headings[ci].level}>\n`;
+          out += `    <p>[~20 words — column ${ci + 1} content]</p>\n`;
+          out += `  </div>\n`;
+        }
         out += `</div>\n`;
       } else {
         // long-content or short-content — keep headings, replace body text
