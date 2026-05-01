@@ -4526,6 +4526,32 @@ Apply the user's feedback and return the revised version.`, item) }]
   }
 });
 
+// Full-page screenshot capture via Google PageSpeed API
+app.post('/api/projects/:projectId/screenshot', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    // Use Google PageSpeed API — it returns a full screenshot
+    const apiKey = process.env.PAGESPEED_API_KEY || '';
+    const psUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=desktop&category=performance${apiKey ? '&key=' + apiKey : ''}`;
+    console.log(`[screenshot] Capturing: ${url}`);
+    const resp = await fetch(psUrl, { signal: AbortSignal.timeout(30000) });
+    if (!resp.ok) return res.status(500).json({ error: `PageSpeed API failed: ${resp.status}` });
+    const data = await resp.json();
+    // Extract the full screenshot from the audit
+    const screenshot = data?.lighthouseResult?.audits?.['final-screenshot']?.details?.data
+      || data?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
+    if (!screenshot) return res.status(500).json({ error: 'No screenshot in PageSpeed response' });
+    // screenshot is a data URL like "data:image/jpeg;base64,..."
+    const base64 = screenshot.replace(/^data:[^;]+;base64,/, '');
+    console.log(`[screenshot] Captured ${url}: ${Math.round(base64.length / 1024)}KB`);
+    res.json({ image: base64, mime: 'image/jpeg' });
+  } catch (e) {
+    console.error('[screenshot] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== CONTENT KEYWORDS ====================
 
 // List all keywords for a project

@@ -9352,6 +9352,31 @@
                 React.createElement('i', { className: 'fas fa-upload', style: { marginRight: 6 } }),
                 selectedItem.wireframe_image ? 'Replace Image' : 'Upload Wireframe'
               ),
+              // Capture full-page screenshot button
+              selectedItem.page_url && React.createElement('button', {
+                className: 'btn btn-small',
+                style: { background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.3)' },
+                onClick: async () => {
+                  const pageUrl = selectedItem.page_url.startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
+                  const btn = event.target.closest('button');
+                  const origText = btn.textContent;
+                  btn.textContent = 'Capturing...';
+                  btn.disabled = true;
+                  try {
+                    const r = await api(`/projects/${project.id}/screenshot`, { method: 'POST', body: { url: pageUrl } });
+                    if (r.image) {
+                      setSelectedItem(prev => ({ ...prev, wireframe_image: r.image, wireframe_mime: 'image/jpeg' }));
+                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                        method: 'PUT', body: { wireframe_image: r.image, wireframe_mime: 'image/jpeg' }
+                      }).catch(() => {});
+                    } else { alert(r.error || 'Screenshot failed'); }
+                  } catch (e) { alert('Error: ' + e.message); }
+                  btn.textContent = origText;
+                  btn.disabled = false;
+                }
+              },
+                React.createElement('i', { className: 'fas fa-camera', style: { marginRight: 6 } }), 'Capture Page'
+              ),
               selectedItem.wireframe_image && React.createElement('button', {
                 className: 'btn btn-small',
                 style: { background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
