@@ -13072,6 +13072,7 @@
       }, [project?.id]);
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
       const [appLoading, setAppLoading] = useState(true);
+      const [allProjects, setAllProjects] = useState([]);
 
       // On mount: check for existing token, load user + project
       useEffect(() => {
@@ -13085,6 +13086,7 @@
               // Load projects
               const projData = await api('/projects');
               if (projData?.projects?.length > 0) {
+                setAllProjects(projData.projects);
                 const savedId = localStorage.getItem('currentProject');
                 const found = projData.projects.find(p => String(p.id) === savedId);
                 setProject(found || projData.projects[0]);
@@ -13106,6 +13108,7 @@
         try {
           const projData = await api('/projects');
           if (projData?.projects?.length > 0) {
+            setAllProjects(projData.projects);
             setProject(projData.projects[0]);
             localStorage.setItem('currentProject', projData.projects[0].id);
           } else {
@@ -13275,9 +13278,27 @@ case 'action-plan':
       return (
         <div className="app-wrapper">
           <div className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
-            <div className="sidebar-header">
-              <i className="fas fa-rocket"></i>
-              <span>SEO Room</span>
+            <div className="sidebar-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <i className="fas fa-rocket"></i>
+                <span>SEO Room</span>
+              </div>
+              {allProjects.length > 1 ? (
+                <select
+                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                  value={project?.id || ''}
+                  onChange={(e) => {
+                    const p = allProjects.find(pr => String(pr.id) === e.target.value);
+                    if (p) handleProjectSwitch(p);
+                  }}
+                >
+                  {allProjects.map(p => (
+                    <option key={p.id} value={p.id}>{p.business_name || p.name}</option>
+                  ))}
+                </select>
+              ) : project && (
+                <div style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600 }}>{project.business_name || project.name}</div>
+              )}
             </div>
 
             <div className="sidebar-content">
@@ -13386,10 +13407,6 @@ case 'action-plan':
             </div>
 
             <div className="sidebar-footer">
-              <button className="btn btn-secondary" style={{ width: '100%', marginBottom: 8, fontSize: 13, textAlign: 'left', padding: '8px 12px' }} onClick={() => setActiveTab('projects')}>
-                <i className="fas fa-folder" style={{ marginRight: 8 }}></i>
-                {project ? (project.name || 'Select Project') : 'Select Project'}
-              </button>
               <button className="btn btn-danger" style={{ width: '100%' }} onClick={handleLogout}>
                 <i className="fas fa-sign-out-alt"></i> Sign out
               </button>
