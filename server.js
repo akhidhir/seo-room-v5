@@ -3493,12 +3493,62 @@ app.post('/api/projects/:projectId/content-queue', async (req, res) => {
       const dup = await pool.query('SELECT id FROM content_queue WHERE project_id=$1 AND page_id=$2 AND stage != $3', [projectId, page_id, 'published']);
       if (dup.rows.length > 0) return res.status(409).json({ error: 'Page already in content queue', existing_id: dup.rows[0].id });
     }
+
+    // Auto-fetch content from WordPress if not provided
+    let fetchedContent = current_content || null;
+    let fetchedWordCount = current_word_count || 0;
+    if (!fetchedContent && page_id) {
+      try {
+        const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+        const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+        if (wpBase) {
+          const authHeaders = getWpAuthHeaders(project);
+          // Try pages endpoint first, then posts
+          for (const type of ['pages', 'posts']) {
+            try {
+              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${page_id}`, {
+                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+              });
+              if (wpRes.ok) {
+                const wpData = await wpRes.json();
+                fetchedContent = wpData.content?.rendered || '';
+                // For Elementor sites, fetch live HTML if WP REST content is thin
+                const plainText = fetchedContent.replace(/<[^>]+>/g, '').trim();
+                const wc = plainText ? plainText.split(/\s+/).length : 0;
+                if (wc < 50 && project.is_elementor_site && page_url) {
+                  try {
+                    const liveRes = await fetch(page_url);
+                    if (liveRes.ok) {
+                      const liveHtml = await liveRes.text();
+                      const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                                        liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                                        liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
+                                        liveHtml.match(/<div[^>]*class="[^"]*elementor[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+                      if (mainMatch) {
+                        const liveText = mainMatch[1].replace(/<[^>]+>/g, '').trim();
+                        if (liveText.split(/\s+/).length > wc) {
+                          fetchedContent = mainMatch[1];
+                        }
+                      }
+                    }
+                  } catch (e2) { console.log('[content-queue] Live fetch fallback failed:', e2.message); }
+                }
+                fetchedWordCount = fetchedContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+                console.log(`[content-queue] Fetched ${fetchedWordCount} words from WP ${type}/${page_id}`);
+                break;
+              }
+            } catch (e2) { /* try next type */ }
+          }
+        }
+      } catch (e2) { console.log('[content-queue] WP content fetch failed:', e2.message); }
+    }
+
     const r = await pool.query(
       `INSERT INTO content_queue (project_id, page_id, page_url, page_title, content_type, source, priority, brief,
         current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [projectId, page_id, page_url, page_title, content_type || 'rewrite', source || 'onpage-audit',
-       priority || 'medium', brief, current_content, current_word_count || 0,
+       priority || 'medium', brief, fetchedContent, fetchedWordCount,
        current_meta_title, current_meta_desc, current_focus_keyword]
     );
     res.json(r.rows[0]);
