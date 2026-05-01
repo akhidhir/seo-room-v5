@@ -9506,18 +9506,17 @@
                   if (!templateId) return;
                   setApplyingTemplate(true);
                   try {
-                    const r = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
+                    await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
                       method: 'POST', body: { template_id: parseInt(templateId) }
                     });
-                    if (r.ok || r.success) {
-                      try {
-                        const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
-                        if (fresh) setSelectedItem(fresh);
-                      } catch (_) { /* refresh can fail during deploy — template already applied */ }
-                    } else { alert(r.error || 'Failed to apply template'); }
                   } catch (err) {
-                    if (!err.message?.includes('non-JSON')) alert('Error: ' + err.message);
+                    console.warn('Apply template call:', err.message);
                   }
+                  // Always try to reload the item — template may have applied even if response was garbled
+                  try {
+                    const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
+                    if (fresh) setSelectedItem(fresh);
+                  } catch (_) {}
                   setApplyingTemplate(false);
                   e.target.value = '';
                 }
