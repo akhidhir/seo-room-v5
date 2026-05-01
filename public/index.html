@@ -9001,6 +9001,8 @@
       const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
       const [pageTemplates, setPageTemplates] = useState([]);
       const [applyingTemplate, setApplyingTemplate] = useState(false);
+      const [wpChangeHistory, setWpChangeHistory] = useState([]);
+      const [rollingBack, setRollingBack] = useState(null);
 
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
@@ -9028,6 +9030,35 @@
       useEffect(() => {
         if (pid) api(`/projects/${pid}/templates`).then(d => setPageTemplates(Array.isArray(d) ? d : d?.templates || [])).catch(() => {});
       }, [pid]);
+
+      const loadWpHistory = async () => {
+        if (!pid) return;
+        try {
+          const data = await api(`/projects/${pid}/wp-changes`);
+          if (data?.changes) setWpChangeHistory(data.changes);
+        } catch (e) { /* no history */ }
+      };
+      useEffect(() => { if (stage === 'published' && pid) loadWpHistory(); }, [pid, stage]);
+
+      const handleRollbackChange = async (changeId) => {
+        if (!confirm('Roll back this change? The original value will be restored on WordPress.')) return;
+        setRollingBack('change-' + changeId);
+        try {
+          await api(`/projects/${pid}/wp-changes/rollback/${changeId}`, { method: 'POST' });
+          loadWpHistory();
+        } catch (e) { alert('Rollback failed: ' + e.message); }
+        setRollingBack(null);
+      };
+
+      const handleRollbackPage = async (pageId) => {
+        if (!confirm('Roll back ALL changes for this page? All original values will be restored.')) return;
+        setRollingBack('page-' + pageId);
+        try {
+          await api(`/projects/${pid}/wp-changes/rollback-page/${pageId}`, { method: 'POST' });
+          loadWpHistory();
+        } catch (e) { alert('Rollback failed: ' + e.message); }
+        setRollingBack(null);
+      };
 
       const counts = {
         queue: allItems.filter(d => d.stage === 'queue').length,
@@ -9630,7 +9661,67 @@
             project: project,
             item: { ...selectedItem, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword, target_keywords: targetKeywords, comments: comments },
             onItemUpdate: handleItemUpdate
-          })
+          }),
+
+          // Change History panel (published items only)
+          isPublished && (() => {
+            const pageSlug = (selectedItem.page_url || '').replace(/^https?:\/\/[^/]+/, '').replace(/^\//, '').replace(/\/$/, '');
+            const pageChanges = wpChangeHistory.filter(c => {
+              const cSlug = (c.page_url || '').replace(/^https?:\/\/[^/]+/, '').replace(/^\//, '').replace(/\/$/, '');
+              return c.page_id === selectedItem.wp_post_id || cSlug === pageSlug;
+            });
+            const activeChanges = pageChanges.filter(c => !c.rolled_back_at);
+            const rolledBackChanges = pageChanges.filter(c => c.rolled_back_at);
+            return React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginTop: 20, border: '1px solid var(--border)' } },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+                React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8 } },
+                  React.createElement('i', { className: 'fas fa-history', style: { color: '#f59e0b' } }),
+                  'Change History',
+                  activeChanges.length > 0 && React.createElement('span', { style: { fontSize: 11, background: '#f59e0b', color: '#fff', borderRadius: 10, padding: '2px 8px', fontWeight: 600 } }, activeChanges.length + ' active')
+                ),
+                activeChanges.length > 0 && React.createElement('button', {
+                  onClick: () => handleRollbackPage(activeChanges[0].page_id),
+                  disabled: !!rollingBack,
+                  style: { padding: '6px 14px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: rollingBack ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600 }
+                }, rollingBack === 'page-' + activeChanges[0].page_id ?
+                  React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Rolling back...') :
+                  React.createElement('span', null, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 4 } }), 'Rollback All')
+                )
+              ),
+              pageChanges.length === 0 ?
+                React.createElement('div', { style: { color: 'var(--text3)', fontSize: 13, padding: '12px 0' } }, 'No WordPress changes recorded for this page yet.') :
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  pageChanges.map(c => React.createElement('div', { key: c.id, style: {
+                    padding: '10px 14px', background: c.rolled_back_at ? 'rgba(107,114,128,0.05)' : 'rgba(245,158,11,0.05)',
+                    borderRadius: 8, border: '1px solid ' + (c.rolled_back_at ? 'rgba(107,114,128,0.15)' : 'rgba(245,158,11,0.2)'),
+                    opacity: c.rolled_back_at ? 0.6 : 1
+                  }},
+                    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                      React.createElement('div', null,
+                        React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text)', textTransform: 'uppercase' } }, c.field_name || c.change_type),
+                        React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 10 } }, new Date(c.applied_at).toLocaleDateString() + ' ' + new Date(c.applied_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+                        c.rolled_back_at && React.createElement('span', { style: { fontSize: 11, color: '#ef4444', marginLeft: 8, fontWeight: 600 } }, 'ROLLED BACK')
+                      ),
+                      !c.rolled_back_at && React.createElement('button', {
+                        onClick: () => handleRollbackChange(c.id),
+                        disabled: !!rollingBack,
+                        style: { padding: '4px 10px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600 }
+                      }, rollingBack === 'change-' + c.id ? 'Rolling back...' : 'Rollback')
+                    ),
+                    React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 8, fontSize: 12 } },
+                      React.createElement('div', { style: { flex: 1, padding: '6px 10px', background: 'rgba(239,68,68,0.08)', borderRadius: 4, color: '#ef4444', wordBreak: 'break-word', maxHeight: 60, overflow: 'hidden' } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 600, marginBottom: 2, color: 'var(--text3)' } }, 'ORIGINAL'),
+                        (c.original_value || '(empty)').slice(0, 120) + ((c.original_value || '').length > 120 ? '...' : '')
+                      ),
+                      React.createElement('div', { style: { flex: 1, padding: '6px 10px', background: 'rgba(34,197,94,0.08)', borderRadius: 4, color: '#22c55e', wordBreak: 'break-word', maxHeight: 60, overflow: 'hidden' } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 600, marginBottom: 2, color: 'var(--text3)' } }, 'NEW'),
+                        (c.new_value || '(empty)').slice(0, 120) + ((c.new_value || '').length > 120 ? '...' : '')
+                      )
+                    )
+                  ))
+                )
+            );
+          })()
         );
       }
 
