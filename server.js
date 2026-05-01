@@ -4101,9 +4101,18 @@ MANDATORY:
 - Hit ALL thresholds above — this is how the score reaches 90+
 - Keep existing good content, expand it substantially
 - Australian English only
-- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img
+- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div
 - Every <a> MUST have a real href from the linking pages provided
 - Add an <img> tag with descriptive alt text where a relevant image should go
+
+WIREFRAME MATCHING (if a page wireframe is provided):
+- You MUST structure your content to match the wireframe sections
+- Wrap each section in <!-- SECTION N: TYPE --> and <!-- /SECTION N --> comment markers
+- For image-text-columns: use <div class="wf-columns"><div class="wf-col">text</div><div class="wf-col"><img ...></div></div>
+- For hero-banner: use <div class="wf-hero"><h1>...</h1><p>...</p></div>
+- For feature-list: use proper <ul>/<ol> lists
+- For cta-bar: use <div class="wf-cta"><p>...</p><a href="..." class="wf-btn">CTA Text</a></div>
+- The preview system will apply the original page's CSS to these sections
 
 OUTPUT FORMAT (JSON only):
 {
@@ -4190,6 +4199,34 @@ CRITICAL REMINDERS:
           return 'our services';
         });
         console.log(`[optimise] Post-process: reduced focus keyword from ${matches.length}x to ~${maxKeep}x`);
+      } else if (matches.length < 3) {
+        // Too few — inject keyword into content to reach ~5 uses
+        const needed = 5 - matches.length;
+        let injected = 0;
+
+        // Strategy 1: inject into H2 headings that don't already contain it
+        finalHtml = finalHtml.replace(/<h2([^>]*)>(.*?)<\/h2>/gi, (full, attrs, inner) => {
+          if (injected >= needed) return full;
+          if (inner.toLowerCase().includes(focusKw)) return full;
+          injected++;
+          return `<h2${attrs}>${inner} – ${focusKw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</h2>`;
+        });
+
+        // Strategy 2: inject into first paragraph that doesn't contain it
+        if (injected < needed) {
+          let pDone = false;
+          finalHtml = finalHtml.replace(/<p([^>]*)>(.*?)<\/p>/gis, (full, attrs, inner) => {
+            if (pDone || injected >= needed) return full;
+            if (inner.toLowerCase().includes(focusKw)) return full;
+            if (inner.length < 50) return full; // skip tiny paragraphs
+            pDone = true;
+            injected++;
+            const titleCase = focusKw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            return `<p${attrs}>For those searching for ${focusKw} options, ${inner}</p>`;
+          });
+        }
+
+        console.log(`[optimise] Post-process: boosted focus keyword from ${matches.length}x by +${injected} injections`);
       }
     }
 
@@ -4741,6 +4778,14 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     .seo-draft-content a { color: #2563eb; text-decoration: underline; }
     .seo-draft-content ul, .seo-draft-content ol { margin: 1em 0; padding-left: 2em; }
     .seo-draft-content li { margin-bottom: 0.5em; }
+    /* Wireframe layout classes */
+    .wf-columns { display: flex; gap: 30px; align-items: center; margin: 30px 0; flex-wrap: wrap; }
+    .wf-columns .wf-col { flex: 1; min-width: 250px; }
+    .wf-columns .wf-col img { width: 100%; border-radius: 8px; }
+    .wf-hero { text-align: center; padding: 40px 20px; margin-bottom: 30px; }
+    .wf-hero h1 { font-size: 36px; margin-bottom: 10px; }
+    .wf-cta { text-align: center; padding: 30px; margin: 30px 0; background: #f5f5f5; border-radius: 8px; }
+    .wf-btn { display: inline-block; padding: 12px 30px; background: #2563eb; color: #fff !important; text-decoration: none !important; border-radius: 6px; font-weight: 600; margin-top: 10px; }
     .seo-draft-meta {
       max-width: 900px; margin: 20px auto 0; padding: 16px 30px;
       background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 8px; font-size: 14px;
