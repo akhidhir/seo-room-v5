@@ -4401,17 +4401,37 @@ app.post('/api/projects/:projectId/content-queue/:id/chat', async (req, res) => 
     if (focusCount >= 3 && focusCount <= 8) score += 20; else if (focusCount >= 1) score += 10; else if (focusKw) scoreTips.push(`Use focus keyword "${focusKw}" more`);
     score = Math.min(100, Math.max(0, score + 20));
 
-    const systemPrompt = `SEO copywriter. Helping with "${item.page_title}" for "${project.business_name || project.name}".
+    const systemPrompt = `You are an SEO copywriter assistant for "${item.page_title}" (${project.business_name || project.name}).
 
-SCORE:${score}/100|${wordCount}w|${h2s}H2|${h3s}H3|${links}links|${imgs}img|"${focusKw}"${focusCount}x
-FIXES:${scoreTips.join(';') || 'OK'}
-Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
+PAGE STATS: ${wordCount} words | ${h2s} H2s | ${h3s} H3s | ${links} links | ${imgs} images | Focus keyword "${focusKw}" used ${focusCount}x | Score: ${score}/100
+${scoreTips.length > 0 ? 'ISSUES: ' + scoreTips.join('. ') : 'Score looks good.'}
+Available internal links: ${pagesRes.rows.slice(0, 8).map(p => p.page_url + ' (' + p.page_title + ')').join(', ')}
 
-You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
+YOUR JOB: When the user asks you to edit, rewrite, or change content, you MUST return your changes as JSON so they can be applied to the editor. Always respond with a brief explanation PLUS a JSON block.
 
-SELECTED TEXT HANDLING: When the user's message includes [SELECTED TEXT: "..."], they have highlighted that specific text in the editor. Your job is to rewrite ONLY that text based on their instruction. For selected text rewrites, use: \`\`\`json{"ops":[{"op":"replace","find":"<the selected text>","html":"<your rewrite>"}]}\`\`\`
+RESPONSE FORMAT — always use this when making changes:
+\`\`\`json
+{
+  "revised_html": "<the complete rewritten HTML for the section or selected text>",
+  "find_text": "<the original text to find and replace — use plain text, not HTML>",
+  "meta_title": "optional new meta title",
+  "meta_description": "optional new meta description"
+}
+\`\`\`
 
-Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English ONLY (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings).${buildCopywriterContext(project, item)}`;
+RULES:
+- "find_text" = the original plain text (no HTML tags) that should be replaced. Copy it EXACTLY from what the user selected or from the content.
+- "revised_html" = your rewritten version in clean HTML
+- If the user selected specific text ([SELECTED TEXT: "..."]), use that as find_text and rewrite only that portion
+- If the user asks to add new content (e.g. "add a section about X"), set find_text to "" and revised_html to the new HTML to append
+- If no content changes needed (just answering a question), skip the JSON block entirely
+- Australian English ONLY (optimise, colour, centre, favour, labour — NEVER American spellings)
+- Write like a human, not an AI. No filler phrases, no "Furthermore", no "In today's"
+- Keep existing formatting (h2, h3, p, ul, a tags)
+
+CURRENT CONTENT (first 4000 chars):
+${htmlContent.slice(0, 4000)}
+${buildCopywriterContext(project, item)}`;
 
     // Build conversation history
     const messages = [];
@@ -4446,14 +4466,29 @@ Only return JSON when suggesting content changes. Otherwise, have a helpful conv
 
     // Return proposed changes WITHOUT applying
     if (updates) {
-      const pendingChanges = { ops: updates.ops || [], itemId: id };
+      const pendingChanges = { itemId: id };
+      // New simple format: find_text + revised_html
+      if (updates.revised_html) {
+        pendingChanges.revised_html = updates.revised_html;
+        pendingChanges.find_text = updates.find_text || '';
+      }
+      // Legacy ops format
+      if (updates.ops) pendingChanges.ops = updates.ops;
       if (updates.content_html) pendingChanges.content_html = updates.content_html;
       if (updates.meta_title) pendingChanges.meta_title = updates.meta_title;
       if (updates.meta_description) pendingChanges.meta_description = updates.meta_description;
       if (updates.focus_keyword) pendingChanges.focus_keyword = updates.focus_keyword;
-      if (updates.add_keywords) pendingChanges.add_keywords = updates.add_keywords;
 
-      return res.json({ reply: text, applied: false, pending: pendingChanges });
+      // Build human-readable change summary
+      const changeSummary = [];
+      if (updates.revised_html) {
+        if (updates.find_text) changeSummary.push('Rewrite: "' + updates.find_text.slice(0, 60) + '..."');
+        else changeSummary.push('Add new content section');
+      }
+      if (updates.meta_title) changeSummary.push('Update meta title');
+      if (updates.meta_description) changeSummary.push('Update meta description');
+
+      return res.json({ reply: text, applied: false, pending: pendingChanges, change_summary: changeSummary });
     }
 
     res.json({ reply: text, applied: false });
@@ -4476,24 +4511,51 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, re
     let currentHtml = item.draft_content || item.current_content || '';
     let contentChanged = false;
 
-    // Apply ops
+    // New simple format: find_text + revised_html
+    if (pending.revised_html) {
+      if (pending.find_text && pending.find_text.trim()) {
+        // Find and replace — try plain text match first, then try matching within HTML
+        const plainContent = currentHtml.replace(/<[^>]+>/g, '');
+        if (plainContent.includes(pending.find_text)) {
+          // Find the HTML that contains this plain text and replace it
+          // Strategy: find the text in plain content, locate surrounding HTML tags, replace that chunk
+          const escFind = pending.find_text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Build a regex that matches the find_text with possible HTML tags interspersed
+          const flexRegex = new RegExp(escFind.split(/\s+/).map(w => w).join('[\\s\\S]{0,50}?'), 'i');
+          const htmlMatch = currentHtml.match(flexRegex);
+          if (htmlMatch) {
+            currentHtml = currentHtml.replace(htmlMatch[0], pending.revised_html);
+            contentChanged = true;
+          } else {
+            // Fallback: just append
+            currentHtml += '\n' + pending.revised_html;
+            contentChanged = true;
+          }
+        } else if (currentHtml.includes(pending.find_text)) {
+          // Direct HTML match
+          currentHtml = currentHtml.replace(pending.find_text, pending.revised_html);
+          contentChanged = true;
+        } else {
+          // Can't find — append instead
+          currentHtml += '\n' + pending.revised_html;
+          contentChanged = true;
+        }
+      } else {
+        // No find_text — append new content
+        currentHtml += '\n' + pending.revised_html;
+        contentChanged = true;
+      }
+    }
+
+    // Legacy ops format
     if (pending.ops && Array.isArray(pending.ops)) {
       for (const op of pending.ops) {
         if (op.op === 'append' && op.html) {
           currentHtml += '\n' + op.html;
           contentChanged = true;
-        } else if (op.op === 'prepend' && op.html) {
-          currentHtml = op.html + '\n' + currentHtml;
-          contentChanged = true;
         } else if (op.op === 'replace' && op.find && op.html) {
           if (currentHtml.includes(op.find)) {
             currentHtml = currentHtml.replace(op.find, op.html);
-            contentChanged = true;
-          }
-        } else if (op.op === 'insert_after' && op.find && op.html) {
-          const idx = currentHtml.indexOf(op.find);
-          if (idx !== -1) {
-            currentHtml = currentHtml.slice(0, idx + op.find.length) + '\n' + op.html + currentHtml.slice(idx + op.find.length);
             contentChanged = true;
           }
         }
