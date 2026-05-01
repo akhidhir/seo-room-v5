@@ -7621,7 +7621,7 @@
       const [viewMode, setViewMode] = useState('graph'); // graph | list
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
-      const graphRef = useRef(null);
+      const graphRef = React.useRef(null);
 
       const loadGraph = async () => {
         setLoading(true);
