@@ -3653,7 +3653,18 @@ Adopt this writing style and perspective throughout. This defines HOW you write 
 ${project.customer_persona}
 Write directly to this persona. Address their pain points, needs, and language.`);
   }
-  if (parts.length === 0) return '';
+  // Always add human writing rules
+  parts.push(`WRITE LIKE A HUMAN — NOT AN AI (critical):
+- BANNED PHRASES (never use): "In today's", "Whether you're", "Look no further", "When it comes to", "It's important to note", "At the end of the day", "Are you looking for", "In this comprehensive guide", "Navigate the complexities", "rest assured", "peace of mind", "top-notch", "cutting-edge", "state-of-the-art", "second to none", "one-stop shop", "hassle-free", "seamless experience", "don't hesitate to", "feel free to", "game-changer", "a wide range of", "take it to the next level", "dive into", "let's explore"
+- BANNED TRANSITIONS: "Furthermore", "Moreover", "Additionally", "In addition", "It's worth noting", "Notably", "Importantly", "In conclusion", "Needless to say"
+- VARY sentence length — mix short punchy (5-8 words) with longer ones. Never 3+ similar-length sentences in a row
+- USE CONTRACTIONS — "we're", "you'll", "it's", "don't" — stiff formal writing sounds robotic
+- START sentences differently — don't begin 2+ consecutive sentences the same way
+- BE SPECIFIC — instead of "we provide quality services" say exactly what and why
+- Write like explaining to a mate, then polish for a website
+- NO empty filler paragraphs — every paragraph needs a concrete fact or specific detail
+- AVOID generic superlatives — say what makes you different, not "best in Perth"`);
+
   return '\n\n=== COPYWRITER SETTINGS (these override general defaults) ===\n' + parts.join('\n\n') + '\n=== END COPYWRITER SETTINGS ===\n';
 }
 
@@ -4129,6 +4140,17 @@ MANDATORY:
 - Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div
 - Every <a> MUST have a real href from the linking pages provided
 - Add an <img> tag with descriptive alt text where a relevant image should go
+
+WRITE LIKE A HUMAN — NOT AN AI (this is critical):
+- BANNED PHRASES (never use these): "In today's", "In the world of", "Whether you're", "Look no further", "When it comes to", "It's important to note", "At the end of the day", "Are you looking for", "Understanding the importance", "In this comprehensive guide", "Navigate the complexities", "rest assured", "peace of mind", "top-notch", "cutting-edge", "state-of-the-art", "second to none", "the right choice", "your trusted partner", "one-stop shop", "hassle-free", "seamless experience", "don't hesitate to", "feel free to", "game-changer", "unlock the power", "a wide range of", "take it to the next level", "dive into", "let's explore", "without further ado"
+- BANNED TRANSITIONS (never start a sentence with): "Furthermore", "Moreover", "Additionally", "In addition", "It's worth noting", "Notably", "Importantly", "Consequently", "Subsequently", "In conclusion", "Ultimately", "Needless to say"
+- VARY sentence length — mix short punchy sentences (5-8 words) with longer ones. Never write 3+ sentences of similar length in a row
+- USE CONTRACTIONS naturally — "we're", "you'll", "it's", "don't", "won't", "can't" — stiff formal writing sounds robotic
+- START sentences differently — don't begin 2+ consecutive sentences the same way (especially not with "We", "Our", "The", "This")
+- BE SPECIFIC over generic — instead of "we provide quality services" say exactly what you do and why it matters
+- WRITE like you're explaining to a mate over coffee, then polish it for a website — not the other way around
+- NO empty filler paragraphs — every paragraph must contain a concrete fact, example, or specific detail
+- AVOID over-promising superlatives — don't say "best in Perth" unless you can back it up. Say what makes you different instead
 
 WIREFRAME MATCHING (if a page wireframe is provided):
 - You MUST structure your content to match the wireframe sections
