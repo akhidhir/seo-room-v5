@@ -390,6 +390,9 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS ai_notes TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS schema_markup JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_image TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
 
     // Content keywords — for new project keyword workflow
     await client.query(`
@@ -3576,7 +3579,7 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     const vals = [];
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
-                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type'];
+                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
@@ -3602,17 +3605,23 @@ app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
 
 // Helper: build copywriter context block from project settings (tone, wireframe, persona)
 // Returns a string to inject into AI prompts — empty string if none set
-function buildCopywriterContext(project) {
+function buildCopywriterContext(project, item) {
   const parts = [];
   if (project.tone_of_voice) {
     parts.push(`TONE OF VOICE (MUST follow strictly):
 ${project.tone_of_voice}
 You MUST write in this exact tone. Every sentence should reflect this voice.`);
   }
-  if (project.page_wireframe) {
-    parts.push(`PAGE WIREFRAME / STRUCTURE (MUST follow strictly):
-${project.page_wireframe}
-You MUST follow this page structure exactly. Use the sections and order specified above.`);
+  // Page wireframe — text description (design layout): item-level overrides project-level
+  const wireframe = (item && item.page_wireframe) || project.page_wireframe;
+  if (wireframe) {
+    parts.push(`PAGE WIREFRAME / DESIGN STRUCTURE (MUST follow strictly):
+${wireframe}
+This describes the visual layout and design structure of the page. You MUST write content that fits into these design sections exactly — match the layout blocks, content types, and visual hierarchy described above.`);
+  }
+  // Note: if a wireframe IMAGE is uploaded, it's handled separately via getWireframeImageBlocks()
+  if (item && item.wireframe_image && !wireframe) {
+    parts.push(`PAGE WIREFRAME: A wireframe image has been provided (see the image in this message). You MUST write content that matches the visual layout and design structure shown in that image exactly.`);
   }
   if (project.customer_persona) {
     parts.push(`TARGET CUSTOMER PERSONA (MUST address):
@@ -3621,6 +3630,26 @@ Write directly to this persona. Address their pain points, needs, and language.`
   }
   if (parts.length === 0) return '';
   return '\n\n=== COPYWRITER SETTINGS (these override general defaults) ===\n' + parts.join('\n\n') + '\n=== END COPYWRITER SETTINGS ===\n';
+}
+
+// Helper: get wireframe image content blocks for Anthropic vision API
+function getWireframeImageBlocks(item) {
+  if (!item || !item.wireframe_image) return [];
+  // wireframe_image is base64 data (no data: prefix), wireframe_mime is e.g. 'image/png'
+  const mime = item.wireframe_mime || 'image/png';
+  // Strip data:...;base64, prefix if present
+  const base64 = item.wireframe_image.replace(/^data:[^;]+;base64,/, '');
+  return [
+    { type: 'text', text: 'PAGE WIREFRAME IMAGE — You MUST write content that matches this visual layout and design structure exactly:' },
+    { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } }
+  ];
+}
+
+// Helper: build user message content array, optionally including wireframe image
+function buildUserContent(textPrompt, item) {
+  const imgBlocks = getWireframeImageBlocks(item);
+  if (imgBlocks.length === 0) return textPrompt; // plain string — no image
+  return [...imgBlocks, { type: 'text', text: textPrompt }];
 }
 
 // Helper: fetch live page content for Elementor or when WP REST content is thin
@@ -3719,7 +3748,7 @@ RULES:
 - If given target keywords, weave them in naturally throughout the content
 
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}
-${buildCopywriterContext(project)}`;
+${buildCopywriterContext(project, item)}`;
 
       userPrompt = `Rewrite this page for better SEO performance:
 
@@ -3739,7 +3768,7 @@ ${(currentContent || '').slice(0, 3000)}`;
     } else if (item.content_type === 'meta_only') {
       systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
 Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}
-${buildCopywriterContext(project)}`;
+${buildCopywriterContext(project, item)}`;
       userPrompt = `Write optimized meta tags for:
 Page: ${item.page_title} (${item.page_url})
 Business: ${project.business_name || project.name} in ${project.location || 'Australia'}
@@ -3763,7 +3792,7 @@ RULES:
 - If any schema markup data is provided, include appropriate structured data
 
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}
-${buildCopywriterContext(project)}`;
+${buildCopywriterContext(project, item)}`;
       userPrompt = `Write a new page:
 Title: ${item.page_title}
 Target URL: ${item.page_url || '(to be determined)'}
@@ -3778,7 +3807,7 @@ ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}`;
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4000,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }],
       system: systemPrompt,
     });
     const raw = aiResp.content[0].text;
@@ -3938,7 +3967,7 @@ OUTPUT FORMAT (respond in valid JSON only):
   "additional_html": "<h2>New Section</h2><p>...</p>... (HTML to APPEND after existing content)",
   "ai_notes": "Brief summary of what was added and keywords used"
 }
-${buildCopywriterContext(project)}`;
+${buildCopywriterContext(project, item)}`;
 
     const currentHtml = item.draft_content || item.current_content || '';
     const currentWords = currentHtml.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length;
@@ -3965,7 +3994,7 @@ Add ${Math.max(300, (target_words || 1500) - currentWords)} more words of new co
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
     });
 
     const text = response.content[0]?.text || '';
@@ -4065,7 +4094,7 @@ OUTPUT FORMAT (respond in valid JSON only):
   "meta_description": "optimised meta description (140-160 chars)",
   "ai_notes": "List which numbered issues you fixed and how"
 }
-${buildCopywriterContext(project)}`;
+${buildCopywriterContext(project, item)}`;
 
 
     const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
@@ -4105,7 +4134,7 @@ Rewrite the FULL content fixing ALL numbered issues above. The output must be su
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
     });
 
     const text = response.content[0]?.text || '';
@@ -4237,7 +4266,7 @@ Available links: ${pagesRes.rows.slice(0, 5).map(p => p.page_url).join(',')}
 
 You can suggest edits. When proposing changes, respond with \`\`\`json{"ops":[{"op":"append|prepend|replace","find":"...","html":"..."}],"meta_title":"...","meta_description":"...","focus_keyword":"...","add_keywords":[...]}
 
-Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.${buildCopywriterContext(project)}`;
+Only return JSON when suggesting content changes. Otherwise, have a helpful conversation. Keep replies brief. Australian English.${buildCopywriterContext(project, item)}`;
 
     // Build conversation history
     const messages = [];
@@ -4423,8 +4452,8 @@ OUTPUT FORMAT (JSON only):
   "meta_title": "revised meta title (50-60 chars)",
   "meta_description": "revised meta description (140-160 chars)",
   "ai_notes": "What was changed based on feedback"
-}${buildCopywriterContext(project)}`,
-      messages: [{ role: 'user', content: `USER FEEDBACK: ${feedback}
+}${buildCopywriterContext(project, item)}`,
+      messages: [{ role: 'user', content: buildUserContent(`USER FEEDBACK: ${feedback}
 
 CURRENT PROPOSED CONTENT (revise this):
 ${current_proposed.content_html}
@@ -4435,7 +4464,7 @@ CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
 PAGES FOR INTERNAL LINKING:
 ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
 
-Apply the user's feedback and return the revised version.` }]
+Apply the user's feedback and return the revised version.`, item) }]
     });
 
     const text = response.content[0]?.text || '';

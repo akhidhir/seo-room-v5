@@ -9289,6 +9289,97 @@
             onReject: () => setOptimisePreview(null), onUpdate: setOptimisePreview
           }),
 
+          // Page Wireframe (per-page) — upload image/PDF or describe in text
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } },
+                React.createElement('i', { className: 'fas fa-drafting-compass', style: { marginRight: 6, color: '#8b5cf6' } }),
+                'Page Wireframe'
+              ),
+              React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'Optional — upload design or describe layout')
+            ),
+
+            // Wireframe image upload + preview
+            React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 10 } },
+              React.createElement('button', {
+                className: 'btn btn-secondary btn-small',
+                onClick: () => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = 'image/*,.pdf';
+                  input.onchange = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    if (file.size > 5 * 1024 * 1024) { alert('File too large (max 5MB)'); return; }
+                    const reader = new FileReader();
+                    reader.onload = async () => {
+                      const dataUrl = reader.result;
+                      const base64 = dataUrl.split(',')[1];
+                      const mime = file.type || 'image/png';
+                      setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: mime }));
+                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                        method: 'PUT', body: { wireframe_image: base64, wireframe_mime: mime }
+                      }).catch(() => {});
+                    };
+                    reader.readAsDataURL(file);
+                  };
+                  input.click();
+                }
+              },
+                React.createElement('i', { className: 'fas fa-upload', style: { marginRight: 6 } }),
+                selectedItem.wireframe_image ? 'Replace Image' : 'Upload Wireframe'
+              ),
+              selectedItem.wireframe_image && React.createElement('button', {
+                className: 'btn btn-small',
+                style: { background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
+                onClick: async () => {
+                  setSelectedItem(prev => ({ ...prev, wireframe_image: null, wireframe_mime: null }));
+                  await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                    method: 'PUT', body: { wireframe_image: '', wireframe_mime: '' }
+                  }).catch(() => {});
+                }
+              },
+                React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 4 } }), 'Remove'
+              )
+            ),
+
+            // Wireframe image preview
+            selectedItem.wireframe_image && React.createElement('div', { style: { marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', maxHeight: 200 } },
+              selectedItem.wireframe_mime && selectedItem.wireframe_mime.startsWith('image/')
+                ? React.createElement('img', {
+                    src: `data:${selectedItem.wireframe_mime};base64,${selectedItem.wireframe_image}`,
+                    style: { width: '100%', maxHeight: 200, objectFit: 'contain', background: '#f9fafb', cursor: 'pointer' },
+                    onClick: () => {
+                      const w = window.open();
+                      w.document.write(`<img src="data:${selectedItem.wireframe_mime};base64,${selectedItem.wireframe_image}" style="max-width:100%">`);
+                    },
+                    title: 'Click to view full size'
+                  })
+                : React.createElement('div', { style: { padding: 16, textAlign: 'center', color: 'var(--text2)', fontSize: 13 } },
+                    React.createElement('i', { className: 'fas fa-file-pdf', style: { fontSize: 24, marginBottom: 6, color: '#ef4444', display: 'block' } }),
+                    'PDF wireframe uploaded'
+                  )
+            ),
+
+            // Text description fallback
+            React.createElement('textarea', {
+              value: selectedItem.page_wireframe || '',
+              onChange: e => {
+                const val = e.target.value;
+                setSelectedItem(prev => ({ ...prev, page_wireframe: val }));
+              },
+              onBlur: e => {
+                const val = e.target.value;
+                api(`/projects/${project.id}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { page_wireframe: val } }).catch(() => {});
+              },
+              placeholder: selectedItem.wireframe_image
+                ? 'Optional — add notes about the wireframe design above'
+                : 'Describe the page design layout, or upload a wireframe image/PDF above',
+              rows: 3,
+              style: { width: '100%', padding: 10, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, resize: 'vertical', fontFamily: 'inherit' }
+            })
+          ),
+
           // AI Notes
           selectedItem.ai_notes && React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
             React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'AI Strategy Notes'),
@@ -11544,7 +11635,6 @@
         gbpLocationId: '',
         gbpLocationName: '',
         toneOfVoice: '',
-        pageWireframe: '',
         customerPersona: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
@@ -11583,7 +11673,6 @@
               gbpLocationId: data.project.gbp_location_id || '',
               gbpLocationName: data.project.gbp_location_name || '',
               toneOfVoice: data.project.tone_of_voice || '',
-              pageWireframe: data.project.page_wireframe || '',
               customerPersona: data.project.customer_persona || '',
             });
           }
@@ -11608,7 +11697,6 @@
             body: {
               ...formData,
               tone_of_voice: formData.toneOfVoice,
-              page_wireframe: formData.pageWireframe,
               customer_persona: formData.customerPersona,
             },
           });
@@ -12092,18 +12180,6 @@
                 onChange={(e) => setFormData(prev => ({ ...prev, toneOfVoice: e.target.value }))}
                 placeholder="e.g., Professional yet approachable. Use active voice. Avoid jargon. Speak like a trusted local expert."
                 rows={3}
-                style={{ resize: 'vertical', fontFamily: 'inherit' }}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Page Wireframe / Structure</label>
-              <textarea
-                className="form-input"
-                value={formData.pageWireframe}
-                onChange={(e) => setFormData(prev => ({ ...prev, pageWireframe: e.target.value }))}
-                placeholder={"e.g.,\nH1: Service + Location\nIntro paragraph (2-3 sentences)\nH2: What is [Service]?\nH2: Benefits\n- 4 bullet points\nH2: Why Choose Us\nH2: Service Areas\nCTA paragraph"}
-                rows={5}
                 style={{ resize: 'vertical', fontFamily: 'inherit' }}
               />
             </div>
