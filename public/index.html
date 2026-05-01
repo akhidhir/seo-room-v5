@@ -9201,7 +9201,7 @@
                 React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
               ),
               React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
-              React.createElement('a', { href: selectedItem.page_url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
+              React.createElement('a', { href: (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url), target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
                 React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', selectedItem.page_url
               )
             ),
