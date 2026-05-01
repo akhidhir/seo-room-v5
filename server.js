@@ -4605,53 +4605,96 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
     let headContent = headMatch ? headMatch[1] : '';
 
-    // Extract <header> block (nav, logo, etc.)
+    // Generic extraction — works with any WordPress theme
+    // Split the page into: header zone | hero zone | content zone | footer zone
+    // We keep header + hero + footer, replace content zone with draft
+
+    // 1. Find header end
     let headerBlock = '';
     const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
     if (headerMatch) headerBlock = headerMatch[0];
+    const headerEndPos = headerMatch ? headerMatch.index + headerMatch[0].length : 0;
 
-    // Extract hero/banner block — common patterns: .in-ban, .hero, .banner, .page-header
-    let heroBlock = '';
-    const heroPatterns = [/(<div[^>]*class="[^"]*in-ban[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?=<div|<section|<main|<article))/i,
-      /(<div[^>]*class="[^"]*hero[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?=<div|<section|<main))/i,
-      /(<section[^>]*class="[^"]*banner[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
-      /(<div[^>]*class="[^"]*page-header[^"]*"[^>]*>[\s\S]*?<\/div>)/i];
-    for (const hp of heroPatterns) {
-      const hm = html.match(hp);
-      if (hm) { heroBlock = hm[1]; break; }
-    }
-    // Fallback: extract everything between </header> and #content or first <section>
-    if (!heroBlock) {
-      const headerEndIdx = html.search(/<\/header>/i);
-      if (headerEndIdx !== -1) {
-        const afterHeader = headerEndIdx + '</header>'.length;
-        const contentStartIdx = html.indexOf('id="content"', afterHeader);
-        const sectionStartIdx = html.search(/<section/i);
-        const endIdx = Math.min(
-          contentStartIdx !== -1 ? html.lastIndexOf('<', contentStartIdx) : html.length,
-          sectionStartIdx !== -1 ? sectionStartIdx : html.length
-        );
-        if (endIdx > afterHeader && endIdx - afterHeader < 5000) {
-          heroBlock = html.slice(afterHeader, endIdx);
+    // 2. Find footer start
+    let footerBlock = '';
+    const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
+    if (footerMatch) footerBlock = footerMatch[0];
+    const footerStartPos = footerMatch ? footerMatch.index : html.length;
+
+    // 3. Everything between header and footer is the "middle" — hero + content + CTA
+    const middleHtml = html.slice(headerEndPos, footerStartPos);
+
+    // 4. Split middle into blocks by top-level tags (div, section, main, article)
+    const blockRegex = /<(div|section|main|article)([^>]*)>/gi;
+    const blocks = [];
+    let match;
+    while ((match = blockRegex.exec(middleHtml)) !== null) {
+      const tag = match[1].toLowerCase();
+      const attrs = match[2];
+      const blockStart = match.index;
+      // Quick depth scan to find the end of this block
+      let depth = 1;
+      let pos = match.index + match[0].length;
+      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        openRe.lastIndex = pos;
+        closeRe.lastIndex = pos;
+        const nextOpen = openRe.exec(middleHtml);
+        const nextClose = closeRe.exec(middleHtml);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          pos = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            const blockEnd = nextClose.index + nextClose[0].length;
+            const blockContent = middleHtml.slice(blockStart, blockEnd);
+            const textContent = blockContent.replace(/<[^>]+>/g, '').trim();
+            blocks.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent.slice(0, 100) });
+            // Skip blockRegex past this block
+            blockRegex.lastIndex = blockEnd;
+            break;
+          }
+          pos = nextClose.index + nextClose[0].length;
         }
       }
     }
 
-    // Extract CTA/contact sections before footer (usp-list, talk-to-us, etc.)
+    // 5. Classify blocks: hero (first block or banner-like), content (largest text blocks), CTA (small blocks after content)
+    // Hero: first 1-2 blocks that are small text or have banner/hero/cover keywords
+    let heroBlock = '';
     let ctaBlock = '';
-    const ctaPatterns = [
-      /(<section[^>]*class="[^"]*usp[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
-      /(<section[^>]*class="[^"]*row-am[^"]*hello[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
-    ];
-    for (const cp of ctaPatterns) {
-      const cm = html.match(cp);
-      if (cm) ctaBlock += cm[1] + '\n';
+    const heroKeywords = /hero|banner|cover|in-ban|page-title|page-header|breadcrumb|featured|slider|jumbotron/i;
+    let heroEndIdx = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (i < 2 && (b.textLen < 200 || heroKeywords.test(b.attrs) || heroKeywords.test(b.html.slice(0, 200)))) {
+        heroBlock += b.html + '\n';
+        heroEndIdx = i + 1;
+      } else if (i < 2 && b.textLen < 100) {
+        heroBlock += b.html + '\n'; // floating buttons, quote forms etc
+        heroEndIdx = i + 1;
+      } else {
+        break;
+      }
     }
 
-    // Extract <footer> block
-    let footerBlock = '';
-    const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
-    if (footerMatch) footerBlock = footerMatch[0];
+    // CTA: last blocks after the main content that are small (contact, testimonials, services widgets)
+    // Work backwards from end
+    const ctaBlocks = [];
+    for (let i = blocks.length - 1; i > heroEndIdx; i--) {
+      const b = blocks[i];
+      if (b.textLen < 500) {
+        ctaBlocks.unshift(b.html);
+      } else {
+        break; // stop once we hit a big content block
+      }
+    }
+    ctaBlock = ctaBlocks.join('\n');
+
+    console.log(`[preview] Generic extraction: ${blocks.length} blocks, hero=${heroEndIdx}, cta=${ctaBlocks.length}`);
 
     // Extract body classes for theme styling
     const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
@@ -4725,9 +4768,9 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     <div class="meta-desc">${draftDesc || ''}</div>
   </div>
 
-  <div id="content">
-    <div class="seo-draft-content entry-content mac-content">
-      <div class="container">
+  <div id="content" class="site-content">
+    <div class="seo-draft-content entry-content">
+      <div class="container" style="max-width:900px;margin:0 auto;padding:40px 30px">
         ${draftContent}
       </div>
     </div>
