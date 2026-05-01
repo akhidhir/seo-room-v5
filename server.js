@@ -4595,62 +4595,115 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     }
     let html = await resp.text();
 
-    // Inject draft content — try common WordPress content selectors
-    const contentSelectors = [
-      // Elementor
-      { open: /<div[^>]*class="[^"]*elementor-widget-theme-post-content[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*elementor-widget-container[^"]*"[^>]*>/i,
-        close: /<\/div>\s*<\/div>\s*<\/div>/i, tag: 'div' },
-      // Standard WP
-      { open: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
-      { open: /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: null, tag: 'article' },
-      { open: /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
-      { open: /<div[^>]*class="[^"]*page-content[^"]*"[^>]*>/i, close: null, tag: 'div' },
-      { open: /<div[^>]*class="[^"]*content-area[^"]*"[^>]*>/i, close: null, tag: 'div' },
-      { open: /<main[^>]*>/i, close: null, tag: 'main' },
+    // Inject draft content — find content container and replace its inner HTML
+    // Helper: given a starting position after an opening tag, find matching close
+    function findClosingTag(src, startPos, tagName) {
+      let depth = 1;
+      let pos = startPos;
+      const openRe = new RegExp(`<${tagName}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tagName}\\s*>`, 'gi');
+      while (depth > 0 && pos < src.length) {
+        openRe.lastIndex = pos;
+        closeRe.lastIndex = pos;
+        const nextOpen = openRe.exec(src);
+        const nextClose = closeRe.exec(src);
+        if (!nextClose) return -1;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          pos = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          if (depth === 0) return nextClose.index;
+          pos = nextClose.index + nextClose[0].length;
+        }
+      }
+      return -1;
+    }
+
+    // CSS class patterns to search for (in priority order)
+    const classPatterns = [
+      'entry-content', 'post-content', 'page-content', 'article-content',
+      'content-area', 'site-content', 'main-content', 'the-content',
+      'td-post-content', 'blog-content', 'single-content'
     ];
 
     let injected = false;
-    for (const sel of contentSelectors) {
-      const openMatch = html.match(sel.open);
-      if (!openMatch) continue;
 
-      const startIdx = openMatch.index + openMatch[0].length;
-      // Find the matching close tag — count nesting
-      const tag = sel.tag;
-      let depth = 1;
-      let i = startIdx;
-      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
-      const closeRe = new RegExp(`</${tag}>`, 'gi');
+    // Strategy 1: search for common content class names using indexOf (faster, more reliable than regex)
+    for (const cls of classPatterns) {
+      const idx = html.indexOf(cls);
+      if (idx === -1) continue;
 
-      while (depth > 0 && i < html.length) {
-        openRe.lastIndex = i;
-        closeRe.lastIndex = i;
-        const nextOpen = openRe.exec(html);
-        const nextClose = closeRe.exec(html);
-        if (!nextClose) break;
-        if (nextOpen && nextOpen.index < nextClose.index) {
-          depth++;
-          i = nextOpen.index + nextOpen[0].length;
-        } else {
-          depth--;
-          if (depth === 0) {
-            // Replace content between startIdx and nextClose.index
-            html = html.slice(0, startIdx) + '\n' + draftContent + '\n' + html.slice(nextClose.index);
-            injected = true;
-            break;
-          }
-          i = nextClose.index + nextClose[0].length;
+      // Walk backwards to find the opening < of this tag
+      let tagStart = html.lastIndexOf('<', idx);
+      if (tagStart === -1) continue;
+
+      // Get the tag name
+      const tagMatch = html.slice(tagStart).match(/^<(\w+)/);
+      if (!tagMatch) continue;
+      const tagName = tagMatch[1];
+
+      // Find the end of the opening tag (the >)
+      const tagEnd = html.indexOf('>', tagStart);
+      if (tagEnd === -1) continue;
+
+      const contentStart = tagEnd + 1;
+      const closeIdx = findClosingTag(html, contentStart, tagName);
+      if (closeIdx === -1) continue;
+
+      // Wrap draft in a styled container that fits the page
+      const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
+      html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
+      injected = true;
+      console.log(`[preview] Injected via class "${cls}" (tag: ${tagName})`);
+      break;
+    }
+
+    // Strategy 2: find <article> tag
+    if (!injected) {
+      const articleMatch = html.match(/<article[^>]*>/i);
+      if (articleMatch) {
+        const contentStart = articleMatch.index + articleMatch[0].length;
+        const closeIdx = findClosingTag(html, contentStart, 'article');
+        if (closeIdx !== -1) {
+          const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
+          html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
+          injected = true;
+          console.log('[preview] Injected via <article> tag');
         }
       }
-      if (injected) break;
+    }
+
+    // Strategy 3: find <main> tag
+    if (!injected) {
+      const mainMatch = html.match(/<main[^>]*>/i);
+      if (mainMatch) {
+        const contentStart = mainMatch.index + mainMatch[0].length;
+        const closeIdx = findClosingTag(html, contentStart, 'main');
+        if (closeIdx !== -1) {
+          const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
+          html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
+          injected = true;
+          console.log('[preview] Injected via <main> tag');
+        }
+      }
+    }
+
+    // Strategy 4: replace everything between </header> or </nav> and <footer
+    if (!injected) {
+      const headerEnd = html.search(/<\/header>/i);
+      const footerStart = html.search(/<footer/i);
+      if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
+        const insertPoint = html.indexOf('>', headerEnd) + 1;
+        const wrappedDraft = `<div style="max-width:800px;margin:40px auto;padding:40px 20px;font-size:16px;line-height:1.8;min-height:60vh">${draftContent}</div>`;
+        html = html.slice(0, insertPoint) + '\n' + wrappedDraft + '\n' + html.slice(footerStart);
+        injected = true;
+        console.log('[preview] Injected between </header> and <footer>');
+      }
     }
 
     if (!injected) {
-      // Fallback: try to replace inside <body> after first header/nav
-      const bodyMatch = html.match(/<body[^>]*>/i);
-      if (bodyMatch) {
-        console.log('[preview] Could not find content container, using body fallback');
-      }
+      console.log('[preview] WARNING: Could not find content container. Page served without injection.');
     }
 
     // Replace meta title
