@@ -9515,7 +9515,11 @@
                   // Always try to reload the item — template may have applied even if response was garbled
                   try {
                     const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
-                    if (fresh) setSelectedItem(fresh);
+                    if (fresh) {
+                      setSelectedItem(fresh);
+                      setEditContent(fresh.draft_content || '');
+                      setEditMeta({ meta_title: fresh.draft_meta_title || fresh.current_meta_title || '', meta_desc: fresh.draft_meta_desc || fresh.current_meta_desc || '', focus_keyword: fresh.draft_focus_keyword || fresh.current_focus_keyword || '' });
+                    }
                   } catch (_) {}
                   setApplyingTemplate(false);
                   e.target.value = '';

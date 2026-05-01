@@ -4166,23 +4166,26 @@ ${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All ke
 PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
 ${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
 
-${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? `SKELETON TEMPLATE (fill in placeholders, preserve ALL HTML structure):
+${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? `SKELETON TEMPLATE — YOU MUST PRESERVE THIS EXACT HTML STRUCTURE:
 ${contentToOptimise.slice(0, 12000)}
 
-CRITICAL: This is a SKELETON with placeholders. You MUST:
-- Keep the EXACT HTML structure (all divs, classes, section comments)
-- Replace ONLY the placeholder text like "[~80 words about...]" with real content
-- Keep all .wf-columns, .wf-col, .wf-hero, .wf-cta divs exactly as they are
-- Keep all [IMAGE: ...] tags as <img> tags with descriptive alt text
-- Do NOT flatten the structure into plain paragraphs
-- The layout structure is sacred — only the text content changes` : `CURRENT CONTENT (${actualWords} words):
+===== SKELETON MODE RULES (OVERRIDE ALL OTHER INSTRUCTIONS) =====
+1. OUTPUT the EXACT same HTML skeleton above — every <!-- SECTION comment, every <div class="wf-...">, every opening/closing tag MUST appear in your output
+2. Replace ONLY the placeholder text inside brackets like "[~80 words about...]", "[HERO HEADING]", "[Section Heading]", "[CTA Button Text]" with real, compelling content
+3. NEVER remove, merge, reorder, or flatten sections. NEVER strip wf-hero, wf-cta, wf-columns, wf-col, wf-features, wf-btn classes
+4. NEVER convert the structured HTML into flat h2+p paragraphs. The div structure IS the page layout
+5. Keep all <img src="" alt="[...]"> tags — fill in descriptive alt text only
+6. Each [~N words] placeholder: write EXACTLY that many words (±20%)
+7. The page wireframe/design depends on these CSS classes — removing them breaks the visual layout
+8. Write 2,000+ words total across ALL sections combined
+========================================================` : `CURRENT CONTENT (${actualWords} words):
 ${contentToOptimise.slice(0, 12000)}`}
 
 CRITICAL REMINDERS:
-- You MUST produce at least 2,000 words. Write 18+ substantial paragraphs of 3-5 sentences each. This is NON-NEGOTIABLE.
+- You MUST produce at least 2,000 words total. This is NON-NEGOTIABLE.
 - Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear EXACTLY 5 times in the entire content. NOT 4, NOT 6, NOT 12. EXACTLY 5.
 - After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
-- Rewrite the FULL content fixing ALL numbered issues above.`;
+${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? '- SKELETON MODE: Fill in the skeleton placeholders. Do NOT rewrite or restructure. Keep ALL HTML tags, divs, classes, and section comments exactly as provided.' : '- Rewrite the FULL content fixing ALL numbered issues above.'}`;
 
     console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix`);
 
