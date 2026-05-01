@@ -4526,26 +4526,37 @@ Apply the user's feedback and return the revised version.`, item) }]
   }
 });
 
-// Full-page screenshot capture — uses thum.io (free, fast, full-page)
+// Full-page screenshot capture — uses Google PageSpeed API (returns screenshot in response)
 app.post('/api/projects/:projectId/screenshot', async (req, res) => {
-  req.setTimeout(60000);
-  res.setTimeout(60000);
+  req.setTimeout(90000);
+  res.setTimeout(90000);
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL required' });
   try {
-    // thum.io: free full-page screenshot API, returns image directly
-    const thumbUrl = `https://image.thum.io/get/width/1400/crop/2000/noanimate/${url}`;
-    console.log(`[screenshot] Capturing via thum.io: ${url}`);
-    const resp = await fetch(thumbUrl, { signal: AbortSignal.timeout(45000) });
-    if (!resp.ok) return res.status(500).json({ error: `Screenshot service failed: ${resp.status}` });
-    const buffer = Buffer.from(await resp.arrayBuffer());
-    const base64 = buffer.toString('base64');
-    // Check size — Anthropic limit is 5MB
-    if (buffer.length > 4.5 * 1024 * 1024) {
-      console.log(`[screenshot] Image too large (${Math.round(buffer.length / 1024)}KB), compressing not possible server-side without sharp`);
+    const apiKey = process.env.PAGESPEED_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'PageSpeed API key not configured' });
+    const psiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&category=PERFORMANCE&strategy=MOBILE&key=${apiKey}`;
+    console.log(`[screenshot] Capturing via PageSpeed API: ${url}`);
+    const resp = await fetch(psiUrl, { signal: AbortSignal.timeout(75000) });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      console.error(`[screenshot] PageSpeed API error ${resp.status}:`, errText);
+      return res.status(500).json({ error: `PageSpeed API failed: ${resp.status}` });
     }
-    console.log(`[screenshot] Captured ${url}: ${Math.round(buffer.length / 1024)}KB`);
-    res.json({ image: base64, mime: 'image/png' });
+    const data = await resp.json();
+    // Extract final screenshot from Lighthouse audits
+    const screenshot = data?.lighthouseResult?.audits?.['final-screenshot']?.details?.data;
+    if (!screenshot) {
+      // Try full-page-screenshot audit
+      const fullPage = data?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
+      if (!fullPage) return res.status(500).json({ error: 'No screenshot in PageSpeed response' });
+      const base64 = fullPage.replace(/^data:[^;]+;base64,/, '');
+      console.log(`[screenshot] Captured full-page ${url}: ${Math.round(base64.length * 0.75 / 1024)}KB`);
+      return res.json({ image: base64, mime: 'image/jpeg' });
+    }
+    const base64 = screenshot.replace(/^data:[^;]+;base64,/, '');
+    console.log(`[screenshot] Captured ${url}: ${Math.round(base64.length * 0.75 / 1024)}KB`);
+    res.json({ image: base64, mime: 'image/jpeg' });
   } catch (e) {
     console.error('[screenshot] Error:', e.message);
     res.status(500).json({ error: e.message });
