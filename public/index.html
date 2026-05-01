@@ -9311,17 +9311,40 @@
                     const file = e.target.files[0];
                     if (!file) return;
                     if (file.size > 20 * 1024 * 1024) { alert('File too large (max 20MB)'); return; }
-                    const reader = new FileReader();
-                    reader.onload = async () => {
-                      const dataUrl = reader.result;
-                      const base64 = dataUrl.split(',')[1];
-                      const mime = file.type || 'image/png';
-                      setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: mime }));
-                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
-                        method: 'PUT', body: { wireframe_image: base64, wireframe_mime: mime }
-                      }).catch(() => {});
-                    };
-                    reader.readAsDataURL(file);
+
+                    // For images: compress to max 1400px wide, JPEG quality 0.8 (Anthropic 5MB limit)
+                    if (file.type.startsWith('image/')) {
+                      const img = new Image();
+                      img.onload = async () => {
+                        const maxW = 1400;
+                        let w = img.width, h = img.height;
+                        if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const compressed = canvas.toDataURL('image/jpeg', 0.8);
+                        const base64 = compressed.split(',')[1];
+                        const mime = 'image/jpeg';
+                        setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: mime }));
+                        await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                          method: 'PUT', body: { wireframe_image: base64, wireframe_mime: mime }
+                        }).catch(() => {});
+                      };
+                      img.src = URL.createObjectURL(file);
+                    } else {
+                      // PDF: store as-is
+                      const reader = new FileReader();
+                      reader.onload = async () => {
+                        const dataUrl = reader.result;
+                        const base64 = dataUrl.split(',')[1];
+                        const mime = file.type || 'application/pdf';
+                        setSelectedItem(prev => ({ ...prev, wireframe_image: base64, wireframe_mime: mime }));
+                        await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, {
+                          method: 'PUT', body: { wireframe_image: base64, wireframe_mime: mime }
+                        }).catch(() => {});
+                      };
+                      reader.readAsDataURL(file);
+                    }
                   };
                   input.click();
                 }
