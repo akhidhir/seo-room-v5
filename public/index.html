@@ -8053,7 +8053,7 @@
         'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
         'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
         'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'manual', label: 'Manual Fix Required' },
+        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
         'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter' },
         'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links' },
         'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links' },
@@ -8063,7 +8063,7 @@
         for (const [pattern, meta] of Object.entries(ISSUE_META)) {
           if (key.startsWith(pattern)) return meta;
         }
-        return { icon: 'fa-circle-exclamation', color: '#ef4444', fix: 'manual', label: 'Manual Fix' };
+        return { icon: 'fa-circle-exclamation', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' };
       };
 
       const toggleSelect = (groupKey, nodeId) => {
@@ -8180,11 +8180,6 @@
                         <i className="fas fa-wrench" style={{ marginRight: 4 }} />{meta.label}
                       </button>
                     )}
-                    {meta.fix === 'manual' && (
-                      <span style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
-                        <i className="fas fa-hand" style={{ marginRight: 4 }} />{meta.label}
-                      </span>
-                    )}
                   </div>
                 </div>
                 {/* Pages table */}
@@ -8243,11 +8238,6 @@
                                 style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
                                 <i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix
                               </button>
-                            )}
-                            {meta.fix === 'manual' && (
-                              <a href={n.url} target="_blank" rel="noopener noreferrer" style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, background: 'rgba(239,68,68,0.1)', color: '#ef4444', textDecoration: 'none' }}>
-                                <i className="fas fa-external-link" style={{ marginRight: 4 }} />View Page
-                              </a>
                             )}
                           </td>
                         </tr>
