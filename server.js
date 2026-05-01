@@ -4865,6 +4865,125 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   }
 });
 
+// Analyze page wireframe — fetches live page, extracts section structure for AI copywriting
+app.post('/api/projects/:projectId/analyze-wireframe', async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  const { projectId } = req.params;
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    const pageUrl = url.startsWith('http') ? url : 'https://' + url;
+    console.log(`[wireframe] Analyzing page structure: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch: ${resp.status}` });
+    const html = await resp.text();
+
+    // Parse the page into sections
+    // Find all top-level sections/divs between header and footer
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
+    );
+
+    // Extract sections with their content details
+    const sections = [];
+    const sectionRegex = /<(section|div)([^>]*)>/gi;
+    let match;
+    while ((match = sectionRegex.exec(middleHtml)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      const blockStart = match.index;
+      // Quick depth scan
+      let depth = 1, pos = match.index + match[0].length;
+      const oRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const cRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        oRe.lastIndex = pos; cRe.lastIndex = pos;
+        const nO = oRe.exec(middleHtml);
+        const nC = cRe.exec(middleHtml);
+        if (!nC) break;
+        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+        else { depth--; if (depth === 0) {
+          const blockEnd = nC.index + nC[0].length;
+          const blockHtml = middleHtml.slice(blockStart, blockEnd);
+          const text = blockHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (text.length < 10) { sectionRegex.lastIndex = blockEnd; break; } // skip empty
+
+          // Analyze section content
+          const h1s = (blockHtml.match(/<h1[^>]*>/gi) || []).length;
+          const h2s = (blockHtml.match(/<h2[^>]*>/gi) || []).length;
+          const h3s = (blockHtml.match(/<h3[^>]*>/gi) || []).length;
+          const imgs = (blockHtml.match(/<img[^>]*>/gi) || []).length;
+          const links = (blockHtml.match(/<a[^>]*>/gi) || []).length;
+          const lists = (blockHtml.match(/<(ul|ol)[^>]*>/gi) || []).length;
+          const forms = (blockHtml.match(/<form[^>]*>/gi) || []).length;
+          const buttons = (blockHtml.match(/<button[^>]*>/gi) || []).length + (blockHtml.match(/class="[^"]*btn[^"]*"/gi) || []).length;
+
+          // Detect layout type
+          const hasColumns = /col-|column|grid|flex|row/i.test(attrs + blockHtml.slice(0, 500));
+          const hasBgImage = /background.*url|bg-img|ban-img/i.test(blockHtml.slice(0, 500));
+          const headings = [];
+          const hMatches = blockHtml.matchAll(/<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/gi);
+          for (const hm of hMatches) headings.push(hm[2].replace(/<[^>]+>/g, '').trim().slice(0, 80));
+
+          // Classify section type
+          let sectionType = 'content';
+          if (hasBgImage && (h1s || h2s) && text.length < 300) sectionType = 'hero-banner';
+          else if (forms) sectionType = 'form/cta';
+          else if (imgs > 0 && hasColumns) sectionType = 'image-text-columns';
+          else if (imgs > 1 && text.length < 200) sectionType = 'image-gallery';
+          else if (lists && text.length > 200) sectionType = 'feature-list';
+          else if (buttons > 1 || (text.length < 150 && links > 2)) sectionType = 'cta-bar';
+          else if (text.length > 500) sectionType = 'long-content';
+          else if (text.length < 150) sectionType = 'short-content';
+
+          const cls = (attrs.match(/class="([^"]*)"/i) || [])[1] || '';
+          sections.push({
+            type: sectionType,
+            className: cls.split(' ').filter(c => c && !c.match(/^(col|row|d-|p-|m-|w-)/)).slice(0, 3).join(' '),
+            headings,
+            wordCount: text.split(/\s+/).length,
+            images: imgs,
+            links,
+            lists,
+            hasColumns,
+            textPreview: text.slice(0, 120)
+          });
+          sectionRegex.lastIndex = blockEnd;
+          break;
+        }
+        pos = nC.index + nC[0].length; }
+      }
+    }
+
+    // Build a human-readable wireframe description
+    const wireframeLines = sections.map((s, i) => {
+      let desc = `SECTION ${i + 1}: ${s.type.toUpperCase()}`;
+      if (s.headings.length) desc += `\n  Headings: ${s.headings.map(h => `"${h}"`).join(', ')}`;
+      desc += `\n  Layout: ${s.hasColumns ? 'Multi-column' : 'Full-width'}`;
+      if (s.images) desc += ` | ${s.images} image(s)`;
+      if (s.links) desc += ` | ${s.links} link(s)`;
+      if (s.lists) desc += ` | ${s.lists} list(s)`;
+      desc += `\n  Content: ~${s.wordCount} words`;
+      desc += `\n  Preview: "${s.textPreview}"`;
+      return desc;
+    });
+
+    const wireframeText = `PAGE WIREFRAME STRUCTURE (${sections.length} sections):\n\n` + wireframeLines.join('\n\n');
+    console.log(`[wireframe] Analyzed ${pageUrl}: ${sections.length} sections found`);
+    res.json({ wireframe: wireframeText, sections });
+  } catch (e) {
+    console.error('[wireframe] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Full-page screenshot capture — uses Google PageSpeed API (returns screenshot in response)
 app.post('/api/projects/:projectId/screenshot', async (req, res) => {
   req.setTimeout(90000);

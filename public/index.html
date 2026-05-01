@@ -9395,6 +9395,17 @@
                         }).catch(() => {});
                         btn.textContent = origText;
                         btn.disabled = false;
+                        // Also analyze wireframe structure
+                        const pUrl = (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
+                        if (pUrl) {
+                          try {
+                            const wfData = await api(`/projects/${project.id}/analyze-wireframe`, { method: 'POST', body: { url: pUrl } });
+                            if (wfData.wireframe) {
+                              setSelectedItem(prev => ({ ...prev, page_wireframe: wfData.wireframe }));
+                              await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { page_wireframe: wfData.wireframe } }).catch(() => {});
+                            }
+                          } catch (wfErr) { console.log('Wireframe analysis optional:', wfErr); }
+                        }
                       };
                       img.onerror = () => { alert('Failed to process screenshot'); btn.textContent = origText; btn.disabled = false; };
                       img.src = `data:${r.mime || 'image/png'};base64,${r.image}`;
@@ -9406,6 +9417,28 @@
                 }
               },
                 React.createElement('i', { className: 'fas fa-camera', style: { marginRight: 6 } }), 'Capture Page'
+              ),
+              // Standalone analyze wireframe button
+              React.createElement('button', {
+                className: 'btn btn-small',
+                style: { background: 'rgba(139,92,246,0.1)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.3)' },
+                onClick: async (e) => {
+                  const btn = e.currentTarget;
+                  btn.disabled = true; btn.textContent = 'Analyzing...';
+                  const pUrl = (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url);
+                  try {
+                    const wfData = await api(`/projects/${project.id}/analyze-wireframe`, { method: 'POST', body: { url: pUrl } });
+                    if (wfData.wireframe) {
+                      setSelectedItem(prev => ({ ...prev, page_wireframe: wfData.wireframe }));
+                      await api(`/projects/${project.id}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { page_wireframe: wfData.wireframe } }).catch(() => {});
+                    } else { alert(wfData.error || 'Analysis failed'); }
+                  } catch (err) { alert('Error: ' + err.message); }
+                  btn.textContent = ''; btn.disabled = false;
+                  // Re-render will show the button text
+                  btn.innerHTML = '<i class="fas fa-sitemap" style="margin-right:6px"></i>Analyze Layout';
+                }
+              },
+                React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Analyze Layout'
               ),
               selectedItem.wireframe_image && React.createElement('button', {
                 className: 'btn btn-small',
