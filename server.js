@@ -4053,13 +4053,26 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
       }
     }
 
-    const pagesRes = await pool.query(
-      `SELECT page_url, page_title FROM (
-        SELECT DISTINCT page_url, page_title FROM content_queue
-        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 30
-      ) AS p`,
-      [projectId]
-    );
+    // Get pages for internal linking — from content_queue and site_pages (exclude current page)
+    let pagesRes = await pool.query(
+      `SELECT DISTINCT page_url, page_title FROM (
+        SELECT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND page_url IS NOT NULL AND page_url != ''
+        UNION
+        SELECT url AS page_url, title AS page_title FROM site_pages
+        WHERE project_id=$1 AND url IS NOT NULL AND url != ''
+      ) AS all_pages WHERE page_url != $2
+      ORDER BY page_title LIMIT 30`,
+      [projectId, item.page_url || '']
+    ).catch(() => ({ rows: [] }));
+    // Fallback: discover pages from WP if no pages found
+    if (pagesRes.rows.length === 0 && project.wordpress_url) {
+      try {
+        const wpBase = project.wordpress_url.replace(/\/$/, '');
+        const wpPages = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=30&_fields=id,link,title`).then(r => r.ok ? r.json() : []);
+        pagesRes = { rows: wpPages.filter(p => p.link !== item.page_url).map(p => ({ page_url: p.link, page_title: p.title?.rendered || '' })) };
+      } catch(e) { /* WP not available */ }
+    }
 
     const allMissing = (missing_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
 
@@ -4073,26 +4086,31 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 
     const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
 
-You will receive existing page content along with numbered issues from its SEO content score panel. You MUST fix EVERY numbered issue. Do NOT skip any.
+You will receive page content and its SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
 
-CRITICAL RULES:
-- Fix EVERY numbered issue below — each one directly affects the content score
-- Keep ALL existing good content — don't remove paragraphs or sections
-- EXPAND content substantially — add new H2/H3 sections, paragraphs, FAQs, local info
-- Write naturally in Australian English
-- Output clean HTML only: h2, h3, h4, p, ul, ol, li, a, strong, em
-- Focus keyword must appear 3-8 times naturally (not more, not less)
-- Naturally weave in ALL missing keywords listed below — they MUST appear at least once each
-- Add internal links using <a href="URL">anchor text</a> to the pages listed below
-- Meta title: 50-60 characters, include focus keyword
-- Meta description: 140-160 characters, include CTA and focus keyword
+SCORING SYSTEM (you must hit EVERY threshold):
+1. WORDS: 25 points if 1,500+ words. You MUST write at least 1,600 words of content. Count them.
+2. H2 HEADINGS: 15 points if 3+ H2s. You MUST include at least 4 <h2> tags.
+3. H3 SUBHEADINGS: 5 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
+4. INTERNAL LINKS: 10 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
+5. IMAGES: 5 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
+6. FOCUS KEYWORD: 20 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
+7. TARGET KEYWORDS: 20 points proportional to how many target keywords appear. Include EVERY one.
 
-OUTPUT FORMAT (respond in valid JSON only):
+MANDATORY:
+- Hit ALL thresholds above — this is how the score reaches 90+
+- Keep existing good content, expand it substantially
+- Australian English only
+- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img
+- Every <a> MUST have a real href from the linking pages provided
+- Add an <img> tag with descriptive alt text where a relevant image should go
+
+OUTPUT FORMAT (JSON only):
 {
   "content_html": "<h2>...</h2><p>...</p>...",
-  "meta_title": "optimised meta title (50-60 chars)",
-  "meta_description": "optimised meta description (140-160 chars)",
-  "ai_notes": "List which numbered issues you fixed and how"
+  "meta_title": "50-60 chars with focus keyword",
+  "meta_description": "140-160 chars with CTA and focus keyword",
+  "ai_notes": "Score targets hit: X words, Y H2s, Z links, focus kw Nx, N/N keywords used"
 }
 ${buildCopywriterContext(project, item)}`;
 
@@ -4102,7 +4120,7 @@ ${buildCopywriterContext(project, item)}`;
     const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
 
 PAGE: ${item.page_url}
-FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — need 3-8)
+FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
 
 CURRENT STATS:
 - Words: ${actualWords} (target: 1500+)
