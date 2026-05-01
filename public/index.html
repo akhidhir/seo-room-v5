@@ -8980,6 +8980,7 @@
       const [applyingOptimise, setApplyingOptimise] = useState(false);
       const [expandingContent, setExpandingContent] = useState(false);
       const [showExpandPopup, setShowExpandPopup] = useState(false);
+      const [showPreview, setShowPreview] = useState(false);
       const [expandWords, setExpandWords] = useState(1500);
       const [generating, setGenerating] = useState(null); // item id being generated
       const [batchSelected, setBatchSelected] = useState(new Set());
@@ -9224,6 +9225,11 @@
               selectedItem.stage === 'drafts' && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
               // Publish
               selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Publish'),
+              // Preview
+              !isPublished && hasDraft && React.createElement('button', {
+                onClick: () => setShowPreview(true),
+                style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
               // Expand / Generate More
               !isPublished && hasDraft && React.createElement('button', {
                 onClick: () => setShowExpandPopup(true), disabled: expandingContent,
@@ -9288,6 +9294,61 @@
             applyingOptimise: applyingOptimise, onApply: handleApplyOptimise,
             onReject: () => setOptimisePreview(null), onUpdate: setOptimisePreview
           }),
+
+          // Preview modal — side-by-side wireframe vs rendered content
+          showPreview && React.createElement('div', {
+            onClick: () => setShowPreview(false),
+            style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'stretch', justifyContent: 'center', padding: 20 }
+          },
+            React.createElement('div', { onClick: e => e.stopPropagation(),
+              style: { background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: '95vw', maxWidth: 1400, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+            },
+              // Header
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderBottom: '1px solid var(--border)' } },
+                React.createElement('h3', { style: { margin: 0, fontSize: 18 } },
+                  React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 8, color: '#a855f7' } }),
+                  'Page Preview — ', selectedItem.page_title
+                ),
+                React.createElement('button', { onClick: () => setShowPreview(false), style: { background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' } }, '✕')
+              ),
+              // Body — two columns
+              React.createElement('div', { style: { display: 'flex', flex: 1, overflow: 'hidden' } },
+                // Left: Wireframe
+                React.createElement('div', { style: { width: selectedItem.wireframe_image ? '40%' : '0%', borderRight: selectedItem.wireframe_image ? '1px solid var(--border)' : 'none', overflow: 'auto', transition: 'width 0.2s' } },
+                  selectedItem.wireframe_image && React.createElement('div', { style: { padding: 16 } },
+                    React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 } },
+                      React.createElement('i', { className: 'fas fa-drafting-compass', style: { marginRight: 6, color: '#8b5cf6' } }),
+                      'Wireframe'
+                    ),
+                    React.createElement('img', {
+                      src: `data:${selectedItem.wireframe_mime || 'image/png'};base64,${selectedItem.wireframe_image}`,
+                      style: { width: '100%', borderRadius: 8, border: '1px solid var(--border)' }
+                    })
+                  )
+                ),
+                // Right: Rendered content
+                React.createElement('div', { style: { flex: 1, overflow: 'auto', padding: 32 } },
+                  React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 } },
+                    React.createElement('i', { className: 'fas fa-file-alt', style: { marginRight: 6, color: '#3b82f6' } }),
+                    'Content Preview'
+                  ),
+                  // Meta title
+                  React.createElement('div', { style: { marginBottom: 20, padding: '12px 16px', background: 'rgba(59,130,246,0.08)', borderRadius: 8, border: '1px solid rgba(59,130,246,0.2)' } },
+                    React.createElement('div', { style: { fontSize: 11, color: '#3b82f6', fontWeight: 600, marginBottom: 4, textTransform: 'uppercase' } }, 'Meta Title'),
+                    React.createElement('div', { style: { fontSize: 18, color: '#3b82f6', fontWeight: 600 } }, selectedItem.draft_meta_title || selectedItem.page_title || 'No title'),
+                    React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 6, textTransform: 'uppercase', fontWeight: 600 } }, 'Meta Description'),
+                    React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginTop: 2 } }, selectedItem.draft_meta_desc || '')
+                  ),
+                  // Rendered HTML content
+                  React.createElement('div', {
+                    className: 'preview-content',
+                    style: { fontSize: 15, lineHeight: 1.8, color: 'var(--text)', maxWidth: 720 },
+                    dangerouslySetInnerHTML: { __html: selectedItem.draft_content || selectedItem.current_content || '<p style="color:var(--text3)">No content yet</p>' }
+                  })
+                )
+              )
+            )
+          ),
 
           // Page Wireframe (per-page) — upload image/PDF or describe in text
           React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid var(--border)' } },
