@@ -2246,17 +2246,45 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     }
 
     // 3. Analyze each page
+    const isElementor = project.is_elementor_site;
     const results = [];
     for (const pg of allPages) {
       const url = pg.link || '';
       const slug = pg.slug || '';
       const title = pg.title?.rendered || '';
-      const content = pg.content?.rendered || '';
+      let content = pg.content?.rendered || '';
       const yoast = pg.yoast_head_json || {};
       const pluginData = yoastMap[pg.id];
       // Fallback: read from seoroom_yoast (added by plugin to REST response) or meta fields
       const srYoast = pg.seoroom_yoast || {};
       const pgMeta = pg.meta || {};
+
+      // Elementor fix: content.rendered is often empty/minimal for Elementor pages.
+      // Fetch the actual rendered HTML from the live page to get real word count.
+      let prelimPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      let prelimWords = prelimPlain.split(/\s+/).filter(Boolean).length;
+      if (isElementor && prelimWords < 50 && url) {
+        try {
+          const liveResp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          if (liveResp.ok) {
+            const liveHtml = await liveResp.text();
+            // Extract main content area — look for elementor-widget-text-editor or main content
+            const mainMatch = liveHtml.match(/<main[\s\S]*?<\/main>/i) ||
+                              liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>[\s\S]*?<\/div>/i) ||
+                              liveHtml.match(/<article[\s\S]*?<\/article>/i);
+            if (mainMatch) {
+              content = mainMatch[0];
+            } else {
+              // Fallback: extract body content between header and footer
+              const bodyMatch = liveHtml.match(/<body[\s\S]*?<\/body>/i);
+              if (bodyMatch) content = bodyMatch[0];
+            }
+            console.log(`[onpage-audit] Elementor page ${slug}: fetched live HTML, content length ${content.length}`);
+          }
+        } catch (e) {
+          console.log(`[onpage-audit] Failed to fetch live page ${slug}: ${e.message}`);
+        }
+      }
 
       // Extract fields
       const metaTitle = yoast.title || '';
