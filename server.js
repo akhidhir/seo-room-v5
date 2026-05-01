@@ -4610,6 +4610,44 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
     if (headerMatch) headerBlock = headerMatch[0];
 
+    // Extract hero/banner block — common patterns: .in-ban, .hero, .banner, .page-header
+    let heroBlock = '';
+    const heroPatterns = [/(<div[^>]*class="[^"]*in-ban[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?=<div|<section|<main|<article))/i,
+      /(<div[^>]*class="[^"]*hero[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?=<div|<section|<main))/i,
+      /(<section[^>]*class="[^"]*banner[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
+      /(<div[^>]*class="[^"]*page-header[^"]*"[^>]*>[\s\S]*?<\/div>)/i];
+    for (const hp of heroPatterns) {
+      const hm = html.match(hp);
+      if (hm) { heroBlock = hm[1]; break; }
+    }
+    // Fallback: extract everything between </header> and #content or first <section>
+    if (!heroBlock) {
+      const headerEndIdx = html.search(/<\/header>/i);
+      if (headerEndIdx !== -1) {
+        const afterHeader = headerEndIdx + '</header>'.length;
+        const contentStartIdx = html.indexOf('id="content"', afterHeader);
+        const sectionStartIdx = html.search(/<section/i);
+        const endIdx = Math.min(
+          contentStartIdx !== -1 ? html.lastIndexOf('<', contentStartIdx) : html.length,
+          sectionStartIdx !== -1 ? sectionStartIdx : html.length
+        );
+        if (endIdx > afterHeader && endIdx - afterHeader < 5000) {
+          heroBlock = html.slice(afterHeader, endIdx);
+        }
+      }
+    }
+
+    // Extract CTA/contact sections before footer (usp-list, talk-to-us, etc.)
+    let ctaBlock = '';
+    const ctaPatterns = [
+      /(<section[^>]*class="[^"]*usp[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
+      /(<section[^>]*class="[^"]*row-am[^"]*hello[^"]*"[^>]*>[\s\S]*?<\/section>)/i,
+    ];
+    for (const cp of ctaPatterns) {
+      const cm = html.match(cp);
+      if (cm) ctaBlock += cm[1] + '\n';
+    }
+
     // Extract <footer> block
     let footerBlock = '';
     const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
@@ -4678,6 +4716,7 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   <div class="seo-preview-spacer"></div>
 
   ${headerBlock}
+  ${fixUrls(heroBlock)}
 
   <div class="seo-draft-meta">
     <div class="meta-label">Google Search Preview</div>
@@ -4686,10 +4725,15 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     <div class="meta-desc">${draftDesc || ''}</div>
   </div>
 
-  <div class="seo-draft-content entry-content">
-    ${draftContent}
+  <div id="content">
+    <div class="seo-draft-content entry-content mac-content">
+      <div class="container">
+        ${draftContent}
+      </div>
+    </div>
   </div>
 
+  ${fixUrls(ctaBlock)}
   ${footerBlock}
 
   <script>
