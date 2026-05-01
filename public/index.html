@@ -9510,10 +9510,14 @@
                       method: 'POST', body: { template_id: parseInt(templateId) }
                     });
                     if (r.ok || r.success) {
-                      const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
-                      if (fresh) setSelectedItem(fresh);
+                      try {
+                        const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
+                        if (fresh) setSelectedItem(fresh);
+                      } catch (_) { /* refresh can fail during deploy — template already applied */ }
                     } else { alert(r.error || 'Failed to apply template'); }
-                  } catch (err) { alert('Error: ' + err.message); }
+                  } catch (err) {
+                    if (!err.message?.includes('non-JSON')) alert('Error: ' + err.message);
+                  }
                   setApplyingTemplate(false);
                   e.target.value = '';
                 }
