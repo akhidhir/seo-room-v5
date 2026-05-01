@@ -2285,7 +2285,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
         const seoScore = parseInt(rawSeoScore) || 0;
         yoastScore = seoScore >= 70 ? 'green' : seoScore >= 40 ? 'orange' : 'red';
       } else {
-        // Heuristic based on meta completeness
+        // Heuristic based on meta completeness (Yoast only updates linkdex when page is opened in editor)
         const hasGoodTitle = metaTitle.length >= 30 && metaTitle.length <= 60;
         const hasGoodDesc = metaDesc.length >= 120 && metaDesc.length <= 155;
         const hasFocus = !!focusKeyword;
@@ -2490,17 +2490,24 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
       problems: (p.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').map(i => i.text)
     }));
 
-    const resp = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4000,
-      messages: [{
-        role: 'user',
-        content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.
+    // Batch pages in groups of 5 to avoid Haiku timeout/token issues
+    const BATCH_SIZE = 5;
+    const allSuggestions = [];
+    for (let i = 0; i < pagesData.length; i += BATCH_SIZE) {
+      const batch = pagesData.slice(i, i + BATCH_SIZE);
+      console.log(`[onpage-suggest] Processing batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(pagesData.length/BATCH_SIZE)} (${batch.length} pages)`);
+
+      const resp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.
 
 Business: ${project.business_name || project.name} | Domain: ${project.domain} | Industry: ${project.industry || 'general'} | Location: ${project.location || ''}
 
 Pages to fix:
-${JSON.stringify(pagesData, null, 2)}
+${JSON.stringify(batch, null, 2)}
 
 For each page, return a JSON array with objects:
 {
@@ -2516,14 +2523,29 @@ Rules:
 - Focus keyword: choose the most relevant, search-intent-matching keyword for each page
 - If current values are already good, return them unchanged
 - ONLY return valid JSON array, no explanation`
-      }]
-    });
+        }]
+      });
 
-    const text = resp.content[0].text.trim();
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return res.status(500).json({ error: 'AI returned invalid format' });
-    const suggestions = JSON.parse(jsonMatch[0]);
-    res.json({ suggestions });
+      const text = resp.content[0].text.trim();
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error(`[onpage-suggest] Batch ${Math.floor(i/BATCH_SIZE)+1} returned invalid format:`, text.substring(0, 200));
+        continue; // skip bad batch, don't fail entire request
+      }
+      try {
+        const batchSuggestions = JSON.parse(jsonMatch[0]);
+        allSuggestions.push(...batchSuggestions);
+      } catch (parseErr) {
+        console.error(`[onpage-suggest] Batch ${Math.floor(i/BATCH_SIZE)+1} JSON parse error:`, parseErr.message);
+        continue;
+      }
+    }
+
+    if (allSuggestions.length === 0) {
+      return res.status(500).json({ error: 'AI failed to generate suggestions for any pages' });
+    }
+
+    res.json({ suggestions: allSuggestions });
   } catch (e) {
     console.error('[onpage-suggest] Error:', e.message);
     res.status(500).json({ error: e.message });
