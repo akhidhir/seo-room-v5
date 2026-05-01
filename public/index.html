@@ -9495,12 +9495,12 @@
               },
                 React.createElement('i', { className: 'fas fa-bone', style: { marginRight: 6 } }), 'Generate Skeleton'
               ),
-              // Apply Template dropdown
-              pageTemplates.length > 0 && React.createElement('select', {
+              // Apply Template dropdown — always show
+              React.createElement('select', {
                 className: 'form-input',
-                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)' },
+                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' },
                 value: '',
-                disabled: applyingTemplate,
+                disabled: applyingTemplate || pageTemplates.length === 0,
                 onChange: async (e) => {
                   const templateId = e.target.value;
                   if (!templateId) return;
@@ -9518,7 +9518,7 @@
                   e.target.value = '';
                 }
               },
-                React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : '📐 Apply Template'),
+                React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : pageTemplates.length === 0 ? 'No templates (add in Settings)' : 'Apply Template...'),
                 ...pageTemplates.map(t => React.createElement('option', { key: t.id, value: t.id }, `${t.name} (${t.page_type})`))
               )
             ),
