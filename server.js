@@ -4631,32 +4631,43 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
 
     // Strategy 1: search for common content class names using indexOf (faster, more reliable than regex)
     for (const cls of classPatterns) {
-      const idx = html.indexOf(cls);
-      if (idx === -1) continue;
+      // Search for all occurrences — skip ones inside <script> or <style> tags
+      let searchFrom = 0;
+      while (searchFrom < html.length) {
+        const idx = html.indexOf(cls, searchFrom);
+        if (idx === -1) break;
 
-      // Walk backwards to find the opening < of this tag
-      let tagStart = html.lastIndexOf('<', idx);
-      if (tagStart === -1) continue;
+        // Walk backwards to find the opening < of this tag
+        let tagStart = html.lastIndexOf('<', idx);
+        if (tagStart === -1) { searchFrom = idx + cls.length; continue; }
 
-      // Get the tag name
-      const tagMatch = html.slice(tagStart).match(/^<(\w+)/);
-      if (!tagMatch) continue;
-      const tagName = tagMatch[1];
+        // Get the tag name
+        const tagMatch = html.slice(tagStart).match(/^<(\w+)/);
+        if (!tagMatch) { searchFrom = idx + cls.length; continue; }
+        const tagName = tagMatch[1].toLowerCase();
 
-      // Find the end of the opening tag (the >)
-      const tagEnd = html.indexOf('>', tagStart);
-      if (tagEnd === -1) continue;
+        // Skip if inside script, style, noscript, or comment
+        if (['script', 'style', 'noscript', 'link', 'meta'].includes(tagName)) {
+          searchFrom = idx + cls.length;
+          continue;
+        }
 
-      const contentStart = tagEnd + 1;
-      const closeIdx = findClosingTag(html, contentStart, tagName);
-      if (closeIdx === -1) continue;
+        // Find the end of the opening tag (the >)
+        const tagEnd = html.indexOf('>', tagStart);
+        if (tagEnd === -1) { searchFrom = idx + cls.length; continue; }
 
-      // Wrap draft in a styled container that fits the page
-      const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
-      html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
-      injected = true;
-      console.log(`[preview] Injected via class "${cls}" (tag: ${tagName})`);
-      break;
+        const contentStart = tagEnd + 1;
+        const closeIdx = findClosingTag(html, contentStart, tagName);
+        if (closeIdx === -1) { searchFrom = idx + cls.length; continue; }
+
+        // Wrap draft in a styled container that fits the page
+        const wrappedDraft = `<div style="max-width:800px;margin:0 auto;padding:40px 20px;font-size:16px;line-height:1.8">${draftContent}</div>`;
+        html = html.slice(0, contentStart) + '\n' + wrappedDraft + '\n' + html.slice(closeIdx);
+        injected = true;
+        console.log(`[preview] Injected via class "${cls}" (tag: ${tagName})`);
+        break;
+      }
+      if (injected) break;
     }
 
     // Strategy 2: find <article> tag
@@ -4703,7 +4714,16 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     }
 
     if (!injected) {
-      console.log('[preview] WARNING: Could not find content container. Page served without injection.');
+      // Debug: log all class names found in the page
+      const allClasses = [...new Set((html.match(/class="[^"]{3,60}"/gi) || []).map(c => c.slice(7, -1)))];
+      console.log('[preview] WARNING: Could not find content container.');
+      console.log('[preview] Classes found:', allClasses.slice(0, 80).join(' | '));
+      // Also log tag structure around body
+      const bodyIdx = html.search(/<body/i);
+      if (bodyIdx !== -1) {
+        const snippet = html.slice(bodyIdx, bodyIdx + 2000).replace(/\s+/g, ' ');
+        console.log('[preview] Body snippet:', snippet.slice(0, 1500));
+      }
     }
 
     // Replace meta title
