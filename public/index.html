@@ -9844,13 +9844,16 @@
           if (r.error) {
             setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + r.error }]);
           } else if (r.preview) {
-            onUpdate(r);
-            setMetaTitle(r.proposed?.meta_title || metaTitle);
-            setMetaDesc(r.proposed?.meta_description || metaDesc);
+            const wasChanged = r.changed !== false;
+            if (wasChanged) {
+              onUpdate(r);
+              setMetaTitle(r.proposed?.meta_title || metaTitle);
+              setMetaDesc(r.proposed?.meta_description || metaDesc);
+            }
             setMessages(prev => [...prev, {
               role: 'assistant',
-              content: r.proposed?.ai_notes || 'Changes applied to the preview.',
-              revised: true
+              content: r.proposed?.ai_notes || (wasChanged ? 'Changes applied to the preview.' : 'No changes made.'),
+              revised: wasChanged
             }]);
           }
         } catch (e) {
@@ -9937,7 +9940,7 @@
               },
                 React.createElement('div', {
                   className: 'content-preview',
-                  style: { fontSize: 17, lineHeight: 1.85, color: 'var(--text)', maxWidth: 780 },
+                  style: { fontSize: 17, lineHeight: 1.85, color: 'var(--text)' },
                   dangerouslySetInnerHTML: { __html: preview.proposed.content_html }
                 })
               )

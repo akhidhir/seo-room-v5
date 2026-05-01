@@ -4644,21 +4644,25 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8000,
-      system: `You are an expert SEO copywriter for "${project.business_name || project.name}". You previously optimised content and the user has feedback. Revise the content based on their feedback while keeping all SEO improvements.
+      system: `You are an expert SEO copywriter for "${project.business_name || project.name}". The user is chatting with you about content they're editing. They may:
+1. Ask a QUESTION about the content (e.g. "what's the focus keyword?", "are you using australian english?") — answer it in ai_notes and return the content UNCHANGED
+2. Give REVISION INSTRUCTIONS (e.g. "make the intro shorter", "remove the word Perth") — revise the content and explain what changed in ai_notes
 
-RULES:
-- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
+IMPORTANT: If the user is asking a question or making a comment (NOT requesting changes), set "changed": false and return content_html exactly as-is. Only modify content when the user explicitly asks for changes.
+
+RULES FOR REVISIONS:
+- Apply the user's feedback precisely
 - Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
-- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em
+- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
 - Focus keyword must appear 3-8 times
 - Write like a human, not AI — no banned phrases
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT. No text before or after. No markdown code blocks. Just the raw JSON:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "revised (50-60 chars)", "meta_description": "revised (140-160 chars)", "ai_notes": "What changed"}${buildCopywriterContext(project, item)}`,
-      messages: [{ role: 'user', content: buildUserContent(`USER FEEDBACK: ${feedback}
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "Your response to the user", "changed": true/false}${buildCopywriterContext(project, item)}`,
+      messages: [{ role: 'user', content: buildUserContent(`USER MESSAGE: ${feedback}
 
-CURRENT PROPOSED CONTENT (revise this — apply feedback then return the FULL revised content):
+CURRENT CONTENT:
 ${current_proposed.content_html}
 
 CURRENT META TITLE: ${current_proposed.meta_title || ''}
@@ -4711,11 +4715,18 @@ Respond with ONLY the JSON object. No other text.`, item) }]
       }
     }
 
+    // If AI said no changes, return content unchanged with just the answer
+    const noChange = parsed.changed === false;
+
+    // Clean literal \n from content_html
+    let cleanHtml = (parsed.content_html || current_proposed.content_html || '');
+    cleanHtml = cleanHtml.replace(/\\n/g, '').replace(/\n(?!<)/g, '');
+
     const proposed = {
-      content_html: parsed.content_html || current_proposed.content_html,
-      meta_title: parsed.meta_title || current_proposed.meta_title,
-      meta_description: parsed.meta_description || current_proposed.meta_description,
-      ai_notes: parsed.ai_notes || 'Revised based on feedback',
+      content_html: noChange ? current_proposed.content_html : cleanHtml,
+      meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
+      meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
     };
 
     const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
@@ -4727,10 +4738,11 @@ Respond with ONLY the JSON object. No other text.`, item) }]
     const currentText = (item.draft_content || item.current_content || '').replace(/<[^>]+>/g, '');
     const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
 
-    console.log(`[re-optimise] Revised item ${id}: ${currentWords} → ${proposedWords} words`);
+    console.log(`[re-optimise] ${noChange ? 'Question' : 'Revised'} item ${id}: ${currentWords} → ${proposedWords} words`);
     res.json({
       preview: true,
       proposed,
+      changed: !noChange,
       stats: {
         current: { words: currentWords },
         proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
