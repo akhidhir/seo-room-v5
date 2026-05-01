@@ -4555,7 +4555,8 @@ Apply the user's feedback and return the revised version.`, item) }]
   }
 });
 
-// Live preview — fetch real page, inject draft content, return full HTML for iframe rendering
+// Live preview — push draft as WP autosave, redirect to WP preview URL
+// Falls back to HTML extraction if WP credentials unavailable
 app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
@@ -4569,6 +4570,74 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const draftTitle = item.draft_meta_title || item.page_title || '';
     const draftDesc = item.draft_meta_desc || '';
 
+    // Strategy 1: WordPress autosave preview (best — uses real page layout)
+    const authHeaders = getWpAuthHeaders(project);
+    if (authHeaders && project.wordpress_url && item.page_id) {
+      const wpBase = project.wordpress_url.replace(/\/$/, '');
+      try {
+        // Resolve the WP post/page ID
+        let wpId = item.page_id;
+        let wpType = 'pages';
+
+        // If page_id is a slug, look up the numeric ID
+        if (isNaN(wpId)) {
+          const slug = String(wpId).replace(/^\/|\/$/g, '');
+          let lookup = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : []);
+          if (lookup.length > 0) {
+            wpId = lookup[0].id;
+          } else {
+            lookup = await fetch(`${wpBase}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, signal: AbortSignal.timeout(10000) }).then(r => r.ok ? r.json() : []);
+            if (lookup.length > 0) { wpId = lookup[0].id; wpType = 'posts'; }
+          }
+        }
+
+        if (wpId && !isNaN(wpId)) {
+          // Create autosave with draft content — doesn't affect the live page
+          const autosaveResp = await fetch(`${wpBase}/wp-json/wp/v2/${wpType}/${wpId}/autosaves`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              content: draftContent,
+              title: draftTitle || item.page_title,
+            }),
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (autosaveResp.ok) {
+            // Build preview URL — user must be logged into WP for this to work
+            let pageUrl = item.page_url || '';
+            if (pageUrl && !pageUrl.startsWith('http')) {
+              pageUrl = 'https://' + (project.domain || '') + pageUrl;
+            }
+            const previewUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'preview=true';
+            console.log(`[preview] WP autosave created for ${wpType}/${wpId}, redirecting to: ${previewUrl}`);
+
+            // Return HTML that redirects + shows instructions
+            res.setHeader('Content-Type', 'text/html');
+            return res.send(`<!DOCTYPE html><html><head>
+              <meta charset="utf-8"><title>Preview — ${draftTitle}</title>
+              <meta http-equiv="refresh" content="1;url=${previewUrl}">
+              <style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#1a1a2e;color:#fff}
+              .box{text-align:center;padding:40px}.spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,0.2);border-top-color:#a855f7;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 20px}
+              @keyframes spin{to{transform:rotate(360deg)}}
+              a{color:#a855f7}</style>
+              </head><body><div class="box">
+              <div class="spinner"></div>
+              <h2>Opening WordPress Preview...</h2>
+              <p style="opacity:0.7;margin-top:10px">Draft content pushed as autosave. You must be logged into WordPress.</p>
+              <p style="margin-top:20px"><a href="${previewUrl}">Click here if not redirected</a></p>
+              </div></body></html>`);
+          } else {
+            const errText = await autosaveResp.text().catch(() => '');
+            console.log(`[preview] WP autosave failed (${autosaveResp.status}): ${errText.slice(0, 200)}, falling back to HTML extraction`);
+          }
+        }
+      } catch (wpErr) {
+        console.log(`[preview] WP preview error: ${wpErr.message}, falling back to HTML extraction`);
+      }
+    }
+
+    // Strategy 2: Fallback — fetch live page, extract header/footer, inject draft
     // Build the page URL
     let pageUrl = item.page_url || '';
     if (pageUrl && !pageUrl.startsWith('http')) {
