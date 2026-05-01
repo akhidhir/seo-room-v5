@@ -8999,6 +8999,8 @@
       const [batchSelected, setBatchSelected] = useState(new Set());
       const [batchGenerating, setBatchGenerating] = useState(false);
       const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
+      const [pageTemplates, setPageTemplates] = useState([]);
+      const [applyingTemplate, setApplyingTemplate] = useState(false);
 
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
@@ -9023,6 +9025,9 @@
       };
 
       useEffect(() => { loadItems(); }, [pid, stage]);
+      useEffect(() => {
+        if (pid) api(`/projects/${pid}/templates`).then(d => setPageTemplates(d?.templates || [])).catch(() => {});
+      }, [pid]);
 
       const counts = {
         queue: allItems.filter(d => d.stage === 'queue').length,
@@ -9489,6 +9494,32 @@
                 }
               },
                 React.createElement('i', { className: 'fas fa-bone', style: { marginRight: 6 } }), 'Generate Skeleton'
+              ),
+              // Apply Template dropdown
+              pageTemplates.length > 0 && React.createElement('select', {
+                className: 'form-input',
+                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)' },
+                value: '',
+                disabled: applyingTemplate,
+                onChange: async (e) => {
+                  const templateId = e.target.value;
+                  if (!templateId) return;
+                  setApplyingTemplate(true);
+                  try {
+                    const r = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
+                      method: 'POST', body: { template_id: parseInt(templateId) }
+                    });
+                    if (r.success) {
+                      const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
+                      if (fresh) setSelectedItem(fresh);
+                    } else { alert(r.error || 'Failed to apply template'); }
+                  } catch (err) { alert('Error: ' + err.message); }
+                  setApplyingTemplate(false);
+                  e.target.value = '';
+                }
+              },
+                React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : '📐 Apply Template'),
+                ...pageTemplates.map(t => React.createElement('option', { key: t.id, value: t.id }, `${t.name} (${t.page_type})`))
               )
             ),
 
@@ -11794,6 +11825,15 @@
       const [loadingGbp, setLoadingGbp] = useState(false);
       const [newCompetitor, setNewCompetitor] = useState('');
 
+      // Page Templates state
+      const [templates, setTemplates] = useState([]);
+      const [loadingTemplates, setLoadingTemplates] = useState(false);
+      const [importUrl, setImportUrl] = useState('');
+      const [importType, setImportType] = useState('service');
+      const [importName, setImportName] = useState('');
+      const [importing, setImporting] = useState(false);
+      const [editingTemplate, setEditingTemplate] = useState(null);
+
       useEffect(() => {
         if (currentProject) loadProject();
       }, [currentProject?.id]);
@@ -11828,11 +11868,57 @@
           // Load available GSC sites and GBP locations
           loadGscSites();
           loadGbpLocations();
+          loadTemplates();
         } catch (err) {
           setError(err.message);
         } finally {
           setLoading(false);
         }
+      };
+
+      const loadTemplates = async () => {
+        const pid = currentProject?.id;
+        if (!pid) return;
+        setLoadingTemplates(true);
+        try {
+          const data = await api(`/projects/${pid}/templates`);
+          setTemplates(data?.templates || []);
+        } catch (e) { console.error('loadTemplates', e); }
+        finally { setLoadingTemplates(false); }
+      };
+
+      const handleImportTemplate = async () => {
+        if (!importUrl.trim()) return;
+        const pid = project?.id || currentProject?.id;
+        setImporting(true);
+        try {
+          const res = await api(`/projects/${pid}/templates/import`, {
+            method: 'POST',
+            body: { url: importUrl.trim(), page_type: importType, name: importName.trim() || undefined },
+          });
+          if (res?.template) {
+            setTemplates(prev => [...prev, res.template]);
+            setImportUrl('');
+            setImportName('');
+          }
+        } catch (e) { setError(e.message); }
+        finally { setImporting(false); }
+      };
+
+      const handleDeleteTemplate = async (id) => {
+        const pid = project?.id || currentProject?.id;
+        await api(`/projects/${pid}/templates/${id}`, { method: 'DELETE' });
+        setTemplates(prev => prev.filter(t => t.id !== id));
+      };
+
+      const handleSaveTemplate = async (tmpl) => {
+        const pid = project?.id || currentProject?.id;
+        await api(`/projects/${pid}/templates/${tmpl.id}`, {
+          method: 'PUT',
+          body: { name: tmpl.name, page_type: tmpl.page_type, skeleton_html: tmpl.skeleton_html },
+        });
+        setEditingTemplate(null);
+        loadTemplates();
       };
 
       const handleSave = async () => {
@@ -12344,6 +12430,116 @@
                 style={{ resize: 'vertical', fontFamily: 'inherit' }}
               />
             </div>
+          </div>
+
+          {/* Page Templates */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '8px' }}>
+              <i className="fas fa-layer-group" style={{ marginRight: 8, color: '#f59e0b' }} />Page Templates
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
+              Import page layouts from your client's live website. Templates are reusable skeletons that guide AI copywriting.
+            </div>
+
+            {/* Import from URL */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Import from URL</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8, marginBottom: 8 }}>
+                <input
+                  type="text" className="form-input" placeholder="https://example.com/services/plumbing"
+                  value={importUrl} onChange={(e) => setImportUrl(e.target.value)}
+                />
+                <select className="form-input" value={importType} onChange={(e) => setImportType(e.target.value)}>
+                  <option value="home">Home</option>
+                  <option value="service">Service</option>
+                  <option value="suburb">Suburb</option>
+                  <option value="blog">Blog</option>
+                  <option value="landing">Landing</option>
+                  <option value="about">About</option>
+                  <option value="contact">Contact</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+                <input
+                  type="text" className="form-input" placeholder="Template name (optional — auto-generated from URL)"
+                  value={importName} onChange={(e) => setImportName(e.target.value)}
+                />
+                <button className="btn btn-primary btn-small" onClick={handleImportTemplate} disabled={importing || !importUrl.trim()}>
+                  {importing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }}></i>Importing...</> : <><i className="fas fa-download" style={{ marginRight: 4 }}></i>Import</>}
+                </button>
+              </div>
+            </div>
+
+            {/* Template list */}
+            {loadingTemplates ? (
+              <div style={{ textAlign: 'center', padding: 20 }}><span className="spinner"></span></div>
+            ) : templates.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>
+                No templates yet. Import one from a live page URL above.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {templates.map(tmpl => (
+                  <div key={tmpl.id} style={{ background: 'var(--bg)', borderRadius: 8, padding: 12 }}>
+                    {editingTemplate?.id === tmpl.id ? (
+                      <div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: 8, marginBottom: 8 }}>
+                          <input className="form-input" value={editingTemplate.name}
+                            onChange={(e) => setEditingTemplate(prev => ({ ...prev, name: e.target.value }))} />
+                          <select className="form-input" value={editingTemplate.page_type}
+                            onChange={(e) => setEditingTemplate(prev => ({ ...prev, page_type: e.target.value }))}>
+                            <option value="home">Home</option>
+                            <option value="service">Service</option>
+                            <option value="suburb">Suburb</option>
+                            <option value="blog">Blog</option>
+                            <option value="landing">Landing</option>
+                            <option value="about">About</option>
+                            <option value="contact">Contact</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </div>
+                        <textarea className="form-input" rows={10}
+                          style={{ fontFamily: 'monospace', fontSize: 11, resize: 'vertical' }}
+                          value={editingTemplate.skeleton_html}
+                          onChange={(e) => setEditingTemplate(prev => ({ ...prev, skeleton_html: e.target.value }))} />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button className="btn btn-primary btn-small" onClick={() => handleSaveTemplate(editingTemplate)}>
+                            <i className="fas fa-save" style={{ marginRight: 4 }}></i>Save
+                          </button>
+                          <button className="btn btn-secondary btn-small" onClick={() => setEditingTemplate(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <strong>{tmpl.name}</strong>
+                          <span style={{ marginLeft: 8, fontSize: 11, background: 'var(--accent)', color: '#fff', padding: '2px 8px', borderRadius: 4 }}>
+                            {tmpl.page_type}
+                          </span>
+                          <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>
+                            {tmpl.section_count} sections
+                          </span>
+                          {tmpl.source_url && (
+                            <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--text3)' }} title={tmpl.source_url}>
+                              <i className="fas fa-link" style={{ marginRight: 3 }}></i>imported
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button className="btn btn-secondary btn-small" onClick={() => setEditingTemplate({ ...tmpl })}>
+                            <i className="fas fa-edit"></i>
+                          </button>
+                          <button className="btn btn-danger btn-small" onClick={() => handleDeleteTemplate(tmpl.id)}>
+                            <i className="fas fa-trash"></i>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <button className={`btn ${saved ? 'btn-success' : 'btn-primary'} mt-24`} onClick={handleSave} disabled={saving}>

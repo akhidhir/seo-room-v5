@@ -408,6 +408,22 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // Page templates — reusable content skeletons
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS page_templates (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        page_type TEXT NOT NULL DEFAULT 'service',
+        source_url TEXT,
+        skeleton_html TEXT NOT NULL DEFAULT '',
+        section_count INTEGER DEFAULT 0,
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
     // Site pages — staging zone for new website content
     await client.query(`
       CREATE TABLE IF NOT EXISTS site_pages (
@@ -5137,6 +5153,298 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
     console.error('[skeleton] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ===== PAGE TEMPLATES =====
+
+// List templates for a project
+app.get('/api/projects/:projectId/templates', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, page_type, source_url, section_count, is_default, created_at, updated_at FROM page_templates WHERE project_id=$1 ORDER BY page_type, name',
+      [req.params.projectId]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single template (with full HTML)
+app.get('/api/projects/:projectId/templates/:id', async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create template manually
+app.post('/api/projects/:projectId/templates', async (req, res) => {
+  const { name, page_type, skeleton_html, source_url } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  try {
+    const html = skeleton_html || '';
+    const sections = (html.match(/<!-- SECTION/gi) || []).length;
+    const { rows } = await pool.query(
+      'INSERT INTO page_templates (project_id, name, page_type, skeleton_html, source_url, section_count) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [req.params.projectId, name, page_type || 'service', html, source_url || null, sections]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update template
+app.put('/api/projects/:projectId/templates/:id', async (req, res) => {
+  const { name, page_type, skeleton_html, source_url } = req.body;
+  try {
+    const sets = []; const vals = []; let n = 1;
+    if (name !== undefined) { sets.push(`name=$${n++}`); vals.push(name); }
+    if (page_type !== undefined) { sets.push(`page_type=$${n++}`); vals.push(page_type); }
+    if (skeleton_html !== undefined) {
+      sets.push(`skeleton_html=$${n++}`); vals.push(skeleton_html);
+      sets.push(`section_count=$${n++}`); vals.push((skeleton_html.match(/<!-- SECTION/gi) || []).length);
+    }
+    if (source_url !== undefined) { sets.push(`source_url=$${n++}`); vals.push(source_url); }
+    sets.push(`updated_at=NOW()`);
+    vals.push(req.params.id, req.params.projectId);
+    const row = (await pool.query(
+      `UPDATE page_templates SET ${sets.join(',')} WHERE id=$${n++} AND project_id=$${n++} RETURNING *`, vals
+    )).rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete template
+app.delete('/api/projects/:projectId/templates/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM page_templates WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Import template from URL — fetches page, strips to skeleton, saves as template
+app.post('/api/projects/:projectId/templates/import', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { url, name, page_type } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    const pageUrl = url.startsWith('http') ? url : 'https://' + url;
+    console.log(`[templates] Importing from: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch: ${resp.status}` });
+    const html = await resp.text();
+
+    // Extract content between </header> and <footer>
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
+    );
+
+    // Parse top-level blocks
+    function parseBlocks(sourceHtml) {
+      const blockRegex = /<(section|div|main|article)([^>]*)>/gi;
+      const results = [];
+      let match;
+      while ((match = blockRegex.exec(sourceHtml)) !== null) {
+        const tag = match[1].toLowerCase();
+        const attrs = match[2];
+        const blockStart = match.index;
+        let depth = 1, pos = match.index + match[0].length;
+        const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+        const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+        while (depth > 0 && pos < sourceHtml.length) {
+          openRe.lastIndex = pos; closeRe.lastIndex = pos;
+          const nO = openRe.exec(sourceHtml);
+          const nC = closeRe.exec(sourceHtml);
+          if (!nC) break;
+          if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+          else {
+            depth--;
+            if (depth === 0) {
+              const blockEnd = nC.index + nC[0].length;
+              const blockContent = sourceHtml.slice(blockStart, blockEnd);
+              const textContent = blockContent.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+              if (textContent.length >= 10) {
+                results.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent });
+                blockRegex.lastIndex = blockEnd;
+              }
+              break;
+            }
+            pos = nC.index + nC[0].length;
+          }
+        }
+      }
+      return results;
+    }
+
+    let blocks = parseBlocks(middleHtml);
+
+    // Drill into wrapper divs if one block has >70% of text
+    const totalText = blocks.reduce((sum, b) => sum + b.textLen, 0);
+    const bigBlock = blocks.find(b => b.textLen > totalText * 0.7 && blocks.length <= 5);
+    if (bigBlock) {
+      const innerStart = bigBlock.html.indexOf('>') + 1;
+      const innerEnd = bigBlock.html.lastIndexOf('</');
+      const innerContent = bigBlock.html.slice(innerStart, innerEnd > innerStart ? innerEnd : bigBlock.html.length);
+      const innerBlocks = parseBlocks(innerContent);
+      if (innerBlocks.length > blocks.length) {
+        const heroBefore = blocks.filter(b => b !== bigBlock && blocks.indexOf(b) < blocks.indexOf(bigBlock));
+        const heroAfter = blocks.filter(b => b !== bigBlock && blocks.indexOf(b) > blocks.indexOf(bigBlock));
+        blocks = [...heroBefore, ...innerBlocks, ...heroAfter];
+      }
+    }
+
+    // Strip each block to skeleton
+    function stripBlock(blockHtml, sectionNum) {
+      const imgSrcs = [];
+      blockHtml.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (m, src) => {
+        const altMatch = m.match(/alt=["']([^"']*?)["']/i);
+        imgSrcs.push({ src, alt: altMatch ? altMatch[1] : '' });
+        return m;
+      });
+
+      const h2s = (blockHtml.match(/<h2[^>]*>/gi) || []).length;
+      const imgs = (blockHtml.match(/<img[^>]*>/gi) || []).length;
+      const lists = (blockHtml.match(/<(ul|ol)[^>]*>/gi) || []).length;
+      const forms = (blockHtml.match(/<form[^>]*>/gi) || []).length;
+      const hasBgImage = /background.*url|bg-img|ban-img|hero|banner/i.test(blockHtml.slice(0, 500));
+      const hasColumns = /col-\w+-\d|col-\d|column|wp-block-columns/i.test(blockHtml);
+      const text = blockHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const wordCount = text.split(/\s+/).length;
+
+      const headings = [];
+      blockHtml.replace(/<h([1-6])([^>]*)>([\s\S]*?)<\/h\1>/gi, (m, level, attrs, inner) => {
+        headings.push({ level, text: inner.replace(/<[^>]+>/g, '').trim() });
+        return m;
+      });
+
+      let sectionType = 'content';
+      if (hasBgImage && wordCount < 100) sectionType = 'hero-banner';
+      else if (forms) sectionType = 'form-cta';
+      else if (imgs > 0 && hasColumns) sectionType = 'image-text-columns';
+      else if (hasColumns && wordCount < 150) sectionType = 'multi-column-cta';
+      else if (imgs > 2 && wordCount < 100) sectionType = 'image-gallery';
+      else if (lists && wordCount > 50) sectionType = 'feature-list';
+      else if (wordCount < 80 && (blockHtml.match(/<a[^>]*>/gi) || []).length > 0) sectionType = 'cta-bar';
+      else if (wordCount > 200) sectionType = 'long-content';
+      else sectionType = 'short-content';
+
+      let out = `<!-- SECTION ${sectionNum}: ${sectionType.toUpperCase()} -->\n`;
+
+      if (sectionType === 'hero-banner') {
+        out += `<div class="wf-hero">\n`;
+        out += headings.length ? `  <h${headings[0].level}>[HERO HEADING — page title with keyword]</h${headings[0].level}>\n` : `  <h1>[HERO HEADING]</h1>\n`;
+        out += `  <p>[~30 words hero subtext — brief intro or tagline]</p>\n`;
+        if (imgs > 0) out += `  <img src="" alt="[hero image alt text]">\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'image-text-columns') {
+        const firstImgPos = blockHtml.search(/<img/i);
+        const firstTextPos = blockHtml.search(/<(p|h[2-6])/i);
+        const imgFirst = firstImgPos < firstTextPos;
+        out += `<div class="wf-columns">\n`;
+        if (imgFirst) {
+          out += `  <div class="wf-col"><img src="" alt="[section image]"></div>\n`;
+          out += `  <div class="wf-col">\n`;
+          out += `    <h2>[Section Heading]</h2>\n`;
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — section content]</p>\n`;
+          out += `  </div>\n`;
+        } else {
+          out += `  <div class="wf-col">\n`;
+          out += `    <h2>[Section Heading]</h2>\n`;
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — section content]</p>\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col"><img src="" alt="[section image]"></div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'multi-column-cta') {
+        const colMatches = blockHtml.match(/col-\w+-(\d+)/gi) || [];
+        const numCols = Math.max(2, Math.min(colMatches.length, 6));
+        out += `<div class="wf-columns">\n`;
+        for (let ci = 0; ci < numCols; ci++) {
+          out += `  <div class="wf-col">\n`;
+          if (imgs > ci) out += `    <img src="" alt="[column ${ci + 1} image]">\n`;
+          out += `    <p>[~20 words — column ${ci + 1} content]</p>\n`;
+          out += `  </div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'feature-list') {
+        out += `<h2>[Features/Benefits Heading]</h2>\n`;
+        const liCount = Math.max(3, (blockHtml.match(/<li/gi) || []).length);
+        out += `<ul>\n`;
+        for (let i = 0; i < liCount; i++) out += `  <li>[Feature/benefit ${i + 1} — ~15 words]</li>\n`;
+        out += `</ul>\n`;
+      } else if (sectionType === 'form-cta') {
+        out += `<div class="wf-cta">\n`;
+        out += `  <h2>[Form Heading — e.g. "Get a Free Quote"]</h2>\n`;
+        out += `  <p>[~20 words — form intro]</p>\n`;
+        out += `  <p><em>[Contact form appears here — not editable]</em></p>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'cta-bar') {
+        out += `<div class="wf-cta">\n`;
+        if (headings.length) out += `  <h2>[CTA Heading]</h2>\n`;
+        out += `  <p>[~20 words CTA text]</p>\n`;
+        out += `  <a href="#" class="wf-btn">[CTA Button Text]</a>\n`;
+        out += `</div>\n`;
+      } else {
+        // Long or short content
+        const pCount = Math.max(1, (blockHtml.match(/<p[^>]*>/gi) || []).length);
+        const wordsPerP = Math.max(40, Math.round(wordCount / pCount));
+        // Use generic heading placeholders instead of original text
+        const hCount = Math.max(1, headings.length);
+        for (let hi = 0; hi < hCount; hi++) {
+          out += `<h2>[Section ${sectionNum} Heading ${hi > 0 ? hi + 1 : ''}]</h2>\n`;
+          const parasForH = Math.max(1, Math.ceil(pCount / hCount));
+          for (let pi = 0; pi < parasForH; pi++) {
+            out += `<p>[~${wordsPerP} words — paragraph content]</p>\n`;
+          }
+        }
+        if (imgs > 0) out += `<img src="" alt="[relevant image]">\n`;
+      }
+
+      out += `<!-- /SECTION ${sectionNum} -->\n`;
+      return out;
+    }
+
+    let skeleton = '';
+    blocks.forEach((block, i) => { skeleton += stripBlock(block.html, i + 1) + '\n'; });
+
+    const templateName = name || (page_type ? page_type.charAt(0).toUpperCase() + page_type.slice(1) + ' Page' : 'Imported Template');
+    const sectionCount = (skeleton.match(/<!-- SECTION/gi) || []).length;
+
+    const { rows } = await pool.query(
+      'INSERT INTO page_templates (project_id, name, page_type, skeleton_html, source_url, section_count) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [req.params.projectId, templateName, page_type || 'service', skeleton, pageUrl, sectionCount]
+    );
+
+    console.log(`[templates] Imported "${templateName}" from ${pageUrl}: ${sectionCount} sections, ${skeleton.length} chars`);
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[templates] Import error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply template to a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/apply-template', async (req, res) => {
+  const { template_id } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id required' });
+  try {
+    const template = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [template_id, req.params.projectId])).rows[0];
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+
+    await pool.query(
+      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2, updated_at=NOW() WHERE id=$3 AND project_id=$4',
+      [template.skeleton_html, `Template: ${template.name} (${template.section_count} sections)`, req.params.id, req.params.projectId]
+    );
+
+    res.json({ ok: true, skeleton: template.skeleton_html, sections: template.section_count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Analyze page wireframe — fetches live page, extracts section structure for AI copywriting
