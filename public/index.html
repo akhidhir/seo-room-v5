@@ -4127,6 +4127,7 @@
       const [showHistory, setShowHistory] = useState(false);
       const [rollingBack, setRollingBack] = useState(null);
       const [searchQuery, setSearchQuery] = useState('');
+      const [statFilter, setStatFilter] = useState(null); // null | 'green' | 'orange' | 'red' | 'missingMeta' | 'noFocus'
       const [editingKeyword, setEditingKeyword] = useState({});
       const [savingKeyword, setSavingKeyword] = useState(null);
 
@@ -4233,15 +4234,25 @@
       }, [pages, sortBy, sortDir]);
 
       const filteredPages = useMemo(() => {
-        if (!searchQuery.trim()) return sortedPages;
-        const q = searchQuery.toLowerCase();
-        return sortedPages.filter(p =>
-          (p.title || '').toLowerCase().includes(q) ||
-          (p.url || '').toLowerCase().includes(q) ||
-          (p.focusKeyword || '').toLowerCase().includes(q) ||
-          (p.metaTitle || '').toLowerCase().includes(q)
-        );
-      }, [sortedPages, searchQuery]);
+        let list = sortedPages;
+        // Apply stat card filter
+        if (statFilter === 'green') list = list.filter(p => p.yoastScore === 'green');
+        else if (statFilter === 'orange') list = list.filter(p => p.yoastScore === 'orange');
+        else if (statFilter === 'red') list = list.filter(p => p.yoastScore === 'red');
+        else if (statFilter === 'missingMeta') list = list.filter(p => !p.metaDesc || p.metaDescLen < 50);
+        else if (statFilter === 'noFocus') list = list.filter(p => !p.focusKeyword);
+        // Apply search
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          list = list.filter(p =>
+            (p.title || '').toLowerCase().includes(q) ||
+            (p.url || '').toLowerCase().includes(q) ||
+            (p.focusKeyword || '').toLowerCase().includes(q) ||
+            (p.metaTitle || '').toLowerCase().includes(q)
+          );
+        }
+        return list;
+      }, [sortedPages, searchQuery, statFilter]);
 
       const toggleSelect = (id, e) => {
         e.stopPropagation();
@@ -4509,14 +4520,14 @@
           {overallStats && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
               {[
-                { label: 'SEO Green', value: overallStats.green, color: '#22c55e' },
-                { label: 'SEO Orange', value: overallStats.orange, color: '#f59e0b' },
-                { label: 'SEO Red', value: overallStats.red, color: '#ef4444' },
-                { label: 'Avg Words', value: overallStats.avgWords, color: 'var(--accent)' },
-                { label: 'Missing Meta', value: overallStats.missingMeta, color: overallStats.missingMeta > 0 ? '#ef4444' : '#22c55e' },
-                { label: 'No Focus KW', value: overallStats.noFocus, color: overallStats.noFocus > 0 ? '#ef4444' : '#22c55e' },
+                { label: 'SEO Green', value: overallStats.green, color: '#22c55e', filter: 'green' },
+                { label: 'SEO Orange', value: overallStats.orange, color: '#f59e0b', filter: 'orange' },
+                { label: 'SEO Red', value: overallStats.red, color: '#ef4444', filter: 'red' },
+                { label: 'Avg Words', value: overallStats.avgWords, color: 'var(--accent)', filter: null },
+                { label: 'Missing Meta', value: overallStats.missingMeta, color: overallStats.missingMeta > 0 ? '#ef4444' : '#22c55e', filter: 'missingMeta' },
+                { label: 'No Focus KW', value: overallStats.noFocus, color: overallStats.noFocus > 0 ? '#ef4444' : '#22c55e', filter: 'noFocus' },
               ].map(s => (
-                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                <div key={s.label} onClick={() => s.filter && setStatFilter(statFilter === s.filter ? null : s.filter)} style={{ background: statFilter === s.filter ? 'rgba(99,102,241,0.15)' : 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: statFilter === s.filter ? '2px solid var(--accent)' : '1px solid var(--border)', cursor: s.filter ? 'pointer' : 'default', transition: 'all 0.15s' }}>
                   <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
                   <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
                 </div>
@@ -4537,7 +4548,12 @@
                   </button>
                 )}
               </div>
-              <span style={{ fontSize: 12, color: 'var(--text3)' }}>{filteredPages.length} of {pages.length} pages</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>{statFilter ? `${filteredPages.length} of ${pages.length} pages` : `${filteredPages.length} of ${pages.length} pages`}</span>
+              {statFilter && (
+                <button onClick={() => setStatFilter(null)} style={{ fontSize: 12, padding: '4px 10px', background: 'rgba(99,102,241,0.15)', border: '1px solid var(--accent)', borderRadius: 6, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <i className="fas fa-times" style={{ fontSize: 10 }} /> Clear filter
+                </button>
+              )}
             </div>
           )}
 
