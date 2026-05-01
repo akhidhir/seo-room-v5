@@ -8110,8 +8110,7 @@
         try {
           await api(`/projects/${project.id}/onpage-audit/add-links`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ page_id: pageNode.id })
+            body: { page_id: pageNode.id }
           });
           setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
         } catch(e) {
@@ -8127,8 +8126,7 @@
         try {
           await api(`/projects/${project.id}/content-queue`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: {
               page_id: pageNode.id,
               page_url: pageNode.url,
               page_title: pageNode.title,
@@ -8136,7 +8134,7 @@
               source: 'site-issues',
               priority: 'high',
               brief: `Thin content (${pageNode.word_count} words). Expand to 800+ words with relevant, keyword-rich content.`
-            })
+            }
           });
           setFixing(prev => ({ ...prev, ['cw-' + pageNode.id]: 'sent' }));
         } catch(e) {
@@ -8155,8 +8153,7 @@
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages: [{
+            body: { pages: [{
               id: pageNode.id,
               title: pageNode.title,
               url: pageNode.url,
@@ -8166,7 +8163,7 @@
               h1: pageNode.h1,
               wordCount: pageNode.word_count,
               issues: pageNode.issues.map(i => ({ type: 'problem', text: i }))
-            }]})
+            }]}
           });
           if (data.suggestions && data.suggestions.length > 0) {
             const s = data.suggestions[0];
@@ -8185,15 +8182,14 @@
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/fix`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fixes: [{
+            body: { fixes: [{
               id: pageNode.id,
               url: pageNode.url,
               title: pageNode.title,
               new_meta_title: s.suggested_title,
               new_meta_desc: s.suggested_desc,
               new_focus_keyword: s.suggested_keyword
-            }]})
+            }]}
           });
           if (data.results && data.results[0]?.success) {
             setFixing(prev => ({ ...prev, ['meta-' + pageNode.id]: 'fixed' }));
@@ -8211,13 +8207,12 @@
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages: toFix.map(n => ({
+            body: { pages: toFix.map(n => ({
               id: n.id, title: n.title, url: n.url,
               metaTitle: n.meta_title, metaDesc: n.meta_description, focusKeyword: '',
               h1: n.h1, wordCount: n.word_count,
               issues: n.issues.map(i => ({ type: 'problem', text: i }))
-            }))})
+            }))}
           });
           if (data.suggestions) {
             const newSugg = {};
@@ -8230,13 +8225,12 @@
               try {
                 const fixData = await api(`/projects/${project.id}/onpage-audit/fix`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ fixes: [{
+                  body: { fixes: [{
                     id: node.id, url: node.url, title: node.title,
                     new_meta_title: s.suggested_title,
                     new_meta_desc: s.suggested_desc,
                     new_focus_keyword: s.suggested_keyword
-                  }]})
+                  }]}
                 });
                 if (fixData.results && fixData.results[0]?.success) {
                   setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'fixed' }));
