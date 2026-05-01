@@ -1072,7 +1072,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useCallback, useMemo } = React;
+    const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
     const API_BASE = window.location.origin + '/api';
 
@@ -4603,7 +4603,7 @@
                               {page.title}
                               {hasHistory && <i className="fas fa-history" style={{ color: '#f59e0b', fontSize: 10 }} title="Has changes — rollback available" />}
                             </div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>{page.url}</div>
+                            <a href={page.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--text3)', textDecoration: 'none' }} onMouseEnter={e => e.target.style.color='var(--accent)'} onMouseLeave={e => e.target.style.color='var(--text3)'}>{page.url}</a>
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             <i className={seo.icon} style={{ color: seo.color, fontSize: 12 }} />
