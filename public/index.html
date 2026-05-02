@@ -12004,148 +12004,324 @@
         }
       };
 
-      const StatBox = ({ label, value, sub, color }) => (
-        <div style={{ padding: '14px 16px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-          <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 4 }}>{label}</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: color || 'var(--text)' }}>{value}</div>
-          {sub && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2 }}>{sub}</div>}
+      const RptStat = ({ label, value, sub, color, icon }) => (
+        <div style={{ padding: '16px 18px', background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
+            {icon && <i className={icon} style={{ fontSize: 10 }} />}{label}
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: color || 'var(--text)', lineHeight: 1.1 }}>{value}</div>
+          {sub && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 4 }}>{sub}</div>}
         </div>
       );
+
+      const HealthCircle = ({ score }) => {
+        const color = score >= 70 ? '#22c55e' : score >= 40 ? '#f59e0b' : '#ef4444';
+        const label = score >= 70 ? 'Good' : score >= 40 ? 'Needs Work' : 'Critical';
+        const circumference = 2 * Math.PI * 45;
+        const offset = circumference - (score / 100) * circumference;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <svg width="120" height="120" viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r="45" fill="none" stroke="var(--border)" strokeWidth="8" />
+              <circle cx="60" cy="60" r="45" fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
+                strokeDasharray={circumference} strokeDashoffset={offset}
+                transform="rotate(-90 60 60)" style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
+              <text x="60" y="55" textAnchor="middle" fill={color} fontSize="28" fontWeight="800">{score}</text>
+              <text x="60" y="72" textAnchor="middle" fill="var(--text3)" fontSize="10" fontWeight="600">{label}</text>
+            </svg>
+          </div>
+        );
+      };
+
+      const RptSection = ({ title, icon, color, children }) => (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: color || 'var(--text1)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 28, height: 28, borderRadius: 6, background: (color || '#6366f1') + '20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className={icon} style={{ fontSize: 12, color: color || '#6366f1' }} />
+            </span>
+            {title}
+          </div>
+          {children}
+        </div>
+      );
+
+      const PillarLabel = ({ name }) => {
+        const colors = { gbp: '#f97316', gbp_external: '#f97316', gsc: '#3b82f6', gsc_agent: '#3b82f6', website: '#a855f7', technical: '#a855f7' };
+        const labels = { gbp: 'GBP', gbp_external: 'GBP', gsc: 'GSC', gsc_agent: 'GSC', website: 'Website', technical: 'Website' };
+        return React.createElement('span', { style: { fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: (colors[name] || '#6366f1') + '20', color: colors[name] || '#6366f1', textTransform: 'uppercase' } }, labels[name] || name);
+      };
+
+      const renderReportV2 = (report) => {
+        const maps = report.mapsRankings || {};
+        const serp = report.serpRankings || {};
+        const gsc = report.gscData || {};
+        const acts = report.actions || {};
+        const op = report.onPageStats || {};
+        const ps = report.pageSpeedStats;
+
+        return (
+          <div style={{ padding: '0 24px 24px' }}>
+            {/* Header with health score */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '20px 0', borderBottom: '1px solid var(--border)' }}>
+              <HealthCircle score={report.healthScore || 0} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{report.project?.name || 'SEO Report'}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{report.project?.domain} · {report.project?.industry} · {report.project?.location}</div>
+                {report.executiveSummary && (
+                  <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, maxWidth: 700 }}>{report.executiveSummary}</div>
+                )}
+              </div>
+            </div>
+
+            {/* Maps Rankings */}
+            {maps.totalKeywords > 0 && (
+              <RptSection title="Google Maps Rankings" icon="fas fa-map-marker-alt" color="#22c55e">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                  <RptStat label="Avg Rank" value={maps.avgArp ? `#${maps.avgArp.toFixed(1)}` : (maps.avgMapsPosition ? `#${maps.avgMapsPosition.toFixed(1)}` : '—')} color="#22c55e" />
+                  <RptStat label="Avg Visibility" value={maps.avgVisibility != null ? `${maps.avgVisibility.toFixed(0)}%` : '—'} color={maps.avgVisibility >= 30 ? '#22c55e' : '#f59e0b'} />
+                  <RptStat label="Dominant" value={maps.dominant || 0} sub={`of ${maps.totalKeywords} keywords`} color="#22c55e" />
+                  <RptStat label="Not Visible" value={maps.notVisible || 0} color={maps.notVisible > 0 ? '#ef4444' : '#22c55e'} />
+                </div>
+                {maps.topKeywords && maps.topKeywords.length > 0 && (
+                  <div style={{ background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 80px 90px 100px', padding: '8px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>
+                      <span>Keyword</span><span>Avg Rank</span><span>True Avg</span><span>Visibility</span><span>Status</span>
+                    </div>
+                    {maps.topKeywords.map((kw, i) => (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 80px 80px 90px 100px', padding: '8px 14px', fontSize: 12, color: 'var(--text2)', borderBottom: i < maps.topKeywords.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text1)' }}>{kw.keyword}</span>
+                        <span style={{ color: kw.arp && kw.arp <= 3 ? '#22c55e' : kw.arp <= 10 ? '#f59e0b' : '#ef4444' }}>{kw.arp ? `#${kw.arp}` : '—'}</span>
+                        <span style={{ color: 'var(--text3)' }}>{kw.atrp ? `#${kw.atrp}` : '—'}</span>
+                        <span style={{ color: kw.visibility >= 30 ? '#22c55e' : kw.visibility > 0 ? '#f59e0b' : '#ef4444' }}>{kw.visibility}%</span>
+                        <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
+                          background: kw.status === 'Dominant' ? 'rgba(34,197,94,0.15)' : kw.status === 'Competitive' ? 'rgba(59,130,246,0.15)' : kw.status === 'Needs Work' ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                          color: kw.status === 'Dominant' ? '#22c55e' : kw.status === 'Competitive' ? '#3b82f6' : kw.status === 'Needs Work' ? '#f59e0b' : '#ef4444'
+                        }}>{kw.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </RptSection>
+            )}
+
+            {/* GSC */}
+            <RptSection title="Google Search Console" icon="fas fa-chart-line" color="#3b82f6">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                <RptStat label="Clicks" value={gsc.clicks?.toLocaleString() || 0} color="#3b82f6" icon="fas fa-mouse-pointer" />
+                <RptStat label="Impressions" value={gsc.impressions?.toLocaleString() || 0} icon="fas fa-eye" />
+                <RptStat label="CTR" value={gsc.ctr ? `${gsc.ctr}%` : '—'} color={gsc.ctr >= 3 ? '#22c55e' : '#f59e0b'} />
+                <RptStat label="Avg Position" value={gsc.avgPosition ? `#${gsc.avgPosition}` : '—'} color={gsc.avgPosition && gsc.avgPosition <= 10 ? '#22c55e' : '#f59e0b'} />
+              </div>
+              {gsc.topQueries && gsc.topQueries.length > 0 && (
+                <div style={{ background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 70px 90px 60px 70px', padding: '8px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>
+                    <span>Query</span><span>Clicks</span><span>Impressions</span><span>CTR</span><span>Position</span>
+                  </div>
+                  {gsc.topQueries.slice(0, 10).map((q, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 70px 90px 60px 70px', padding: '8px 14px', fontSize: 12, color: 'var(--text2)', borderBottom: i < Math.min(gsc.topQueries.length, 10) - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <span style={{ fontWeight: 500, color: 'var(--text1)' }}>{q.query}</span>
+                      <span style={{ fontWeight: 600, color: '#3b82f6' }}>{q.clicks}</span>
+                      <span>{q.impressions?.toLocaleString()}</span>
+                      <span>{q.ctr}%</span>
+                      <span style={{ color: q.position <= 10 ? '#22c55e' : '#f59e0b' }}>#{q.position}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {gsc.topPages && gsc.topPages.length > 0 && (
+                <div style={{ marginTop: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>Top Pages</div>
+                  {gsc.topPages.slice(0, 5).map((p, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 70px 90px 60px', padding: '8px 14px', fontSize: 12, color: 'var(--text2)', borderBottom: i < Math.min(gsc.topPages.length, 5) - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <span style={{ fontWeight: 500, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.page || '/'}</span>
+                      <span style={{ fontWeight: 600, color: '#3b82f6' }}>{p.clicks}</span>
+                      <span>{p.impressions?.toLocaleString()}</span>
+                      <span>{p.ctr}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </RptSection>
+
+            {/* Website Health row */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 24 }}>
+              {/* On-Page */}
+              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: 6, background: '#f59e0b20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-file-alt" style={{ fontSize: 12, color: '#f59e0b' }} />
+                  </span>
+                  On-Page SEO
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Pages</div><div style={{ fontSize: 22, fontWeight: 800 }}>{op.totalPages || 0}</div></div>
+                  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Avg SEO Score</div><div style={{ fontSize: 22, fontWeight: 800, color: (op.avgScore || 0) >= 70 ? '#22c55e' : '#f59e0b' }}>{op.avgScore || 0}%</div></div>
+                  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Issues Found</div><div style={{ fontSize: 22, fontWeight: 800, color: '#ef4444' }}>{op.issuesFound || 0}</div></div>
+                  <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Fixes Applied</div><div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e' }}>{op.pagesFixed || 0}</div></div>
+                </div>
+              </div>
+
+              {/* PageSpeed */}
+              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: 6, background: '#a855f720', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-tachometer-alt" style={{ fontSize: 12, color: '#a855f7' }} />
+                  </span>
+                  PageSpeed
+                </div>
+                {ps ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Avg Score</div><div style={{ fontSize: 22, fontWeight: 800, color: ps.avgPerformance >= 90 ? '#22c55e' : ps.avgPerformance >= 50 ? '#f59e0b' : '#ef4444' }}>{ps.avgPerformance}%</div></div>
+                    <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Pages</div><div style={{ fontSize: 22, fontWeight: 800 }}>{ps.totalPages}</div></div>
+                    <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Good (90+)</div><div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e' }}>{ps.good}</div></div>
+                    <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Poor (&lt;50)</div><div style={{ fontSize: 22, fontWeight: 800, color: '#ef4444' }}>{ps.poor}</div></div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--text3)', padding: '20px 0', textAlign: 'center' }}>Not scanned yet — run Website Audit</div>
+                )}
+              </div>
+            </div>
+
+            {/* Audit & Actions row */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+              {/* Audit Findings */}
+              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: 6, background: '#ef444420', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-clipboard-check" style={{ fontSize: 12, color: '#ef4444' }} />
+                  </span>
+                  Audit Findings
+                </div>
+                {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 ? Object.entries(report.findingsByPillar).map(([pillar, data]) => (
+                  <div key={pillar} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <PillarLabel name={pillar} />
+                    <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                      {data.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 600 }}>{data.critical} critical</span>}
+                      <span>{data.total} total</span>
+                      <span style={{ color: '#22c55e' }}>{data.approved} done</span>
+                      {data.pending > 0 && <span style={{ color: '#f59e0b' }}>{data.pending} pending</span>}
+                    </div>
+                  </div>
+                )) : <div style={{ fontSize: 12, color: 'var(--text3)', padding: '20px 0', textAlign: 'center' }}>No audits run yet</div>}
+              </div>
+
+              {/* Action Items */}
+              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: 6, background: '#3b82f620', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-tasks" style={{ fontSize: 12, color: '#3b82f6' }} />
+                  </span>
+                  Action Plan
+                  {acts.total > 0 && <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>({acts.completionRate}% complete)</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+                  <div style={{ textAlign: 'center', flex: 1, padding: '10px 0', background: 'rgba(34,197,94,0.08)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e' }}>{acts.completed || 0}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Done</div>
+                  </div>
+                  <div style={{ textAlign: 'center', flex: 1, padding: '10px 0', background: 'rgba(59,130,246,0.08)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#3b82f6' }}>{acts.inProgress || 0}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>In Progress</div>
+                  </div>
+                  <div style={{ textAlign: 'center', flex: 1, padding: '10px 0', background: 'rgba(245,158,11,0.08)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#f59e0b' }}>{acts.pending || 0}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Pending</div>
+                  </div>
+                </div>
+                {/* Progress bar */}
+                {acts.total > 0 && (
+                  <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${acts.completionRate}%`, background: 'linear-gradient(90deg, #22c55e, #3b82f6)', borderRadius: 3, transition: 'width 0.5s' }} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Critical findings callout */}
+            {report.criticalFindings && report.criticalFindings.length > 0 && (
+              <div style={{ marginTop: 16, padding: 16, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginBottom: 8 }}>
+                  <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />Critical Issues Requiring Attention
+                </div>
+                {report.criticalFindings.map((f, i) => (
+                  <div key={i} style={{ fontSize: 12, color: 'var(--text2)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <PillarLabel name={f.pillar} />
+                    <span>{f.title}</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, color: f.status === 'approved' ? '#22c55e' : '#f59e0b', fontWeight: 600 }}>{f.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // Legacy v1 renderer
+      const renderReportV1 = (report) => {
+        const rs = report.rankingsSummary || {};
+        const gsc = report.gscTrends || {};
+        return (
+          <div style={{ padding: '16px 20px', fontSize: 13, color: 'var(--text2)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+              <RptStat label="Keywords" value={rs.keywordsTracked || 0} />
+              <RptStat label="Maps Avg" value={rs.avgMapsPosition ? `#${rs.avgMapsPosition.toFixed(1)}` : '—'} color="#22c55e" />
+              <RptStat label="Clicks" value={gsc.clicks || 0} color="#3b82f6" />
+            </div>
+            {report.recommendations && report.recommendations.length > 0 && (
+              <div style={{ marginTop: 14, padding: 12, background: 'rgba(138,180,248,0.08)', borderRadius: 8 }}>
+                {report.recommendations.map((r, i) => <div key={i} style={{ fontSize: 12, marginBottom: 4 }}>{r}</div>)}
+              </div>
+            )}
+          </div>
+        );
+      };
 
       return (
         <>
           <div className="page-header">
-            <div className="page-title">
-              <i className="fas fa-chart-bar"></i> Monthly Reports
-            </div>
-            <div className="page-subtitle">Auto-generated performance reports from your SEO data</div>
+            <div className="page-title"><i className="fas fa-chart-bar"></i> Monthly Reports</div>
+            <div className="page-subtitle">Professional SEO performance reports with AI insights</div>
           </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
           {genSuccess && <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, color: '#22c55e', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}><i className="fas fa-check-circle"></i> {genSuccess}</div>}
 
-          <button className="btn btn-primary" style={{ marginBottom: 20 }} onClick={handleGenerateReport} disabled={generating}>
-            {generating ? <span className="spinner"></span> : <i className="fas fa-sync-alt"></i>}
-            {generating ? ' Generating...' : ' Generate This Month\'s Report'}
+          <button className="btn btn-primary" style={{ marginBottom: 20, padding: '10px 20px', fontSize: 14 }} onClick={handleGenerateReport} disabled={generating}>
+            {generating ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 8 } }), 'Generating report...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-sync-alt', style: { marginRight: 8 } }), 'Generate This Month\'s Report')}
           </button>
 
           {reports.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {reports.map((report) => {
                 const isExpanded = expandedId === report.id;
-                const rs = report.rankingsSummary || {};
-                const gsc = report.gscTrends || {};
+                const isV2 = report.version === 2;
                 return (
-                  <div key={report.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-                    <div
-                      style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                      onClick={() => setExpandedId(isExpanded ? null : report.id)}
-                    >
-                      <div>
-                        <div style={{ fontSize: 16, fontWeight: 700 }}>{report.monthLabel || report.month}</div>
-                        <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 2 }}>
-                          Generated {new Date(report.createdAt || report.generatedAt).toLocaleDateString('en-AU')}
-                        </div>
-                      </div>
+                  <div key={report.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                    <div style={{ padding: '16px 24px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      onClick={() => setExpandedId(isExpanded ? null : report.id)}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        {rs.avgPosition && <span style={{ fontSize: 12, color: 'var(--text2)' }}>Avg #{rs.avgPosition.toFixed(1)}</span>}
-                        {gsc.clicks > 0 && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{gsc.clicks} clicks</span>}
-                        <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)' }} />
-                      </div>
-                    </div>
-
-                    {isExpanded && (
-                      <div style={{ padding: '0 20px 20px', borderTop: '1px solid var(--border)' }}>
-                        {/* SERP Rankings */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-search" style={{ marginRight: 6 }} />SERP Rankings
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Avg Position" value={rs.avgPosition ? `#${rs.avgPosition.toFixed(1)}` : '—'} color={rs.avgPosition && rs.avgPosition <= 10 ? '#22c55e' : '#f59e0b'} />
-                          <StatBox label="Top 3" value={rs.serpTop3 || 0} sub={`of ${rs.serpPositions || 0} tracked`} color="#22c55e" />
-                          <StatBox label="Top 10" value={rs.serpTop10 || 0} color="#3b82f6" />
-                          <StatBox label="Keywords" value={rs.keywordsTracked || 0} />
-                        </div>
-
-                        {/* Maps Rankings */}
-                        {(rs.mapsPositions > 0) && (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                              <i className="fas fa-map-marker-alt" style={{ marginRight: 6 }} />Maps Rankings
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                              <StatBox label="Avg Maps Position" value={rs.avgMapsPosition ? `#${rs.avgMapsPosition.toFixed(1)}` : '—'} color={rs.avgMapsPosition && rs.avgMapsPosition <= 3 ? '#22c55e' : '#f59e0b'} />
-                              <StatBox label="Maps Top 3" value={rs.mapsTop3 || 0} sub={`of ${rs.mapsPositions} tracked`} color="#22c55e" />
-                            </div>
-                          </>
-                        )}
-
-                        {/* GSC */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-chart-line" style={{ marginRight: 6 }} />Google Search Console
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Total Clicks" value={gsc.clicks?.toLocaleString() || 0} color="#3b82f6" />
-                          <StatBox label="Impressions" value={gsc.impressions?.toLocaleString() || 0} />
-                          <StatBox label="Avg CTR" value={gsc.ctr ? `${gsc.ctr.toFixed(1)}%` : '—'} color={gsc.ctr >= 3 ? '#22c55e' : '#f59e0b'} />
-                          <StatBox label="Keywords w/ Clicks" value={gsc.keywordsWithClicks || 0} sub={`of ${gsc.totalKeywords || 0}`} />
-                        </div>
-
-                        {/* Action Items */}
-                        <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                          <i className="fas fa-tasks" style={{ marginRight: 6 }} />Action Items
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-                          <StatBox label="Completed" value={report.actionsCompleted || 0} color="#22c55e" />
-                          <StatBox label="In Progress" value={report.actionsInProgress || 0} color="#3b82f6" />
-                          <StatBox label="Pending" value={report.actionsPending || 0} color="#f59e0b" />
-                        </div>
-
-                        {/* Audit Findings */}
-                        {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 && (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 600, margin: '16px 0 10px', color: 'var(--text2)' }}>
-                              <i className="fas fa-clipboard-check" style={{ marginRight: 6 }} />Audit Findings
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                              {Object.entries(report.findingsByPillar).map(([pillar, data]) => (
-                                <div key={pillar} style={{ padding: '12px 16px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                                  <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 6 }}>{pillar}</div>
-                                  <div style={{ fontSize: 13 }}>
-                                    <span style={{ color: '#ef4444' }}>{data.critical} critical</span> ·
-                                    <span> {data.total} total</span> ·
-                                    <span style={{ color: '#22c55e' }}> {data.approved} approved</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-
-                        {/* Recommendations */}
-                        {report.recommendations && report.recommendations.length > 0 && (
-                          <div style={{ marginTop: 16, padding: '14px 18px', background: 'rgba(138,180,248,0.08)', border: '1px solid rgba(138,180,248,0.2)', borderRadius: 8 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#8ab4f8' }}>
-                              <i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Recommendations
-                            </div>
-                            {report.recommendations.map((rec, i) => (
-                              <div key={i} style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6, paddingLeft: 12, borderLeft: '2px solid rgba(138,180,248,0.3)' }}>
-                                {rec}
-                              </div>
-                            ))}
+                        {isV2 && report.healthScore != null && (
+                          <div style={{ width: 44, height: 44, borderRadius: '50%', border: `3px solid ${report.healthScore >= 70 ? '#22c55e' : report.healthScore >= 40 ? '#f59e0b' : '#ef4444'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: report.healthScore >= 70 ? '#22c55e' : report.healthScore >= 40 ? '#f59e0b' : '#ef4444' }}>
+                            {report.healthScore}
                           </div>
                         )}
+                        <div>
+                          <div style={{ fontSize: 18, fontWeight: 700 }}>{report.monthLabel || report.month}</div>
+                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 2 }}>
+                            Generated {new Date(report.createdAt || report.generatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
                       </div>
-                    )}
+                      <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 14 }} />
+                    </div>
+                    {isExpanded && (isV2 ? renderReportV2(report) : renderReportV1(report))}
                   </div>
                 );
               })}
             </div>
           ) : !loading && (
             <div className="empty-state">
-              <div className="empty-state-icon">
-                <i className="fas fa-chart-bar"></i>
-              </div>
+              <div className="empty-state-icon"><i className="fas fa-chart-bar"></i></div>
               <div className="empty-state-title">No reports yet</div>
               <div>Click "Generate This Month's Report" to create your first performance report</div>
             </div>

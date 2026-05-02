@@ -11528,103 +11528,262 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const monthLabel = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long' });
 
-    // 1. Rankings summary — avg SERP position, top 3 count, keywords tracked
+    // 1. Maps Rankings — from grid_scans (most accurate) + rank_tracking
+    const gridRes = await pool.query(
+      `SELECT keyword, arp, atrp, solv, found_in, data_points, grid_size, competitors, scanned_at
+       FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`,
+      [projectId]
+    );
+    // Latest scan per keyword
+    const latestGrid = {};
+    for (const r of gridRes.rows) { if (!latestGrid[r.keyword]) latestGrid[r.keyword] = r; }
+    const gridEntries = Object.values(latestGrid);
+    const avgArp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.arp || 0), 0) / gridEntries.length : null;
+    const avgAtrp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.atrp || 0), 0) / gridEntries.length : null;
+    const avgSolv = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.solv || 0), 0) / gridEntries.length : null;
+
+    // Top keywords by grid scan
+    const topMapKeywords = gridEntries
+      .sort((a, b) => (a.arp || 99) - (b.arp || 99))
+      .slice(0, 10)
+      .map(r => ({
+        keyword: r.keyword,
+        arp: r.arp ? parseFloat(r.arp.toFixed(1)) : null,
+        atrp: r.atrp ? parseFloat(r.atrp.toFixed(1)) : null,
+        visibility: r.solv ? parseFloat((r.solv).toFixed(0)) : 0,
+        found: r.found_in || 0,
+        total: r.data_points || 0,
+        status: r.solv >= 60 ? 'Dominant' : r.solv >= 30 ? 'Competitive' : r.solv > 0 ? 'Needs Work' : 'Not Visible'
+      }));
+
+    // Rank tracking fallback
     const rankRes = await pool.query(
       `SELECT keyword, serp_position, maps_position FROM rank_tracking
-       WHERE project_id=$1 AND checked_at >= NOW() - INTERVAL '30 days'
-       ORDER BY checked_at DESC`,
+       WHERE project_id=$1 AND checked_at >= NOW() - INTERVAL '30 days' ORDER BY checked_at DESC`,
       [projectId]
     );
     const latestByKw = {};
-    for (const r of rankRes.rows) {
-      if (!latestByKw[r.keyword]) latestByKw[r.keyword] = r;
-    }
+    for (const r of rankRes.rows) { if (!latestByKw[r.keyword]) latestByKw[r.keyword] = r; }
     const rankEntries = Object.values(latestByKw);
     const serpPositions = rankEntries.filter(r => r.serp_position).map(r => r.serp_position);
     const mapsPositions = rankEntries.filter(r => r.maps_position).map(r => r.maps_position);
     const avgSerp = serpPositions.length > 0 ? serpPositions.reduce((a, b) => a + b, 0) / serpPositions.length : null;
     const avgMaps = mapsPositions.length > 0 ? mapsPositions.reduce((a, b) => a + b, 0) / mapsPositions.length : null;
-    const serpTop3 = serpPositions.filter(p => p <= 3).length;
-    const serpTop10 = serpPositions.filter(p => p <= 10).length;
-    const mapsTop3 = mapsPositions.filter(p => p <= 3).length;
 
-    const rankingsSummary = {
-      avgPosition: avgSerp,
+    const mapsRankings = {
+      totalKeywords: gridEntries.length || mapsPositions.length,
+      avgArp: avgArp,
+      avgAtrp: avgAtrp,
+      avgVisibility: avgSolv,
+      dominant: gridEntries.filter(r => r.solv >= 60).length,
+      competitive: gridEntries.filter(r => r.solv >= 30 && r.solv < 60).length,
+      needsWork: gridEntries.filter(r => r.solv > 0 && r.solv < 30).length,
+      notVisible: gridEntries.filter(r => !r.solv || r.solv === 0).length,
+      topKeywords: topMapKeywords,
       avgMapsPosition: avgMaps,
+      mapsTop3: mapsPositions.filter(p => p <= 3).length,
+    };
+
+    const serpRankings = {
+      avgPosition: avgSerp,
       keywordsTracked: rankEntries.length,
-      serpTop3,
-      serpTop10,
-      mapsTop3,
-      serpPositions: serpPositions.length,
-      mapsPositions: mapsPositions.length
+      top3: serpPositions.filter(p => p <= 3).length,
+      top10: serpPositions.filter(p => p <= 10).length,
+      page2: serpPositions.filter(p => p > 10 && p <= 20).length,
+      notRanking: serpPositions.filter(p => p > 20).length,
     };
 
-    // 2. GSC trends — total clicks, impressions, avg CTR, avg position
-    const gscRes = await pool.query(
-      'SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1',
-      [projectId]
-    );
-    const totalClicks = gscRes.rows.reduce((s, r) => s + (r.clicks || 0), 0);
-    const totalImpressions = gscRes.rows.reduce((s, r) => s + (r.impressions || 0), 0);
-    const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0;
-    const avgGscPos = gscRes.rows.length > 0 ? gscRes.rows.reduce((s, r) => s + (r.position || 0), 0) / gscRes.rows.length : null;
+    // 2. GSC — pull live data if connected
+    let gscData = { clicks: 0, impressions: 0, ctr: 0, avgPosition: null, topPages: [], topQueries: [], totalKeywords: 0 };
+    try {
+      const token = await getGscAccessToken(req.auth?.userId);
+      if (token && project.gsc_property) {
+        const endDate = now.toISOString().split('T')[0];
+        const startDate = new Date(now - 30 * 86400000).toISOString().split('T')[0];
 
-    const gscTrends = {
-      clicks: totalClicks,
-      impressions: totalImpressions,
-      ctr: avgCtr,
-      avgPosition: avgGscPos,
-      keywordsWithClicks: gscRes.rows.filter(r => r.clicks > 0).length,
-      totalKeywords: gscRes.rows.length
-    };
+        // Top queries
+        const qRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: 20, orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }] }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          const rows = qData.rows || [];
+          gscData.topQueries = rows.map(r => ({
+            query: r.keys[0], clicks: r.clicks, impressions: r.impressions,
+            ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1))
+          }));
+          gscData.clicks = rows.reduce((s, r) => s + r.clicks, 0);
+          gscData.impressions = rows.reduce((s, r) => s + r.impressions, 0);
+          gscData.totalKeywords = rows.length;
+        }
 
-    // 3. Audit findings summary
+        // Top pages
+        const pRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate, dimensions: ['page'], rowLimit: 10, orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }] }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          gscData.topPages = (pData.rows || []).map(r => ({
+            page: r.keys[0].replace(project.domain || '', '').replace(/^https?:\/\/[^/]+/, ''),
+            clicks: r.clicks, impressions: r.impressions,
+            ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1))
+          }));
+        }
+
+        // Totals
+        const tRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate, endDate }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (tRes.ok) {
+          const tData = await tRes.json();
+          const tRows = tData.rows || [];
+          if (tRows.length > 0) {
+            gscData.clicks = tRows[0].clicks;
+            gscData.impressions = tRows[0].impressions;
+            gscData.ctr = parseFloat((tRows[0].ctr * 100).toFixed(1));
+            gscData.avgPosition = parseFloat(tRows[0].position.toFixed(1));
+          }
+        }
+      }
+    } catch (gscErr) { console.log('[reports] GSC fetch skipped:', gscErr.message); }
+
+    // Fallback to stored GSC keywords if no live data
+    if (gscData.clicks === 0 && gscData.topQueries.length === 0) {
+      const gscRes = await pool.query(
+        'SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC LIMIT 20',
+        [projectId]
+      );
+      if (gscRes.rows.length > 0) {
+        gscData.topQueries = gscRes.rows.map(r => ({
+          query: r.keyword, clicks: r.clicks || 0, impressions: r.impressions || 0,
+          ctr: r.ctr ? parseFloat((r.ctr * 100).toFixed(1)) : 0, position: r.position ? parseFloat(r.position.toFixed(1)) : null
+        }));
+        gscData.clicks = gscRes.rows.reduce((s, r) => s + (r.clicks || 0), 0);
+        gscData.impressions = gscRes.rows.reduce((s, r) => s + (r.impressions || 0), 0);
+        gscData.totalKeywords = gscRes.rows.length;
+        if (gscData.impressions > 0) gscData.ctr = parseFloat((gscData.clicks / gscData.impressions * 100).toFixed(1));
+      }
+    }
+
+    // 3. Audit findings with details
     const findingsRes = await pool.query(
-      `SELECT pillar, severity, status, COUNT(*) as cnt FROM audit_findings WHERE project_id=$1 GROUP BY pillar, severity, status`,
+      `SELECT pillar, severity, status, category, title FROM audit_findings WHERE project_id=$1 ORDER BY severity DESC, created_at DESC`,
       [projectId]
     );
     const findingsByPillar = {};
+    const criticalFindings = [];
     for (const r of findingsRes.rows) {
-      if (!findingsByPillar[r.pillar]) findingsByPillar[r.pillar] = { total: 0, critical: 0, approved: 0, new: 0 };
-      const cnt = parseInt(r.cnt);
-      findingsByPillar[r.pillar].total += cnt;
-      if (r.severity === 'Critical') findingsByPillar[r.pillar].critical += cnt;
-      if (r.status === 'approved') findingsByPillar[r.pillar].approved += cnt;
-      if (r.status === 'new') findingsByPillar[r.pillar].new += cnt;
+      const p = r.pillar || 'other';
+      if (!findingsByPillar[p]) findingsByPillar[p] = { total: 0, critical: 0, high: 0, medium: 0, approved: 0, dismissed: 0, pending: 0 };
+      findingsByPillar[p].total++;
+      if (r.severity === 'Critical') { findingsByPillar[p].critical++; criticalFindings.push({ pillar: p, title: r.title, status: r.status }); }
+      if (r.severity === 'High') findingsByPillar[p].high++;
+      if (r.severity === 'Medium') findingsByPillar[p].medium++;
+      if (r.status === 'approved') findingsByPillar[p].approved++;
+      if (r.status === 'dismissed') findingsByPillar[p].dismissed++;
+      if (r.status === 'new') findingsByPillar[p].pending++;
     }
 
-    // 4. Action items summary
+    // 4. Action items with detail
     const actionsRes = await pool.query(
-      `SELECT status, COUNT(*) as cnt FROM action_items WHERE project_id=$1 GROUP BY status`,
+      `SELECT status, pillar, title, priority FROM action_items WHERE project_id=$1 ORDER BY created_at DESC`,
       [projectId]
     );
-    const actionsByStatus = {};
-    for (const r of actionsRes.rows) actionsByStatus[r.status] = parseInt(r.cnt);
-    const actionsCompleted = actionsByStatus['done'] || 0;
-    const actionsPending = actionsByStatus['pending'] || 0;
-    const actionsInProgress = actionsByStatus['in-progress'] || 0;
+    const actionsByStatus = { done: 0, pending: 0, 'in-progress': 0 };
+    const recentActions = [];
+    for (const r of actionsRes.rows) {
+      actionsByStatus[r.status] = (actionsByStatus[r.status] || 0) + 1;
+      if (recentActions.length < 10) recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, priority: r.priority });
+    }
+    const totalActions = Object.values(actionsByStatus).reduce((s, v) => s + v, 0);
+    const completionRate = totalActions > 0 ? Math.round((actionsByStatus.done / totalActions) * 100) : 0;
 
-    // 5. Generate recommendations
-    const recommendations = [];
-    if (avgSerp && avgSerp > 15) recommendations.push(`Average SERP position is ${avgSerp.toFixed(1)} — focus on optimizing pages ranking 10-20 to push them onto page 1.`);
-    if (serpTop3 === 0 && serpPositions.length > 0) recommendations.push('No keywords in top 3 yet. Prioritize content optimization and link building for your closest keywords.');
-    if (avgCtr < 2 && totalImpressions > 100) recommendations.push(`Average CTR is only ${avgCtr.toFixed(1)}%. Rewrite meta titles and descriptions to be more compelling.`);
-    if (findingsByPillar.gsc?.new > 5) recommendations.push(`${findingsByPillar.gsc.new} GSC audit findings still unactioned. Review and approve them in the Audit section.`);
-    if (findingsByPillar.gbp?.new > 3) recommendations.push(`${findingsByPillar.gbp.new} GBP audit findings need attention. GBP optimization directly impacts local pack rankings.`);
-    if (actionsPending > 5) recommendations.push(`${actionsPending} action items are pending. Schedule time to work through the Action Plan.`);
-    if (mapsTop3 < mapsPositions.length * 0.5 && mapsPositions.length > 0) recommendations.push('Less than half your keywords are in Maps top 3. Focus on reviews, GBP posts, and NAP consistency.');
-    if (recommendations.length === 0) recommendations.push('Keep monitoring rankings and running audits regularly. Consistency is key to SEO success.');
+    // 5. On-page audit stats
+    let onPageStats = { totalPages: 0, avgScore: 0, pagesFixed: 0, issuesFound: 0 };
+    try {
+      const opRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      if (opRes.rows.length > 0 && opRes.rows[0].results) {
+        const pages = typeof opRes.rows[0].results === 'string' ? JSON.parse(opRes.rows[0].results) : opRes.rows[0].results;
+        if (Array.isArray(pages)) {
+          onPageStats.totalPages = pages.length;
+          const scores = pages.map(p => p.seoScore || 0);
+          onPageStats.avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+          onPageStats.issuesFound = pages.reduce((s, p) => s + (p.issues ? p.issues.filter(i => i.type !== 'good').length : 0), 0);
+        }
+      }
+      const fixRes = await pool.query(`SELECT COUNT(*) as cnt FROM wp_change_history WHERE project_id=$1 AND rolled_back_at IS NULL`, [projectId]);
+      onPageStats.pagesFixed = parseInt(fixRes.rows[0]?.cnt || 0);
+    } catch (e) { /* skip */ }
+
+    // 6. PageSpeed scores
+    let pageSpeedStats = null;
+    try {
+      const psRes = await pool.query(`SELECT report_data FROM audits WHERE project_id=$1 AND pillar='pagespeed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+      if (psRes.rows.length > 0 && psRes.rows[0].report_data) {
+        const psData = typeof psRes.rows[0].report_data === 'string' ? JSON.parse(psRes.rows[0].report_data) : psRes.rows[0].report_data;
+        if (Array.isArray(psData) && psData.length > 0) {
+          const scores = psData.filter(p => p.performance != null).map(p => p.performance);
+          pageSpeedStats = {
+            avgPerformance: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+            good: scores.filter(s => s >= 90).length,
+            needsImprovement: scores.filter(s => s >= 50 && s < 90).length,
+            poor: scores.filter(s => s < 50).length,
+            totalPages: psData.length,
+          };
+        }
+      }
+    } catch (e) { /* skip */ }
+
+    // 7. AI-generated executive summary
+    let executiveSummary = '';
+    if (anthropic) {
+      try {
+        const summaryResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 500,
+          system: 'You are an SEO agency report writer. Write a brief, professional executive summary (3-4 sentences) for a monthly SEO report. Be specific with numbers. No bullet points, no headers. Tone: confident, data-driven, action-oriented.',
+          messages: [{ role: 'user', content: `Write an executive summary for ${project.business_name || project.name} (${project.domain}):
+- Maps: ${gridEntries.length} keywords tracked, avg visibility ${avgSolv ? avgSolv.toFixed(0) + '%' : 'N/A'}, ${mapsRankings.dominant} dominant, ${mapsRankings.notVisible} not visible
+- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr}% CTR
+- Audit: ${findingsRes.rows.length} total findings, ${criticalFindings.length} critical
+- Actions: ${actionsByStatus.done} completed, ${actionsByStatus.pending} pending, ${completionRate}% completion rate
+- On-page: ${onPageStats.totalPages} pages, avg SEO score ${onPageStats.avgScore}%, ${onPageStats.pagesFixed} fixes applied
+- PageSpeed: ${pageSpeedStats ? `avg ${pageSpeedStats.avgPerformance}% performance` : 'not scanned'}` }]
+        });
+        executiveSummary = summaryResp.content[0].text;
+      } catch (e) { console.log('[reports] AI summary skipped:', e.message); }
+    }
+
+    // 8. Overall health score (0-100)
+    let healthScore = 50; // base
+    if (avgSolv) healthScore = Math.min(100, Math.max(0, Math.round(
+      (avgSolv * 0.3) + // Maps visibility weight
+      (completionRate * 0.2) + // Action completion weight
+      (onPageStats.avgScore * 0.2) + // On-page score weight
+      ((pageSpeedStats?.avgPerformance || 50) * 0.15) + // PageSpeed weight
+      (Math.min(100, (gscData.ctr || 0) * 20) * 0.15) // CTR weight (5% CTR = 100)
+    )));
 
     const reportData = {
+      version: 2,
       monthLabel,
-      project: { name: project.name, domain: project.domain },
-      rankingsSummary,
-      gscTrends,
+      project: { name: project.business_name || project.name, domain: project.domain, industry: project.industry, location: project.location },
+      healthScore,
+      executiveSummary,
+      mapsRankings,
+      serpRankings,
+      gscData,
       findingsByPillar,
-      actionsCompleted,
-      actionsPending,
-      actionsInProgress,
-      recommendations,
+      criticalFindings: criticalFindings.slice(0, 5),
+      actions: { completed: actionsByStatus.done, inProgress: actionsByStatus['in-progress'], pending: actionsByStatus.pending, total: totalActions, completionRate, recentActions },
+      onPageStats,
+      pageSpeedStats,
       generatedAt: now.toISOString()
     };
 
@@ -11635,7 +11794,7 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       [projectId, month, JSON.stringify(reportData)]
     );
 
-    console.log(`[reports] Generated ${month} report for project ${projectId}`);
+    console.log(`[reports] Generated v2 ${month} report for project ${projectId}`);
     res.json({ report: { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, ...reportData } });
   } catch (e) {
     console.error('[reports] Error:', e.message);
