@@ -189,14 +189,11 @@
     }
 
     .sidebar-item:hover {
-      background: rgba(99, 102, 241, 0.1);
-      color: var(--accent);
+      background: rgba(255, 255, 255, 0.06);
     }
 
     .sidebar-item.active {
-      background: rgba(99, 102, 241, 0.15);
-      color: var(--accent);
-      border-left: 3px solid var(--accent);
+      border-left: 3px solid currentColor;
       padding-left: 17px;
       font-weight: 600;
     }
@@ -13705,7 +13702,7 @@ case 'action-plan':
               {navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
                   <div className="sidebar-section-title" style={{ fontSize: 14, fontWeight: 900, letterSpacing: 2, color: { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
-                  {group.items.map((item) => {
+                  {(() => { const sColor = { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
                     const isActive = activeTab === item.id
@@ -13731,6 +13728,7 @@ case 'action-plan':
                       <React.Fragment key={item.id}>
                         <div
                           className={`sidebar-item ${isActive ? 'active' : ''}`}
+                          style={isActive ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {}}
                           onClick={() => {
                             if (item.expandable) {
                               setExpandedNav(prev => ({ ...prev, [item.id]: !prev[item.id] }));
@@ -13740,7 +13738,7 @@ case 'action-plan':
                             }
                           }}
                         >
-                          <i className={item.icon}></i>
+                          <i className={item.icon} style={{ color: sColor, opacity: isActive ? 1 : 0.5 }}></i>
                           <span>{item.label}</span>
                           {item.expandable && (
                             <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.5 }}></i>
@@ -13752,10 +13750,10 @@ case 'action-plan':
                           return (
                             <div key={secId}
                               className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                              style={{ paddingLeft: 40, fontSize: 12 }}
+                              style={Object.assign({ paddingLeft: 40, fontSize: 12 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                               onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                             >
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? 'var(--accent)' : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
                               <span>{sec.length > 24 ? sec.substring(0, 24) + '...' : sec}</span>
                             </div>
                           );
@@ -13769,7 +13767,7 @@ case 'action-plan':
                             <React.Fragment key={child.id}>
                               <div
                                 className={`sidebar-item ${childActive ? 'active' : ''}`}
-                                style={{ paddingLeft: 36, fontSize: 13 }}
+                                style={Object.assign({ paddingLeft: 36, fontSize: 13 }, childActive ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                                 onClick={() => {
                                   if (child.expandable && extSections.length > 0) {
                                     setExpandedNav(prev => ({ ...prev, [child.id]: !prev[child.id] }));
@@ -13777,7 +13775,7 @@ case 'action-plan':
                                   setActiveTab(child.id); setMobileMenuOpen(false);
                                 }}
                               >
-                                <i className={child.icon} style={{ fontSize: 12 }}></i>
+                                <i className={child.icon} style={{ fontSize: 12, color: sColor, opacity: childActive ? 1 : 0.5 }}></i>
                                 <span>{child.label}</span>
                                 {child.expandable && extSections.length > 0 && (
                                   <i className={`fas fa-chevron-${childExpanded ? 'down' : 'right'}`} style={{ marginLeft: 'auto', fontSize: 9, opacity: 0.5 }}></i>
@@ -13788,10 +13786,10 @@ case 'action-plan':
                                 return (
                                   <div key={secId}
                                     className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                                    style={{ paddingLeft: 56, fontSize: 12 }}
+                                    style={Object.assign({ paddingLeft: 56, fontSize: 12 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                                     onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                                   >
-                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? 'var(--accent)' : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
+                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
                                     <span>{sec.length > 22 ? sec.substring(0, 22) + '...' : sec}</span>
                                   </div>
                                 );
@@ -13801,7 +13799,7 @@ case 'action-plan':
                         })}
                       </React.Fragment>
                     );
-                  })}
+                  }); })()}
                 </div>
               ))}
             </div>
