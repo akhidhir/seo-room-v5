@@ -4915,86 +4915,42 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     }
     if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID — cannot publish. Set the page URL first.' });
 
-    // Snapshot current live values for rollback
+    // Snapshot current live values for rollback (DO NOT touch the live page)
     const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
     let currentContent = '';
     let currentStatus = 'publish';
-    const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { headers: authHeaders });
+    const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}?_fields=content,status`, { headers: authHeaders });
     if (pageResp.ok) {
       const pageData = await pageResp.json();
       currentContent = pageData.content?.rendered || '';
       currentStatus = pageData.status || 'publish';
     }
 
-    // Build the draft payload — set status to 'draft' so it doesn't go live
-    const payload = { status: 'draft' };
+    // Check there are actual changes
     const changes = [];
-
     if (item.draft_content && item.content_type !== 'meta_only') {
       changes.push({ field: 'content', old: currentContent.slice(0, 5000), new: item.draft_content.slice(0, 5000) });
-      payload.content = item.draft_content;
     }
-
-    const metaPayload = {};
-    if (item.draft_meta_title) {
-      changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
-      metaPayload._yoast_wpseo_title = item.draft_meta_title;
-    }
-    if (item.draft_meta_desc) {
-      changes.push({ field: 'yoast_wpseo_metadesc', old: currentMeta.yoast_wpseo_metadesc || '', new: item.draft_meta_desc });
-      metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc;
-    }
-    if (item.draft_focus_keyword) {
-      changes.push({ field: 'yoast_wpseo_focuskw', old: currentMeta.yoast_wpseo_focuskw || '', new: item.draft_focus_keyword });
-      metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword;
-    }
-    if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
-
+    if (item.draft_meta_title) changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
+    if (item.draft_meta_desc) changes.push({ field: 'yoast_wpseo_metadesc', old: currentMeta.yoast_wpseo_metadesc || '', new: item.draft_meta_desc });
+    if (item.draft_focus_keyword) changes.push({ field: 'yoast_wpseo_focuskw', old: currentMeta.yoast_wpseo_focuskw || '', new: item.draft_focus_keyword });
     if (changes.length === 0) return res.status(400).json({ error: 'Nothing to publish' });
 
-    // Push to WP as draft
-    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
-      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!writeResp.ok) {
-      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
-        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    }
-    if (!writeResp.ok) {
-      const errText = await writeResp.text();
-      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
-    }
-
-    const wpResult = await writeResp.json();
-    // Build preview URL — WP drafts need ?p=ID&preview=true, and user must be logged into WP admin
-    const siteUrl = (wpResult.link || wpUrl || '').replace(/\/[^\/]*$/, '').replace(/\/$/, '');
-    const previewUrl = `${wpUrl}/?p=${item.page_id}&preview=true`;
-    // Also return the WP admin edit link for easy access
-    const editUrl = `${wpUrl}/wp-admin/post.php?post=${item.page_id}&action=edit`;
-
-    // Save snapshot for rollback
+    // Save snapshot for rollback — DO NOT push anything to WP yet
     await pool.query(
-      `UPDATE content_queue SET wp_previous_status=$1, wp_previous_content=$2, updated_at=NOW() WHERE id=$3`,
+      `UPDATE content_queue SET wp_previous_status=$1, wp_previous_content=$2, stage='staging', updated_at=NOW() WHERE id=$3`,
       [currentStatus, currentContent.slice(0, 50000), id]
     );
 
-    // Move to 'staging' stage (WP draft created, pending go-live approval)
-    await pool.query(
-      `UPDATE content_queue SET stage='staging', updated_at=NOW() WHERE id=$1`, [id]
-    );
-
-    console.log(`[copywriter] Pushed item ${id} to WP as draft (page ${item.page_id}), preview: ${previewUrl}`);
-    res.json({ success: true, stage: 'staging', preview_url: previewUrl, edit_url: editUrl, page_id: item.page_id, changes: changes.length });
+    console.log(`[copywriter] Item ${id} moved to staging (page ${item.page_id}) — live page NOT touched`);
+    res.json({ success: true, stage: 'staging', page_id: item.page_id, changes: changes.length });
   } catch (e) {
-    console.error('[copywriter] Publish-to-draft error:', e.message);
+    console.error('[copywriter] Publish-to-staging error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Stage 2: Go Live — set WP draft to published
+// Stage 2: Go Live — push changes to WP and publish
 app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) => {
   try {
     const { projectId, id } = req.params;
@@ -5008,15 +4964,39 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Set status to 'publish' — goes live
+    // Build payload with all changes — push directly as published
+    const payload = {};
+    const changes = [];
+
+    if (item.draft_content && item.content_type !== 'meta_only') {
+      payload.content = item.draft_content;
+      changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+    }
+
+    const metaPayload = {};
+    if (item.draft_meta_title) {
+      metaPayload._yoast_wpseo_title = item.draft_meta_title;
+      changes.push({ field: 'yoast_wpseo_title', old: '', new: item.draft_meta_title });
+    }
+    if (item.draft_meta_desc) {
+      metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc;
+      changes.push({ field: 'yoast_wpseo_metadesc', old: '', new: item.draft_meta_desc });
+    }
+    if (item.draft_focus_keyword) {
+      metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword;
+      changes.push({ field: 'yoast_wpseo_focuskw', old: '', new: item.draft_focus_keyword });
+    }
+    if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
+
+    // Push to WP — keep status as-is (published stays published)
     let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
       method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'publish' }),
+      body: JSON.stringify(payload),
     });
     if (!writeResp.ok) {
       writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'publish' }),
+        body: JSON.stringify(payload),
       });
     }
     if (!writeResp.ok) {
@@ -5025,13 +5005,6 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
     }
 
     // Save to wp_change_history for rollback
-    const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
-    const changes = [];
-    if (item.draft_content) changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
-    if (item.draft_meta_title) changes.push({ field: 'yoast_wpseo_title', old: '', new: item.draft_meta_title });
-    if (item.draft_meta_desc) changes.push({ field: 'yoast_wpseo_metadesc', old: '', new: item.draft_meta_desc });
-    if (item.draft_focus_keyword) changes.push({ field: 'yoast_wpseo_focuskw', old: '', new: item.draft_focus_keyword });
-
     for (const ch of changes) {
       await pool.query(
         `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
@@ -5052,7 +5025,7 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
   }
 });
 
-// Revert staging — set WP page back to its previous status and return item to approved
+// Revert staging — just move back to approved (live page was never touched)
 app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req, res) => {
   try {
     const { projectId, id } = req.params;
@@ -5060,28 +5033,37 @@ app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req
     if (!item) return res.status(404).json({ error: 'Not found' });
     if (item.stage !== 'staging') return res.status(400).json({ error: 'Item is not in staging' });
 
+    await pool.query(`UPDATE content_queue SET stage='approved', updated_at=NOW() WHERE id=$1`, [id]);
+    console.log(`[copywriter] Item ${id} reverted from staging to approved — no WP changes to undo`);
+    res.json({ success: true, stage: 'approved' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Emergency restore — fix any page that was accidentally set to draft
+app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (req, res) => {
+  try {
+    const { projectId, pageId } = req.params;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     const wpUrl = project.wordpress_url?.replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Restore the WP page to its previous status + content
-    if (wpUrl && authHeaders && item.page_id) {
-      const restorePayload = { status: item.wp_previous_status || 'publish' };
-      if (item.wp_previous_content) restorePayload.content = item.wp_previous_content;
-      let resp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'publish' }),
+    });
+    if (!writeResp.ok) {
+      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${pageId}`, {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify(restorePayload),
+        body: JSON.stringify({ status: 'publish' }),
       });
-      if (!resp.ok) {
-        await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
-          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-          body: JSON.stringify(restorePayload),
-        });
-      }
     }
-
-    await pool.query(`UPDATE content_queue SET stage='approved', updated_at=NOW() WHERE id=$1`, [id]);
-    res.json({ success: true, stage: 'approved' });
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `Restore failed: ${errText.slice(0, 300)}` });
+    }
+    console.log(`[copywriter] Emergency restore: page ${pageId} set back to publish`);
+    res.json({ success: true, message: `Page ${pageId} restored to published` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
