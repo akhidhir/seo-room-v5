@@ -13704,7 +13704,7 @@ case 'action-plan':
             <div className="sidebar-content">
               {navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={group.section === 'COPYWRITER' ? { fontSize: 14, fontWeight: 900, color: '#eab308', letterSpacing: 2 } : {}}>{group.section}</div>
+                  <div className="sidebar-section-title" style={{ fontSize: 14, fontWeight: 900, letterSpacing: 2, color: { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
                   {group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
