@@ -4930,7 +4930,7 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
 
     // Check there are actual changes
     const changes = [];
-    if (item.draft_content && item.content_type !== 'meta_only') {
+    if (item.draft_content) {
       changes.push({ field: 'content', old: currentContent.slice(0, 5000), new: item.draft_content.slice(0, 5000) });
     }
     if (item.draft_meta_title) changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
@@ -4970,7 +4970,8 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
     const payload = {};
     const changes = [];
 
-    if (item.draft_content && item.content_type !== 'meta_only') {
+    // Always push draft_content if it exists — user explicitly wrote/edited this content
+    if (item.draft_content) {
       payload.content = item.draft_content;
       changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
     }
