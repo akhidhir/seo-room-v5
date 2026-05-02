@@ -5392,6 +5392,8 @@
       const [error, setError] = useState('');
       const [sortCol, setSortCol] = useState('severity');
       const [sortDir, setSortDir] = useState('asc');
+      const [bulkSending, setBulkSending] = useState(false);
+      const [bulkResult, setBulkResult] = useState(null);
       const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } };
 
       useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
@@ -5456,6 +5458,20 @@
           await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
           setItems(prev => prev.map(i => i.id === actionId ? { ...i, status: newStatus } : i));
         } catch (e) { setError(e.message); }
+      };
+
+      const handleBulkSendToCopywriter = async () => {
+        const copywriterItems = itemsWithAssignee.filter(i => i._assigneeLabel === 'Copywriter' && (i.status || 'pending') === 'pending');
+        if (!copywriterItems.length) { setBulkResult({ error: 'No pending Copywriter items to send' }); return; }
+        setBulkSending(true); setBulkResult(null);
+        try {
+          const data = await api(`/projects/${project.id}/content-queue/bulk-from-actions`, {
+            method: 'POST', body: { action_ids: copywriterItems.map(i => i.id) }
+          });
+          setBulkResult(data);
+          loadData(); // reload to show updated statuses
+        } catch (e) { setBulkResult({ error: e.message }); }
+        setBulkSending(false);
       };
 
       const pillars = [
@@ -5601,6 +5617,35 @@
               {filtered.length}{filtered.length !== stats.total ? ` of ${stats.total}` : ''} items
             </span>
           </div>
+
+          {/* Bulk Copywriter action */}
+          {(() => {
+            const cwPending = itemsWithAssignee.filter(i => i._assigneeLabel === 'Copywriter' && (i.status || 'pending') === 'pending').length;
+            if (cwPending === 0) return null;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '10px 16px', background: '#8b5cf615', border: '1px solid #8b5cf630', borderRadius: 8 }}>
+                <i className="fas fa-pen-fancy" style={{ color: '#8b5cf6', fontSize: 14 }} />
+                <span style={{ fontSize: 13, color: 'var(--text1)' }}><strong>{cwPending}</strong> pending Copywriter tasks</span>
+                <button onClick={handleBulkSendToCopywriter} disabled={bulkSending}
+                  style={{ marginLeft: 'auto', padding: '6px 14px', fontSize: 12, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: bulkSending ? 'wait' : 'pointer', opacity: bulkSending ? 0.7 : 1 }}>
+                  {bulkSending ? <><span className="spinner" style={{ marginRight: 6 }}></span>Sending...</> : <><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />Send All to Copywriter</>}
+                </button>
+              </div>
+            );
+          })()}
+          {bulkResult && !bulkResult.error && (
+            <div style={{ padding: 12, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, color: '#22c55e', fontSize: 13, marginBottom: 16 }}>
+              <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
+              Sent {bulkResult.created} items to Copywriter{bulkResult.skipped > 0 ? ` (${bulkResult.skipped} skipped — already in queue)` : ''}
+              <button onClick={() => setBulkResult(null)} style={{ float: 'right', background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times" /></button>
+            </div>
+          )}
+          {bulkResult?.error && (
+            <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}>
+              <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{bulkResult.error}
+              <button onClick={() => setBulkResult(null)} style={{ float: 'right', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times" /></button>
+            </div>
+          )}
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 

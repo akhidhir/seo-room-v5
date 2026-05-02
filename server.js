@@ -4389,6 +4389,116 @@ app.post('/api/projects/:projectId/content-queue', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk send action items to content queue (from Action Plan → Copywriter)
+app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { action_ids } = req.body; // array of action_item IDs
+    if (!action_ids || !action_ids.length) return res.status(400).json({ error: 'No action IDs provided' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Fetch the action items
+    const actionRes = await pool.query(
+      `SELECT * FROM action_items WHERE id = ANY($1) AND project_id=$2`,
+      [action_ids, projectId]
+    );
+    const actions = actionRes.rows;
+    if (!actions.length) return res.status(404).json({ error: 'No matching action items found' });
+
+    const created = [];
+    const skipped = [];
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+
+    for (const action of actions) {
+      // Try to extract page_url from description or current_value
+      const urlMatch = (action.description || '').match(/https?:\/\/[^\s,)]+/) ||
+                       (action.current_value || '').match(/https?:\/\/[^\s,)]+/) ||
+                       (action.page_url || '').match(/https?:\/\/[^\s,)]+/);
+      const pageUrl = urlMatch ? urlMatch[0].replace(/[.,;]+$/, '') : (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : '');
+
+      // Try to resolve WP page_id from URL
+      let pageId = null;
+      if (wpBase && pageUrl) {
+        try {
+          const slug = pageUrl.replace(/\/$/, '').split('/').pop();
+          if (slug && slug !== project.domain?.replace(/^https?:\/\//, '').replace(/\/$/, '')) {
+            for (const type of ['pages', 'posts']) {
+              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, {
+                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+              });
+              if (wpRes.ok) {
+                const wpData = await wpRes.json();
+                if (wpData.length > 0) { pageId = wpData[0].id; break; }
+              }
+            }
+          }
+        } catch (e) { /* skip WP lookup */ }
+      }
+
+      // Check for duplicate in content_queue
+      if (pageId) {
+        const dup = await pool.query('SELECT id FROM content_queue WHERE project_id=$1 AND page_id=$2 AND stage != $3', [projectId, pageId, 'published']);
+        if (dup.rows.length > 0) { skipped.push({ action_id: action.id, title: action.title, reason: 'Already in content queue' }); continue; }
+      }
+
+      // Determine content_type from action description
+      const desc = (action.description || action.title || '').toLowerCase();
+      let contentType = 'rewrite';
+      if (desc.includes('meta title') || desc.includes('meta description') || desc.includes('meta tag')) contentType = 'meta_only';
+      else if (desc.includes('thin content') || desc.includes('word count') || desc.includes('low content')) contentType = 'rewrite';
+
+      // Build brief from action item data
+      const brief = `[From Action Plan] ${action.title}\n\n${action.description || ''}\n\nCurrent: ${action.current_value || 'N/A'}\nTarget: ${action.new_value || 'N/A'}`;
+
+      // Auto-fetch WP content if we have page_id
+      let fetchedContent = null, fetchedWordCount = 0, fetchedMetaTitle = null, fetchedMetaDesc = null, fetchedFocusKw = null;
+      if (wpBase && pageId) {
+        try {
+          for (const type of ['pages', 'posts']) {
+            const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+            });
+            if (wpRes.ok) {
+              const wpData = await wpRes.json();
+              fetchedContent = wpData.content?.rendered || '';
+              fetchedWordCount = fetchedContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+              const yoast = wpData.yoast_head_json;
+              if (yoast) {
+                fetchedMetaTitle = yoast.title || null;
+                fetchedMetaDesc = yoast.description || null;
+                fetchedFocusKw = yoast.focuskw || null;
+              }
+              break;
+            }
+          }
+        } catch (e) { /* skip */ }
+      }
+
+      try {
+        const r = await pool.query(
+          `INSERT INTO content_queue (project_id, page_id, page_url, page_title, content_type, source, priority, brief,
+            current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+          [projectId, pageId, pageUrl, action.title, contentType, 'action-plan',
+           action.severity || 'medium', brief, fetchedContent, fetchedWordCount,
+           fetchedMetaTitle, fetchedMetaDesc, fetchedFocusKw]
+        );
+        created.push({ action_id: action.id, content_queue_id: r.rows[0].id, title: action.title });
+
+        // Mark action item as in-progress
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['in-progress', action.id]);
+      } catch (e) {
+        skipped.push({ action_id: action.id, title: action.title, reason: e.message });
+      }
+    }
+
+    res.json({ created: created.length, skipped: skipped.length, details: { created, skipped } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Update content queue item (edit draft, change stage, approve)
 app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   try {
