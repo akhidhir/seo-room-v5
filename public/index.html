@@ -5390,6 +5390,9 @@
       const [loading, setLoading] = useState(false);
       const [syncing, setSyncing] = useState(false);
       const [error, setError] = useState('');
+      const [sortCol, setSortCol] = useState('severity');
+      const [sortDir, setSortDir] = useState('asc');
+      const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } };
 
       useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
 
@@ -5482,7 +5485,9 @@
       }, [itemsWithAssignee]);
 
       const filtered = useMemo(() => {
-        return itemsWithAssignee.filter(i => {
+        const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+        const statusOrder = { pending: 0, 'in-progress': 1, done: 2, completed: 2 };
+        const result = itemsWithAssignee.filter(i => {
           if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
           if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
           if (filterCategory !== 'all' && (i._category || i.category) !== filterCategory) return false;
@@ -5490,7 +5495,21 @@
           if (filterStatus !== 'all' && (i.status || 'pending') !== filterStatus) return false;
           return true;
         });
-      }, [itemsWithAssignee, activePillar, filterSeverity, filterCategory, filterAssignee, filterStatus]);
+        result.sort((a, b) => {
+          let va, vb;
+          if (sortCol === 'severity') { va = sevOrder[(a.severity || 'medium').toLowerCase()] ?? 2; vb = sevOrder[(b.severity || 'medium').toLowerCase()] ?? 2; }
+          else if (sortCol === 'title') { va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase(); }
+          else if (sortCol === 'pillar') { va = (a._pillar || a.pillar || ''); vb = (b._pillar || b.pillar || ''); }
+          else if (sortCol === 'category') { va = (a._category || a.category || ''); vb = (b._category || b.category || ''); }
+          else if (sortCol === 'assignee') { va = (a._assigneeLabel || ''); vb = (b._assigneeLabel || ''); }
+          else if (sortCol === 'status') { va = statusOrder[(a.status || 'pending')] ?? 0; vb = statusOrder[(b.status || 'pending')] ?? 0; }
+          else { va = 0; vb = 0; }
+          if (va < vb) return sortDir === 'asc' ? -1 : 1;
+          if (va > vb) return sortDir === 'asc' ? 1 : -1;
+          return 0;
+        });
+        return result;
+      }, [itemsWithAssignee, activePillar, filterSeverity, filterCategory, filterAssignee, filterStatus, sortCol, sortDir]);
 
       const activeFilterCount = [filterSeverity, filterCategory, filterAssignee, filterStatus].filter(f => f !== 'all').length;
 
@@ -5597,12 +5616,20 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PRIORITY</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>ACTION</th>
-                    {activePillar === 'all' && <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 80 }}>PILLAR</th>}
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>CATEGORY</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 140 }}>ASSIGNEE</th>
-                    <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: 90 }}>STATUS</th>
+                    {[
+                      { key: 'severity', label: 'PRIORITY', w: 80, align: 'left' },
+                      { key: 'title', label: 'ACTION', w: null, align: 'left' },
+                      ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 80, align: 'left' }] : []),
+                      { key: 'category', label: 'CATEGORY', w: 140, align: 'left' },
+                      { key: 'assignee', label: 'ASSIGNEE', w: 140, align: 'left' },
+                      { key: 'status', label: 'STATUS', w: 90, align: 'center' },
+                    ].map(col => (
+                      <th key={col.key} onClick={() => toggleSort(col.key)}
+                        style={{ padding: '10px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: 'pointer', userSelect: 'none' }}>
+                        {col.label}
+                        {sortCol === col.key && <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10 }} />}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
