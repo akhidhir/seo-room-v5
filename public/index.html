@@ -7744,9 +7744,31 @@
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
       const [isFullscreen, setIsFullscreen] = useState(false);
+      const [cwSending, setCwSending] = useState({});
       const graphRef = React.useRef(null);
       const zoomRef = React.useRef(null);
       const svgSelRef = React.useRef(null);
+
+      const handleSendToCopywriter = async (node) => {
+        setCwSending(prev => ({ ...prev, [node.id]: 'sending' }));
+        try {
+          await api(`/projects/${project.id}/content-queue`, {
+            method: 'POST',
+            body: {
+              page_id: node.id,
+              page_url: node.url,
+              page_title: node.title,
+              content_type: 'optimise',
+              source: 'site-map',
+              priority: 'high',
+              brief: `Thin content (${node.word_count} words). Expand to 800+ words with relevant, keyword-rich content.`
+            }
+          });
+          setCwSending(prev => ({ ...prev, [node.id]: 'sent' }));
+        } catch(e) {
+          setCwSending(prev => ({ ...prev, [node.id]: e.message && e.message.includes('409') ? 'exists' : 'error' }));
+        }
+      };
 
       // Load cached data on mount
       const loadCached = async () => {
@@ -7885,7 +7907,7 @@
         return () => sim.stop();
       }, [graphData, viewMode, isFullscreen]);
 
-      const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : graphData.nodes) : [];
+      const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : filter === 'poor-copy' ? graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) : graphData.nodes) : [];
 
       if (loading) {
         return (
@@ -7947,14 +7969,14 @@
             const healthyCount = graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length === 0).length;
             const statsCards = [
               { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
-              { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen' },
+              { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen', click: () => { setViewMode('list'); setFilter('poor-copy'); } },
               { label: 'TOTAL ISSUES', value: nonOrphanIssues, color: nonOrphanIssues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
               { label: 'HEALTHY', value: healthyCount, color: '#22c55e', icon: 'fa-circle-check' },
             ];
             return (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
               {statsCards.map((s, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)' }}>
+                <div key={i} onClick={s.click || undefined} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)', cursor: s.click ? 'pointer' : 'default' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
                   <div style={{ fontSize: 28, fontWeight: 800, color: s.color, marginTop: 4 }}>
                     <i className={`fas ${s.icon}`} style={{ fontSize: 16, marginRight: 6, opacity: 0.6 }} />{s.value}
@@ -8080,6 +8102,21 @@
                       ))}
                     </div>
                   )}
+                  {/* Send to Copywriter button for thin content pages */}
+                  {(selectedNode.word_count < 500 || selectedNode.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) && (
+                    <div style={{ marginTop: 10 }}>
+                      {cwSending[selectedNode.id] === 'sent' ? (
+                        <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Sent to Copywriter</div>
+                      ) : cwSending[selectedNode.id] === 'exists' ? (
+                        <div style={{ fontSize: 11, color: '#6366f1', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Already in Queue</div>
+                      ) : (
+                        <button onClick={() => handleSendToCopywriter(selectedNode)} disabled={cwSending[selectedNode.id] === 'sending'}
+                          style={{ width: '100%', padding: '7px 0', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: cwSending[selectedNode.id] === 'sending' ? 'default' : 'pointer', background: '#8b5cf6', color: '#fff', opacity: cwSending[selectedNode.id] === 'sending' ? 0.7 : 1 }}>
+                          {cwSending[selectedNode.id] === 'sending' ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 4 }} />Send to Copywriter</>}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -8089,9 +8126,9 @@
           {viewMode === 'list' && graphData && (
             <div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {['all', 'issues'].map(f => (
-                  <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: filter === f ? '#6366f1' : 'var(--card)', color: filter === f ? '#fff' : 'var(--text2)', textTransform: 'capitalize' }}>
-                    {f === 'all' ? `All (${graphData.nodes.length})` : `Issues (${graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0).length})`}
+                {['all', 'poor-copy', 'issues'].map(f => (
+                  <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: filter === f ? '#6366f1' : 'var(--card)', color: filter === f ? '#fff' : 'var(--text2)' }}>
+                    {f === 'all' ? `All (${graphData.nodes.length})` : f === 'poor-copy' ? `Poor Copy (${graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length})` : `Issues (${graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0).length})`}
                   </button>
                 ))}
               </div>
@@ -8104,6 +8141,7 @@
                       <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Inbound</th>
                       <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Internal</th>
                       <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Issues</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -8125,6 +8163,18 @@
                                 <span key={j} style={{ fontSize: 11, color: '#ef4444' }}><i className="fas fa-xmark" style={{ marginRight: 4, fontSize: 9 }} />{issue}</span>
                               ))}
                             </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                          {(n.word_count < 500 || n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) && (
+                            cwSending[n.id] === 'sent' || cwSending[n.id] === 'exists' ? (
+                              <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />{cwSending[n.id] === 'exists' ? 'In Queue' : 'Sent'}</span>
+                            ) : (
+                              <button onClick={() => handleSendToCopywriter(n)} disabled={cwSending[n.id] === 'sending'}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: cwSending[n.id] === 'sending' ? 'default' : 'pointer', background: '#8b5cf6', color: '#fff', opacity: cwSending[n.id] === 'sending' ? 0.7 : 1 }}>
+                                {cwSending[n.id] === 'sending' ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 4 }} />Copywriter</>}
+                              </button>
+                            )
                           )}
                         </td>
                       </tr>
