@@ -8779,7 +8779,8 @@
           quillRef.current = q;
           if (value) {
             settingProgrammatically.current = true;
-            q.root.innerHTML = value;
+            const delta = q.clipboard.convert(value);
+            q.setContents(delta, 'silent');
             updateWordCount(q);
             settingProgrammatically.current = false;
           }
@@ -8796,7 +8797,8 @@
           if (quillRef.current && value != null) {
             try {
               settingProgrammatically.current = true;
-              quillRef.current.root.innerHTML = value || '';
+              const delta = quillRef.current.clipboard.convert(value || '');
+              quillRef.current.setContents(delta, 'silent');
               updateWordCount(quillRef.current);
               applyCommentHighlights(quillRef.current, comments || []);
               settingProgrammatically.current = false;
