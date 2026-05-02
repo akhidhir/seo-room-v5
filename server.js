@@ -4516,6 +4516,15 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Get single content queue item
+app.get('/api/projects/:projectId/content-queue/:id', async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Update content queue item (edit draft, change stage, approve)
 app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   try {

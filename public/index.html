@@ -9933,21 +9933,26 @@
                   if (!templateId) return;
                   setApplyingTemplate(true);
                   try {
-                    await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
+                    const result = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
                       method: 'POST', body: { template_id: parseInt(templateId) }
                     });
+                    // Use the skeleton from the response directly
+                    if (result && result.skeleton) {
+                      setEditContent(result.skeleton);
+                      setSelectedItem(prev => ({ ...prev, draft_content: result.skeleton, page_wireframe: `Template: ${result.sections || '?'} sections` }));
+                    }
                   } catch (err) {
                     console.warn('Apply template call:', err.message);
+                    // Fallback — try to reload the item from DB
+                    try {
+                      const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
+                      if (fresh && fresh.id) {
+                        setSelectedItem(fresh);
+                        setEditContent(fresh.draft_content || '');
+                        setEditMeta({ meta_title: fresh.draft_meta_title || fresh.current_meta_title || '', meta_desc: fresh.draft_meta_desc || fresh.current_meta_desc || '', focus_keyword: fresh.draft_focus_keyword || fresh.current_focus_keyword || '' });
+                      }
+                    } catch (_) {}
                   }
-                  // Always try to reload the item — template may have applied even if response was garbled
-                  try {
-                    const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
-                    if (fresh) {
-                      setSelectedItem(fresh);
-                      setEditContent(fresh.draft_content || '');
-                      setEditMeta({ meta_title: fresh.draft_meta_title || fresh.current_meta_title || '', meta_desc: fresh.draft_meta_desc || fresh.current_meta_desc || '', focus_keyword: fresh.draft_focus_keyword || fresh.current_focus_keyword || '' });
-                    }
-                  } catch (_) {}
                   setApplyingTemplate(false);
                   e.target.value = '';
                 }
