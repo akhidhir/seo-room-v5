@@ -7823,8 +7823,9 @@
             .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
 
         const getColor = (n) => {
-          const nonOrphanIssues = n.issues.filter(i => !i.startsWith('Orphan page'));
-          if (nonOrphanIssues.length > 0) return '#3b82f6';
+          if (n.issues.length > 0 && n.inbound_count === 0) return '#ef4444';
+          if (n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') return '#f59e0b';
+          if (n.issues.length > 0) return '#3b82f6';
           return '#22c55e';
         };
 
@@ -7883,7 +7884,7 @@
         return () => sim.stop();
       }, [graphData, viewMode, isFullscreen]);
 
-      const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : graphData.nodes) : [];
+      const filtered = graphData ? (filter === 'orphans' ? graphData.nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') : filter === 'issues' ? graphData.nodes.filter(n => n.issues.length > 0) : graphData.nodes) : [];
 
       if (loading) {
         return (
@@ -7902,7 +7903,7 @@
           <div style={{ padding: '24px 32px', textAlign: 'center', marginTop: 60 }}>
             <i className="fas fa-project-diagram" style={{ fontSize: 48, color: 'var(--text3)', marginBottom: 16 }} />
             <h3 style={{ fontSize: 18, fontWeight: 700 }}>No site scan yet</h3>
-            <p style={{ color: 'var(--text3)', marginBottom: 20 }}>Scan your website to discover pages and detect SEO issues.</p>
+            <p style={{ color: 'var(--text3)', marginBottom: 20 }}>Scan your website to discover pages, find orphans, and detect SEO issues.</p>
             <button onClick={rescan} style={{ padding: '10px 24px', fontSize: 14, fontWeight: 600, borderRadius: 8, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
               <i className="fas fa-search" style={{ marginRight: 6 }} />Scan Now
             </button>
@@ -7920,7 +7921,7 @@
               </h2>
               {graphData && (
                 <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
-                  {graphData.stats.total} pages · {graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0)} issues
+                  {graphData.stats.total} pages · {graphData.stats.orphans} orphans · {graphData.stats.issues} issues
                   {scannedAt && <span style={{ marginLeft: 8, fontSize: 11 }}>· Last scanned: {new Date(scannedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
                 </div>
               )}
@@ -7940,17 +7941,16 @@
 
           {/* Stats cards */}
           {graphData && (() => {
-            const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length;
-            const nonOrphanIssues = graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0);
-            const healthyCount = graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length === 0).length;
+            const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i.startsWith('Missing or short meta') || i === 'Missing H1 tag')).length;
             const statsCards = [
               { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
               { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen' },
-              { label: 'TOTAL ISSUES', value: nonOrphanIssues, color: nonOrphanIssues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
-              { label: 'HEALTHY', value: healthyCount, color: '#22c55e', icon: 'fa-circle-check' },
+              { label: 'ORPHAN PAGES', value: graphData.stats.orphans, color: graphData.stats.orphans > 0 ? '#f59e0b' : '#22c55e', icon: 'fa-unlink' },
+              { label: 'TOTAL ISSUES', value: graphData.stats.issues, color: graphData.stats.issues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
+              { label: 'HEALTHY', value: graphData.nodes.filter(n => n.issues.length === 0).length, color: '#22c55e', icon: 'fa-circle-check' },
             ];
             return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
               {statsCards.map((s, i) => (
                 <div key={i} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
@@ -7971,10 +7971,10 @@
                   <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
                     <i className="fas fa-project-diagram" style={{ color: '#6366f1', marginRight: 8 }} />Site Map
                   </h3>
-                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>{graphData.stats.total} pages · {graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0)} issues</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>{graphData.stats.total} pages · {graphData.stats.orphans} orphans · {graphData.stats.issues} issues</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Issues' }].map((x, i) => (
+                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan+Issues' }].map((x, i) => (
                     <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
                   ))}
                   <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
@@ -8023,7 +8023,7 @@
                 Drag nodes · Click to inspect
               </div>
               <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none' }}>
-                {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }].map((x, i) => (
+                {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }, { c: '#f59e0b', l: 'Orphan' }, { c: '#ef4444', l: 'Orphan + Issues' }].map((x, i) => (
                   <span key={i}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
                 ))}
               </div>
@@ -8087,9 +8087,9 @@
           {viewMode === 'list' && graphData && (
             <div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {['all', 'issues'].map(f => (
+                {['all', 'orphans', 'issues'].map(f => (
                   <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: filter === f ? '#6366f1' : 'var(--card)', color: filter === f ? '#fff' : 'var(--text2)', textTransform: 'capitalize' }}>
-                    {f === 'all' ? `All (${graphData.nodes.length})` : `Issues (${graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0).length})`}
+                    {f === 'all' ? `All (${graphData.nodes.length})` : f === 'orphans' ? `Orphans (${graphData.stats.orphans})` : `Issues (${graphData.nodes.filter(n => n.issues.length > 0).length})`}
                   </button>
                 ))}
               </div>
@@ -8162,15 +8162,7 @@
         (async () => {
           try {
             const data = await api(`/projects/${project.id}/site-graph`);
-            if (data && data.nodes) {
-              setGraphData(data);
-              // Restore persisted fixed_nodes into fixing state
-              if (data.fixed_nodes && data.fixed_nodes.length > 0) {
-                const restored = {};
-                data.fixed_nodes.forEach(id => { restored['meta-' + id] = 'fixed'; });
-                setFixing(prev => ({ ...prev, ...restored }));
-              }
-            }
+            if (data && data.nodes) setGraphData(data);
           } catch(e) { console.error(e); }
           setLoading(false);
         })();
@@ -8188,13 +8180,10 @@
         </div>
       );
 
-      // Group issues by type — exclude fixed pages
-      const isNodeFixed = (n) => fixing['meta-' + n.id] === 'fixed' || fixing[n.id] === 'fixed' || fixing[n.id] === 'linked';
+      // Group issues by type
       const issueGroups = {};
       graphData.nodes.forEach(n => {
-        if (isNodeFixed(n)) return;
         n.issues.forEach(issue => {
-          if (issue.startsWith('Orphan page')) return; // handled in On-Page Audit
           const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
           if (!issueGroups[key]) issueGroups[key] = [];
           issueGroups[key].push(n);
@@ -8202,10 +8191,14 @@
       });
 
       const ISSUE_META = {
-        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
-        'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter', canAiFix: false },
-        'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links', canAiFix: false },
-        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: null, label: 'Fix in On-Page Audit', canAiFix: false },
+        'Missing or short meta title': { icon: 'fa-heading', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
+        'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter' },
+        'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links' },
+        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links' },
       };
 
       const getIssueMeta = (key) => {
@@ -8237,28 +8230,11 @@
       const handleAddLinks = async (pageNode) => {
         setLinkingPage(pageNode.id);
         try {
-          // For orphan pages, use fix-orphan (adds inbound links FROM other pages TO this one)
-          // For no-outbound-links pages, use add-links (adds outbound links FROM this page)
-          const isOrphan = (pageNode.inbound_count || 0) === 0;
-          if (isOrphan) {
-            const data = await api(`/projects/${project.id}/fix-orphan`, {
-              method: 'POST',
-              body: { orphan_id: pageNode.id, orphan_title: pageNode.title, orphan_url: pageNode.url }
-            });
-            if (data.success) {
-              setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
-              // Re-fetch graph data so stats update
-              try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
-            } else {
-              setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
-            }
-          } else {
-            await api(`/projects/${project.id}/onpage-audit/add-links`, {
-              method: 'POST',
-              body: { page_id: pageNode.id }
-            });
-            setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
-          }
+          await api(`/projects/${project.id}/onpage-audit/add-links`, {
+            method: 'POST',
+            body: { page_id: pageNode.id }
+          });
+          setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
         } catch(e) {
           console.error('Link error:', e);
           setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
@@ -8335,17 +8311,13 @@
               title: pageNode.title,
               new_meta_title: s.suggested_title,
               new_meta_desc: s.suggested_desc,
-              new_focus_keyword: s.suggested_keyword,
-              fix_h1: !!s.add_h1,
-              h1_text: s.h1_text || ''
+              new_focus_keyword: s.suggested_keyword
             }]}
           });
           const r = data.results && data.results[0];
           if (r?.success) {
             setFixing(prev => ({ ...prev, ['meta-' + pageNode.id]: 'fixed' }));
             setApplyResult({ success: true, message: 'Updated successfully! ' + (r.changes || 0) + ' field(s) changed.' });
-            // Re-fetch graph data so stats + graph reflect the fix
-            try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
             setTimeout(() => { setPreviewPage(null); setApplyResult(null); }, 2000);
           } else {
             const errMsg = r?.error || 'Unknown error';
@@ -8364,34 +8336,52 @@
         setApplying(prev => ({ ...prev, [pageNode.id]: false }));
       };
 
-      // Bulk AI fix — single server call (suggest + apply), won't stop on navigation
+      // Bulk AI fix for selected onpage pages
       const handleBulkAiFix = async (nodes) => {
-        const toFix = nodes.filter(n => !fixing['meta-' + n.id] || fixing['meta-' + n.id] === 'error');
+        const toFix = nodes.filter(n => !fixing['meta-' + n.id]);
         if (!toFix.length) return;
         setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = true); return n; });
         try {
-          const data = await api(`/projects/${project.id}/onpage-audit/bulk-fix`, {
+          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
             method: 'POST',
             body: { pages: toFix.map(n => ({
               id: n.id, title: n.title, url: n.url,
               metaTitle: n.meta_title, metaDesc: n.meta_description, focusKeyword: '',
               h1: n.h1, wordCount: n.word_count,
-              issues: n.issues
+              issues: n.issues.map(i => ({ type: 'problem', text: i }))
             }))}
           });
-          if (data.results) {
-            data.results.forEach(r => {
-              if (r.success) setFixing(prev => ({ ...prev, ['meta-' + r.id]: 'fixed' }));
-              else setFixing(prev => ({ ...prev, ['meta-' + r.id]: 'error' }));
-            });
-          }
           if (data.suggestions) {
             const newSugg = {};
             data.suggestions.forEach(s => { newSugg[s.id] = s; });
             setAiSuggestions(prev => ({ ...prev, ...newSugg }));
+            // Auto-apply all
+            for (const s of data.suggestions) {
+              const node = toFix.find(n => n.id === s.id);
+              if (!node) continue;
+              try {
+                const fixData = await api(`/projects/${project.id}/onpage-audit/fix`, {
+                  method: 'POST',
+                  body: { fixes: [{
+                    id: node.id, url: node.url, title: node.title,
+                    new_meta_title: s.suggested_title,
+                    new_meta_desc: s.suggested_desc,
+                    new_focus_keyword: s.suggested_keyword
+                  }]}
+                });
+                const r = fixData.results && fixData.results[0];
+                if (r?.success) {
+                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'fixed' }));
+                } else {
+                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
+                  console.error(`[bulk-fix] Failed for ${node.id}: ${r?.error}`);
+                }
+              } catch(e) {
+                setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
+                console.error(e);
+              }
+            }
           }
-          // Re-fetch graph data so stats reflect fixes
-          try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
         } catch(e) { console.error(e); }
         setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = false); return n; });
       };
@@ -8408,7 +8398,7 @@
                 Site Issues
               </h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
-                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0 && !isNodeFixed(n)).length} pages · {groupEntries.length} issue types
+                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0).length} pages · {groupEntries.length} issue types
               </div>
             </div>
           </div>
@@ -8494,7 +8484,7 @@
                             {meta.fix === 'links' && !isLinked && (
                               <button onClick={() => handleAddLinks(n)} disabled={isLinking}
                                 style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isLinking ? 'default' : 'pointer', background: isLinking ? 'var(--border)' : '#3b82f6', color: '#fff', opacity: isLinking ? 0.7 : 1 }}>
-                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />{(n.inbound_count || 0) === 0 ? 'Fix Orphan' : 'Add Links'}</>}
+                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Linking...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />Add Links</>}
                               </button>
                             )}
                             {meta.fix === 'links' && isLinked && (
@@ -8534,7 +8524,7 @@
                     {meta.fix === 'links' && (
                       <button onClick={async () => { for (const n of sel) { await handleAddLinks(n); } }}
                         style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>
-                        <i className="fas fa-link" style={{ marginRight: 4 }} />Fix All Orphans
+                        <i className="fas fa-link" style={{ marginRight: 4 }} />Add Links to All
                       </button>
                     )}
                     {meta.fix === 'copywriter' && (
@@ -8577,15 +8567,6 @@
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{previewPage.title}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16 }}>{previewPage.url}</div>
-
-                {aiSuggestions[previewPage.id].add_h1 && (
-                  <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 6, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6366f1', marginBottom: 4 }}>
-                      <i className="fas fa-heading" style={{ marginRight: 4 }} />H1 TAG FIX
-                    </div>
-                    <div style={{ fontSize: 12 }}>Will add <code style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: 3 }}>&lt;h1&gt;{aiSuggestions[previewPage.id].h1_text || previewPage.title}&lt;/h1&gt;</code> to page content</div>
-                  </div>
-                )}
 
                 {[
                   { label: 'Meta Title', current: previewPage.meta_title, suggested: aiSuggestions[previewPage.id].suggested_title },
@@ -9982,6 +9963,7 @@
         }]);
         setSelectedText('');
         setSending(true);
+        console.log('[OptimiseModal] scoreData.competitorData:', scoreData?.competitorData ? 'YES' : 'NONE', scoreData?.wordTarget);
 
         try {
           const r = await api('/projects/' + pid + '/' + tablePrefix + '/' + preview.item_id + '/re-optimise', {
