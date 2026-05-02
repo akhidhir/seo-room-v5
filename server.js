@@ -5045,7 +5045,11 @@ app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req
 app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (req, res) => {
   try {
     const { projectId, pageId } = req.params;
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    // Try all projects to find one with WP credentials
+    const allProjects = (await pool.query('SELECT * FROM projects ORDER BY id')).rows;
+    let project = allProjects.find(p => p.id == projectId && p.wp_username && p.wp_app_password);
+    if (!project) project = allProjects.find(p => p.wp_username && p.wp_app_password);
+    if (!project) return res.status(400).json({ error: 'No project with WordPress credentials found' });
     const wpUrl = project.wordpress_url?.replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
