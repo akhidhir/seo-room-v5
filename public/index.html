@@ -8184,6 +8184,7 @@
       const isNodeFixed = (n) => fixing['meta-' + n.id] === 'fixed' || fixing[n.id] === 'fixed' || fixing[n.id] === 'linked';
       const issueGroups = {};
       graphData.nodes.forEach(n => {
+        if (isNodeFixed(n)) return;
         n.issues.forEach(issue => {
           const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
           if (!issueGroups[key]) issueGroups[key] = [];
@@ -8403,7 +8404,7 @@
                 Site Issues
               </h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
-                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0).length} pages · {groupEntries.length} issue types
+                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0 && !isNodeFixed(n)).length} pages · {groupEntries.length} issue types
               </div>
             </div>
           </div>
