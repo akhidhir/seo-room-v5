@@ -9588,7 +9588,13 @@
       };
 
       const handlePublish = async (item) => {
-        if (!pid || !confirm('Move to Staging?\n\nYou can review the proposed changes in the dashboard, then Go Live to push to WordPress.')) return;
+        if (!pid) return;
+        // Pre-check: WP credentials configured?
+        if (!project?.wordpress_url || !project?.wp_username || !project?.wp_app_password) {
+          alert('WordPress credentials not configured.\n\nGo to Settings → Project Settings → WordPress Auth and enter your WP Username + Application Password, then click Save.');
+          return;
+        }
+        if (!confirm('Move to Staging?\n\nYou can review the proposed changes in the dashboard, then Go Live to push to WordPress.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/publish', { method: 'POST' });
           if (data && !data.error) {
@@ -9600,7 +9606,12 @@
       };
 
       const handleGoLive = async (item) => {
-        if (!pid || !confirm('Go Live? This will push the changes to WordPress immediately.')) return;
+        if (!pid) return;
+        if (!project?.wordpress_url || !project?.wp_username || !project?.wp_app_password) {
+          alert('WordPress credentials not configured.\n\nGo to Settings → Project Settings → WordPress Auth and enter your WP Username + Application Password, then click Save.');
+          return;
+        }
+        if (!confirm('Go Live? This will push the changes to WordPress immediately.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/go-live', { method: 'POST' });
           if (data && !data.error) { await loadItems(); alert('Page is now live!'); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
