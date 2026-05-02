@@ -8236,11 +8236,28 @@
       const handleAddLinks = async (pageNode) => {
         setLinkingPage(pageNode.id);
         try {
-          await api(`/projects/${project.id}/onpage-audit/add-links`, {
-            method: 'POST',
-            body: { page_id: pageNode.id }
-          });
-          setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+          // For orphan pages, use fix-orphan (adds inbound links FROM other pages TO this one)
+          // For no-outbound-links pages, use add-links (adds outbound links FROM this page)
+          const isOrphan = (pageNode.inbound_count || 0) === 0;
+          if (isOrphan) {
+            const data = await api(`/projects/${project.id}/fix-orphan`, {
+              method: 'POST',
+              body: { orphan_id: pageNode.id, orphan_title: pageNode.title, orphan_url: pageNode.url }
+            });
+            if (data.success) {
+              setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+              // Re-fetch graph data so stats update
+              try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
+            } else {
+              setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
+            }
+          } else {
+            await api(`/projects/${project.id}/onpage-audit/add-links`, {
+              method: 'POST',
+              body: { page_id: pageNode.id }
+            });
+            setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+          }
         } catch(e) {
           console.error('Link error:', e);
           setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
@@ -8476,7 +8493,7 @@
                             {meta.fix === 'links' && !isLinked && (
                               <button onClick={() => handleAddLinks(n)} disabled={isLinking}
                                 style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isLinking ? 'default' : 'pointer', background: isLinking ? 'var(--border)' : '#3b82f6', color: '#fff', opacity: isLinking ? 0.7 : 1 }}>
-                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Linking...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />Add Links</>}
+                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />{(n.inbound_count || 0) === 0 ? 'Fix Orphan' : 'Add Links'}</>}
                               </button>
                             )}
                             {meta.fix === 'links' && isLinked && (
@@ -8516,7 +8533,7 @@
                     {meta.fix === 'links' && (
                       <button onClick={async () => { for (const n of sel) { await handleAddLinks(n); } }}
                         style={{ padding: '5px 14px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>
-                        <i className="fas fa-link" style={{ marginRight: 4 }} />Add Links to All
+                        <i className="fas fa-link" style={{ marginRight: 4 }} />Fix All Orphans
                       </button>
                     )}
                     {meta.fix === 'copywriter' && (

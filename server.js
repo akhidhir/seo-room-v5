@@ -3362,6 +3362,267 @@ ${contentForAI.slice(0, 12000)}` }],
   }
 });
 
+// Fix orphan page — add inbound links FROM other pages TO the orphan
+app.post('/api/projects/:projectId/fix-orphan', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { orphan_id, orphan_title, orphan_url } = req.body;
+    if (!orphan_id) return res.status(400).json({ error: 'orphan_id required' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // 1. Fetch the orphan page info
+    let orphanPage, orphanType = 'pages';
+    for (const type of ['pages', 'posts']) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${orphan_id}?_fields=id,title,link,slug,meta`, {
+          headers: authHeaders, signal: AbortSignal.timeout(15000)
+        });
+        if (r.ok) { orphanPage = await r.json(); orphanType = type; break; }
+      } catch {}
+    }
+    if (!orphanPage) return res.status(404).json({ error: 'Orphan page not found in WordPress' });
+
+    const orphanLink = orphanPage.link || orphan_url;
+    const orphanName = orphanPage.title?.rendered || orphan_title || '';
+    const orphanKeyword = orphanPage.meta?._yoast_wpseo_focuskw || orphanPage.meta?.yoast_wpseo_focuskw || '';
+    console.log(`[fix-orphan] Orphan: "${orphanName}" (${orphan_id}), keyword: "${orphanKeyword}", URL: ${orphanLink}`);
+
+    // 2. Fetch all other pages with their content length
+    const candidates = [];
+    for (const type of ['pages', 'posts']) {
+      let pg = 1;
+      while (true) {
+        try {
+          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&_fields=id,title,link,slug,content`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!r.ok) break;
+          const items = await r.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          for (const p of items) {
+            if (p.id === Number(orphan_id)) continue;
+            const content = p.content?.rendered || '';
+            const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(w => w).length;
+            // Skip thin pages and pages that already link to the orphan
+            if (wordCount < 200) continue;
+            if (content.includes(orphanLink)) continue;
+            candidates.push({
+              id: p.id, type, title: p.title?.rendered || '', url: p.link || '',
+              slug: p.slug, wordCount, contentPreview: content.substring(0, 500)
+            });
+          }
+          if (items.length < 50) break;
+          pg++;
+        } catch { break; }
+      }
+    }
+    if (candidates.length === 0) return res.json({ success: false, message: 'No suitable pages found to link from', fixes: [] });
+
+    // 3. Ask AI to pick the best 2-3 pages to link from
+    const pickResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `You are an SEO expert. Pick the 2-3 BEST pages to add an internal link FROM, pointing TO this orphan page:
+
+Orphan page: "${orphanName}"
+Orphan URL: ${orphanLink}
+Orphan focus keyword: "${orphanKeyword || 'none'}"
+
+Candidate pages (pick ones that are topically related):
+${candidates.slice(0, 30).map(c => `- ID: ${c.id} | "${c.title}" (${c.wordCount} words) | ${c.url}`).join('\n')}
+
+Return ONLY a JSON array of IDs: [123, 456, 789]
+Pick 2-3 pages that are most topically related to "${orphanName}".` }]
+    });
+
+    let selectedIds;
+    try {
+      const match = pickResp.content[0].text.match(/\[[\d\s,]+\]/);
+      selectedIds = JSON.parse(match[0]);
+    } catch {
+      // Fallback: pick top 2 by word count
+      selectedIds = candidates.sort((a, b) => b.wordCount - a.wordCount).slice(0, 2).map(c => c.id);
+    }
+    console.log(`[fix-orphan] AI selected pages: ${selectedIds.join(', ')}`);
+
+    // 4. For each selected page, fetch full content and add a link to the orphan
+    const fixes = [];
+    const isElementor = project.is_elementor_site;
+
+    for (const sourceId of selectedIds) {
+      const candidate = candidates.find(c => c.id === sourceId);
+      if (!candidate) continue;
+
+      try {
+        // Fetch full content
+        const fullResp = await fetch(`${wpUrl}/wp-json/wp/v2/${candidate.type}/${sourceId}?context=edit`, {
+          headers: authHeaders, signal: AbortSignal.timeout(15000)
+        });
+        if (!fullResp.ok) { fixes.push({ id: sourceId, success: false, error: 'Failed to fetch page' }); continue; }
+        const fullPage = await fullResp.json();
+
+        // Check for Elementor
+        let elementorData = null;
+        if (isElementor && fullPage.meta?._elementor_data) {
+          try {
+            elementorData = typeof fullPage.meta._elementor_data === 'string'
+              ? JSON.parse(fullPage.meta._elementor_data) : fullPage.meta._elementor_data;
+          } catch { elementorData = null; }
+        }
+
+        const content = elementorData ? null : (fullPage.content?.raw || fullPage.content?.rendered || '');
+        if (!elementorData && !content) { fixes.push({ id: sourceId, success: false, error: 'No content' }); continue; }
+
+        // Extract Elementor text widgets if applicable
+        let textWidgets = [];
+        if (elementorData) {
+          const extract = (elements, path = '') => {
+            if (!Array.isArray(elements)) return;
+            elements.forEach((el, idx) => {
+              const cp = path ? `${path}.${idx}` : `${idx}`;
+              if (el.widgetType === 'text-editor' && el.settings?.editor) {
+                textWidgets.push({ path: cp, content: el.settings.editor });
+              }
+              if (el.elements?.length) extract(el.elements, cp + '.elements');
+            });
+          };
+          extract(elementorData);
+        }
+
+        const contentForAI = elementorData
+          ? textWidgets.map((tw, i) => `[WIDGET_${i}]\n${tw.content}\n[/WIDGET_${i}]`).join('\n\n')
+          : content;
+
+        // Ask AI to add a single link to the orphan
+        const linkResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: `You are an SEO expert. Add ONE internal link to the following page content, pointing to:
+
+Target page: "${orphanName}"
+Target URL: ${orphanLink}
+Target focus keyword: "${orphanKeyword || orphanName}"
+
+Rules:
+- Find a phrase in the content that naturally relates to "${orphanKeyword || orphanName}"
+- Wrap that phrase in <a href="${orphanLink}">phrase</a>
+- Use the focus keyword or a close variation as anchor text
+- Do NOT add the link inside headings (h1-h6)
+- Do NOT modify any other HTML
+- Do NOT change any text — only wrap an existing phrase
+- Return the FULL modified content
+
+${elementorData ? `The content uses Elementor widgets. Return JSON:
+{"widgets": [{"index": 0, "modified_content": "..."}], "links_added": [{"anchor": "text", "url": "${orphanLink}"}]}
+Only include the widget you modified.` : `Return JSON: {"modified_content": "<full HTML>", "links_added": [{"anchor": "text", "url": "${orphanLink}"}]}`}
+
+Content:
+${contentForAI.slice(0, 12000)}` }]
+        });
+
+        let parsed;
+        try {
+          const jsonMatch = linkResp.content[0].text.match(/\{[\s\S]*\}/);
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {
+          fixes.push({ id: sourceId, success: false, error: 'AI returned invalid JSON' });
+          continue;
+        }
+
+        if (!parsed.links_added?.length) {
+          fixes.push({ id: sourceId, success: false, error: 'AI could not find a place to add link' });
+          continue;
+        }
+
+        // Apply the change
+        if (elementorData && parsed.widgets) {
+          const originalJson = JSON.stringify(elementorData);
+          for (const w of parsed.widgets) {
+            const tw = textWidgets[w.index];
+            if (!tw) continue;
+            const parts = (tw.path + '.settings.editor').split('.');
+            let cur = elementorData;
+            for (let i = 0; i < parts.length - 1; i++) cur = cur[isNaN(parts[i]) ? parts[i] : parseInt(parts[i])];
+            cur[isNaN(parts[parts.length-1]) ? parts[parts.length-1] : parseInt(parts[parts.length-1])] = w.modified_content;
+          }
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', '_elementor_data', originalJson, JSON.stringify(elementorData)]
+          );
+          const wr = await fetch(`${wpUrl}/wp-json/wp/v2/${candidate.type}/${sourceId}`, {
+            method: 'POST', headers: authHeaders,
+            body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elementorData) } }),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!wr.ok) { fixes.push({ id: sourceId, success: false, error: `WP write failed: ${wr.status}` }); continue; }
+        } else if (parsed.modified_content) {
+          const currentContent = fullPage.content?.raw || fullPage.content?.rendered || '';
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', 'content', currentContent, parsed.modified_content]
+          );
+          const wr = await fetch(`${wpUrl}/wp-json/wp/v2/${candidate.type}/${sourceId}`, {
+            method: 'POST', headers: authHeaders,
+            body: JSON.stringify({ content: parsed.modified_content }),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!wr.ok) { fixes.push({ id: sourceId, success: false, error: `WP write failed: ${wr.status}` }); continue; }
+        }
+
+        fixes.push({ id: sourceId, success: true, title: candidate.title, links_added: parsed.links_added });
+        console.log(`[fix-orphan] Added link to orphan from "${candidate.title}" (${sourceId})`);
+      } catch (e) {
+        fixes.push({ id: sourceId, success: false, error: e.message });
+      }
+    }
+
+    // 5. Update site graph cache — increase inbound_count for orphan node
+    const successCount = fixes.filter(f => f.success).length;
+    if (successCount > 0) {
+      try {
+        const graphRes = await pool.query(
+          `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+          [projectId]
+        );
+        if (graphRes.rows.length > 0) {
+          const graphData = graphRes.rows[0].audit_data;
+          if (graphData && graphData.nodes) {
+            const node = graphData.nodes.find(n => String(n.id) === String(orphan_id));
+            if (node) {
+              node.inbound_count = (node.inbound_count || 0) + successCount;
+              // Rebuild issues
+              const newIssues = [];
+              if (!node.h1) newIssues.push('Missing H1 tag');
+              if (node.word_count < 300) newIssues.push('Thin content (' + node.word_count + ' words)');
+              if (!node.internal_links || node.internal_links.length === 0) newIssues.push('No outbound internal links');
+              if (node.inbound_count === 0 && node.slug !== 'home' && node.slug !== '') newIssues.push('Orphan page — no inbound links');
+              node.issues = newIssues;
+              graphData.stats.issues = graphData.nodes.reduce((sum, n) => sum + (n.issues || []).length, 0);
+              graphData.stats.orphans = graphData.nodes.filter(n => (n.inbound_count || 0) === 0 && n.slug !== 'home' && n.slug !== '').length;
+              if (!graphData.fixed_nodes) graphData.fixed_nodes = [];
+              if (!graphData.fixed_nodes.includes(String(orphan_id))) graphData.fixed_nodes.push(String(orphan_id));
+              await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), graphRes.rows[0].id]);
+              console.log(`[fix-orphan] Updated cache: node ${orphan_id} inbound_count=${node.inbound_count}, issues=${node.issues.length}`);
+            }
+          }
+        }
+      } catch (e) { console.log('[fix-orphan] Cache update error:', e.message); }
+    }
+
+    console.log(`[fix-orphan] Done: ${successCount}/${fixes.length} pages linked to orphan "${orphanName}"`);
+    res.json({ success: successCount > 0, fixes, orphan_id, orphan_title: orphanName });
+  } catch (e) {
+    console.error('[fix-orphan] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Update focus keyword on WordPress
 app.post('/api/projects/:projectId/onpage-audit/update-keyword', async (req, res) => {
   try {
