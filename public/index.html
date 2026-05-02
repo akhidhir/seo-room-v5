@@ -9628,6 +9628,19 @@
         } catch (e) { alert('Error: ' + e.message); }
       };
 
+      const handleRollback = async (item) => {
+        if (!pid) return;
+        if (!confirm('Rollback this page?\n\nThis will restore the ORIGINAL content on WordPress and move the item back to Approved.\n\nThe live page will revert to what it was before Go Live.')) return;
+        try {
+          const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/rollback', { method: 'POST' });
+          if (data && !data.error) {
+            await loadItems();
+            alert('Rolled back! Original content restored on WordPress. (' + (data.changes_rolled_back || 0) + ' changes undone)');
+            if (selectedItem && selectedItem.id === item.id) setSelectedItem(null);
+          } else { alert(data?.error || 'Rollback failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
       const handleSendBackToDrafts = async (item) => {
         if (!pid) return;
         try {
@@ -9850,6 +9863,11 @@
                 },
                 style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
               }, React.createElement('i', { className: 'fa-solid fa-pen-to-square', style: { marginRight: 6 } }), 'Revise'),
+              // Rollback — restore original WP content
+              isPublished && React.createElement('button', {
+                onClick: () => handleRollback(selectedItem),
+                style: { padding: '8px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Rollback'),
               // Preview — opens real page with draft content injected
               !isPublished && hasDraft && React.createElement('button', {
                 onClick: () => {
@@ -10273,7 +10291,9 @@
                     React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 4 } }), 'Review'),
                   stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleRevertStaging(item); }, style: { padding: '6px 12px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Revert'),
                   stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleGoLive(item); }, style: { padding: '6px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
-                    React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 4 } }), 'Go Live')
+                    React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 4 } }), 'Go Live'),
+                  stage === 'published' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleRollback(item); }, style: { padding: '6px 12px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
+                    React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 4 } }), 'Rollback')
                 )
               )
             )

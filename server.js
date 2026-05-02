@@ -5042,6 +5042,83 @@ app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Rollback published — restore original content from wp_change_history
+app.post('/api/projects/:projectId/content-queue/:id/rollback', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (item.stage !== 'published') return res.status(400).json({ error: 'Item must be published to rollback' });
+    if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Get all change history entries for this page from this copywriter item
+    const historyRes = await pool.query(
+      `SELECT * FROM wp_change_history WHERE project_id=$1 AND page_id=$2 AND change_type='copywriter' AND rolled_back_at IS NULL ORDER BY applied_at DESC`,
+      [projectId, item.page_id]
+    );
+    if (historyRes.rows.length === 0) return res.status(400).json({ error: 'No change history found to rollback' });
+
+    // Build restore payload from original values
+    const payload = {};
+    const metaPayload = {};
+    const rolledBackIds = [];
+
+    for (const ch of historyRes.rows) {
+      rolledBackIds.push(ch.id);
+      if (ch.field_name === 'content' && ch.original_value) {
+        payload.content = ch.original_value;
+      } else if (ch.field_name === 'yoast_wpseo_title') {
+        metaPayload._yoast_wpseo_title = ch.original_value || '';
+      } else if (ch.field_name === 'yoast_wpseo_metadesc') {
+        metaPayload._yoast_wpseo_metadesc = ch.original_value || '';
+      } else if (ch.field_name === 'yoast_wpseo_focuskw') {
+        metaPayload._yoast_wpseo_focuskw = ch.original_value || '';
+      }
+    }
+    if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
+
+    if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'Nothing to rollback — no original values saved' });
+
+    // Push original content back to WP
+    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!writeResp.ok) {
+      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress rollback failed: ${errText.slice(0, 300)}` });
+    }
+
+    // Mark history entries as rolled back
+    await pool.query(
+      `UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id = ANY($1::int[])`,
+      [rolledBackIds]
+    );
+
+    // Move item back to approved
+    await pool.query(
+      `UPDATE content_queue SET stage='approved', published_at=NULL, updated_at=NOW() WHERE id=$1`, [id]
+    );
+
+    console.log(`[copywriter] Item ${id} rolled back — ${rolledBackIds.length} changes restored on page ${item.page_id}`);
+    res.json({ success: true, stage: 'approved', changes_rolled_back: rolledBackIds.length });
+  } catch (e) {
+    console.error('[copywriter] Rollback error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Emergency restore — fix any page that was accidentally set to draft
 app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (req, res) => {
   try {
