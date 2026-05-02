@@ -5271,7 +5271,7 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { tips, missing_keywords, target_keywords, content_score, stats } = req.body;
+  const { tips, missing_keywords, target_keywords, content_score, stats, current_meta } = req.body;
 
   try {
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
@@ -5328,16 +5328,19 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 
     const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
 
-You will receive page content and its SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
+You will receive page content, meta data, and SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
 
-SCORING SYSTEM (you must hit EVERY threshold):
-1. WORDS: 25 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
-2. H2 HEADINGS: 15 points if 3+ H2s. You MUST include at least 4 <h2> tags.
-3. H3 SUBHEADINGS: 5 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
-4. INTERNAL LINKS: 10 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
-5. IMAGES: 5 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
-6. FOCUS KEYWORD: 20 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
-7. TARGET KEYWORDS: 20 points proportional to how many target keywords appear. Include EVERY one.
+SCORING SYSTEM (100 points total — hit EVERY threshold):
+1. WORDS: 20 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
+2. H2 HEADINGS: 8 points if 3+ H2s. You MUST include at least 4 <h2> tags.
+3. H3 SUBHEADINGS: 2 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
+4. INTERNAL LINKS: 8 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
+5. IMAGES: 2 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
+6. FOCUS KEYWORD IN CONTENT: 15 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
+7. TARGET KEYWORDS: 15 points proportional to how many target keywords appear. Include EVERY one.
+8. META TITLE: 10 points — MUST be 50-60 characters AND contain focus keyword near the start. No pipes/dashes (theme adds those).
+9. META DESCRIPTION: 10 points — MUST be 120-155 characters AND contain focus keyword naturally. Include a call-to-action.
+10. FOCUS KEYWORD: Must be set (if not provided, suggest one based on page content).
 
 MANDATORY:
 - Hit ALL thresholds above — this is how the score reaches 90+
@@ -5370,19 +5373,29 @@ WIREFRAME MATCHING (if a page wireframe is provided):
 OUTPUT FORMAT (JSON only):
 {
   "content_html": "<h2>...</h2><p>...</p>...",
-  "meta_title": "50-60 chars with focus keyword",
-  "meta_description": "140-160 chars with CTA and focus keyword",
-  "ai_notes": "Score targets hit: X words, Y H2s, Z links, focus kw Nx, N/N keywords used"
+  "meta_title": "EXACTLY 50-60 chars, focus keyword near start, compelling",
+  "meta_description": "EXACTLY 120-155 chars, contains focus keyword, clear CTA",
+  "focus_keyword": "the focus keyword (keep existing if good, suggest better if missing)",
+  "ai_notes": "Score targets hit: X words, Y H2s, Z links, focus kw Nx, N/N keywords used, meta title Xch, meta desc Xch"
 }
 ${buildCopywriterContext(project, item)}`;
 
 
     const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
 
+    const metaTitle = current_meta?.meta_title || item.draft_meta_title || item.current_meta_title || '';
+    const metaDesc = current_meta?.meta_desc || item.draft_meta_desc || item.current_meta_desc || '';
+    const focusKw = current_meta?.focus_keyword || item.draft_focus_keyword || item.current_focus_keyword || '';
+
     const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
 
 PAGE: ${item.page_url}
-FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
+FOCUS KEYWORD: "${focusKw}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
+
+CURRENT META TITLE: "${metaTitle}" (${metaTitle.length} chars — ${metaTitle.length >= 50 && metaTitle.length <= 60 ? 'OK' : metaTitle.length < 50 ? 'TOO SHORT, need 50-60' : 'TOO LONG, need 50-60'})
+CURRENT META DESC: "${metaDesc}" (${metaDesc.length} chars — ${metaDesc.length >= 120 && metaDesc.length <= 155 ? 'OK' : metaDesc.length < 120 ? 'TOO SHORT, need 120-155' : 'TOO LONG, need 120-155'})
+META TITLE HAS FOCUS KW: ${focusKw && metaTitle.toLowerCase().includes(focusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
+META DESC HAS FOCUS KW: ${focusKw && metaDesc.toLowerCase().includes(focusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
 
 CURRENT STATS:
 - Words: ${actualWords} (target: 1500+)
@@ -5500,6 +5513,7 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
       content_html: finalHtml,
       meta_title: parsed.meta_title || null,
       meta_description: parsed.meta_description || null,
+      focus_keyword: parsed.focus_keyword || null,
       ai_notes: parsed.ai_notes || 'Content improved',
     };
 
@@ -6379,7 +6393,7 @@ Respond with ONLY the JSON object.` }]
 app.post('/api/projects/:projectId/rewrite-meta', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { field, meta_title, meta_desc, focus_keyword, content_snippet } = req.body;
+    const { field, meta_title, meta_desc, focus_keyword, content_snippet, score_tips } = req.body;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
     const currentTitle = meta_title || '';
@@ -6390,43 +6404,51 @@ app.post('/api/projects/:projectId/rewrite-meta', async (req, res) => {
     const industry = project.industry || '';
     const contentSnippet = (content_snippet || '').slice(0, 500);
 
+    // Build score context from tips
+    const metaIssues = (score_tips || []).filter(t => t.msg && (t.msg.toLowerCase().includes('meta') || t.msg.toLowerCase().includes('title') || t.msg.toLowerCase().includes('desc'))).map(t => `- ${t.msg}`).join('\n');
+
     let prompt;
     if (field === 'title') {
-      prompt = `You are an SEO expert. Rewrite this meta title to be more compelling and optimized.
+      prompt = `You are an SEO expert. Rewrite this meta title to score maximum points on the content score panel.
 
-Current meta title: "${currentTitle}"
+Current meta title: "${currentTitle}" (${currentTitle.length} chars)
 Focus keyword: "${focusKw}"
 Business: ${bizName}, ${location}
 Industry: ${industry}
 Page content preview: ${contentSnippet}
 
-Rules:
-- 50-60 characters max
-- Include the focus keyword near the start
-- Make it compelling with a clear value proposition
-- Include location if it's a local service page
-- Don't stuff keywords
-- No pipes or dashes separating brand name (the theme adds that)
+SCORE ISSUES TO FIX:
+${metaIssues || '- No specific issues, but optimise for maximum score'}
 
-Return ONLY the new title text, nothing else.`;
+SCORING RULES (you MUST hit these for 10/10 points):
+- EXACTLY 50-60 characters (currently ${currentTitle.length} — ${currentTitle.length >= 50 && currentTitle.length <= 60 ? 'OK' : currentTitle.length < 50 ? 'TOO SHORT' : 'TOO LONG'})
+- MUST contain the focus keyword "${focusKw}" near the start
+- Compelling with a clear value proposition
+- Include location for local service pages
+- No pipes or dashes (theme adds brand name)
+
+Return ONLY the new title text, nothing else. Count your characters carefully.`;
     } else {
-      prompt = `You are an SEO expert. Rewrite this meta description to be more compelling and optimized.
+      prompt = `You are an SEO expert. Rewrite this meta description to score maximum points on the content score panel.
 
-Current meta description: "${currentDesc}"
+Current meta description: "${currentDesc}" (${currentDesc.length} chars)
 Meta title: "${currentTitle}"
 Focus keyword: "${focusKw}"
 Business: ${bizName}, ${location}
 Industry: ${industry}
 Page content preview: ${contentSnippet}
 
-Rules:
-- 120-155 characters max
-- Include the focus keyword naturally
-- Include a clear call-to-action
-- Make it compelling for Google search results
+SCORE ISSUES TO FIX:
+${metaIssues || '- No specific issues, but optimise for maximum score'}
+
+SCORING RULES (you MUST hit these for 10/10 points):
+- EXACTLY 120-155 characters (currently ${currentDesc.length} — ${currentDesc.length >= 120 && currentDesc.length <= 155 ? 'OK' : currentDesc.length < 120 ? 'TOO SHORT' : 'TOO LONG'})
+- MUST contain the focus keyword "${focusKw}" naturally
+- Include a clear call-to-action (call, book, visit, get a quote)
+- Compelling for Google search results
 - Mention unique selling points from the content
 
-Return ONLY the new description text, nothing else.`;
+Return ONLY the new description text, nothing else. Count your characters carefully.`;
     }
 
     const aiResp = await anthropic.messages.create({

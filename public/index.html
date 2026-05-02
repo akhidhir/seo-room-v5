@@ -7115,7 +7115,12 @@
               target_keywords: targetKeywords.map(function(k) { return typeof k === 'string' ? { keyword: k } : k; }),
               content_score: scoreData ? scoreData.score : 0,
               stats: scoreData ? scoreData.stats : {},
-              focus_keyword: editMeta.focus_keyword
+              focus_keyword: editMeta.focus_keyword,
+              current_meta: {
+                meta_title: editMeta.meta_title || '',
+                meta_desc: editMeta.meta_desc || '',
+                focus_keyword: editMeta.focus_keyword || ''
+              }
             }
           });
           if (data.error) { alert('Optimise failed: ' + data.error); }
@@ -7196,7 +7201,7 @@
         setRewritingMeta(field);
         try {
           var snippet = (editContent || '').replace(/<[^>]+>/g, '').slice(0, 500);
-          var data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field: field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet } });
+          var data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field: field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet, score_tips: scoreData ? scoreData.tips : [] } });
           if (data.error) { alert('Rewrite failed: ' + data.error); return; }
           if (field === 'title' && data.title) setEditMeta(Object.assign({}, editMeta, { meta_title: data.title }));
           if (field === 'description' && data.description) setEditMeta(Object.assign({}, editMeta, { meta_desc: data.description }));
@@ -9666,7 +9671,7 @@
         setRewritingMeta(field);
         try {
           const snippet = (editContent || '').replace(/<[^>]+>/g, '').slice(0, 500);
-          const data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet } });
+          const data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet, score_tips: scoreData?.tips || [] } });
           if (data.error) { alert('Rewrite failed: ' + data.error); return; }
           if (field === 'title' && data.title) setEditMeta(prev => ({ ...prev, meta_title: data.title }));
           if (field === 'description' && data.description) setEditMeta(prev => ({ ...prev, meta_desc: data.description }));
@@ -9806,6 +9811,11 @@
                 imgs: scoreData?.stats?.imgs || 0,
                 paragraphs: scoreData?.stats?.paragraphs || 0,
                 focus_keyword_count: scoreData?.focusCount || 0
+              },
+              current_meta: {
+                meta_title: editMeta.meta_title || '',
+                meta_desc: editMeta.meta_desc || '',
+                focus_keyword: editMeta.focus_keyword || ''
               }
             }
           });
