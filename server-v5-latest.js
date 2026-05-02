@@ -5413,6 +5413,79 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   }
 });
 
+// Preview for site_pages (New Website) — standalone preview since no live URL
+app.get('/api/projects/:projectId/site-pages/:id/preview', async (req, res) => {
+  try {
+    const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!item) return res.status(404).send('Not found');
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+
+    const draftContent = item.draft_content || '';
+    const draftTitle = item.meta_title || item.page_name || '';
+    const draftDesc = item.meta_description || '';
+    const domain = project?.domain || '';
+    const slug = item.slug || '';
+
+    // Try to fetch the live site for header/footer
+    let headerBlock = '', footerBlock = '', headContent = '', bodyClasses = '', base = '';
+    try {
+      const siteUrl = domain.startsWith('http') ? domain : ('https://' + domain);
+      base = new URL(siteUrl).origin;
+      const resp = await fetch(siteUrl, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' } });
+      if (resp.ok) {
+        const html = await resp.text();
+        const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+        headContent = headMatch ? headMatch[1] : '';
+        const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
+        if (headerMatch) headerBlock = headerMatch[0];
+        const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
+        if (footerMatch) footerBlock = footerMatch[0];
+        const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
+        bodyClasses = bodyClassMatch ? bodyClassMatch[1] : '';
+        // Replace meta title
+        if (draftTitle) headContent = headContent.replace(/<title>[^<]*<\/title>/i, '<title>' + draftTitle + '</title>');
+        const fixUrls = (s) => s.replace(/(href|src|action)=["']\//g, '$1="' + base + '/');
+        headContent = fixUrls(headContent);
+        headerBlock = fixUrls(headerBlock);
+        footerBlock = fixUrls(footerBlock);
+      }
+    } catch (e) { console.log('[preview-sp] Could not fetch site for header/footer:', e.message); }
+
+    const previewHtml = `<!DOCTYPE html><html lang="en-AU"><head>
+      ${base ? '<base href="' + base + '/">' : ''}
+      ${headContent || '<meta charset="utf-8"><title>' + draftTitle + '</title>'}
+      <style>
+        .seo-preview-banner { position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3); }
+        .seo-preview-spacer { height:44px; }
+        .seo-draft-content { max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.9; }
+        .seo-draft-content h1,.seo-draft-content h2,.seo-draft-content h3,.seo-draft-content h4 { margin-top:1.5em;margin-bottom:0.5em; }
+        .seo-draft-content h2 { font-size:28px; } .seo-draft-content h3 { font-size:22px; }
+        .seo-draft-content p { margin-bottom:1em; } .seo-draft-content img { max-width:100%;height:auto;border-radius:8px;margin:20px 0; }
+        .seo-draft-content a { color:#2563eb;text-decoration:underline; }
+        .seo-draft-content ul,.seo-draft-content ol { margin:1em 0;padding-left:2em; } .seo-draft-content li { margin-bottom:0.5em; }
+        .seo-draft-meta { max-width:900px;margin:20px auto 0;padding:16px 30px;background:#f0f4ff;border:1px solid #d0d8f0;border-radius:8px;font-size:14px; }
+        .seo-draft-meta .meta-title { font-size:20px;color:#1a0dab;font-weight:600;margin-bottom:4px; }
+        .seo-draft-meta .meta-url { font-size:13px;color:#006621;margin-bottom:4px; }
+        .seo-draft-meta .meta-desc { font-size:14px;color:#545454; }
+        .seo-draft-meta .meta-label { font-size:11px;color:#888;text-transform:uppercase;font-weight:600;margin-bottom:8px; }
+      </style></head><body class="${bodyClasses}">
+      <div class="seo-preview-banner"><span>\u{1F4CB} NEW PAGE PREVIEW — ${headerBlock ? 'Header & footer from live site' : 'Standalone preview'}</span><span style="opacity:0.7;font-size:12px">${item.page_name}</span></div>
+      <div class="seo-preview-spacer"></div>
+      ${headerBlock}
+      <div class="seo-draft-meta"><div class="meta-label">Google Search Preview</div><div class="meta-title">${draftTitle}</div><div class="meta-url">${domain}/${slug}/</div><div class="meta-desc">${draftDesc}</div></div>
+      <div id="content" class="site-content"><div class="seo-draft-content entry-content"><div class="container" style="max-width:900px;margin:0 auto;padding:40px 30px">${draftContent}</div></div></div>
+      ${footerBlock}
+      <script>document.addEventListener('click',function(e){if(e.target.closest('a')){e.preventDefault();e.stopPropagation();}},true);</script>
+    </body></html>`;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(previewHtml);
+  } catch (e) {
+    console.error('[preview-sp] Error:', e.message);
+    res.status(500).send('Preview error: ' + e.message);
+  }
+});
+
 // Generate content skeleton — HTML-first: fetch real page DOM, strip text content, keep structure
 app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (req, res) => {
   req.setTimeout(60000);
