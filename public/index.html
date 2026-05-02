@@ -8184,7 +8184,6 @@
       const isNodeFixed = (n) => fixing['meta-' + n.id] === 'fixed' || fixing[n.id] === 'fixed' || fixing[n.id] === 'linked';
       const issueGroups = {};
       graphData.nodes.forEach(n => {
-        if (isNodeFixed(n)) return; // Skip fixed pages
         n.issues.forEach(issue => {
           const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
           if (!issueGroups[key]) issueGroups[key] = [];
@@ -8193,14 +8192,14 @@
       });
 
       const ISSUE_META = {
-        'Missing or short meta title': { icon: 'fa-heading', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit' },
-        'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter' },
-        'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links' },
-        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links' },
+        'Missing or short meta title': { icon: 'fa-heading', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
+        'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
+        'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
+        'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
+        'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'manual', label: 'Requires manual edit', canAiFix: false },
+        'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter', canAiFix: false },
+        'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links', canAiFix: false },
+        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links', canAiFix: false },
       };
 
       const getIssueMeta = (key) => {
@@ -8404,7 +8403,7 @@
                 Site Issues
               </h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
-                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0 && !isNodeFixed(n)).length} pages · {groupEntries.length} issue types
+                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0).length} pages · {groupEntries.length} issue types
               </div>
             </div>
           </div>
@@ -8516,6 +8515,9 @@
                             )}
                             {meta.fix === 'onpage' && fixing['meta-' + n.id] === 'error' && (
                               <span style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}><i className="fas fa-circle-xmark" style={{ marginRight: 4 }} />Failed</span>
+                            )}
+                            {meta.fix === 'manual' && (
+                              <span style={{ fontSize: 10, color: 'var(--text3)', fontStyle: 'italic' }}>Edit in WordPress</span>
                             )}
                           </td>
                         </tr>
