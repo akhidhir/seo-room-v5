@@ -7077,6 +7077,7 @@
       var [pageTemplates, setPageTemplates] = React.useState([]);
       var [applyingTemplate, setApplyingTemplate] = React.useState(false);
       var [comments, setComments] = React.useState([]);
+      var [rewritingMeta, setRewritingMeta] = React.useState(null);
 
       var hasDraft = !!editContent;
 
@@ -7182,6 +7183,19 @@
             draft_content: editContent, meta_title: editMeta.meta_title, meta_description: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword
           }));
         } catch (e) { alert('Error saving: ' + e.message); }
+      };
+
+      var handleRewriteMeta = async function(field) {
+        if (!pid) return;
+        setRewritingMeta(field);
+        try {
+          var snippet = (editContent || '').replace(/<[^>]+>/g, '').slice(0, 500);
+          var data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field: field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet } });
+          if (data.error) { alert('Rewrite failed: ' + data.error); return; }
+          if (field === 'title' && data.title) setEditMeta(Object.assign({}, editMeta, { meta_title: data.title }));
+          if (field === 'description' && data.description) setEditMeta(Object.assign({}, editMeta, { meta_desc: data.description }));
+        } catch (e) { alert('Rewrite error: ' + e.message); }
+        finally { setRewritingMeta(null); }
       };
 
       var handleApprove = async function() {
@@ -7387,7 +7401,12 @@
         React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
             React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Title'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Meta Title'),
+                !isPublished && React.createElement('button', { onClick: function() { handleRewriteMeta('title'); }, disabled: rewritingMeta === 'title',
+                  style: { padding: '2px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, opacity: rewritingMeta === 'title' ? 0.5 : 1 } },
+                  rewritingMeta === 'title' ? 'Rewriting...' : 'AI Rewrite')
+              ),
               React.createElement('input', { value: editMeta.meta_title, onChange: function(e) { setEditMeta(Object.assign({}, editMeta, { meta_title: e.target.value })); },
                 readOnly: isPublished,
                 style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, boxSizing: 'border-box' } }),
@@ -7401,7 +7420,12 @@
             )
           ),
           React.createElement('div', { style: { marginTop: 16 } },
-            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Description'),
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Meta Description'),
+              !isPublished && React.createElement('button', { onClick: function() { handleRewriteMeta('description'); }, disabled: rewritingMeta === 'description',
+                style: { padding: '2px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, opacity: rewritingMeta === 'description' ? 0.5 : 1 } },
+                rewritingMeta === 'description' ? 'Rewriting...' : 'AI Rewrite')
+            ),
             React.createElement('textarea', { value: editMeta.meta_desc, onChange: function(e) { setEditMeta(Object.assign({}, editMeta, { meta_desc: e.target.value })); },
               readOnly: isPublished, rows: 2,
               style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' } }),
@@ -9581,6 +9605,20 @@
         } catch (e) { alert('Error saving: ' + e.message); }
       };
 
+      const [rewritingMeta, setRewritingMeta] = useState(null); // 'title' or 'description'
+      const handleRewriteMeta = async (field) => {
+        if (!selectedItem || !pid) return;
+        setRewritingMeta(field);
+        try {
+          const snippet = (editContent || '').replace(/<[^>]+>/g, '').slice(0, 500);
+          const data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet } });
+          if (data.error) { alert('Rewrite failed: ' + data.error); return; }
+          if (field === 'title' && data.title) setEditMeta(prev => ({ ...prev, meta_title: data.title }));
+          if (field === 'description' && data.description) setEditMeta(prev => ({ ...prev, meta_desc: data.description }));
+        } catch (e) { alert('Rewrite error: ' + e.message); }
+        finally { setRewritingMeta(null); }
+      };
+
       const handleApprove = async (item) => {
         if (!pid) return;
         try {
@@ -10093,7 +10131,12 @@
           React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
             React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
               React.createElement('div', null,
-                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Title'),
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
+                  React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Meta Title'),
+                  !isPublished && React.createElement('button', { onClick: () => handleRewriteMeta('title'), disabled: rewritingMeta === 'title',
+                    style: { padding: '2px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, opacity: rewritingMeta === 'title' ? 0.5 : 1 } },
+                    rewritingMeta === 'title' ? 'Rewriting...' : 'AI Rewrite')
+                ),
                 React.createElement('input', { value: editMeta.meta_title, onChange: e => setEditMeta(prev => ({ ...prev, meta_title: e.target.value })),
                   readOnly: isPublished,
                   style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } }),
@@ -10107,7 +10150,12 @@
               )
             ),
             React.createElement('div', { style: { marginTop: 16 } },
-              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Description'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 } },
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Meta Description'),
+                !isPublished && React.createElement('button', { onClick: () => handleRewriteMeta('description'), disabled: rewritingMeta === 'description',
+                  style: { padding: '2px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600, opacity: rewritingMeta === 'description' ? 0.5 : 1 } },
+                  rewritingMeta === 'description' ? 'Rewriting...' : 'AI Rewrite')
+              ),
               React.createElement('textarea', { value: editMeta.meta_desc, onChange: e => setEditMeta(prev => ({ ...prev, meta_desc: e.target.value })),
                 readOnly: isPublished, rows: 2,
                 style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit' } }),

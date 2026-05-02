@@ -6375,6 +6375,73 @@ Respond with ONLY the JSON object.` }]
 });
 
 // Live preview ��� fetch live page, extract header/hero/footer, inject draft content
+// AI rewrite a single meta field (title or description)
+app.post('/api/projects/:projectId/rewrite-meta', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { field, meta_title, meta_desc, focus_keyword, content_snippet } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const currentTitle = meta_title || '';
+    const currentDesc = meta_desc || '';
+    const focusKw = focus_keyword || '';
+    const bizName = project.business_name || project.name || '';
+    const location = project.location || '';
+    const industry = project.industry || '';
+    const contentSnippet = (content_snippet || '').slice(0, 500);
+
+    let prompt;
+    if (field === 'title') {
+      prompt = `You are an SEO expert. Rewrite this meta title to be more compelling and optimized.
+
+Current meta title: "${currentTitle}"
+Focus keyword: "${focusKw}"
+Business: ${bizName}, ${location}
+Industry: ${industry}
+Page content preview: ${contentSnippet}
+
+Rules:
+- 50-60 characters max
+- Include the focus keyword near the start
+- Make it compelling with a clear value proposition
+- Include location if it's a local service page
+- Don't stuff keywords
+- No pipes or dashes separating brand name (the theme adds that)
+
+Return ONLY the new title text, nothing else.`;
+    } else {
+      prompt = `You are an SEO expert. Rewrite this meta description to be more compelling and optimized.
+
+Current meta description: "${currentDesc}"
+Meta title: "${currentTitle}"
+Focus keyword: "${focusKw}"
+Business: ${bizName}, ${location}
+Industry: ${industry}
+Page content preview: ${contentSnippet}
+
+Rules:
+- 120-155 characters max
+- Include the focus keyword naturally
+- Include a clear call-to-action
+- Make it compelling for Google search results
+- Mention unique selling points from the content
+
+Return ONLY the new description text, nothing else.`;
+    }
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    const result = aiResp.content[0].text.trim().replace(/^["']|["']$/g, '');
+    res.json({ [field]: result });
+  } catch (e) {
+    console.error('[rewrite-meta] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
