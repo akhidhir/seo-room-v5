@@ -6530,24 +6530,30 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       swapped = true;
     }
 
-    // Add preview banner + disable links
+    // Add preview pill (bottom-right corner, doesn't block page)
     const bannerHtml = `
     <style>
-      .seo-preview-banner { position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:12px 24px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.3) }
-      .seo-preview-banner .meta-preview { font-size:11px;opacity:0.9;max-width:500px }
-      .seo-preview-banner .meta-preview .mt { color:#fff;font-size:13px;font-weight:700 }
-      .seo-preview-banner .meta-preview .md { color:rgba(255,255,255,0.8);font-size:11px;margin-top:2px }
-      body { padding-top: 60px !important; }
+      .seo-preview-pill { position:fixed;bottom:20px;right:20px;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:10px 18px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600;border-radius:30px;box-shadow:0 4px 20px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;gap:8px;transition:all 0.3s }
+      .seo-preview-pill:hover { transform:scale(1.05) }
+      .seo-preview-pill .dot { width:10px;height:10px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite }
+      @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+      .seo-preview-meta { position:fixed;bottom:70px;right:20px;z-index:99998;background:#1e1b4b;color:#fff;padding:16px 20px;border-radius:12px;font-family:-apple-system,sans-serif;font-size:12px;box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:400px;display:none }
+      .seo-preview-meta.show { display:block }
+      .seo-preview-meta .mt { color:#a5b4fc;font-size:14px;font-weight:700;margin-bottom:4px }
+      .seo-preview-meta .md { color:rgba(255,255,255,0.7);font-size:11px;line-height:1.4 }
+      .seo-preview-meta .ml { font-size:10px;color:#818cf8;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px }
     </style>
-    <div class="seo-preview-banner">
-      <span>\u{1F441}️ REVIEW PREVIEW — This is how your page will look after Go Live</span>
-      <div class="meta-preview">
-        <div class="mt">${(draftTitle || item.page_title || '').slice(0, 60)}</div>
-        <div class="md">${(draftDesc || '').slice(0, 120)}</div>
-      </div>
+    <div class="seo-preview-pill" onclick="document.querySelector('.seo-preview-meta').classList.toggle('show')">
+      <span class="dot"></span> REVIEW PREVIEW
+    </div>
+    <div class="seo-preview-meta">
+      <div class="ml">Google Search Preview</div>
+      <div class="mt">${(draftTitle || item.page_title || '').replace(/"/g, '&quot;').slice(0, 60)}</div>
+      <div class="md">${(draftDesc || '').replace(/"/g, '&quot;').slice(0, 160)}</div>
     </div>`;
 
-    html = html.replace(/<body([^>]*)>/i, `<body$1>${bannerHtml}`);
+    // Inject pill at end of body so it doesn't affect layout
+    html = html.replace('</body>', `${bannerHtml}</body>`);
 
     // Disable all links so user doesn't accidentally navigate away
     html = html.replace('</body>', `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-banner')){e.preventDefault();e.stopPropagation();}},true);</script></body>`);
