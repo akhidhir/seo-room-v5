@@ -11979,9 +11979,11 @@
         }
       };
 
+      const [genSuccess, setGenSuccess] = useState('');
       const handleGenerateReport = async () => {
         setGenerating(true);
         setError('');
+        setGenSuccess('');
         try {
           const data = await api(`/projects/${project.id}/reports/generate`, { method: 'POST' });
           if (data.report) {
@@ -11990,6 +11992,10 @@
               return [data.report, ...filtered];
             });
             setExpandedId(data.report.id);
+            setGenSuccess('Report generated successfully for ' + (data.report.monthLabel || data.report.month));
+            setTimeout(() => setGenSuccess(''), 5000);
+          } else {
+            setError('No report data returned');
           }
         } catch (err) {
           setError(err.message);
@@ -12016,6 +12022,7 @@
           </div>
 
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+          {genSuccess && <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, color: '#22c55e', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}><i className="fas fa-check-circle"></i> {genSuccess}</div>}
 
           <button className="btn btn-primary" style={{ marginBottom: 20 }} onClick={handleGenerateReport} disabled={generating}>
             {generating ? <span className="spinner"></span> : <i className="fas fa-sync-alt"></i>}
