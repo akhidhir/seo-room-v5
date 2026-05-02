@@ -4949,7 +4949,11 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     }
 
     const wpResult = await writeResp.json();
-    const previewUrl = wpResult.link ? wpResult.link + (wpResult.link.includes('?') ? '&preview=true' : '?preview=true') : null;
+    // Build preview URL — WP drafts need ?p=ID&preview=true, and user must be logged into WP admin
+    const siteUrl = (wpResult.link || wpUrl || '').replace(/\/[^\/]*$/, '').replace(/\/$/, '');
+    const previewUrl = `${wpUrl}/?p=${item.page_id}&preview=true`;
+    // Also return the WP admin edit link for easy access
+    const editUrl = `${wpUrl}/wp-admin/post.php?post=${item.page_id}&action=edit`;
 
     // Save snapshot for rollback
     await pool.query(
@@ -4962,8 +4966,8 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
       `UPDATE content_queue SET stage='staging', updated_at=NOW() WHERE id=$1`, [id]
     );
 
-    console.log(`[copywriter] Pushed item ${id} to WP as draft (page ${item.page_id})`);
-    res.json({ success: true, stage: 'staging', preview_url: previewUrl, changes: changes.length });
+    console.log(`[copywriter] Pushed item ${id} to WP as draft (page ${item.page_id}), preview: ${previewUrl}`);
+    res.json({ success: true, stage: 'staging', preview_url: previewUrl, edit_url: editUrl, page_id: item.page_id, changes: changes.length });
   } catch (e) {
     console.error('[copywriter] Publish-to-draft error:', e.message);
     res.status(500).json({ error: e.message });

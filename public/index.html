@@ -9588,15 +9588,13 @@
       };
 
       const handlePublish = async (item) => {
-        if (!pid || !confirm('Push to WordPress as draft for preview?')) return;
+        if (!pid || !confirm('Push to WordPress as draft for preview?\n\nYou\'ll need to be logged into WP admin to see the preview.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/publish', { method: 'POST' });
           if (data && !data.error) {
             await loadItems();
-            if (data.preview_url) {
-              alert('Pushed to WordPress as draft! Preview it, then click "Go Live" to publish.\n\nPreview: ' + data.preview_url);
-              window.open(data.preview_url, '_blank');
-            }
+            // Open preview in new tab
+            if (data.preview_url) window.open(data.preview_url, '_blank');
             if (selectedItem && selectedItem.id === item.id) setSelectedItem(null);
           }
           else { alert(data?.error || 'Publish failed'); }
@@ -10262,6 +10260,8 @@
                   stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleSendBackToDrafts(item); }, style: { padding: '6px 12px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
                     React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 4 } }), 'Drafts'),
                   stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handlePublish(item); }, style: { padding: '6px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Push to WP'),
+                  stage === 'staging' && React.createElement('a', { href: (project.wordpress_url || '').replace(/\/$/, '') + '/?p=' + item.page_id + '&preview=true', target: '_blank', onClick: (e) => e.stopPropagation(), style: { padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' } },
+                    React.createElement('i', { className: 'fas fa-external-link-alt', style: { marginRight: 4 } }), 'Preview'),
                   stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleRevertStaging(item); }, style: { padding: '6px 12px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Revert'),
                   stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleGoLive(item); }, style: { padding: '6px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
                     React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 4 } }), 'Go Live')
