@@ -3731,6 +3731,58 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
   return content;
 }
 
+// Import current copy — fetch live WP content + meta for a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req, res) => {
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+
+    // If current_content already stored, return it
+    if (item.current_content && item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 20) {
+      return res.json({
+        content: item.current_content,
+        meta_title: item.current_meta_title || '',
+        meta_desc: item.current_meta_desc || '',
+        focus_keyword: item.current_focus_keyword || ''
+      });
+    }
+
+    // Otherwise fetch live from WP
+    const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+    const content = await fetchLivePageContent(pageUrl, project, item.page_id);
+
+    // Also try to get Yoast meta
+    let meta = {};
+    const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+    if (wpBase && item.page_id) {
+      const authHeaders = getWpAuthHeaders(project);
+      try {
+        const m = await readWpYoastMeta(wpBase, item.page_id, authHeaders);
+        if (m) { meta = m; }
+      } catch (e) { /* no meta */ }
+    }
+
+    // Save to DB for future use
+    if (content) {
+      await pool.query(
+        'UPDATE content_queue SET current_content=$1, current_meta_title=COALESCE($2, current_meta_title), current_meta_desc=COALESCE($3, current_meta_desc), current_focus_keyword=COALESCE($4, current_focus_keyword) WHERE id=$5',
+        [content, meta.meta_title || null, meta.meta_description || null, meta.focus_keyword || null, req.params.id]
+      );
+    }
+
+    res.json({
+      content: content || '',
+      meta_title: meta.meta_title || item.current_meta_title || '',
+      meta_desc: meta.meta_description || item.current_meta_desc || '',
+      focus_keyword: meta.focus_keyword || item.current_focus_keyword || ''
+    });
+  } catch (e) {
+    console.error('[import-current] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Generate AI draft for a content queue item (enhanced with keyword context + internal linking)
 app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
   try {
