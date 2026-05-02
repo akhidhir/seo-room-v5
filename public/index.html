@@ -7466,6 +7466,8 @@
             React.createElement(ContentScorePanel, {
               content: editContent,
               focusKeyword: editMeta.focus_keyword,
+              metaTitle: editMeta.meta_title,
+              metaDesc: editMeta.meta_desc,
               keywords: project && project.keywords ? project.keywords : [],
               targetKeywords: targetKeywords,
               projectId: pid,
@@ -9222,7 +9224,7 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, pageTitle }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, pageTitle, metaTitle, metaDesc }) {
       const text = useMemo(() => {
         if (!content) return '';
         const div = document.createElement('div');
@@ -9295,39 +9297,80 @@
       const { score, tips } = useMemo(() => {
         let s = 0;
         const t = [];
-        if (stats.words >= wt) { s += 25; t.push({ type: 'success', msg: 'Great content length! (' + stats.words + '/' + wt + ')' }); }
-        else if (stats.words >= wt * 0.5) { s += 15; t.push({ type: 'warn', msg: 'Add ' + (wt - stats.words) + ' more words (target: ' + wt.toLocaleString() + ')' }); }
-        else if (stats.words >= wt * 0.25) { s += 8; t.push({ type: 'error', msg: 'Content too short (' + stats.words + ' words). Aim for ' + wt.toLocaleString() }); }
+        // Content length (20 pts)
+        if (stats.words >= wt) { s += 20; t.push({ type: 'success', msg: 'Great content length! (' + stats.words + '/' + wt + ')' }); }
+        else if (stats.words >= wt * 0.5) { s += 12; t.push({ type: 'warn', msg: 'Add ' + (wt - stats.words) + ' more words (target: ' + wt.toLocaleString() + ')' }); }
+        else if (stats.words >= wt * 0.25) { s += 6; t.push({ type: 'error', msg: 'Content too short (' + stats.words + ' words). Aim for ' + wt.toLocaleString() }); }
         else { t.push({ type: 'error', msg: stats.words === 0 ? 'No content yet' : 'Very short (' + stats.words + ' words). Need ' + wt.toLocaleString() }); }
-        if (stats.h2s >= 3) { s += 15; t.push({ type: 'success', msg: stats.h2s + ' H2 headings (target: 3+)' }); }
-        else if (stats.h2s >= 1) { s += 8; t.push({ type: 'warn', msg: 'Add ' + (3 - stats.h2s) + ' more H2 headings (target: 3+)' }); }
+        // Headings (10 pts)
+        if (stats.h2s >= 3) { s += 8; t.push({ type: 'success', msg: stats.h2s + ' H2 headings (target: 3+)' }); }
+        else if (stats.h2s >= 1) { s += 4; t.push({ type: 'warn', msg: 'Add ' + (3 - stats.h2s) + ' more H2 headings (target: 3+)' }); }
         else { t.push({ type: 'error', msg: 'No H2 headings. Add at least 3' }); }
-        if (stats.h3s >= 2) { s += 5; t.push({ type: 'success', msg: stats.h3s + ' H3 subheadings' }); }
+        if (stats.h3s >= 2) { s += 2; t.push({ type: 'success', msg: stats.h3s + ' H3 subheadings' }); }
         else { t.push({ type: 'warn', msg: 'Add H3 subheadings for better structure' }); }
-        if (stats.links >= 3) { s += 10; t.push({ type: 'success', msg: stats.links + ' internal links' }); }
-        else if (stats.links >= 1) { s += 5; t.push({ type: 'warn', msg: 'Add ' + (3 - stats.links) + ' more internal links' }); }
+        // Links + images (10 pts)
+        if (stats.links >= 3) { s += 8; t.push({ type: 'success', msg: stats.links + ' internal links' }); }
+        else if (stats.links >= 1) { s += 4; t.push({ type: 'warn', msg: 'Add ' + (3 - stats.links) + ' more internal links' }); }
         else { t.push({ type: 'error', msg: 'No links found. Add internal links' }); }
-        if (stats.imgs >= 1) { s += 5; t.push({ type: 'success', msg: stats.imgs + ' image' + (stats.imgs > 1 ? 's' : '') }); }
+        if (stats.imgs >= 1) { s += 2; t.push({ type: 'success', msg: stats.imgs + ' image' + (stats.imgs > 1 ? 's' : '') }); }
         else { t.push({ type: 'warn', msg: 'Add at least 1 image' }); }
-        if (focusCount >= 3 && focusCount <= 8) { s += 20; t.push({ type: 'success', msg: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
-        else if (focusCount > 8) { s += 12; t.push({ type: 'warn', msg: 'Focus keyword overused (' + focusCount + 'x). Reduce to 3-8 for best results' }); }
-        else if (focusCount >= 1) { s += 10; t.push({ type: 'warn', msg: 'Use focus keyword ' + (3 - focusCount) + ' more times (have ' + focusCount + ', need 3-8)' }); }
+        // Focus keyword in content (15 pts)
+        if (focusCount >= 3 && focusCount <= 8) { s += 15; t.push({ type: 'success', msg: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
+        else if (focusCount > 8) { s += 10; t.push({ type: 'warn', msg: 'Focus keyword overused (' + focusCount + 'x). Reduce to 3-8 for best results' }); }
+        else if (focusCount >= 1) { s += 7; t.push({ type: 'warn', msg: 'Use focus keyword ' + (3 - focusCount) + ' more times (have ' + focusCount + ', need 3-8)' }); }
         else if (focusKeyword) { t.push({ type: 'error', msg: 'Focus keyword "' + focusKeyword + '" not found in content' }); }
-        else { t.push({ type: 'error', msg: 'Set a focus keyword (+20 pts)' }); }
+        else { t.push({ type: 'error', msg: 'Set a focus keyword' }); }
+        // Target keywords (15 pts)
         const hasKws = keywordAnalysis.length > 0;
         const used = keywordAnalysis.filter(k => k.count > 0).length;
         const total = keywordAnalysis.length || 1;
         if (hasKws) {
-          s += Math.min(20, Math.round((used / total) * 20));
+          s += Math.min(15, Math.round((used / total) * 15));
           if (used < total * 0.5) t.push({ type: 'warn', msg: 'Using ' + used + '/' + keywordAnalysis.length + ' target keywords. Add more.' });
         } else {
-          t.push({ type: 'error', msg: 'Add target keywords (+20 pts)' });
+          t.push({ type: 'error', msg: 'Add target keywords' });
         }
+        // Meta Title (10 pts)
+        const mt = (metaTitle || '').trim();
+        const mtLen = mt.length;
+        const fkLower = (focusKeyword || '').toLowerCase();
+        if (mt) {
+          const mtHasKw = fkLower && mt.toLowerCase().includes(fkLower);
+          if (mtLen >= 50 && mtLen <= 60 && mtHasKw) { s += 10; t.push({ type: 'success', msg: 'Meta title optimized (' + mtLen + ' chars, has keyword)' }); }
+          else if (mtLen >= 40 && mtLen <= 65 && mtHasKw) { s += 7; t.push({ type: 'success', msg: 'Meta title good (' + mtLen + ' chars). Ideal: 50-60' }); }
+          else {
+            let mtPts = 3;
+            const mtIssues = [];
+            if (mtLen < 40) mtIssues.push('too short (' + mtLen + ')');
+            else if (mtLen > 65) mtIssues.push('too long (' + mtLen + ')');
+            if (!mtHasKw && fkLower) mtIssues.push('missing focus keyword');
+            s += mtPts;
+            t.push({ type: 'warn', msg: 'Meta title: ' + mtIssues.join(', ') });
+          }
+        } else { t.push({ type: 'error', msg: 'Add a meta title (+10 pts)' }); }
+        // Meta Description (10 pts)
+        const md = (metaDesc || '').trim();
+        const mdLen = md.length;
+        if (md) {
+          const mdHasKw = fkLower && md.toLowerCase().includes(fkLower);
+          if (mdLen >= 120 && mdLen <= 155 && mdHasKw) { s += 10; t.push({ type: 'success', msg: 'Meta description optimized (' + mdLen + ' chars, has keyword)' }); }
+          else if (mdLen >= 100 && mdLen <= 160 && mdHasKw) { s += 7; t.push({ type: 'success', msg: 'Meta description good (' + mdLen + ' chars). Ideal: 120-155' }); }
+          else {
+            let mdPts = 3;
+            const mdIssues = [];
+            if (mdLen < 100) mdIssues.push('too short (' + mdLen + ')');
+            else if (mdLen > 160) mdIssues.push('too long (' + mdLen + ')');
+            if (!mdHasKw && fkLower) mdIssues.push('missing focus keyword');
+            s += mdPts;
+            t.push({ type: 'warn', msg: 'Meta desc: ' + mdIssues.join(', ') });
+          }
+        } else { t.push({ type: 'error', msg: 'Add a meta description (+10 pts)' }); }
+        // Overall structure bonus
         if (stats.words >= 1500 && stats.h2s >= 3 && focusCount >= 3) {
           t.unshift({ type: 'success', msg: 'Great content structure!' });
         }
         return { score: Math.min(100, s), tips: t };
-      }, [stats, focusCount, keywordAnalysis, focusKeyword, wt]);
+      }, [stats, focusCount, keywordAnalysis, focusKeyword, wt, metaTitle, metaDesc]);
 
       useEffect(() => {
         if (onScoreChange) onScoreChange({ score, tips, stats, focusCount, keywordAnalysis, competitorData, wordTarget });
@@ -10184,6 +10227,8 @@
               React.createElement(ContentScorePanel, {
                 content: editContent,
                 focusKeyword: editMeta.focus_keyword,
+                metaTitle: editMeta.meta_title,
+                metaDesc: editMeta.meta_desc,
                 keywords: project?.keywords || [],
                 targetKeywords: targetKeywords,
                 projectId: pid,
