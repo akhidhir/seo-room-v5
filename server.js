@@ -2792,6 +2792,8 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
       } catch (cacheErr) { console.log('[onpage-fix] Cache update failed:', cacheErr.message); }
 
       // 2. Update site_graph audit — recalculate issues for fixed nodes
+      // Site graph uses: node.id (string), node.meta_title, node.meta_description, node.h1, node.word_count
+      // Issues are plain strings like 'Missing H1 tag', 'Meta title too long (65 chars)'
       try {
         const graphRes = await pool.query(
           `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
@@ -2803,44 +2805,34 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           if (graphData && graphData.nodes) {
             let updated = false;
             for (const node of graphData.nodes) {
-              const fix = fixMap[node.id];
+              // Match by string or number ID
+              const fix = fixMap[node.id] || fixMap[String(node.id)] || fixMap[Number(node.id)];
               if (!fix) continue;
               updated = true;
-              if (fix.new_meta_title) { node.metaTitle = fix.new_meta_title; node.metaTitleLen = fix.new_meta_title.length; }
-              if (fix.new_meta_desc) { node.metaDesc = fix.new_meta_desc; node.metaDescLen = fix.new_meta_desc.length; }
-              if (fix.new_focus_keyword) node.focusKeyword = fix.new_focus_keyword;
-              // Rebuild issues
-              const issues = [];
-              const kwLower = (node.focusKeyword || '').toLowerCase();
-              if (!node.metaTitle) issues.push({ type: 'problem', text: 'Meta title is missing' });
-              else {
-                if ((node.metaTitleLen || 0) < 30) issues.push({ type: 'problem', text: `Meta title too short (${node.metaTitleLen} chars) — should be 50-60` });
-                if ((node.metaTitleLen || 0) > 60) issues.push({ type: 'warning', text: `Meta title too long (${node.metaTitleLen} chars) — max 60` });
-                if ((node.metaTitleLen || 0) >= 50 && (node.metaTitleLen || 0) <= 60) issues.push({ type: 'good', text: 'Title tag length is good' });
-                if (kwLower && node.metaTitle.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Title tag contains focus keyword' });
-                else if (kwLower) issues.push({ type: 'warning', text: 'Focus keyword not in title tag' });
-              }
-              if (!node.metaDesc) issues.push({ type: 'problem', text: 'Meta description is empty' });
-              else {
-                if ((node.metaDescLen || 0) < 120) issues.push({ type: 'warning', text: `Meta description short (${node.metaDescLen} chars) — aim for 120-155` });
-                if ((node.metaDescLen || 0) > 155) issues.push({ type: 'warning', text: `Meta description too long (${node.metaDescLen} chars) — max 155` });
-                if ((node.metaDescLen || 0) >= 120 && (node.metaDescLen || 0) <= 155) issues.push({ type: 'good', text: 'Meta description length is good' });
-                if (kwLower && node.metaDesc.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Meta description contains focus keyword' });
-              }
-              if (!node.focusKeyword) issues.push({ type: 'problem', text: 'No focus keyword set' });
-              // Preserve non-meta issues
-              const metaIssueTexts = ['Meta title', 'Title tag', 'Meta description', 'No focus keyword', 'Focus keyword not'];
-              const preserved = (node.issues || []).filter(i => !metaIssueTexts.some(t => i.text.startsWith(t)));
-              node.issues = [...issues, ...preserved];
+              // Update stored values (snake_case fields)
+              if (fix.new_meta_title) node.meta_title = fix.new_meta_title;
+              if (fix.new_meta_desc) node.meta_description = fix.new_meta_desc;
+              // Rebuild issues array (plain strings, matching crawlSiteGraph format)
+              const newIssues = [];
+              const mt = node.meta_title || '';
+              const md = node.meta_description || '';
+              if (!mt || mt.length < 10) newIssues.push('Missing or short meta title');
+              if (!md || md.length < 50) newIssues.push('Missing or short meta description');
+              if (mt && mt.length > 60) newIssues.push('Meta title too long (' + mt.length + ' chars)');
+              if (md && md.length > 160) newIssues.push('Meta description too long (' + md.length + ' chars)');
+              if (!node.h1) newIssues.push('Missing H1 tag');
+              if (node.word_count < 300) newIssues.push('Thin content (' + node.word_count + ' words)');
+              if (!node.internal_links || node.internal_links.length === 0) newIssues.push('No outbound internal links');
+              if ((node.inbound_count || 0) === 0 && node.slug !== 'home' && node.slug !== '') newIssues.push('Orphan page — no inbound links');
+              node.issues = newIssues;
             }
             if (updated) {
-              // Recalculate stats
-              const allNodes = graphData.nodes;
-              const totalIssues = allNodes.reduce((sum, n) => sum + (n.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').length, 0);
-              const pagesWithIssues = allNodes.filter(n => (n.issues || []).some(i => i.type === 'problem' || i.type === 'warning')).length;
+              // Recalculate stats (matching crawlSiteGraph format)
+              const issueCount = graphData.nodes.reduce((sum, n) => sum + (n.issues || []).length, 0);
+              const orphans = graphData.nodes.filter(n => (n.inbound_count || 0) === 0 && n.slug !== 'home' && n.slug !== '').length;
               if (graphData.stats) {
-                graphData.stats.totalIssues = totalIssues;
-                graphData.stats.pagesWithIssues = pagesWithIssues;
+                graphData.stats.issues = issueCount;
+                graphData.stats.orphans = orphans;
               }
               await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), auditId]);
               console.log(`[onpage-fix] Updated site_graph audit data for ${successIds.length} nodes`);
