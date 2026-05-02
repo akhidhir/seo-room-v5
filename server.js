@@ -7338,10 +7338,10 @@ async function crawlSiteGraph(project) {
 
   // Resolve slug-based page_ids to numeric WordPress IDs
   const authHeaders = getWpAuthHeaders(project);
+  const slugToModified = {};
   if (wpUrl && authHeaders) {
     const wpBase = wpUrl.replace(/\/$/, '');
     const slugToId = {};
-    const slugToModified = {};
     try {
       for (const type of ['pages', 'posts']) {
         let page = 1;
