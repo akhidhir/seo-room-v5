@@ -4349,9 +4349,11 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    console.log('[import-current] Item:', { id: item.id, page_id: item.page_id, page_url: item.page_url, page_title: item.page_title, has_current: !!(item.current_content) });
 
     // If current_content already stored, return it
     if (item.current_content && item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 20) {
+      console.log('[import-current] Returning cached content, words:', item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length);
       return res.json({
         content: item.current_content,
         meta_title: item.current_meta_title || '',
@@ -4362,7 +4364,9 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
 
     // Otherwise fetch live from WP
     const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', item.page_id);
     const content = await fetchLivePageContent(pageUrl, project, item.page_id);
+    console.log('[import-current] Got content length:', content ? content.length : 0, 'words:', content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0);
 
     // Also try to get Yoast meta
     let meta = {};
