@@ -2733,12 +2733,20 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 
     // --- Update cached data so Site Map + Issues page reflect fixes ---
     const successIds = results.filter(r => r.success).map(r => r.id);
+    console.log(`[onpage-fix] Results: ${results.length} total, ${successIds.length} succeeded. Success IDs: [${successIds.join(', ')}] (types: ${successIds.map(id => typeof id).join(', ')})`);
     if (successIds.length > 0) {
       // Build a map of what was fixed per page
       const fixMap = {};
       for (const fix of fixes) {
         if (!successIds.includes(fix.id)) continue;
         fixMap[fix.id] = fix;
+      }
+      // Also add string/number variants to fixMap for cross-type matching
+      for (const key of Object.keys(fixMap)) {
+        const numKey = Number(key);
+        const strKey = String(key);
+        if (!isNaN(numKey) && !fixMap[numKey]) fixMap[numKey] = fixMap[key];
+        if (!fixMap[strKey]) fixMap[strKey] = fixMap[key];
       }
 
       // 1. Update onpage_audit_cache — recalculate issues for fixed pages
@@ -2803,11 +2811,15 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           const graphData = graphRes.rows[0].audit_data;
           const auditId = graphRes.rows[0].id;
           if (graphData && graphData.nodes) {
+            const fixKeys = Object.keys(fixMap);
+            const nodeIds = graphData.nodes.slice(0, 5).map(n => ({ id: n.id, type: typeof n.id }));
+            console.log(`[onpage-fix] Graph cache: ${graphData.nodes.length} nodes. fixMap keys: [${fixKeys.join(', ')}] (type: ${fixKeys.length ? typeof fixKeys[0] : 'none'}). Sample node IDs:`, JSON.stringify(nodeIds));
             let updated = false;
             for (const node of graphData.nodes) {
               // Match by string or number ID
               const fix = fixMap[node.id] || fixMap[String(node.id)] || fixMap[Number(node.id)];
               if (!fix) continue;
+              console.log(`[onpage-fix] Matched node ${node.id} — updating meta + rebuilding issues`);
               updated = true;
               // Update stored values (snake_case fields)
               if (fix.new_meta_title) node.meta_title = fix.new_meta_title;
