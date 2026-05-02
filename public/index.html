@@ -9287,6 +9287,7 @@
       const [wpChangeHistory, setWpChangeHistory] = useState([]);
       const [rollingBack, setRollingBack] = useState(null);
       const [importingCopy, setImportingCopy] = useState(false);
+      const [editorKey, setEditorKey] = useState(0);
 
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
@@ -9619,9 +9620,12 @@
                   setImportingCopy(true);
                   try {
                     const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST' });
+                    console.log('[import-current] Response:', { hasContent: !!r.content, contentLen: r.content ? r.content.length : 0, meta_title: r.meta_title, preview: r.content ? r.content.substring(0, 200) : 'EMPTY' });
                     if (r.content) {
                       const cleaned = cleanWpHtml(r.content);
+                      console.log('[import-current] Cleaned length:', cleaned.length, 'preview:', cleaned.substring(0, 200));
                       setEditContent(cleaned);
+                      setEditorKey(k => k + 1);
                     } else {
                       alert('No content found — the page may use Elementor or have no text body. Try checking the live page.');
                     }
@@ -9830,6 +9834,7 @@
             React.createElement('div', { style: { flex: 1, minWidth: 0 } },
               React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' } },
                 React.createElement(QuillEditor, {
+                  key: editorKey,
                   value: editContent,
                   onChange: isPublished ? undefined : setEditContent,
                   readOnly: isPublished,
