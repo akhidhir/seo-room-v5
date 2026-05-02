@@ -2731,6 +2731,125 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
       }
     }
 
+    // --- Update cached data so Site Map + Issues page reflect fixes ---
+    const successIds = results.filter(r => r.success).map(r => r.id);
+    if (successIds.length > 0) {
+      // Build a map of what was fixed per page
+      const fixMap = {};
+      for (const fix of fixes) {
+        if (!successIds.includes(fix.id)) continue;
+        fixMap[fix.id] = fix;
+      }
+
+      // 1. Update onpage_audit_cache — recalculate issues for fixed pages
+      try {
+        const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+        if (cacheRes.rows.length > 0) {
+          const cached = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
+          for (const page of cached) {
+            const fix = fixMap[page.id];
+            if (!fix) continue;
+            // Update the stored meta values
+            if (fix.new_meta_title) { page.metaTitle = fix.new_meta_title; page.metaTitleLen = fix.new_meta_title.length; }
+            if (fix.new_meta_desc) { page.metaDesc = fix.new_meta_desc; page.metaDescLen = fix.new_meta_desc.length; }
+            if (fix.new_focus_keyword) page.focusKeyword = fix.new_focus_keyword;
+            // Rebuild issues array from updated values
+            const issues = [];
+            const kwLower = (page.focusKeyword || '').toLowerCase();
+            if (!page.metaTitle) issues.push({ type: 'problem', text: 'Meta title is missing' });
+            else {
+              if (page.metaTitleLen < 30) issues.push({ type: 'problem', text: `Meta title too short (${page.metaTitleLen} chars) — should be 50-60` });
+              if (page.metaTitleLen > 60) issues.push({ type: 'warning', text: `Meta title too long (${page.metaTitleLen} chars) — max 60` });
+              if (page.metaTitleLen >= 50 && page.metaTitleLen <= 60) issues.push({ type: 'good', text: 'Title tag length is good' });
+              if (kwLower && page.metaTitle.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Title tag contains focus keyword' });
+              else if (kwLower) issues.push({ type: 'warning', text: 'Focus keyword not in title tag' });
+            }
+            if (!page.metaDesc) issues.push({ type: 'problem', text: 'Meta description is empty' });
+            else {
+              if (page.metaDescLen < 120) issues.push({ type: 'warning', text: `Meta description short (${page.metaDescLen} chars) — aim for 120-155` });
+              if (page.metaDescLen > 155) issues.push({ type: 'warning', text: `Meta description too long (${page.metaDescLen} chars) — max 155` });
+              if (page.metaDescLen >= 120 && page.metaDescLen <= 155) issues.push({ type: 'good', text: 'Meta description length is good' });
+              if (kwLower && page.metaDesc.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Meta description contains focus keyword' });
+            }
+            if (!page.focusKeyword) issues.push({ type: 'problem', text: 'No focus keyword set' });
+            // Preserve non-meta issues (word count, links, images, etc.)
+            const metaIssueTexts = ['Meta title', 'Title tag', 'Meta description', 'No focus keyword', 'Focus keyword not'];
+            const preserved = (page.issues || []).filter(i => !metaIssueTexts.some(t => i.text.startsWith(t)));
+            page.issues = [...issues, ...preserved];
+            // Recalculate yoastScore heuristic
+            const problems = page.issues.filter(i => i.type === 'problem').length;
+            const warnings = page.issues.filter(i => i.type === 'warning').length;
+            if (problems === 0 && warnings <= 1) page.yoastScore = 'green';
+            else if (problems <= 1) page.yoastScore = 'orange';
+            else page.yoastScore = 'red';
+          }
+          await pool.query(
+            `UPDATE onpage_audit_cache SET results = $1, updated_at = NOW() WHERE project_id = $2`,
+            [JSON.stringify(cached), projectId]
+          );
+          console.log(`[onpage-fix] Updated onpage_audit_cache for ${successIds.length} pages`);
+        }
+      } catch (cacheErr) { console.log('[onpage-fix] Cache update failed:', cacheErr.message); }
+
+      // 2. Update site_graph audit — recalculate issues for fixed nodes
+      try {
+        const graphRes = await pool.query(
+          `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+          [projectId]
+        );
+        if (graphRes.rows.length > 0) {
+          const graphData = graphRes.rows[0].audit_data;
+          const auditId = graphRes.rows[0].id;
+          if (graphData && graphData.nodes) {
+            let updated = false;
+            for (const node of graphData.nodes) {
+              const fix = fixMap[node.id];
+              if (!fix) continue;
+              updated = true;
+              if (fix.new_meta_title) { node.metaTitle = fix.new_meta_title; node.metaTitleLen = fix.new_meta_title.length; }
+              if (fix.new_meta_desc) { node.metaDesc = fix.new_meta_desc; node.metaDescLen = fix.new_meta_desc.length; }
+              if (fix.new_focus_keyword) node.focusKeyword = fix.new_focus_keyword;
+              // Rebuild issues
+              const issues = [];
+              const kwLower = (node.focusKeyword || '').toLowerCase();
+              if (!node.metaTitle) issues.push({ type: 'problem', text: 'Meta title is missing' });
+              else {
+                if ((node.metaTitleLen || 0) < 30) issues.push({ type: 'problem', text: `Meta title too short (${node.metaTitleLen} chars) — should be 50-60` });
+                if ((node.metaTitleLen || 0) > 60) issues.push({ type: 'warning', text: `Meta title too long (${node.metaTitleLen} chars) — max 60` });
+                if ((node.metaTitleLen || 0) >= 50 && (node.metaTitleLen || 0) <= 60) issues.push({ type: 'good', text: 'Title tag length is good' });
+                if (kwLower && node.metaTitle.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Title tag contains focus keyword' });
+                else if (kwLower) issues.push({ type: 'warning', text: 'Focus keyword not in title tag' });
+              }
+              if (!node.metaDesc) issues.push({ type: 'problem', text: 'Meta description is empty' });
+              else {
+                if ((node.metaDescLen || 0) < 120) issues.push({ type: 'warning', text: `Meta description short (${node.metaDescLen} chars) — aim for 120-155` });
+                if ((node.metaDescLen || 0) > 155) issues.push({ type: 'warning', text: `Meta description too long (${node.metaDescLen} chars) — max 155` });
+                if ((node.metaDescLen || 0) >= 120 && (node.metaDescLen || 0) <= 155) issues.push({ type: 'good', text: 'Meta description length is good' });
+                if (kwLower && node.metaDesc.toLowerCase().includes(kwLower)) issues.push({ type: 'good', text: 'Meta description contains focus keyword' });
+              }
+              if (!node.focusKeyword) issues.push({ type: 'problem', text: 'No focus keyword set' });
+              // Preserve non-meta issues
+              const metaIssueTexts = ['Meta title', 'Title tag', 'Meta description', 'No focus keyword', 'Focus keyword not'];
+              const preserved = (node.issues || []).filter(i => !metaIssueTexts.some(t => i.text.startsWith(t)));
+              node.issues = [...issues, ...preserved];
+            }
+            if (updated) {
+              // Recalculate stats
+              const allNodes = graphData.nodes;
+              const totalIssues = allNodes.reduce((sum, n) => sum + (n.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').length, 0);
+              const pagesWithIssues = allNodes.filter(n => (n.issues || []).some(i => i.type === 'problem' || i.type === 'warning')).length;
+              if (graphData.stats) {
+                graphData.stats.totalIssues = totalIssues;
+                graphData.stats.pagesWithIssues = pagesWithIssues;
+              }
+              await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), auditId]);
+              console.log(`[onpage-fix] Updated site_graph audit data for ${successIds.length} nodes`);
+            }
+          }
+        }
+      } catch (graphErr) { console.log('[onpage-fix] Graph cache update failed:', graphErr.message); }
+    }
+
     res.json({ results });
   } catch (e) {
     console.error('[onpage-fix] Error:', e.message);

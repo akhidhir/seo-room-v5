@@ -5689,7 +5689,7 @@
           // Next step hint
           React.createElement('div', { style: { marginTop: 20, padding: '12px 16px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 8, fontSize: 12, color: 'var(--text2)' } },
             React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6, color: 'var(--accent)' } }),
-            'Next step: expand "New Website" in the sidebar and go to ',
+            'Next step: expand "New Website Copywriter" in the sidebar and go to ',
             React.createElement('strong', null, 'Keywords'),
             ' to upload your target keywords.'
           )
@@ -8180,9 +8180,11 @@
         </div>
       );
 
-      // Group issues by type
+      // Group issues by type — exclude fixed pages
+      const isNodeFixed = (n) => fixing['meta-' + n.id] === 'fixed' || fixing[n.id] === 'fixed' || fixing[n.id] === 'linked';
       const issueGroups = {};
       graphData.nodes.forEach(n => {
+        if (isNodeFixed(n)) return; // Skip fixed pages
         n.issues.forEach(issue => {
           const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
           if (!issueGroups[key]) issueGroups[key] = [];
@@ -8318,6 +8320,8 @@
           if (r?.success) {
             setFixing(prev => ({ ...prev, ['meta-' + pageNode.id]: 'fixed' }));
             setApplyResult({ success: true, message: 'Updated successfully! ' + (r.changes || 0) + ' field(s) changed.' });
+            // Re-fetch graph data so stats + graph reflect the fix
+            try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
             setTimeout(() => { setPreviewPage(null); setApplyResult(null); }, 2000);
           } else {
             const errMsg = r?.error || 'Unknown error';
@@ -8382,6 +8386,8 @@
               }
             }
           }
+          // Re-fetch graph data so stats + graph reflect bulk fixes
+          try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
         } catch(e) { console.error(e); }
         setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = false); return n; });
       };
@@ -8398,7 +8404,7 @@
                 Site Issues
               </h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>
-                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0).length} pages · {groupEntries.length} issue types
+                {totalIssues} issues across {graphData.nodes.filter(n => n.issues.length > 0 && !isNodeFixed(n)).length} pages · {groupEntries.length} issue types
               </div>
             </div>
           </div>
@@ -9963,7 +9969,6 @@
         }]);
         setSelectedText('');
         setSending(true);
-        console.log('[OptimiseModal] scoreData.competitorData:', scoreData?.competitorData ? 'YES' : 'NONE', scoreData?.wordTarget);
 
         try {
           const r = await api('/projects/' + pid + '/' + tablePrefix + '/' + preview.item_id + '/re-optimise', {
@@ -13449,7 +13454,7 @@ case 'action-plan':
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
         ]},
         { section: 'COPYWRITER', items: [
-          { id: 'nw-project', label: 'New Website', icon: 'fas fa-globe', expandable: true, children: [
+          { id: 'nw-project', label: 'New Website Copywriter', icon: 'fas fa-globe', expandable: true, children: [
             { id: 'nw-research', label: 'Keyword Research', icon: 'fas fa-search' },
             { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
             { id: 'nw-pages', label: 'Page Setup', icon: 'fas fa-sitemap' },
