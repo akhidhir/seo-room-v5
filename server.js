@@ -394,6 +394,8 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_image TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_status TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_content TEXT`).catch(() => {});
 
     // Content keywords — for new project keyword workflow
     await client.query(`
@@ -4879,7 +4881,7 @@ ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}`;
   }
 });
 
-// Publish approved content to WordPress
+// Stage 1: Push approved content to WordPress as DRAFT for preview
 app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) => {
   try {
     const { projectId, id } = req.params;
@@ -4893,25 +4895,26 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Snapshot current values for rollback
+    // Snapshot current live values for rollback
     const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
-
-    // Build update payload
-    const payload = {};
-    const changes = [];
-
-    // Update content if we have a draft
-    if (item.draft_content && item.content_type !== 'meta_only') {
-      // Snapshot current content
-      const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { headers: authHeaders });
-      if (pageResp.ok) {
-        const pageData = await pageResp.json();
-        changes.push({ field: 'content', old: (pageData.content?.rendered || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
-        payload.content = item.draft_content;
-      }
+    let currentContent = '';
+    let currentStatus = 'publish';
+    const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { headers: authHeaders });
+    if (pageResp.ok) {
+      const pageData = await pageResp.json();
+      currentContent = pageData.content?.rendered || '';
+      currentStatus = pageData.status || 'publish';
     }
 
-    // Update meta
+    // Build the draft payload — set status to 'draft' so it doesn't go live
+    const payload = { status: 'draft' };
+    const changes = [];
+
+    if (item.draft_content && item.content_type !== 'meta_only') {
+      changes.push({ field: 'content', old: currentContent.slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+      payload.content = item.draft_content;
+    }
+
     const metaPayload = {};
     if (item.draft_meta_title) {
       changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
@@ -4927,9 +4930,9 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
     }
     if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
 
-    if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'Nothing to publish' });
+    if (changes.length === 0) return res.status(400).json({ error: 'Nothing to publish' });
 
-    // Try pages first, then posts
+    // Push to WP as draft
     let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
       method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -4945,7 +4948,66 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
       return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
     }
 
+    const wpResult = await writeResp.json();
+    const previewUrl = wpResult.link ? wpResult.link + (wpResult.link.includes('?') ? '&preview=true' : '?preview=true') : null;
+
+    // Save snapshot for rollback
+    await pool.query(
+      `UPDATE content_queue SET wp_previous_status=$1, wp_previous_content=$2, updated_at=NOW() WHERE id=$3`,
+      [currentStatus, currentContent.slice(0, 50000), id]
+    );
+
+    // Move to 'staging' stage (WP draft created, pending go-live approval)
+    await pool.query(
+      `UPDATE content_queue SET stage='staging', updated_at=NOW() WHERE id=$1`, [id]
+    );
+
+    console.log(`[copywriter] Pushed item ${id} to WP as draft (page ${item.page_id})`);
+    res.json({ success: true, stage: 'staging', preview_url: previewUrl, changes: changes.length });
+  } catch (e) {
+    console.error('[copywriter] Publish-to-draft error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Stage 2: Go Live — set WP draft to published
+app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (item.stage !== 'staging') return res.status(400).json({ error: 'Item must be in staging before going live' });
+    if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Set status to 'publish' — goes live
+    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'publish' }),
+    });
+    if (!writeResp.ok) {
+      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'publish' }),
+      });
+    }
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress publish failed: ${errText.slice(0, 300)}` });
+    }
+
     // Save to wp_change_history for rollback
+    const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
+    const changes = [];
+    if (item.draft_content) changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+    if (item.draft_meta_title) changes.push({ field: 'yoast_wpseo_title', old: '', new: item.draft_meta_title });
+    if (item.draft_meta_desc) changes.push({ field: 'yoast_wpseo_metadesc', old: '', new: item.draft_meta_desc });
+    if (item.draft_focus_keyword) changes.push({ field: 'yoast_wpseo_focuskw', old: '', new: item.draft_focus_keyword });
+
     for (const ch of changes) {
       await pool.query(
         `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
@@ -4954,17 +5016,49 @@ app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) 
       );
     }
 
-    // Update stage to published
     await pool.query(
-      `UPDATE content_queue SET stage='published', published_at=NOW(), updated_at=NOW() WHERE id=$1`,
-      [id]
+      `UPDATE content_queue SET stage='published', published_at=NOW(), updated_at=NOW() WHERE id=$1`, [id]
     );
-    console.log(`[copywriter] Published item ${id} to WordPress page ${item.page_id}`);
-    res.json({ success: true, changes: changes.length });
+
+    console.log(`[copywriter] Item ${id} went LIVE on page ${item.page_id}`);
+    res.json({ success: true, stage: 'published' });
   } catch (e) {
-    console.error('[copywriter] Publish error:', e.message);
+    console.error('[copywriter] Go-live error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Revert staging — set WP page back to its previous status and return item to approved
+app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (item.stage !== 'staging') return res.status(400).json({ error: 'Item is not in staging' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+
+    // Restore the WP page to its previous status + content
+    if (wpUrl && authHeaders && item.page_id) {
+      const restorePayload = { status: item.wp_previous_status || 'publish' };
+      if (item.wp_previous_content) restorePayload.content = item.wp_previous_content;
+      let resp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(restorePayload),
+      });
+      if (!resp.ok) {
+        await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify(restorePayload),
+        });
+      }
+    }
+
+    await pool.query(`UPDATE content_queue SET stage='approved', updated_at=NOW() WHERE id=$1`, [id]);
+    res.json({ success: true, stage: 'approved' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== COPYWRITER ADVANCED ENDPOINTS ====================

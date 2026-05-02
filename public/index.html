@@ -9479,11 +9479,12 @@
       const [editorKey, setEditorKey] = useState(0);
 
       const pid = project ? project.id : null;
-      const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
+      const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', staging: 'staging', published: 'published' };
       const stageLabels = {
         queue: { title: 'Content Queue', icon: 'fas fa-inbox', desc: 'Pages sent from On-Page Audit waiting to be drafted' },
         drafts: { title: 'Drafts', icon: 'fas fa-pen', desc: 'AI-generated content ready for editing and review' },
-        approved: { title: 'Approved', icon: 'fas fa-check-circle', desc: 'Content approved and ready to publish to WordPress' },
+        approved: { title: 'Approved', icon: 'fas fa-check-circle', desc: 'Content approved and ready to push to WordPress' },
+        staging: { title: 'Staging', icon: 'fas fa-eye', desc: 'Pushed to WordPress as draft — preview then Go Live or Revert' },
         published: { title: 'Published', icon: 'fas fa-paper-plane', desc: 'Live content with rollback capability via Change History' },
       };
 
@@ -9538,6 +9539,7 @@
         queue: allItems.filter(d => d.stage === 'queue').length,
         drafts: allItems.filter(d => d.stage === 'drafts').length,
         approved: allItems.filter(d => d.stage === 'approved').length,
+        staging: allItems.filter(d => d.stage === 'staging').length,
         published: allItems.filter(d => d.stage === 'published').length,
       };
 
@@ -9586,11 +9588,45 @@
       };
 
       const handlePublish = async (item) => {
-        if (!pid || !confirm('Publish to WordPress?')) return;
+        if (!pid || !confirm('Push to WordPress as draft for preview?')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/publish', { method: 'POST' });
-          if (data && !data.error) { await loadItems(); alert('Published!'); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
+          if (data && !data.error) {
+            await loadItems();
+            if (data.preview_url) {
+              alert('Pushed to WordPress as draft! Preview it, then click "Go Live" to publish.\n\nPreview: ' + data.preview_url);
+              window.open(data.preview_url, '_blank');
+            }
+            if (selectedItem && selectedItem.id === item.id) setSelectedItem(null);
+          }
           else { alert(data?.error || 'Publish failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      const handleGoLive = async (item) => {
+        if (!pid || !confirm('Go live? This will make the draft page visible to the public.')) return;
+        try {
+          const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/go-live', { method: 'POST' });
+          if (data && !data.error) { await loadItems(); alert('Page is now live!'); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
+          else { alert(data?.error || 'Go-live failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      const handleRevertStaging = async (item) => {
+        if (!pid || !confirm('Revert? This will restore the original page and move this item back to Approved.')) return;
+        try {
+          const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/revert-staging', { method: 'POST' });
+          if (data && !data.error) { await loadItems(); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
+          else { alert(data?.error || 'Revert failed'); }
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      const handleSendBackToDrafts = async (item) => {
+        if (!pid) return;
+        try {
+          await api('/projects/' + pid + '/content-queue/' + item.id, { method: 'PUT', body: { stage: 'drafts' } });
+          await loadItems();
+          if (selectedItem && selectedItem.id === item.id) setSelectedItem(null);
         } catch (e) { alert('Error: ' + e.message); }
       };
 
@@ -9721,7 +9757,7 @@
       };
 
       if (selectedItem) {
-        const isPublished = selectedItem.stage === 'published';
+        const isPublished = selectedItem.stage === 'published' || selectedItem.stage === 'staging';
         const hasDraft = !!(selectedItem.draft_content);
 
         // Detail view: editor with score panel, chat, optimise
@@ -9779,8 +9815,17 @@
               ),
               // Approve
               (selectedItem.stage === 'drafts' || selectedItem.stage === 'queue') && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
-              // Publish
-              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Publish'),
+              // Send Back to Drafts — for approved items
+              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handleSendBackToDrafts(selectedItem), style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13 } },
+                React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back to Drafts'),
+              // Publish (push as WP draft for preview)
+              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } },
+                React.createElement('i', { className: 'fas fa-upload', style: { marginRight: 6 } }), 'Push to WP Draft'),
+              // Staging — Go Live or Revert
+              selectedItem.stage === 'staging' && React.createElement('button', { onClick: () => handleRevertStaging(selectedItem), style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13 } },
+                React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Revert to Approved'),
+              selectedItem.stage === 'staging' && React.createElement('button', { onClick: () => handleGoLive(selectedItem), style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
+                React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), 'Go Live'),
               // Revise — move published back to drafts for re-editing
               isPublished && React.createElement('button', {
                 onClick: async () => {
@@ -10135,11 +10180,12 @@
           React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: 0 } }, stageLabels[stage].desc)
         ),
         // Stage tabs
-        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' } },
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' } },
           [
             { key: 'queue', label: 'Queue', icon: 'fas fa-inbox' },
             { key: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
             { key: 'approved', label: 'Approved', icon: 'fas fa-check-circle' },
+            { key: 'staging', label: 'Staging', icon: 'fas fa-eye' },
             { key: 'published', label: 'Published', icon: 'fas fa-paper-plane' },
           ].map(s => React.createElement('div', { key: s.key, onClick: () => setPage && setPage('ow-' + s.key), style: {
             padding: '12px 16px', textAlign: 'center',
@@ -10211,9 +10257,14 @@
                     React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Generating...') :
                     React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 4 } }), 'Generate')
                   ),
-                  // Stage-specific action
+                  // Stage-specific actions
                   stage === 'drafts' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleApprove(item); }, style: { padding: '6px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Approve'),
-                  stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handlePublish(item); }, style: { padding: '6px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Publish')
+                  stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleSendBackToDrafts(item); }, style: { padding: '6px 12px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
+                    React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 4 } }), 'Drafts'),
+                  stage === 'approved' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handlePublish(item); }, style: { padding: '6px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Push to WP'),
+                  stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleRevertStaging(item); }, style: { padding: '6px 12px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Revert'),
+                  stage === 'staging' && React.createElement('button', { onClick: (e) => { e.stopPropagation(); handleGoLive(item); }, style: { padding: '6px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
+                    React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 4 } }), 'Go Live')
                 )
               )
             )
@@ -13916,6 +13967,8 @@ case 'action-plan':
             return <CopywriterPage stage="drafts" project={project} setPage={setActiveTab} />;
           case 'ow-approved':
             return <CopywriterPage stage="approved" project={project} setPage={setActiveTab} />;
+          case 'ow-staging':
+            return <CopywriterPage stage="staging" project={project} setPage={setActiveTab} />;
           case 'ow-published':
             return <CopywriterPage stage="published" project={project} setPage={setActiveTab} />;
           case 'maps-rankings':
@@ -13980,6 +14033,7 @@ case 'action-plan':
             { id: 'ow-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
             { id: 'ow-drafts', label: 'Drafts', icon: 'fas fa-pen' },
             { id: 'ow-approved', label: 'Approved', icon: 'fas fa-check-circle' },
+            { id: 'ow-staging', label: 'Staging', icon: 'fas fa-eye' },
             { id: 'ow-published', label: 'Published', icon: 'fas fa-paper-plane' },
           ]},
         ]},
