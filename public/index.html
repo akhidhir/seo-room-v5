@@ -8317,7 +8317,9 @@
               title: pageNode.title,
               new_meta_title: s.suggested_title,
               new_meta_desc: s.suggested_desc,
-              new_focus_keyword: s.suggested_keyword
+              new_focus_keyword: s.suggested_keyword,
+              fix_h1: !!s.add_h1,
+              h1_text: s.h1_text || ''
             }]}
           });
           const r = data.results && data.results[0];
@@ -8557,6 +8559,15 @@
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{previewPage.title}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16 }}>{previewPage.url}</div>
+
+                {aiSuggestions[previewPage.id].add_h1 && (
+                  <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 6, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6366f1', marginBottom: 4 }}>
+                      <i className="fas fa-heading" style={{ marginRight: 4 }} />H1 TAG FIX
+                    </div>
+                    <div style={{ fontSize: 12 }}>Will add <code style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: 3 }}>&lt;h1&gt;{aiSuggestions[previewPage.id].h1_text || previewPage.title}&lt;/h1&gt;</code> to page content</div>
+                  </div>
+                )}
 
                 {[
                   { label: 'Meta Title', current: previewPage.meta_title, suggested: aiSuggestions[previewPage.id].suggested_title },

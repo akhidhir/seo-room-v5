@@ -2614,6 +2614,18 @@ Rules:
       return res.status(500).json({ error: 'AI failed to generate suggestions for any pages' });
     }
 
+    // Auto-add H1 fix flag for pages missing H1
+    for (const s of allSuggestions) {
+      const page = pages.find(p => String(p.id) === String(s.id));
+      if (page) {
+        const issues = (page.issues || []).map(i => typeof i === 'string' ? i : (i.text || ''));
+        if (issues.some(i => i.includes('Missing H1'))) {
+          s.add_h1 = true;
+          s.h1_text = page.title || s.suggested_title || '';
+        }
+      }
+    }
+
     res.json({ suggestions: allSuggestions });
   } catch (e) {
     console.error('[onpage-suggest] Error:', e.message);
@@ -2699,8 +2711,39 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
           await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
             [projectId, current.wpId, page.url || '', page.title || '', ch.field, ch.old, ch.new]);
         }
-        results.push({ id: s.id, success: true, changes: changes.length });
-        console.log(`[bulk-fix] Fixed ${s.id} (${changes.length} fields)`);
+
+        // Handle H1 fix if page has Missing H1 issue
+        let h1Fixed = false;
+        const pageIssues = (page.issues || []).map(i => typeof i === 'string' ? i : (i.text || ''));
+        if (pageIssues.some(i => i.includes('Missing H1'))) {
+          try {
+            const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+              headers: authHeaders, signal: AbortSignal.timeout(15000)
+            });
+            if (pageResp.ok) {
+              const pageData = await pageResp.json();
+              const content = pageData.content?.raw || pageData.content?.rendered || '';
+              if (!/<h1[\s>]/i.test(content)) {
+                const h1Text = page.title || s.suggested_title || '';
+                const newContent = `<h1>${h1Text}</h1>\n${content}`;
+                const h1WriteResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+                  method: 'POST', headers: authHeaders,
+                  body: JSON.stringify({ content: newContent }),
+                  signal: AbortSignal.timeout(15000)
+                });
+                if (h1WriteResp.ok) {
+                  h1Fixed = true;
+                  await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'h1_fix', 'content', $5, $6)`,
+                    [projectId, current.wpId, page.url || '', page.title || '', content.substring(0, 5000), newContent.substring(0, 5000)]);
+                  console.log(`[bulk-fix] Added H1 to page ${current.wpId}`);
+                }
+              } else { h1Fixed = true; }
+            }
+          } catch (h1Err) { console.warn(`[bulk-fix] H1 fix error:`, h1Err.message); }
+        }
+
+        results.push({ id: s.id, success: true, changes: changes.length, h1Fixed });
+        console.log(`[bulk-fix] Fixed ${s.id} (${changes.length} fields${h1Fixed ? ' + H1' : ''})`);
       } catch (e) { results.push({ id: s.id, success: false, error: e.message }); }
     }
 
@@ -2713,6 +2756,23 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
           const graphData = graphRes.rows[0].audit_data;
           const auditId = graphRes.rows[0].id;
           if (graphData && graphData.nodes) {
+            // Update h1 for nodes where H1 was fixed
+            for (const node of graphData.nodes) {
+              const r = results.find(r => String(r.id) === String(node.id));
+              if (r && r.h1Fixed) {
+                const page = pages.find(p => String(p.id) === String(node.id));
+                node.h1 = page?.title || node.title || '';
+                // Rebuild issues
+                const newIssues = [];
+                if (!node.h1) newIssues.push('Missing H1 tag');
+                if (node.word_count < 300) newIssues.push('Thin content (' + node.word_count + ' words)');
+                if (!node.internal_links || node.internal_links.length === 0) newIssues.push('No outbound internal links');
+                if ((node.inbound_count || 0) === 0 && node.slug !== 'home' && node.slug !== '') newIssues.push('Orphan page — no inbound links');
+                node.issues = newIssues;
+              }
+            }
+            // Recalculate stats
+            graphData.stats.issues = graphData.nodes.reduce((sum, n) => sum + (n.issues || []).length, 0);
             if (!graphData.fixed_nodes) graphData.fixed_nodes = [];
             for (const id of successIds) { if (!graphData.fixed_nodes.includes(id)) graphData.fixed_nodes.push(id); }
             await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), auditId]);
@@ -2766,72 +2826,112 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           changes.push({ field: 'yoast_wpseo_focuskw', old: current.yoast_wpseo_focuskw, new: fix.new_focus_keyword });
         }
 
-        if (changes.length === 0) {
+        if (changes.length === 0 && !fix.fix_h1) {
           results.push({ id: fix.id, success: true, skipped: true, changes: 0 });
           continue;
         }
 
-        // 3. Write new values to WordPress — try meta approach first, fall back to yoast_meta
-        const meta = {};
-        if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
-        if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
-        if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
+        // 3. Write meta values to WordPress (only if there are meta changes)
+        if (changes.length > 0) {
+          const meta = {};
+          if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
+          if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
+          if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
 
-        console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
+          console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
 
-        let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify({ meta }),
-          signal: AbortSignal.timeout(15000)
-        });
-
-        // If meta write fails with 401/403, try yoast_meta wrapper (some Yoast versions expose this)
-        if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
-          console.log(`[onpage-fix] Meta write failed (${writeResp.status}), trying yoast_meta wrapper...`);
-          const yoastPayload = {};
-          if (fix.new_meta_title) yoastPayload.yoast_wpseo_title = fix.new_meta_title;
-          if (fix.new_meta_desc) yoastPayload.yoast_wpseo_metadesc = fix.new_meta_desc;
-          if (fix.new_focus_keyword) yoastPayload.yoast_wpseo_focuskw = fix.new_focus_keyword;
-
-          writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+          let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
             method: 'POST',
             headers: authHeaders,
-            body: JSON.stringify({ yoast_meta: yoastPayload }),
+            body: JSON.stringify({ meta }),
             signal: AbortSignal.timeout(15000)
           });
-        }
 
-        if (!writeResp.ok) {
-          const errText = await writeResp.text();
-          console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
-          results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
-          continue;
-        }
+          // If meta write fails with 401/403, try yoast_meta wrapper (some Yoast versions expose this)
+          if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+            console.log(`[onpage-fix] Meta write failed (${writeResp.status}), trying yoast_meta wrapper...`);
+            const yoastPayload = {};
+            if (fix.new_meta_title) yoastPayload.yoast_wpseo_title = fix.new_meta_title;
+            if (fix.new_meta_desc) yoastPayload.yoast_wpseo_metadesc = fix.new_meta_desc;
+            if (fix.new_focus_keyword) yoastPayload.yoast_wpseo_focuskw = fix.new_focus_keyword;
 
-        // 4. Verify write succeeded by reading back
-        const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
-        const verified = verify && (
-          (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) ||
-          (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc)
-        );
+            writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+              method: 'POST',
+              headers: authHeaders,
+              body: JSON.stringify({ yoast_meta: yoastPayload }),
+              signal: AbortSignal.timeout(15000)
+            });
+          }
 
-        if (!verified) {
-          console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
-          results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The seoroom-helper plugin may be needed to register Yoast meta fields for REST API writes.' });
-          continue;
-        }
+          if (!writeResp.ok) {
+            const errText = await writeResp.text();
+            console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
+            results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
+            continue;
+          }
 
-        // Save each field change to history ONLY after verified write
-        for (const ch of changes) {
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-             VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
-            [projectId, current.wpId, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
+          // 4. Verify write succeeded by reading back
+          const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+          const verified = verify && (
+            (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) ||
+            (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc)
           );
+
+          if (!verified) {
+            console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
+            results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The seoroom-helper plugin may be needed to register Yoast meta fields for REST API writes.' });
+            continue;
+          }
+
+          // Save each field change to history ONLY after verified write
+          for (const ch of changes) {
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
+              [projectId, current.wpId, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
+            );
+          }
         }
 
-        results.push({ id: fix.id, success: true, changes: changes.length });
+        // Handle H1 fix — add H1 tag to page content if requested
+        let h1Fixed = false;
+        if (fix.fix_h1) {
+          try {
+            const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+              headers: authHeaders, signal: AbortSignal.timeout(15000)
+            });
+            if (pageResp.ok) {
+              const pageData = await pageResp.json();
+              const content = pageData.content?.raw || pageData.content?.rendered || '';
+              const hasH1 = /<h1[\s>]/i.test(content);
+              if (!hasH1) {
+                const h1Text = fix.h1_text || fix.title || 'Untitled';
+                const newContent = `<h1>${h1Text}</h1>\n${content}`;
+                const h1WriteResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+                  method: 'POST', headers: authHeaders,
+                  body: JSON.stringify({ content: newContent }),
+                  signal: AbortSignal.timeout(15000)
+                });
+                if (h1WriteResp.ok) {
+                  h1Fixed = true;
+                  await pool.query(
+                    `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+                     VALUES ($1, $2, $3, $4, 'h1_fix', 'content', $5, $6)`,
+                    [projectId, current.wpId, fix.url || '', fix.title || '', content.substring(0, 5000), newContent.substring(0, 5000)]
+                  );
+                  console.log(`[onpage-fix] Added H1 tag to page ${current.wpId}`);
+                } else {
+                  console.warn(`[onpage-fix] H1 write failed: ${h1WriteResp.status}`);
+                }
+              } else {
+                console.log(`[onpage-fix] Page ${current.wpId} already has H1 in content`);
+                h1Fixed = true; // already has H1, count as fixed
+              }
+            }
+          } catch (h1Err) { console.warn(`[onpage-fix] H1 fix error:`, h1Err.message); }
+        }
+
+        results.push({ id: fix.id, success: true, changes: changes.length, h1Fixed });
         console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields) — verified ✓`);
       } catch (e) {
         results.push({ id: fix.id, success: false, error: e.message });
@@ -2931,6 +3031,11 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
               // Update stored values (snake_case fields)
               if (fix.new_meta_title) node.meta_title = fix.new_meta_title;
               if (fix.new_meta_desc) node.meta_description = fix.new_meta_desc;
+              // If H1 was fixed, update the cached h1 value
+              const fixResult = results.find(r => String(r.id) === String(fix.id));
+              if (fix.fix_h1 && fixResult && fixResult.h1Fixed) {
+                node.h1 = fix.h1_text || fix.title || node.title || '';
+              }
               // Rebuild issues array (plain strings, matching crawlSiteGraph format — no meta checks, On-Page Audit handles those)
               const newIssues = [];
               if (!node.h1) newIssues.push('Missing H1 tag');
