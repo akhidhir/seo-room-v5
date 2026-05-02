@@ -7266,6 +7266,7 @@
               targetKeywords: targetKeywords,
               projectId: pid,
               itemId: page.id,
+              pageTitle: page.page_title || page.title || '',
               onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(targetKeywords.concat([kw])); },
               onRemoveKeyword: function(kw) { setTargetKeywords(targetKeywords.filter(function(k) { return k !== kw; })); },
               onScoreChange: setScoreData
@@ -9017,7 +9018,7 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, pageTitle }) {
       const text = useMemo(() => {
         if (!content) return '';
         const div = document.createElement('div');
@@ -9070,7 +9071,7 @@
       const [checkingCompetitors, setCheckingCompetitors] = useState(false);
 
       const checkCompetitorWords = async () => {
-        const kw = focusKeyword || (targetKeywords && targetKeywords[0]) || '';
+        const kw = focusKeyword || (targetKeywords && targetKeywords[0]) || pageTitle || '';
         if (!kw || !projectId || checkingCompetitors) return;
         setCheckingCompetitors(true);
         try {
@@ -9160,7 +9161,7 @@
               React.createElement('i', { className: 'fa-solid fa-crosshairs', style: { marginRight: 4 } }), 'Word Target: ', wt.toLocaleString()
             ),
             React.createElement('button', {
-              onClick: checkCompetitorWords, disabled: checkingCompetitors || (!focusKeyword && (!targetKeywords || !targetKeywords.length)),
+              onClick: checkCompetitorWords, disabled: checkingCompetitors || (!focusKeyword && (!targetKeywords || !targetKeywords.length) && !pageTitle),
               style: { padding: '4px 10px', fontSize: 11, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer' }
             }, checkingCompetitors ?
               React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Checking...') :
@@ -9859,6 +9860,7 @@
                 targetKeywords: targetKeywords,
                 projectId: pid,
                 itemId: selectedItem?.id,
+                pageTitle: selectedItem?.page_title || '',
                 onAddKeyword: (kw) => !targetKeywords.includes(kw) && setTargetKeywords([...targetKeywords, kw]),
                 onRemoveKeyword: (kw) => setTargetKeywords(targetKeywords.filter(k => k !== kw)),
                 onScoreChange: setScoreData
