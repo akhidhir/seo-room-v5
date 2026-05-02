@@ -4676,7 +4676,21 @@ app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
 
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-    const loc = location || project?.location || 'Perth, Western Australia, Australia';
+    let loc = location || project?.location || 'Perth, Western Australia, Australia';
+    // Normalize location for SerpAPI — fix common issues
+    loc = loc.replace(/\s+,/g, ',').replace(/,\s+/g, ', ').trim();
+    // SerpAPI needs state as full name, not abbreviation
+    loc = loc.replace(/\bWA\b/, 'Western Australia').replace(/\bNSW\b/, 'New South Wales')
+             .replace(/\bVIC\b/, 'Victoria').replace(/\bQLD\b/, 'Queensland')
+             .replace(/\bSA\b/, 'South Australia').replace(/\bTAS\b/, 'Tasmania')
+             .replace(/\bNT\b/, 'Northern Territory').replace(/\bACT\b/, 'Australian Capital Territory');
+    // If location has suburb + city, use just the city/state for SERP (e.g. "Bayswater, Perth, WA" → "Perth, Western Australia, Australia")
+    const locParts = loc.split(',').map(p => p.trim());
+    if (locParts.length >= 3) {
+      // Try: city, state, country (skip suburb)
+      loc = locParts.slice(1).join(', ');
+    }
+    if (!loc.includes('Australia')) loc += ', Australia';
 
     console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
     const serpData = await serpApiSearch({
@@ -4726,11 +4740,15 @@ app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
 
     const results = (await Promise.all(fetchPromises)).filter(Boolean);
     const withWords = results.filter(r => r.words && !r.isOwn);
+    // Sort by position (ranking order) for top 3 calc, then by word count for stats
+    const byPosition = [...withWords].sort((a, b) => a.position - b.position);
     const wordCounts = withWords.map(r => r.words).sort((a, b) => a - b);
 
     const avg = wordCounts.length ? Math.round(wordCounts.reduce((a, b) => a + b, 0) / wordCounts.length) : 0;
     const median = wordCounts.length ? wordCounts[Math.floor(wordCounts.length / 2)] : 0;
-    const top3Avg = wordCounts.slice(0, 3).length ? Math.round(wordCounts.slice(0, 3).reduce((a, b) => a + b, 0) / Math.min(3, wordCounts.length)) : 0;
+    // Top 3 = top 3 ranking pages (by SERP position), not lowest word count
+    const top3Words = byPosition.slice(0, 3).map(r => r.words);
+    const top3Avg = top3Words.length ? Math.round(top3Words.reduce((a, b) => a + b, 0) / top3Words.length) : 0;
     // Recommended: aim for 10-20% more than top 3 average
     const recommended = top3Avg ? Math.round(top3Avg * 1.15 / 50) * 50 : 1500;
 
