@@ -7341,19 +7341,22 @@ async function crawlSiteGraph(project) {
   if (wpUrl && authHeaders) {
     const wpBase = wpUrl.replace(/\/$/, '');
     const slugToId = {};
+    const slugToModified = {};
     try {
       for (const type of ['pages', 'posts']) {
         let page = 1;
         while (page <= 5) {
-          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,link,modified`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
           if (!resp.ok) break;
           const items = await resp.json();
           if (!Array.isArray(items) || items.length === 0) break;
           items.forEach(item => {
             slugToId[item.slug] = item.id;
+            if (item.modified) slugToModified[item.slug] = item.modified;
             if (item.link) {
               const linkSlug = item.link.replace(fullUrl, '').replace(/^\/|\/$/g, '') || 'home';
               slugToId[linkSlug] = item.id;
+              if (item.modified) slugToModified[linkSlug] = item.modified;
             }
           });
           if (items.length < 100) break;
@@ -7380,7 +7383,7 @@ async function crawlSiteGraph(project) {
   for (let b = 0; b < pages.length; b += batchSize) {
     const batch = pages.slice(b, b + batchSize);
     const results = await Promise.allSettled(batch.map(async (p) => {
-      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [] };
+      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [], last_modified: slugToModified[p.slug] || null };
       try {
         const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
         if (resp.ok) {
@@ -7391,6 +7394,10 @@ async function crawlSiteGraph(project) {
           node.meta_description = descMatch ? descMatch[1].trim() : '';
           const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
           node.h1 = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').trim() : '';
+          if (!node.last_modified) {
+            const modMatch = html.match(/<meta[^>]*property=["']article:modified_time["'][^>]*content=["']([^"']*)["']/i);
+            if (modMatch) node.last_modified = modMatch[1];
+          }
           const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
           if (bodyMatch) {
             const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');

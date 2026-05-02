@@ -7876,6 +7876,21 @@
         poorTag.append('rect').attr('rx', 3).attr('fill', '#ef4444').attr('x', -18).attr('y', R + 3).attr('width', 36).attr('height', 12);
         poorTag.append('text').text('POOR').attr('text-anchor', 'middle').attr('y', R + 12).attr('font-size', 7).attr('fill', '#fff').attr('font-weight', 700);
 
+        // Last modified date tag
+        const fmtDate = d => {
+          if (!d.last_modified) return null;
+          const dt = new Date(d.last_modified);
+          if (isNaN(dt)) return null;
+          const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          return months[dt.getMonth()] + ' ' + dt.getFullYear().toString().slice(-2);
+        };
+        const hasDate = d => fmtDate(d) !== null;
+        const dateTagY = d => isPoorCopy(d) ? R + 18 : R + 3;
+        const dateTag = node.filter(hasDate).append('g').attr('class', 'date-tag').attr('pointer-events', 'none');
+        const isOld = d => { const dt = new Date(d.last_modified); const ago = Date.now() - dt.getTime(); return ago > 365 * 24 * 60 * 60 * 1000; };
+        dateTag.append('rect').attr('rx', 3).attr('fill', d => isOld(d) ? 'rgba(239,68,68,0.2)' : 'rgba(99,102,241,0.15)').attr('x', -20).attr('y', dateTagY).attr('width', 40).attr('height', 12);
+        dateTag.append('text').text(fmtDate).attr('text-anchor', 'middle').attr('y', d => dateTagY(d) + 9).attr('font-size', 6.5).attr('fill', d => isOld(d) ? '#ef4444' : 'var(--text3)').attr('font-weight', 600);
+
         // Issue count badge (smaller) — exclude orphan issues
         const hasNonOrphan = d => d.issues.filter(i => !i.startsWith('Orphan page')).length > 0;
         const nonOrphanCount = d => d.issues.filter(i => !i.startsWith('Orphan page')).length;
@@ -7913,7 +7928,7 @@
         return () => sim.stop();
       }, [graphData, viewMode, isFullscreen]);
 
-      const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : filter === 'poor-copy' ? graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) : graphData.nodes) : [];
+      const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : filter === 'poor-copy' ? graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) : filter === 'stale' ? graphData.nodes.filter(n => n.last_modified && (Date.now() - new Date(n.last_modified).getTime()) > 365 * 24 * 60 * 60 * 1000) : graphData.nodes) : [];
 
       if (loading) {
         return (
@@ -7973,14 +7988,16 @@
             const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length;
             const nonOrphanIssues = graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0);
             const healthyCount = graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length === 0).length;
+            const staleCount = graphData.nodes.filter(n => n.last_modified && (Date.now() - new Date(n.last_modified).getTime()) > 365 * 24 * 60 * 60 * 1000).length;
             const statsCards = [
               { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
               { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen', click: () => { setViewMode('list'); setFilter('poor-copy'); } },
+              { label: 'STALE (1yr+)', value: staleCount, color: staleCount > 0 ? '#f59e0b' : '#22c55e', icon: 'fa-clock', click: () => { setViewMode('list'); setFilter('stale'); } },
               { label: 'TOTAL ISSUES', value: nonOrphanIssues, color: nonOrphanIssues > 0 ? '#ef4444' : '#22c55e', icon: 'fa-exclamation-triangle' },
               { label: 'HEALTHY', value: healthyCount, color: '#22c55e', icon: 'fa-circle-check' },
             ];
             return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
               {statsCards.map((s, i) => (
                 <div key={i} onClick={s.click || undefined} style={{ background: 'var(--card)', borderRadius: 8, padding: '14px 16px', border: '1px solid var(--border)', cursor: s.click ? 'pointer' : 'default' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
@@ -8095,7 +8112,16 @@
                   </div>
                   {selectedNode.meta_title && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Title:</strong> <span style={{ color: selectedNode.meta_title.length > 60 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_title} ({selectedNode.meta_title.length})</span></div>}
                   {selectedNode.meta_description && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Description:</strong> <span style={{ color: selectedNode.meta_description.length > 160 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_description.substring(0, 80)}... ({selectedNode.meta_description.length})</span></div>}
-                  {selectedNode.h1 && <div style={{ fontSize: 11, marginBottom: 12 }}><strong>H1:</strong> {selectedNode.h1}</div>}
+                  {selectedNode.h1 && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>H1:</strong> {selectedNode.h1}</div>}
+                  {selectedNode.last_modified && (() => {
+                    const dt = new Date(selectedNode.last_modified);
+                    const ago = Math.floor((Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24));
+                    const isOld = ago > 365;
+                    return <div style={{ fontSize: 11, marginBottom: 12, color: isOld ? '#ef4444' : 'var(--text3)' }}>
+                      <strong style={{ color: 'var(--text2)' }}>Last Updated:</strong> {dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {isOld && <span style={{ fontSize: 10, marginLeft: 6, padding: '1px 5px', borderRadius: 3, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600 }}>STALE</span>}
+                    </div>;
+                  })()}
                   {selectedNode.issues.filter(i => !i.startsWith('Orphan page')).length > 0 && (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
@@ -8108,21 +8134,19 @@
                       ))}
                     </div>
                   )}
-                  {/* Send to Copywriter button for thin content pages */}
-                  {(selectedNode.word_count < 500 || selectedNode.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) && (
-                    <div style={{ marginTop: 10 }}>
-                      {cwSending[selectedNode.id] === 'sent' ? (
-                        <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Sent to Copywriter</div>
-                      ) : cwSending[selectedNode.id] === 'exists' ? (
-                        <div style={{ fontSize: 11, color: '#6366f1', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Already in Queue</div>
-                      ) : (
-                        <button onClick={() => handleSendToCopywriter(selectedNode)} disabled={cwSending[selectedNode.id] === 'sending'}
-                          style={{ width: '100%', padding: '7px 0', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: cwSending[selectedNode.id] === 'sending' ? 'default' : 'pointer', background: '#8b5cf6', color: '#fff', opacity: cwSending[selectedNode.id] === 'sending' ? 0.7 : 1 }}>
-                          {cwSending[selectedNode.id] === 'sending' ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 4 }} />Send to Copywriter</>}
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  {/* Send to Copywriter button */}
+                  <div style={{ marginTop: 10 }}>
+                    {cwSending[selectedNode.id] === 'sent' ? (
+                      <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Sent to Copywriter</div>
+                    ) : cwSending[selectedNode.id] === 'exists' ? (
+                      <div style={{ fontSize: 11, color: '#6366f1', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Already in Queue</div>
+                    ) : (
+                      <button onClick={() => handleSendToCopywriter(selectedNode)} disabled={cwSending[selectedNode.id] === 'sending'}
+                        style={{ width: '100%', padding: '7px 0', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: cwSending[selectedNode.id] === 'sending' ? 'default' : 'pointer', background: '#8b5cf6', color: '#fff', opacity: cwSending[selectedNode.id] === 'sending' ? 0.7 : 1 }}>
+                        {cwSending[selectedNode.id] === 'sending' ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 4 }} />Send to Copywriter</>}
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -8132,9 +8156,9 @@
           {viewMode === 'list' && graphData && (
             <div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {['all', 'poor-copy', 'issues'].map(f => (
+                {['all', 'poor-copy', 'stale', 'issues'].map(f => (
                   <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: filter === f ? '#6366f1' : 'var(--card)', color: filter === f ? '#fff' : 'var(--text2)' }}>
-                    {f === 'all' ? `All (${graphData.nodes.length})` : f === 'poor-copy' ? `Poor Copy (${graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length})` : `Issues (${graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0).length})`}
+                    {f === 'all' ? `All (${graphData.nodes.length})` : f === 'poor-copy' ? `Poor Copy (${graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length})` : f === 'stale' ? `Stale (${graphData.nodes.filter(n => n.last_modified && (Date.now() - new Date(n.last_modified).getTime()) > 365 * 24 * 60 * 60 * 1000).length})` : `Issues (${graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0).length})`}
                   </button>
                 ))}
               </div>
@@ -8146,6 +8170,7 @@
                       <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Words</th>
                       <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Inbound</th>
                       <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Internal</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Updated</th>
                       <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Issues</th>
                       <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Action</th>
                     </tr>
@@ -8160,6 +8185,17 @@
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.word_count < 300 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.word_count}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.inbound_count === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.inbound_count}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.internal_links.length === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.internal_links.length}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 11 }}>
+                          {n.last_modified ? (() => {
+                            const dt = new Date(n.last_modified);
+                            const ago = Math.floor((Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24));
+                            const isOld = ago > 365;
+                            return <span style={{ color: isOld ? '#ef4444' : 'var(--text3)', fontWeight: isOld ? 600 : 400 }}>
+                              {dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' })}
+                              {isOld && <div style={{ fontSize: 9, color: '#ef4444', fontWeight: 700 }}>STALE</div>}
+                            </span>;
+                          })() : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
                         <td style={{ padding: '10px 14px' }}>
                           {n.issues.filter(i => !i.startsWith('Orphan page')).length === 0 ? (
                             <span style={{ color: '#22c55e', fontSize: 12 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Healthy</span>
