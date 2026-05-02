@@ -4641,28 +4641,54 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
     console.log(`[re-optimise] Feedback for item ${id}: "${feedback}"`);
 
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
-      system: `You are an expert SEO copywriter for "${project.business_name || project.name}". The user is chatting with you about content they're editing. They may:
-1. Ask a QUESTION about the content (e.g. "what's the focus keyword?", "are you using australian english?") — answer it in ai_notes and return the content UNCHANGED
-2. Give REVISION INSTRUCTIONS (e.g. "make the intro shorter", "remove the word Perth") — revise the content and explain what changed in ai_notes
+    // Fast path: detect questions/comments — no need to process full content
+    const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
+    const isQuestion = feedbackLower.includes('?') ||
+      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
 
-IMPORTANT: If the user is asking a question or making a comment (NOT requesting changes), set "changed": false and return content_html exactly as-is. Only modify content when the user explicitly asks for changes.
+    let response;
+    if (isQuestion) {
+      // FAST PATH: lightweight prompt, no content return, small max_tokens
+      const contentSummary = (current_proposed.content_html || '').replace(/<[^>]+>/g, '').slice(0, 2000);
+      const h2s = (current_proposed.content_html || '').match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
+      const headings = h2s.map(h => h.replace(/<[^>]+>/g, '')).join(', ');
+      const wordCount = contentSummary.trim().split(/\s+/).length;
 
-RULES FOR REVISIONS:
-- Apply the user's feedback precisely
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about the content concisely. Use Australian English.
+Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
+        messages: [{ role: 'user', content: `Question: ${feedback}
+
+Content summary (${wordCount} words): ${contentSummary.slice(0, 1000)}...
+Headings: ${headings}
+Meta title: ${current_proposed.meta_title || ''}
+Meta description: ${current_proposed.meta_description || ''}
+Focus keyword: ${item.draft_focus_keyword || item.current_focus_keyword || 'not set'}
+
+Respond with ONLY JSON.` }]
+      });
+    } else {
+      // FULL PATH: revision with complete content
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8000,
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Revise the content based on user feedback while keeping all SEO improvements.
+
+RULES:
+- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
 - Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
 - Focus keyword must appear 3-8 times
 - Write like a human, not AI — no banned phrases
 
-YOU MUST RESPOND WITH ONLY A JSON OBJECT. No text before or after. No markdown code blocks. Just the raw JSON:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "Your response to the user", "changed": true/false}${buildCopywriterContext(project, item)}`,
-      messages: [{ role: 'user', content: buildUserContent(`USER MESSAGE: ${feedback}
+YOU MUST RESPOND WITH ONLY A JSON OBJECT:
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+        messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
 
-CURRENT CONTENT:
+CURRENT CONTENT (revise this):
 ${current_proposed.content_html}
 
 CURRENT META TITLE: ${current_proposed.meta_title || ''}
@@ -4671,8 +4697,9 @@ CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
 PAGES FOR INTERNAL LINKING:
 ${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
 
-Respond with ONLY the JSON object. No other text.`, item) }]
-    });
+Respond with ONLY the JSON object.`, item) }]
+      });
+    }
 
     const text = response.content[0]?.text || '';
     let parsed;
