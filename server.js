@@ -6412,209 +6412,109 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     }
     let html = await resp.text();
 
-    // Strategy: extract head (CSS/fonts), header/nav, footer from live page
-    // Then build a new page: site head + site header + draft content + site footer
-    // This preserves the site's look (fonts, colors, nav, footer) without destroying layout
+    // Surgical swap: keep the FULL live page, only replace the content area
     const baseUrl = new URL(pageUrl);
     const base = baseUrl.origin;
 
-    // Extract <head> contents
-    const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-    let headContent = headMatch ? headMatch[1] : '';
+    // Add <base> tag so all relative URLs resolve correctly
+    html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${base}/">`);
 
-    // Generic extraction — works with any WordPress theme
-    // Split the page into: header zone | hero zone | content zone | footer zone
-    // We keep header + hero + footer, replace content zone with draft
-
-    // 1. Find header end
-    let headerBlock = '';
-    const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
-    if (headerMatch) headerBlock = headerMatch[0];
-    const headerEndPos = headerMatch ? headerMatch.index + headerMatch[0].length : 0;
-
-    // 2. Find footer start
-    let footerBlock = '';
-    const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
-    if (footerMatch) footerBlock = footerMatch[0];
-    const footerStartPos = footerMatch ? footerMatch.index : html.length;
-
-    // 3. Everything between header and footer is the "middle" — hero + content + CTA
-    const middleHtml = html.slice(headerEndPos, footerStartPos);
-
-    // 4. Split middle into blocks by top-level tags (div, section, main, article)
-    const blockRegex = /<(div|section|main|article)([^>]*)>/gi;
-    const blocks = [];
-    let match;
-    while ((match = blockRegex.exec(middleHtml)) !== null) {
-      const tag = match[1].toLowerCase();
-      const attrs = match[2];
-      const blockStart = match.index;
-      // Quick depth scan to find the end of this block
-      let depth = 1;
-      let pos = match.index + match[0].length;
-      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
-      const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
-      while (depth > 0 && pos < middleHtml.length) {
-        openRe.lastIndex = pos;
-        closeRe.lastIndex = pos;
-        const nextOpen = openRe.exec(middleHtml);
-        const nextClose = closeRe.exec(middleHtml);
-        if (!nextClose) break;
-        if (nextOpen && nextOpen.index < nextClose.index) {
-          depth++;
-          pos = nextOpen.index + nextOpen[0].length;
-        } else {
-          depth--;
-          if (depth === 0) {
-            const blockEnd = nextClose.index + nextClose[0].length;
-            const blockContent = middleHtml.slice(blockStart, blockEnd);
-            const textContent = blockContent.replace(/<[^>]+>/g, '').trim();
-            blocks.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent.slice(0, 100) });
-            // Skip blockRegex past this block
-            blockRegex.lastIndex = blockEnd;
-            break;
-          }
-          pos = nextClose.index + nextClose[0].length;
-        }
-      }
+    // Replace meta title in <head>
+    if (draftTitle) {
+      html = html.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+    }
+    if (draftDesc) {
+      html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // 5. Classify blocks: hero (first block or banner-like), content (largest text blocks), CTA (small blocks after content)
-    // Hero: first 1-2 blocks that are small text or have banner/hero/cover keywords
-    let heroBlock = '';
-    let ctaBlock = '';
-    const heroKeywords = /hero|banner|cover|in-ban|page-title|page-header|breadcrumb|featured|slider|jumbotron/i;
-    let heroEndIdx = 0;
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i];
-      if (i < 2 && (b.textLen < 200 || heroKeywords.test(b.attrs) || heroKeywords.test(b.html.slice(0, 200)))) {
-        heroBlock += b.html + '\n';
-        heroEndIdx = i + 1;
-      } else if (i < 2 && b.textLen < 100) {
-        heroBlock += b.html + '\n'; // floating buttons, quote forms etc
-        heroEndIdx = i + 1;
-      } else {
+    // Find and replace the content area — try multiple selectors in priority order
+    // Each pattern: find the container opening tag, then its innerHTML, replace innerHTML with draft
+    const contentSelectors = [
+      // Elementor post content widget
+      { regex: /(<div[^>]*class="[^"]*elementor-widget-theme-post-content[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*elementor-widget-container[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*<\/div>\s*<\/div>)/i, group: 2 },
+      // Standard WP entry-content
+      { regex: /(<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*(?:<\/(?:article|main|div)>|<(?:footer|aside|div[^>]*class="[^"]*(?:sidebar|widget|comment))))/i, group: 2 },
+      // Article content
+      { regex: /(<article[^>]*>[\s\S]*?<div[^>]*class="[^"]*(?:content|post-content|article-content)[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*<\/article>)/i, group: 2 },
+    ];
+
+    let swapped = false;
+    for (const sel of contentSelectors) {
+      const m = html.match(sel.regex);
+      if (m) {
+        html = html.replace(sel.regex, `$1${draftContent}$3`);
+        swapped = true;
+        console.log(`[preview] Content swapped using selector: ${sel.regex.source.slice(0, 60)}...`);
         break;
       }
     }
 
-    // CTA: last blocks after the main content that are small (contact, testimonials, services widgets)
-    // Work backwards from end
-    const ctaBlocks = [];
-    for (let i = blocks.length - 1; i > heroEndIdx; i--) {
-      const b = blocks[i];
-      if (b.textLen < 500) {
-        ctaBlocks.unshift(b.html);
-      } else {
-        break; // stop once we hit a big content block
+    // Fallback: find the largest text block and replace it
+    if (!swapped) {
+      // Find all entry-content or post-content divs more loosely
+      const looseMatch = html.match(/(<div[^>]*class="[^"]*(?:entry-content|post-content|page-content|the-content|content-area)[^"]*"[^>]*>)([\s\S]{200,}?)(<\/div>)/i);
+      if (looseMatch) {
+        html = html.replace(looseMatch[0], looseMatch[1] + draftContent + looseMatch[3]);
+        swapped = true;
+        console.log('[preview] Content swapped using loose entry-content match');
       }
     }
-    ctaBlock = ctaBlocks.join('\n');
 
-    console.log(`[preview] Generic extraction: ${blocks.length} blocks, hero=${heroEndIdx}, cta=${ctaBlocks.length}`);
-
-    // Extract body classes for theme styling
-    const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
-    const bodyClasses = bodyClassMatch ? bodyClassMatch[1] : '';
-
-    // Replace meta title in head
-    if (draftTitle) {
-      headContent = headContent.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+    // Last resort: find the biggest content block between header and footer
+    if (!swapped) {
+      const headerEnd = html.search(/<\/header>/i);
+      const footerStart = html.search(/<footer/i);
+      if (headerEnd > 0 && footerStart > headerEnd) {
+        const middle = html.slice(headerEnd + 9, footerStart);
+        // Find the div with the most text
+        const divMatches = [...middle.matchAll(/<div([^>]*)>([\s\S]*?)<\/div>/gi)];
+        let biggest = null;
+        let biggestLen = 0;
+        for (const dm of divMatches) {
+          const textLen = dm[2].replace(/<[^>]+>/g, '').trim().length;
+          if (textLen > biggestLen) { biggestLen = textLen; biggest = dm; }
+        }
+        if (biggest && biggestLen > 200) {
+          html = html.replace(biggest[0], `<div${biggest[1]}>${draftContent}</div>`);
+          swapped = true;
+          console.log(`[preview] Content swapped using biggest-block fallback (${biggestLen} chars)`);
+        }
+      }
     }
-    if (draftDesc) {
-      headContent = headContent.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
+
+    if (!swapped) {
+      console.log('[preview] WARNING: Could not find content area to swap, injecting after header');
+      const insertPoint = html.search(/<\/header>/i);
+      if (insertPoint > 0) {
+        html = html.slice(0, insertPoint + 9) + `<div class="seo-draft-content" style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.9">${draftContent}</div>` + html.slice(insertPoint + 9);
+      }
     }
 
-    // Make relative URLs absolute in all parts
-    const fixUrls = (s) => s.replace(/(href|src|action)=["']\//g, `$1="${base}/`);
-    headContent = fixUrls(headContent);
-    headerBlock = fixUrls(headerBlock);
-    footerBlock = fixUrls(footerBlock);
-
-    // Build the preview page
-    const previewHtml = `<!DOCTYPE html>
-<html lang="en-AU">
-<head>
-  <base href="${base}/">
-  ${headContent}
-  <style>
-    .seo-preview-banner {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
-      background: linear-gradient(135deg, #a855f7, #6366f1); color: #fff;
-      padding: 10px 20px; font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600;
-      display: flex; align-items: center; justify-content: space-between;
-      box-shadow: 0 2px 20px rgba(0,0,0,0.3);
-    }
-    .seo-preview-spacer { height: 44px; }
-    .seo-draft-content {
-      max-width: 900px; margin: 40px auto; padding: 40px 30px;
-      font-size: 16px; line-height: 1.9;
-    }
-    .seo-draft-content h1, .seo-draft-content h2, .seo-draft-content h3, .seo-draft-content h4 { margin-top: 1.5em; margin-bottom: 0.5em; }
-    .seo-draft-content h2 { font-size: 28px; }
-    .seo-draft-content h3 { font-size: 22px; }
-    .seo-draft-content p { margin-bottom: 1em; }
-    .seo-draft-content img { max-width: 100%; height: auto; border-radius: 8px; margin: 20px 0; }
-    .seo-draft-content a { color: #2563eb; text-decoration: underline; }
-    .seo-draft-content ul, .seo-draft-content ol { margin: 1em 0; padding-left: 2em; }
-    .seo-draft-content li { margin-bottom: 0.5em; }
-    /* Wireframe layout classes */
-    .wf-columns { display: flex; gap: 30px; align-items: center; margin: 30px 0; flex-wrap: wrap; }
-    .wf-columns .wf-col { flex: 1; min-width: 250px; }
-    .wf-columns .wf-col img { width: 100%; border-radius: 8px; }
-    .wf-hero { text-align: center; padding: 40px 20px; margin-bottom: 30px; }
-    .wf-hero h1 { font-size: 36px; margin-bottom: 10px; }
-    .wf-cta { text-align: center; padding: 30px; margin: 30px 0; background: #f5f5f5; border-radius: 8px; }
-    .wf-btn { display: inline-block; padding: 12px 30px; background: #2563eb; color: #fff !important; text-decoration: none !important; border-radius: 6px; font-weight: 600; margin-top: 10px; }
-    .seo-draft-meta {
-      max-width: 900px; margin: 20px auto 0; padding: 16px 30px;
-      background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 8px; font-size: 14px;
-    }
-    .seo-draft-meta .meta-title { font-size: 20px; color: #1a0dab; font-weight: 600; margin-bottom: 4px; }
-    .seo-draft-meta .meta-url { font-size: 13px; color: #006621; margin-bottom: 4px; }
-    .seo-draft-meta .meta-desc { font-size: 14px; color: #545454; }
-    .seo-draft-meta .meta-label { font-size: 11px; color: #888; text-transform: uppercase; font-weight: 600; margin-bottom: 8px; }
-  </style>
-</head>
-<body class="${bodyClasses}">
-  <div class="seo-preview-banner">
-    <span>\u{1F4CB} DRAFT PREVIEW — Content rendered with your site's design</span>
-    <span style="opacity:0.7;font-size:12px">Header &amp; footer from live site</span>
-  </div>
-  <div class="seo-preview-spacer"></div>
-
-  ${headerBlock}
-  ${fixUrls(heroBlock)}
-
-  <div class="seo-draft-meta">
-    <div class="meta-label">Google Search Preview</div>
-    <div class="meta-title">${draftTitle || item.page_title || ''}</div>
-    <div class="meta-url">${pageUrl}</div>
-    <div class="meta-desc">${draftDesc || ''}</div>
-  </div>
-
-  <div id="content" class="site-content">
-    <div class="seo-draft-content entry-content">
-      <div class="container" style="max-width:900px;margin:0 auto;padding:40px 30px">
-        ${draftContent}
+    // Add preview banner + disable links
+    const bannerHtml = `
+    <style>
+      .seo-preview-banner { position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:12px 24px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.3) }
+      .seo-preview-banner .meta-preview { font-size:11px;opacity:0.9;max-width:500px }
+      .seo-preview-banner .meta-preview .mt { color:#fff;font-size:13px;font-weight:700 }
+      .seo-preview-banner .meta-preview .md { color:rgba(255,255,255,0.8);font-size:11px;margin-top:2px }
+      body { padding-top: 60px !important; }
+    </style>
+    <div class="seo-preview-banner">
+      <span>\u{1F441}️ REVIEW PREVIEW — This is how your page will look after Go Live</span>
+      <div class="meta-preview">
+        <div class="mt">${(draftTitle || item.page_title || '').slice(0, 60)}</div>
+        <div class="md">${(draftDesc || '').slice(0, 120)}</div>
       </div>
-    </div>
-  </div>
+    </div>`;
 
-  ${fixUrls(ctaBlock)}
-  ${footerBlock}
+    html = html.replace(/<body([^>]*)>/i, `<body$1>${bannerHtml}`);
 
-  <script>
-    document.addEventListener('click', function(e) {
-      if (e.target.closest('a')) { e.preventDefault(); e.stopPropagation(); }
-    }, true);
-  </script>
-</body>
-</html>`;
+    // Disable all links so user doesn't accidentally navigate away
+    html = html.replace('</body>', `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-banner')){e.preventDefault();e.stopPropagation();}},true);</script></body>`);
 
-    console.log(`[preview] Built preview for "${item.page_title}" with header=${!!headerMatch}, footer=${!!footerMatch}`);
+    console.log(`[preview] Serving pixel-perfect preview for "${item.page_title}", swapped=${swapped}`);
     res.setHeader('Content-Type', 'text/html');
-    res.send(previewHtml);
+    res.send(html);
   } catch (e) {
     console.error('[preview] Error:', e.message);
     res.status(500).send('Preview error: ' + e.message);
