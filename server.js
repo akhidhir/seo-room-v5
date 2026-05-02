@@ -2931,14 +2931,8 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
               // Update stored values (snake_case fields)
               if (fix.new_meta_title) node.meta_title = fix.new_meta_title;
               if (fix.new_meta_desc) node.meta_description = fix.new_meta_desc;
-              // Rebuild issues array (plain strings, matching crawlSiteGraph format)
+              // Rebuild issues array (plain strings, matching crawlSiteGraph format — no meta checks, On-Page Audit handles those)
               const newIssues = [];
-              const mt = node.meta_title || '';
-              const md = node.meta_description || '';
-              if (!mt || mt.length < 10) newIssues.push('Missing or short meta title');
-              if (!md || md.length < 50) newIssues.push('Missing or short meta description');
-              if (mt && mt.length > 60) newIssues.push('Meta title too long (' + mt.length + ' chars)');
-              if (md && md.length > 160) newIssues.push('Meta description too long (' + md.length + ' chars)');
               if (!node.h1) newIssues.push('Missing H1 tag');
               if (node.word_count < 300) newIssues.push('Thin content (' + node.word_count + ' words)');
               if (!node.internal_links || node.internal_links.length === 0) newIssues.push('No outbound internal links');
@@ -7068,10 +7062,7 @@ async function crawlSiteGraph(project) {
   nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
 
   nodes.forEach(n => {
-    if (!n.meta_title || n.meta_title.length < 10) n.issues.push('Missing or short meta title');
-    if (!n.meta_description || n.meta_description.length < 50) n.issues.push('Missing or short meta description');
-    if (n.meta_title && n.meta_title.length > 60) n.issues.push('Meta title too long (' + n.meta_title.length + ' chars)');
-    if (n.meta_description && n.meta_description.length > 160) n.issues.push('Meta description too long (' + n.meta_description.length + ' chars)');
+    // Meta title/desc checks removed — On-Page Audit handles those via Yoast REST API (more accurate)
     if (!n.h1) n.issues.push('Missing H1 tag');
     if (n.word_count < 300) n.issues.push('Thin content (' + n.word_count + ' words)');
     if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
@@ -7092,7 +7083,22 @@ app.get('/api/projects/:projectId/site-graph', async (req, res) => {
       [req.params.projectId]
     );
     if (cached.rows.length > 0) {
-      return res.json({ ...cached.rows[0].audit_data, scanned_at: cached.rows[0].completed_at });
+      const data = cached.rows[0].audit_data;
+      // Auto-strip meta issues from cached data (On-Page Audit handles those now)
+      const metaPrefixes = ['Missing or short meta', 'Meta title too long', 'Meta description too long'];
+      let cleaned = false;
+      if (data && data.nodes) {
+        for (const n of data.nodes) {
+          const before = (n.issues || []).length;
+          n.issues = (n.issues || []).filter(i => !metaPrefixes.some(p => i.startsWith(p)));
+          if (n.issues.length !== before) cleaned = true;
+        }
+        if (cleaned) {
+          data.stats.issues = data.nodes.reduce((sum, n) => sum + n.issues.length, 0);
+          pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(data), cached.rows[0].id]).catch(() => {});
+        }
+      }
+      return res.json({ ...data, scanned_at: cached.rows[0].completed_at });
     }
     res.json({ nodes: null, edges: null, stats: null, scanned_at: null });
   } catch (e) {

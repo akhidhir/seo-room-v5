@@ -7941,7 +7941,7 @@
 
           {/* Stats cards */}
           {graphData && (() => {
-            const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i.startsWith('Missing or short meta') || i === 'Missing H1 tag')).length;
+            const poorCopyCount = graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')).length;
             const statsCards = [
               { label: 'TOTAL PAGES', value: graphData.stats.total, color: '#6366f1', icon: 'fa-file' },
               { label: 'POOR COPY', value: poorCopyCount, color: poorCopyCount > 0 ? '#ef4444' : '#22c55e', icon: 'fa-file-pen' },
@@ -8201,10 +8201,6 @@
       });
 
       const ISSUE_META = {
-        'Missing or short meta title': { icon: 'fa-heading', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
-        'Missing or short meta description': { icon: 'fa-align-left', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
-        'Meta title too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
-        'Meta description too long': { icon: 'fa-text-width', color: '#f59e0b', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
         'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
         'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter', canAiFix: false },
         'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links', canAiFix: false },
