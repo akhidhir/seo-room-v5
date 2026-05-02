@@ -8194,6 +8194,7 @@
       graphData.nodes.forEach(n => {
         if (isNodeFixed(n)) return;
         n.issues.forEach(issue => {
+          if (issue.startsWith('Orphan page')) return; // handled in On-Page Audit
           const key = issue.replace(/\(\d+.*?\)/, '').replace(/—.*$/, '').trim();
           if (!issueGroups[key]) issueGroups[key] = [];
           issueGroups[key].push(n);
@@ -8204,7 +8205,7 @@
         'Missing H1 tag': { icon: 'fa-h', color: '#ef4444', fix: 'onpage', label: 'Fix in On-Page Audit', canAiFix: true },
         'Thin content': { icon: 'fa-file-lines', color: '#f59e0b', fix: 'copywriter', label: 'Send to Copywriter', canAiFix: false },
         'No outbound internal links': { icon: 'fa-arrow-up-right-from-square', color: '#3b82f6', fix: 'links', label: 'Add Internal Links', canAiFix: false },
-        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: 'links', label: 'Add Inbound Links', canAiFix: false },
+        'Orphan page': { icon: 'fa-unlink', color: '#ef4444', fix: null, label: 'Fix in On-Page Audit', canAiFix: false },
       };
 
       const getIssueMeta = (key) => {
