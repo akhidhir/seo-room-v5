@@ -9604,7 +9604,7 @@
                 React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
               ),
               // Approve
-              selectedItem.stage === 'drafts' && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
+              (selectedItem.stage === 'drafts' || selectedItem.stage === 'queue') && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
               // Publish
               selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Publish'),
               // Revise — move published back to drafts for re-editing
