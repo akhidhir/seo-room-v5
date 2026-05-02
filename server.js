@@ -6401,14 +6401,40 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
         </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
     }
 
-    // Fetch the live page
+    // Fetch the live page — if 404, fall back to a sibling page or homepage as template
     console.log(`[preview] Fetching live page: ${pageUrl}`);
-    const resp = await fetch(pageUrl, {
+    let resp = await fetch(pageUrl, {
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
     });
     if (!resp.ok) {
-      return res.status(502).send(`Failed to fetch live page: ${resp.status}`);
+      // Try a sibling service page with same URL structure (e.g. /computer-repairs-bayswater/ if /computer-repairs-belmont/ is 404)
+      const siteBase = 'https://' + (project.domain || '').replace(/\/$/, '');
+      const fallbackUrls = [];
+      // Try other content_queue items that have the same domain
+      const siblings = (await pool.query(`SELECT DISTINCT page_url FROM content_queue WHERE project_id=$1 AND page_url IS NOT NULL AND page_url != $2 LIMIT 5`, [projectId, item.page_url || ''])).rows;
+      for (const sib of siblings) {
+        let sibUrl = sib.page_url;
+        if (sibUrl && !sibUrl.startsWith('http')) sibUrl = siteBase + sibUrl;
+        if (sibUrl) fallbackUrls.push(sibUrl);
+      }
+      // Always try homepage last
+      fallbackUrls.push(siteBase + '/');
+
+      let foundTemplate = false;
+      for (const fbUrl of fallbackUrls) {
+        try {
+          console.log(`[preview] Page 404, trying template from: ${fbUrl}`);
+          resp = await fetch(fbUrl, {
+            signal: AbortSignal.timeout(10000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+          });
+          if (resp.ok) { foundTemplate = true; break; }
+        } catch (e) { /* try next */ }
+      }
+      if (!foundTemplate) {
+        return res.status(502).send(`Failed to fetch live page or any template page from ${project.domain}`);
+      }
     }
     let html = await resp.text();
 
