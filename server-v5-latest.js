@@ -62,7 +62,7 @@ const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY 
 
 // Express config
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '30mb' }));
 
 // Load index.html once on startup
 let INDEX_HTML = '';
@@ -233,6 +233,29 @@ async function initDb() {
       )
     `);
 
+    // Grid scan results (SerpAPI Maps grid scanning — replaces Local Falcon)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS grid_scans (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword_id INTEGER REFERENCES rank_keywords(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        location TEXT DEFAULT '',
+        grid_size INTEGER DEFAULT 5,
+        center_lat DOUBLE PRECISION,
+        center_lng DOUBLE PRECISION,
+        radius_km DOUBLE PRECISION DEFAULT 10,
+        grid_points JSONB DEFAULT '[]',
+        competitors JSONB DEFAULT '[]',
+        arp DOUBLE PRECISION,
+        atrp DOUBLE PRECISION,
+        solv DOUBLE PRECISION,
+        found_in INTEGER DEFAULT 0,
+        data_points INTEGER DEFAULT 0,
+        scanned_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // GSC keywords (position data from Google Search Console)
     await client.query(`
       CREATE TABLE IF NOT EXISTS gsc_keywords (
@@ -310,18 +333,146 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_custom_suburbs TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_name TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_domain TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_industry TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_location TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_page_labels JSONB DEFAULT '{}'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tone_of_voice TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS customer_persona TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS writer_voice TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS effort TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS assignee_label TEXT`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
+    await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
 
-    // One-time migration: fix execution_type for GBP action items that were saved as 'manual'
+    // Content queue for Copywriter pipeline
     await client.query(`
-      UPDATE action_items SET execution_type = 'extension'
-      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'manual'
-        AND description !~* '(photo|picture|image|shoot|camera|testimonial|in.person|physically|visit|call |phone call|print|brochure|flyer|sign.up|create.*account|register on|claim.*listing|directory|directories|listing|yelp|yellow.pages|true.local|hotfrog|word.of.mouth)'
+      CREATE TABLE IF NOT EXISTS content_queue (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_id INTEGER,
+        page_url TEXT,
+        page_title TEXT,
+        content_type TEXT NOT NULL DEFAULT 'rewrite',
+        source TEXT DEFAULT 'onpage-audit',
+        priority TEXT DEFAULT 'medium',
+        brief TEXT,
+        current_content TEXT,
+        current_word_count INTEGER DEFAULT 0,
+        current_meta_title TEXT,
+        current_meta_desc TEXT,
+        current_focus_keyword TEXT,
+        draft_content TEXT,
+        draft_meta_title TEXT,
+        draft_meta_desc TEXT,
+        draft_focus_keyword TEXT,
+        draft_word_count INTEGER DEFAULT 0,
+        stage TEXT NOT NULL DEFAULT 'queue',
+        approved_by TEXT,
+        approved_at TIMESTAMPTZ,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // Add missing columns for v5 copywriter features
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS target_keywords JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS ai_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS schema_markup JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_image TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
+
+    // Content keywords — for new project keyword workflow
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_keywords (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        page_type TEXT DEFAULT 'unassigned',
+        page_name TEXT,
+        page_id INTEGER REFERENCES content_queue(id) ON DELETE SET NULL,
+        search_volume INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // Page templates — reusable content skeletons
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS page_templates (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        page_type TEXT NOT NULL DEFAULT 'service',
+        source_url TEXT,
+        skeleton_html TEXT NOT NULL DEFAULT '',
+        section_count INTEGER DEFAULT 0,
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // Site pages — staging zone for new website content
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS site_pages (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_type TEXT NOT NULL,
+        page_name TEXT NOT NULL,
+        slug TEXT,
+        is_cornerstone BOOLEAN DEFAULT FALSE,
+        cluster_id TEXT,
+        keywords JSONB DEFAULT '[]',
+        internal_links JSONB DEFAULT '[]',
+        inbound_links JSONB DEFAULT '[]',
+        meta_title TEXT,
+        meta_description TEXT,
+        focus_keyword TEXT,
+        draft_content TEXT,
+        word_count INTEGER DEFAULT 0,
+        stage TEXT NOT NULL DEFAULT 'draft',
+        published_url TEXT,
+        published_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // Content settings — tone, style, word count per project
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_settings (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_type TEXT NOT NULL,
+        target_word_count INTEGER DEFAULT 1500,
+        tone TEXT DEFAULT 'professional',
+        style TEXT DEFAULT 'informative',
+        tone_of_voice TEXT,
+        wireframe_url TEXT,
+        factor_3 TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, page_type)
+      )
+    `).catch(() => {});
+
+    // GBP tasks are manual (SEO Specialist) — no extension automation
+    await client.query(`
+      UPDATE action_items SET execution_type = 'manual'
+      WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'extension'
     `).catch(() => {});
 
     console.log('[boot] Database schema initialized');
@@ -342,7 +493,7 @@ function generateToken(userId, email) {
 
 // Auth middleware
 function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization?.split(' ')[1] || req.query.token;
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
     req.auth = jwt.verify(token, JWT_SECRET);
@@ -478,6 +629,19 @@ app.put('/api/projects/:id', async (req, res) => {
   const gbp_location_name = b.gbp_location_name || b.gbpLocationName;
   const wp_username = b.wp_username || b.wpUsername;
   const wp_app_password = b.wp_app_password || b.wpAppPassword;
+  const map_services = b.map_services;
+  const map_custom_suburbs = b.map_custom_suburbs;
+  const nw_name = b.nw_name;
+  const nw_domain = b.nw_domain;
+  const nw_industry = b.nw_industry;
+  const nw_location = b.nw_location;
+  const nw_business_type = b.nw_business_type;
+  const nw_notes = b.nw_notes;
+  const nw_page_labels = b.nw_page_labels;
+  const tone_of_voice = b.tone_of_voice ?? b.toneOfVoice;
+  const page_wireframe = b.page_wireframe ?? b.pageWireframe;
+  const customer_persona = b.customer_persona ?? b.customerPersona;
+  const writer_voice = b.writer_voice ?? b.writerVoice;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -491,7 +655,20 @@ app.put('/api/projects/:id', async (req, res) => {
            gbp_location_id=COALESCE($13, gbp_location_id),
            gbp_location_name=COALESCE($14, gbp_location_name),
            wp_username=COALESCE($15, wp_username),
-           wp_app_password=COALESCE($16, wp_app_password)
+           wp_app_password=COALESCE($16, wp_app_password),
+           map_services=COALESCE($17, map_services),
+           map_custom_suburbs=COALESCE($18, map_custom_suburbs),
+           nw_name=COALESCE($19, nw_name),
+           nw_domain=COALESCE($20, nw_domain),
+           nw_industry=COALESCE($21, nw_industry),
+           nw_location=COALESCE($22, nw_location),
+           nw_business_type=COALESCE($23, nw_business_type),
+           nw_notes=COALESCE($24, nw_notes),
+           nw_page_labels=COALESCE($25::jsonb, nw_page_labels),
+           tone_of_voice=$26,
+           page_wireframe=$27,
+           customer_persona=$28,
+           writer_voice=$29
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -499,7 +676,14 @@ app.put('/api/projects/:id', async (req, res) => {
        is_local_business, is_elementor_site, wordpress_url,
        service_areas ? JSON.stringify(service_areas) : null,
        gsc_property || null, gbp_location_id || null, gbp_location_name || null,
-       wp_username || null, wp_app_password || null]
+       wp_username || null, wp_app_password || null,
+       map_services !== undefined ? map_services : null, map_custom_suburbs !== undefined ? map_custom_suburbs : null,
+       nw_name || null, nw_domain || null, nw_industry || null, nw_location || null, nw_business_type || null, nw_notes || null,
+       nw_page_labels ? JSON.stringify(nw_page_labels) : null,
+       tone_of_voice !== undefined ? tone_of_voice : null,
+       page_wireframe !== undefined ? page_wireframe : null,
+       customer_persona !== undefined ? customer_persona : null,
+       writer_voice !== undefined ? writer_voice : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -524,15 +708,88 @@ app.delete('/api/projects/:id', async (req, res) => {
   }
 });
 
+// Haversine distance in km
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Perth suburb GPS coordinates for distance calculation
+const SUBURB_GPS = {
+  'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
+  'east cannington': { lat: -32.0100, lng: 115.9500 }, 'ferndale': { lat: -32.0300, lng: 115.9500 },
+  'lynwood': { lat: -32.0400, lng: 115.9300 }, 'parkwood': { lat: -32.0450, lng: 115.9150 },
+  'queens park': { lat: -32.0050, lng: 115.9400 }, 'riverton': { lat: -32.0350, lng: 115.8940 },
+  'rossmoyne': { lat: -32.0380, lng: 115.8700 }, 'shelley': { lat: -32.0280, lng: 115.8800 },
+  'willetton': { lat: -32.0530, lng: 115.8890 }, 'wilson': { lat: -32.0230, lng: 115.9100 },
+  'canning vale': { lat: -32.0580, lng: 115.9180 }, 'bentley': { lat: -32.0000, lng: 115.9200 },
+  'welshpool': { lat: -31.9930, lng: 115.9450 }, 'atwell': { lat: -32.1440, lng: 115.8640 },
+  'aubin grove': { lat: -32.1640, lng: 115.8660 }, 'banjup': { lat: -32.1290, lng: 115.8580 },
+  'beeliar': { lat: -32.1350, lng: 115.8150 }, 'bibra lake': { lat: -32.0930, lng: 115.8200 },
+  'cockburn': { lat: -32.1300, lng: 115.8500 }, 'coogee': { lat: -32.1190, lng: 115.7650 },
+  'coolbellup': { lat: -32.0830, lng: 115.8030 }, 'hamilton hill': { lat: -32.0820, lng: 115.7770 },
+  'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
+  'jandakot': { lat: -32.1050, lng: 115.8700 }, 'lake coogee': { lat: -32.1280, lng: 115.7800 },
+  'munster': { lat: -32.1310, lng: 115.7870 }, 'north coogee': { lat: -32.1100, lng: 115.7640 },
+  'north lake': { lat: -32.0770, lng: 115.8330 }, 'south lake': { lat: -32.0870, lng: 115.8350 },
+  'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
+  'treeby': { lat: -32.1500, lng: 115.8630 }, 'wattleup': { lat: -32.1470, lng: 115.7990 },
+  'yangebup': { lat: -32.1220, lng: 115.8140 }, 'murdoch': { lat: -32.0660, lng: 115.8430 },
+  'perth': { lat: -31.9505, lng: 115.8605 }, 'fremantle': { lat: -32.0569, lng: 115.7439 },
+  'joondalup': { lat: -31.7467, lng: 115.7672 }, 'midland': { lat: -31.8893, lng: 116.0108 },
+  'armadale': { lat: -32.1531, lng: 116.0107 }, 'rockingham': { lat: -32.2833, lng: 115.7333 },
+  'mandurah': { lat: -32.5269, lng: 115.7217 }, 'stirling': { lat: -31.8833, lng: 115.8333 },
+  'claremont': { lat: -31.9803, lng: 115.7814 }, 'subiaco': { lat: -31.9490, lng: 115.8270 },
+  'nedlands': { lat: -31.9800, lng: 115.8060 }, 'cottesloe': { lat: -31.9930, lng: 115.7640 },
+  'mosman park': { lat: -32.0070, lng: 115.7630 }, 'peppermint grove': { lat: -31.9990, lng: 115.7690 },
+  'cambridge': { lat: -31.9370, lng: 115.7930 }, 'victoria park': { lat: -31.9760, lng: 115.8990 },
+  'south perth': { lat: -31.9720, lng: 115.8640 }, 'como': { lat: -31.9910, lng: 115.8610 },
+  'bayswater': { lat: -31.9160, lng: 115.9150 }, 'bassendean': { lat: -31.9030, lng: 115.9470 },
+  'belmont': { lat: -31.9530, lng: 115.9360 }, 'kalamunda': { lat: -31.9750, lng: 116.0580 },
+  'mundaring': { lat: -31.9020, lng: 116.1690 }, 'swan': { lat: -31.7930, lng: 116.0260 },
+  'gosnells': { lat: -32.0810, lng: 115.9810 }, 'serpentine': { lat: -32.3580, lng: 115.9810 },
+  'jarrahdale': { lat: -32.3380, lng: 116.0570 }, 'byford': { lat: -32.2240, lng: 116.0040 },
+  'wanneroo': { lat: -31.7500, lng: 115.8000 }, 'alkimos': { lat: -31.6280, lng: 115.7250 },
+  'beaconsfield': { lat: -32.0560, lng: 115.7640 }, 'melville': { lat: -32.0440, lng: 115.7860 },
+  'kwinana': { lat: -32.2400, lng: 115.7700 }, 'vincent': { lat: -31.9330, lng: 115.8500 },
+};
+
 // Get/set service areas for a project
 app.get('/api/projects/:id/service-areas', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT service_areas FROM projects WHERE id=$1 AND user_id=$2',
+      'SELECT service_areas, location FROM projects WHERE id=$1 AND user_id=$2',
       [req.params.id, req.auth.userId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    res.json({ service_areas: result.rows[0].service_areas || [] });
+    const areas = result.rows[0].service_areas || [];
+    const rawLocation = (result.rows[0].location || '').trim();
+    // Try to match project location to SUBURB_GPS — handle "Cannington, WA", "Cannington Perth" etc.
+    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+    let hqGps = null;
+    // Try full string first, then first word, then first two words
+    const candidates = [
+      rawLocation.toLowerCase().trim(),
+      locParts[0],
+      locParts.slice(0, 2).join(' '),
+      locParts.slice(0, 3).join(' '),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (SUBURB_GPS[candidate]) { hqGps = SUBURB_GPS[candidate]; break; }
+    }
+    if (hqGps) {
+      for (const area of areas) {
+        const subGps = SUBURB_GPS[area.name.toLowerCase().trim()];
+        if (subGps) {
+          area.distance = Math.round(haversineKm(hqGps.lat, hqGps.lng, subGps.lat, subGps.lng) * 10) / 10;
+        }
+      }
+    }
+    console.log(`[service-areas] project location="${rawLocation}", hq matched=${!!hqGps}, areas=${areas.length}`);
+    res.json({ service_areas: areas, hq_location: rawLocation, hq_found: !!hqGps });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -896,13 +1153,29 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       titleCounts[key] = (titleCounts[key] || 0) + 1;
     }
 
-    // Deduplicate: same title + same pillar = duplicate, keep newest
+    // Normalize title for fuzzy dedup: strip filler words, punctuation, collapse whitespace
+    function normalizeTitle(t) {
+      return (t || '').toLowerCase().trim()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\b(the|a|an|to|for|of|in|on|and|or|with|your|their|its|this|that|add|create|update|implement|ensure|improve|optimize)\b/g, '')
+        .replace(/\s+/g, ' ').trim();
+    }
+
+    // Deduplicate: same pillar + similar title = duplicate, keep the one with assignee_label (orchestrator) first, then newest
     const seen = new Map();
     const deduped = [];
-    for (const item of items) {
-      const key = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
-      if (!seen.has(key)) {
-        seen.set(key, true);
+    // Sort so orchestrator items (have assignee_label) come first
+    const sorted = [...items].sort((a, b) => {
+      if (a.assignee_label && !b.assignee_label) return -1;
+      if (!a.assignee_label && b.assignee_label) return 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+    for (const item of sorted) {
+      const exactKey = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
+      const fuzzyKey = `${item.pillar}:${normalizeTitle(item.title)}`;
+      if (!seen.has(exactKey) && !seen.has(fuzzyKey)) {
+        seen.set(exactKey, true);
+        if (fuzzyKey !== exactKey) seen.set(fuzzyKey, true);
         deduped.push(item);
       }
     }
@@ -980,72 +1253,261 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
 });
 
 // Sync all pillars at once (for orchestrator)
-app.post('/api/projects/:projectId/orchestrator/sync-all', async (req, res) => {
+// ==================== AI ORCHESTRATOR — intelligent cross-audit action plan ====================
+app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
   const { projectId } = req.params;
-  const pillars = ['gbp_external', 'gsc_agent', 'gsc', 'website'];
-  const results = {};
-  for (const pillar of pillars) {
-    try {
+  if (!anthropic) return res.status(500).json({ error: 'Anthropic API not configured' });
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Gather all completed audit reports
+    const auditPillars = ['gbp_external', 'gsc_agent', 'website'];
+    const reports = {};
+    for (const pillar of auditPillars) {
       const auditRes = await pool.query(
-        `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        `SELECT id, audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
         [projectId, pillar]
       );
       if (auditRes.rows.length > 0) {
-        const auditData = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
-        const reportText = auditData?.report || auditData?.final_report || '';
+        const data = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
+        const reportText = data?.report || data?.final_report || '';
         if (reportText) {
-          const auditIdRes = await pool.query(
-            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
-            [projectId, pillar]
-          );
-          const auditId = auditIdRes.rows[0]?.id;
-          const count = await extractFindingsFromReport(reportText, pillar, parseInt(projectId), auditId);
-          results[pillar] = { extracted: count };
-        } else {
-          // No report text — old-style audit that saves findings directly. Create action_items from audit_findings.
-          const auditIdRes = await pool.query(
-            `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
-            [projectId, pillar]
-          );
-          const auditId = auditIdRes.rows[0]?.id;
-          if (auditId) {
-            const existingFindings = await pool.query(
-              `SELECT * FROM audit_findings WHERE project_id=$1 AND audit_id=$2`, [parseInt(projectId), auditId]
-            );
-            if (existingFindings.rows.length > 0) {
-              // Clear old action_items for this pillar, then create from findings
-              await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [parseInt(projectId), pillar]);
-              for (const f of existingFindings.rows) {
-                await pool.query(
-                  `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
-                  [parseInt(projectId), f.id, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
-                );
-              }
-              results[pillar] = { extracted: existingFindings.rows.length, source: 'audit_findings' };
-            } else {
-              results[pillar] = { extracted: 0, reason: 'no findings in DB' };
+          reports[pillar] = { text: reportText.slice(0, 15000), auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
+        }
+      }
+    }
+
+    if (Object.keys(reports).length === 0) {
+      return res.status(400).json({ error: 'No completed audits found. Run at least one audit first.' });
+    }
+
+    console.log(`[orchestrator] Running AI orchestrator for project ${projectId} with ${Object.keys(reports).length} audit reports`);
+    res.json({ status: 'running', pillars: Object.keys(reports) });
+
+    // Run async — TWO-STEP orchestrator for maximum accuracy
+    (async () => {
+      try {
+        const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const serviceAreas = project.service_areas || [];
+        const hasWordPress = !!(project.wordpress_url && project.wp_username && project.wp_app_password);
+
+        // Build report sections
+        let reportSection = '';
+        for (const [pillar, r] of Object.entries(reports)) {
+          const label = { gbp_external: 'GBP External Audit', gsc_agent: 'GSC Audit', website: 'Website Audit' }[pillar] || pillar;
+          reportSection += `\n\n=== ${label} (completed ${new Date(r.completedAt).toLocaleDateString()}) ===\n${r.text}`;
+        }
+
+        // Include raw GSC data if available (structured source of truth for GSC metrics)
+        let rawDataSection = '';
+        if (reports.gsc_agent) {
+          const gscAuditData = await pool.query('SELECT audit_data FROM audits WHERE id=$1', [reports.gsc_agent.auditId]);
+          if (gscAuditData.rows.length > 0) {
+            const ad = typeof gscAuditData.rows[0].audit_data === 'string' ? JSON.parse(gscAuditData.rows[0].audit_data) : gscAuditData.rows[0].audit_data;
+            if (ad?.raw_gsc_data && ad.raw_gsc_data.length > 0) {
+              rawDataSection += `\n\n=== RAW GSC DATA (structured, authoritative — use these numbers, not the report's paraphrasing) ===\n${JSON.stringify(ad.raw_gsc_data.slice(0, 100), null, 1)}`;
             }
-          } else {
-            results[pillar] = { extracted: 0, reason: 'no report text' };
           }
         }
-      } else {
-        results[pillar] = { extracted: 0, reason: 'no completed audit' };
+
+        // ========== STEP 1: FACT EXTRACTION ==========
+        // Extract only verifiable facts from reports — no recommendations, no opinions
+        console.log(`[orchestrator] Step 1: Extracting structured facts...`);
+
+        const factExtractionPrompt = `You are a precise data extractor. Read these SEO audit reports and extract ONLY verifiable facts — NO recommendations, NO opinions, NO suggestions.
+
+For each fact, record:
+- The exact data point (number, URL, status, score, etc.)
+- Which report it came from
+- Whether it's a measured value or an inference
+
+Return ONLY a JSON object with these sections:
+
+{
+  "pages": [{"url": "/path", "exists": true|false, "title": "...", "meta_desc": "...", "word_count": 123, "has_schema": true|false, "source": "report_name"}],
+  "gbp_profile": {"name": "...", "rating": 4.2, "review_count": 47, "categories": ["..."], "has_description": true|false|null, "has_hours": true|false|null, "has_photos": true|false|null, "photo_count": 12, "source": "report_name"},
+  "competitors": [{"name": "...", "rating": 4.5, "review_count": 80, "position": 1, "source": "report_name"}],
+  "gsc_metrics": [{"query": "...", "page": "/path", "clicks": 10, "impressions": 500, "ctr": 2.0, "position": 8.5, "source": "gsc_data"}],
+  "technical_issues": [{"issue": "...", "url": "/path", "details": "...", "source": "report_name"}],
+  "service_areas": [{"name": "...", "has_page": true|false, "page_url": "/path_or_null", "source": "report_name"}],
+  "directories": [{"name": "...", "listed": true|false|null, "source": "report_name"}],
+  "scores": {"performance": 45, "lcp": "3.2s", "cls": 0.15, "source": "report_name"}
+}
+
+RULES:
+- Only include data EXPLICITLY stated in the reports. If a field is not mentioned, use null.
+- For pages: only list pages the report explicitly names with URLs.
+- For has_description/has_hours/has_photos: use null if the report doesn't mention it (NOT false).
+- Include the raw GSC data rows as gsc_metrics if provided.
+- Do NOT infer — if the report says "N/A" or doesn't mention something, it's null.
+
+REPORTS:
+${reportSection}
+${rawDataSection}`;
+
+        const factResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 12000,
+          messages: [{ role: 'user', content: factExtractionPrompt }]
+        });
+
+        const factText = factResp.content[0].text.trim();
+        const factJsonMatch = factText.match(/\{[\s\S]*\}/);
+        let facts = {};
+        if (factJsonMatch) {
+          try { facts = JSON.parse(factJsonMatch[0]); } catch (e) {
+            console.error('[orchestrator] Failed to parse facts JSON:', e.message);
+          }
+        }
+        console.log(`[orchestrator] Step 1 complete: ${Object.keys(facts).length} fact categories extracted`);
+
+        // ========== STEP 2: ACTION ITEMS FROM FACTS ==========
+        // Generate action items grounded in the extracted facts
+        console.log(`[orchestrator] Step 2: Generating action items from verified facts...`);
+
+        const orchestratorPrompt = `You are the SEO Orchestrator for "${project.business_name || project.name}" (${domain}).
+Service areas: ${serviceAreas.map(a => a.name).join(', ') || 'not set'}
+WordPress connected: ${hasWordPress ? 'YES — can auto-fix meta titles, descriptions, content via API' : 'NO — content changes need manual WordPress editing'}
+
+You have TWO inputs:
+1. STRUCTURED FACTS (verified data extracted from audit reports — this is your PRIMARY source of truth)
+2. AUDIT REPORTS (for context and recommendations — SECONDARY source)
+
+=== STRUCTURED FACTS (PRIMARY — trust these over report text) ===
+${JSON.stringify(facts, null, 2)}
+
+=== AUDIT REPORTS (SECONDARY — use for context only) ===
+${reportSection}
+
+YOUR JOB:
+1. Create action items ONLY for issues supported by the STRUCTURED FACTS above.
+2. If facts.pages shows a page EXISTS (exists: true), do NOT recommend creating it — recommend optimizing.
+3. If facts.gbp_profile shows a field is null, do NOT flag it as missing — data was unavailable.
+4. For GSC items: use the actual numbers from facts.gsc_metrics (position, CTR, clicks). Do NOT make up metrics.
+5. For competitors: use actual competitor data from facts.competitors.
+6. DEDUPLICATE — same issue across audits = ONE item.
+
+ASSIGN execution_type:
+- "plugin" (WP Plugin) — WordPress content changes via REST API + Yoast: meta titles, descriptions, headings, schema, content, pages, internal links, canonical tags, redirects
+- "manual" with assignee_label "Manual" — business owner physical tasks: photos, review requests, directory registrations, claiming listings
+- "manual" with assignee_label "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses), strategy, server/theme configs, social media
+- "api" (Automated) — API tasks: URL indexing submission, sitemap submission
+
+SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
+PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
+
+VALIDATION RULES — every action item MUST pass ALL of these:
+- The "current_value" field must contain an actual value from the STRUCTURED FACTS (a real number, URL, or status — not a description)
+- The "page_url" must be a real URL from facts.pages or facts.gsc_metrics — NEVER invented
+- The "description" must reference specific data from STRUCTURED FACTS
+- If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
+
+Return ONLY a JSON array:
+[{
+  "pillar": "<gbp_external|gsc_agent|website>",
+  "category": "<section name>",
+  "title": "<short actionable title>",
+  "description": "<what's wrong — cite specific data from facts>",
+  "recommendation": "<specific fix with steps>",
+  "severity": "<Critical|High|Medium|Low>",
+  "execution_type": "<plugin|manual|api>",
+  "assignee_label": "<WP Plugin|SEO Specialist|Manual|Automated>",
+  "current_value": "<actual value from facts>",
+  "new_value": "<target value>",
+  "page_url": "<real URL from facts or empty string>",
+  "fact_source": "<which fact category supports this: pages|gbp_profile|competitors|gsc_metrics|technical_issues|service_areas|directories|scores>"
+}]`;
+
+        const resp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 16000,
+          messages: [{ role: 'user', content: orchestratorPrompt }]
+        });
+
+        const text = resp.content[0].text.trim();
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          console.error('[orchestrator] No JSON array found in Step 2 response');
+          return;
+        }
+
+        const items = JSON.parse(jsonMatch[0]);
+        console.log(`[orchestrator] Step 2: AI returned ${items.length} action items`);
+
+        // Filter out duplicates flagged by AI
+        const uniqueItems = items.filter(i => !i.duplicate_of);
+        console.log(`[orchestrator] After dedup: ${uniqueItems.length} items`);
+
+        // Validate
+        const validExecTypes = ['plugin', 'manual', 'api'];
+        const validSeverities = ['Critical', 'High', 'Medium', 'Low'];
+        const PILLAR_CATEGORIES = {
+          gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+          website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+          gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+        };
+
+        // Clean slate — delete ALL action items and findings for this project
+        await pool.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
+        await pool.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
+
+        let savedCount = 0;
+        let skippedCount = 0;
+        for (const item of uniqueItems) {
+          const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
+          const validCats = PILLAR_CATEGORIES[pillar] || [];
+          const category = validCats.find(c => c.toLowerCase() === (item.category || '').toLowerCase())
+            || validCats.find(c => (item.category || '').toLowerCase().includes(c.toLowerCase().split(' ')[0]))
+            || validCats[0] || 'General';
+          const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
+          const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
+          const assigneeLabel = item.assignee_label || (execType === 'plugin' ? 'WP Plugin' : execType === 'api' ? 'Automated' : 'SEO Specialist');
+
+          if (!item.title) { skippedCount++; continue; }
+
+          const auditId = reports[pillar]?.auditId || null;
+
+          // Save finding
+          const fRes = await pool.query(
+            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+            [projectId, auditId, pillar, category, item.title.slice(0, 200), (item.description || '').slice(0, 1000),
+             (item.recommendation || '').slice(0, 1000), severity, (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500)]
+          );
+
+          // Save action item
+          await pool.query(
+            `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+            [projectId, fRes.rows[0].id, pillar, category, category, item.title.slice(0, 200),
+             (item.recommendation || item.description || '').slice(0, 1000),
+             (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500),
+             severity, execType, assigneeLabel]
+          );
+          savedCount++;
+        }
+
+        console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
+      } catch (e) {
+        console.error('[orchestrator] Error:', e.message);
       }
-    } catch (e) {
-      results[pillar] = { error: e.message };
-    }
+    })();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  res.json({ results });
 });
+
+// Legacy sync-all removed — orchestrator is the sole source of truth for action items
 
 // ==================== SERPAPI HELPER ====================
 
 async function serpApiSearch(params) {
   if (!SERPAPI_KEY) throw new Error('SERPAPI_KEY not configured');
-  // Filter out undefined/null values to avoid sending them as strings
-  const cleanParams = Object.fromEntries(Object.entries({ ...params, api_key: SERPAPI_KEY }).filter(([_, v]) => v != null));
+  // Filter out undefined/null/empty values to avoid sending them as strings
+  const cleanParams = Object.fromEntries(Object.entries({ ...params, api_key: SERPAPI_KEY }).filter(([_, v]) => v != null && v !== ''));
   const searchParams = new URLSearchParams(cleanParams);
   const resp = await fetch(`https://serpapi.com/search.json?${searchParams}`);
   if (!resp.ok) {
@@ -1145,7 +1607,7 @@ function extractImageIssues(lighthouseData) {
 }
 
 // Helper: discover pages from sitemap or WP REST API
-async function discoverPages(projectUrl, wpUrl) {
+async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   const pages = [];
   const baseUrl = projectUrl.replace(/\/$/, '');
   const seenUrls = new Set();
@@ -1195,14 +1657,23 @@ async function discoverPages(projectUrl, wpUrl) {
     }
   } catch (e) { /* sitemap not available */ }
 
-  // Try WP REST API if available and no sitemap pages
-  if (pages.length === 0 && wpUrl) {
+  // Try WP REST API if available and no sitemap pages (or to supplement sitemap)
+  if (wpUrl) {
     try {
-      const wpPages = await wpFetch(wpUrl, 'wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link');
-      for (const p of wpPages) {
-        pages.push({ page_id: String(p.id), title: p.title.rendered, slug: p.slug, url: p.link });
+      const wpBase = wpUrl.replace(/\/$/, '');
+      const fetchOpts = { signal: AbortSignal.timeout(30000), ...(authHeaders ? { headers: authHeaders } : {}) };
+      const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link`, fetchOpts);
+      if (resp.ok) {
+        const wpPages = await resp.json();
+        for (const p of (Array.isArray(wpPages) ? wpPages : [])) {
+          const url = p.link || '';
+          if (!seenUrls.has(url)) {
+            seenUrls.add(url);
+            pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url });
+          }
+        }
       }
-    } catch (e) { /* WP API not available */ }
+    } catch (e) { console.log('[discoverPages] WP REST API failed:', e.message); }
   }
 
   // Fallback: just test the homepage
@@ -1222,7 +1693,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
     const siteUrl = project.wordpress_url || (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : null);
     if (!siteUrl) return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' });
 
-    const pages = await discoverPages(siteUrl, project.wordpress_url);
+    const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
 
     // Process pages in parallel batches of 5
     const BATCH_SIZE = 5;
@@ -1756,7 +2227,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     let yoastMap = {};
     try {
       const yoastResp = await fetch(`${wpBase}/wp-json/seoroom/v1/yoast-scores`, {
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(30000),
+        ...(getWpAuthHeaders(project) ? { headers: getWpAuthHeaders(project) } : {}),
       });
       if (yoastResp.ok) {
         const scores = await yoastResp.json();
@@ -1767,14 +2239,14 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       console.log(`[onpage-audit] seoroom plugin not available: ${e.message}`);
     }
 
-    // 2. Fetch all published pages from WP REST API
+    // 2. Fetch all published pages from WP REST API (with auth if available)
+    const wpAuth = getWpAuthHeaders(project);
+    const wpFetchOpts = { signal: AbortSignal.timeout(30000), ...(wpAuth ? { headers: wpAuth } : {}) };
     let allPages = [];
     let page = 1;
     while (true) {
       try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, {
-          signal: AbortSignal.timeout(30000)
-        });
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, wpFetchOpts);
         if (!resp.ok) break;
         const pages = await resp.json();
         if (!Array.isArray(pages) || pages.length === 0) break;
@@ -1787,9 +2259,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     page = 1;
     while (true) {
       try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, {
-          signal: AbortSignal.timeout(30000)
-        });
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, wpFetchOpts);
         if (!resp.ok) break;
         const posts = await resp.json();
         if (!Array.isArray(posts) || posts.length === 0) break;
@@ -1800,22 +2270,61 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     }
 
     console.log(`[onpage-audit] Fetched ${allPages.length} pages/posts`);
-    if (allPages.length === 0) return res.json({ pages: [], message: 'No published pages found' });
+    if (allPages.length === 0) {
+      // Check if REST API requires auth
+      const testResp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=1`, { signal: AbortSignal.timeout(10000) }).catch(() => null);
+      const isAuthRequired = testResp && testResp.status === 401;
+      const msg = isAuthRequired
+        ? 'WordPress REST API requires authentication. Add WP Username and Application Password in Project Settings.'
+        : 'No published pages found. Check that the WordPress URL is correct and the REST API is accessible.';
+      return res.json({ pages: [], message: msg });
+    }
 
     // 3. Analyze each page
+    const isElementor = project.is_elementor_site;
     const results = [];
     for (const pg of allPages) {
       const url = pg.link || '';
       const slug = pg.slug || '';
       const title = pg.title?.rendered || '';
-      const content = pg.content?.rendered || '';
+      let content = pg.content?.rendered || '';
       const yoast = pg.yoast_head_json || {};
       const pluginData = yoastMap[pg.id];
+      // Fallback: read from seoroom_yoast (added by plugin to REST response) or meta fields
+      const srYoast = pg.seoroom_yoast || {};
+      const pgMeta = pg.meta || {};
+
+      // Elementor fix: content.rendered is often empty/minimal for Elementor pages.
+      // Fetch the actual rendered HTML from the live page to get real word count.
+      let prelimPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      let prelimWords = prelimPlain.split(/\s+/).filter(Boolean).length;
+      if (isElementor && prelimWords < 50 && url) {
+        try {
+          const liveResp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          if (liveResp.ok) {
+            const liveHtml = await liveResp.text();
+            // Extract main content area — look for elementor-widget-text-editor or main content
+            const mainMatch = liveHtml.match(/<main[\s\S]*?<\/main>/i) ||
+                              liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>[\s\S]*?<\/div>/i) ||
+                              liveHtml.match(/<article[\s\S]*?<\/article>/i);
+            if (mainMatch) {
+              content = mainMatch[0];
+            } else {
+              // Fallback: extract body content between header and footer
+              const bodyMatch = liveHtml.match(/<body[\s\S]*?<\/body>/i);
+              if (bodyMatch) content = bodyMatch[0];
+            }
+            console.log(`[onpage-audit] Elementor page ${slug}: fetched live HTML, content length ${content.length}`);
+          }
+        } catch (e) {
+          console.log(`[onpage-audit] Failed to fetch live page ${slug}: ${e.message}`);
+        }
+      }
 
       // Extract fields
       const metaTitle = yoast.title || '';
       const metaDesc = yoast.description || '';
-      const focusKeyword = pluginData?.focus_keyword || '';
+      const focusKeyword = pluginData?.focus_keyword || srYoast.focus_keyword || pgMeta._yoast_wpseo_focuskw || pgMeta.yoast_wpseo_focuskw || '';
       const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const wordCount = plainText.split(/\s+/).filter(Boolean).length;
 
@@ -1840,11 +2349,12 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
 
       // Determine Yoast score
       let yoastScore = 'gray';
-      if (pluginData) {
-        const seoScore = pluginData.seo_score || 0;
+      const rawSeoScore = pluginData?.seo_score || srYoast.seo_score || pgMeta._yoast_wpseo_linkdex || 0;
+      if (rawSeoScore) {
+        const seoScore = parseInt(rawSeoScore) || 0;
         yoastScore = seoScore >= 70 ? 'green' : seoScore >= 40 ? 'orange' : 'red';
       } else {
-        // Heuristic based on meta completeness
+        // Heuristic based on meta completeness (Yoast only updates linkdex when page is opened in editor)
         const hasGoodTitle = metaTitle.length >= 30 && metaTitle.length <= 60;
         const hasGoodDesc = metaDesc.length >= 120 && metaDesc.length <= 155;
         const hasFocus = !!focusKeyword;
@@ -1878,8 +2388,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       else if (wordCount < 800) issues.push({ type: 'warning', text: `Content could be longer (${wordCount} words) — aim for 800+` });
       else issues.push({ type: 'good', text: `Good content length (${wordCount} words)` });
 
-      if (internalLinks < 3) issues.push({ type: 'warning', text: `Only ${internalLinks} internal links — add more for better linking` });
-      else issues.push({ type: 'good', text: `Good internal linking (${internalLinks} links)` });
+      if (internalLinks < 3) issues.push({ type: 'warning', text: `Only ${internalLinks} outbound links — add more for better linking` });
+      else issues.push({ type: 'good', text: `Good outbound linking (${internalLinks} links)` });
 
       if (images > 0 && imagesWithAlt < images) issues.push({ type: 'warning', text: `${images - imagesWithAlt} image(s) missing alt text` });
       else if (images > 0) issues.push({ type: 'good', text: 'All images have alt text' });
@@ -1904,6 +2414,40 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
         imagesWithAlt,
         issues
       });
+    }
+
+    // Calculate inbound links — for each page, count how many other pages link to it
+    const allUrls = allPages.map(pg => (pg.link || '').replace(/\/$/, ''));
+    for (const result of results) {
+      const targetUrl = (wpBase + result.url).replace(/\/$/, '');
+      const targetSlug = result.url.replace(/\//g, '');
+      let inbound = 0;
+      const inboundFrom = [];
+      for (const pg of allPages) {
+        if (pg.id === result.id) continue;
+        const pgContent = pg.content?.rendered || '';
+        // Check if this page's content links to our target
+        const hrefRegex = /href=["']([^"']+)["']/gi;
+        let hm;
+        while ((hm = hrefRegex.exec(pgContent)) !== null) {
+          const href = hm[1].replace(/\/$/, '');
+          if (href === targetUrl || href === result.url.replace(/\/$/, '') || href.endsWith('/' + targetSlug)) {
+            inbound++;
+            inboundFrom.push({ title: pg.title?.rendered || '', url: (pg.link || '').replace(wpBase, '') || '/' });
+            break; // count each source page once
+          }
+        }
+      }
+      result.inboundLinks = inbound;
+      result.inboundFrom = inboundFrom;
+      // Add inbound link issue to the issues array
+      if (inbound === 0) {
+        result.issues.push({ type: 'problem', text: 'No inbound links — orphan page, no other pages link here' });
+      } else if (inbound < 3) {
+        result.issues.push({ type: 'warning', text: `Only ${inbound} inbound link${inbound > 1 ? 's' : ''} — aim for 3+` });
+      } else {
+        result.issues.push({ type: 'good', text: `Good inbound linking (${inbound} pages link here)` });
+      }
     }
 
     // Sort: red first, then orange, then green
@@ -1948,24 +2492,46 @@ function getWpAuthHeaders(project) {
 }
 
 // Helper: read current Yoast meta from WordPress for a page/post
+// Returns { type, title, yoast_wpseo_title, ..., wpId } — wpId is the resolved numeric ID
 async function readWpYoastMeta(wpBase, pageId, authHeaders) {
-  // Try pages first, then posts
+  const parseWpData = (data, type) => {
+    const yoast = data.yoast_head_json || {};
+    const seoroom = data.seoroom_yoast || {};
+    const meta = data.meta || {};
+    return {
+      type,
+      wpId: data.id, // always numeric
+      title: data.title?.rendered || '',
+      yoast_wpseo_title: meta._yoast_wpseo_title || meta.yoast_wpseo_title || seoroom.title || yoast.title || '',
+      yoast_wpseo_metadesc: meta._yoast_wpseo_metadesc || meta.yoast_wpseo_metadesc || seoroom.description || yoast.description || '',
+      yoast_wpseo_focuskw: meta._yoast_wpseo_focuskw || meta.yoast_wpseo_focuskw || seoroom.focus_keyword || ''
+    };
+  };
+
+  // Try numeric ID lookup first
+  if (!isNaN(Number(pageId)) && Number(pageId) > 0) {
+    for (const type of ['pages', 'posts']) {
+      try {
+        const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+          headers: authHeaders,
+          signal: AbortSignal.timeout(15000)
+        });
+        if (resp.ok) return parseWpData(await resp.json(), type);
+      } catch (e) { /* try next type */ }
+    }
+  }
+
+  // Fallback: slug-based lookup (handles site graph pages with slug IDs)
+  const slug = String(pageId).replace(/^\/|\/$/g, '').split('/').pop() || pageId;
   for (const type of ['pages', 'posts']) {
     try {
-      const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+      const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&per_page=1`, {
         headers: authHeaders,
         signal: AbortSignal.timeout(15000)
       });
       if (resp.ok) {
-        const data = await resp.json();
-        const yoast = data.yoast_head_json || {};
-        return {
-          type,
-          title: data.title?.rendered || '',
-          yoast_wpseo_title: data.meta?.yoast_wpseo_title || yoast.title || '',
-          yoast_wpseo_metadesc: data.meta?.yoast_wpseo_metadesc || yoast.description || '',
-          yoast_wpseo_focuskw: data.meta?.yoast_wpseo_focuskw || ''
-        };
+        const items = await resp.json();
+        if (Array.isArray(items) && items.length > 0) return parseWpData(items[0], type);
       }
     } catch (e) { /* try next type */ }
   }
@@ -1993,17 +2559,24 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
       problems: (p.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').map(i => i.text)
     }));
 
-    const resp = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4000,
-      messages: [{
-        role: 'user',
-        content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.
+    // Batch pages in groups of 5 to avoid Haiku timeout/token issues
+    const BATCH_SIZE = 5;
+    const allSuggestions = [];
+    for (let i = 0; i < pagesData.length; i += BATCH_SIZE) {
+      const batch = pagesData.slice(i, i + BATCH_SIZE);
+      console.log(`[onpage-suggest] Processing batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(pagesData.length/BATCH_SIZE)} (${batch.length} pages)`);
+
+      const resp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.
 
 Business: ${project.business_name || project.name} | Domain: ${project.domain} | Industry: ${project.industry || 'general'} | Location: ${project.location || ''}
 
 Pages to fix:
-${JSON.stringify(pagesData, null, 2)}
+${JSON.stringify(batch, null, 2)}
 
 For each page, return a JSON array with objects:
 {
@@ -2019,14 +2592,29 @@ Rules:
 - Focus keyword: choose the most relevant, search-intent-matching keyword for each page
 - If current values are already good, return them unchanged
 - ONLY return valid JSON array, no explanation`
-      }]
-    });
+        }]
+      });
 
-    const text = resp.content[0].text.trim();
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return res.status(500).json({ error: 'AI returned invalid format' });
-    const suggestions = JSON.parse(jsonMatch[0]);
-    res.json({ suggestions });
+      const text = resp.content[0].text.trim();
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error(`[onpage-suggest] Batch ${Math.floor(i/BATCH_SIZE)+1} returned invalid format:`, text.substring(0, 200));
+        continue; // skip bad batch, don't fail entire request
+      }
+      try {
+        const batchSuggestions = JSON.parse(jsonMatch[0]);
+        allSuggestions.push(...batchSuggestions);
+      } catch (parseErr) {
+        console.error(`[onpage-suggest] Batch ${Math.floor(i/BATCH_SIZE)+1} JSON parse error:`, parseErr.message);
+        continue;
+      }
+    }
+
+    if (allSuggestions.length === 0) {
+      return res.status(500).json({ error: 'AI failed to generate suggestions for any pages' });
+    }
+
+    res.json({ suggestions: allSuggestions });
   } catch (e) {
     console.error('[onpage-suggest] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -2072,40 +2660,72 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
         }
 
         if (changes.length === 0) {
-          results.push({ id: fix.id, success: true, message: 'No changes needed' });
+          results.push({ id: fix.id, success: false, skipped: true, error: 'No changes needed — values already match' });
           continue;
         }
 
-        // Save each field change to history
-        for (const ch of changes) {
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-             VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
-            [projectId, fix.id, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
-          );
-        }
-
-        // 3. Write new values to WordPress
+        // 3. Write new values to WordPress — try meta approach first, fall back to yoast_meta
         const meta = {};
-        if (fix.new_meta_title) meta.yoast_wpseo_title = fix.new_meta_title;
-        if (fix.new_meta_desc) meta.yoast_wpseo_metadesc = fix.new_meta_desc;
-        if (fix.new_focus_keyword) meta.yoast_wpseo_focuskw = fix.new_focus_keyword;
+        if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
+        if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
+        if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
 
-        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${fix.id}`, {
+        console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
+
+        let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
           method: 'POST',
           headers: authHeaders,
           body: JSON.stringify({ meta }),
           signal: AbortSignal.timeout(15000)
         });
 
+        // If meta write fails with 401/403, try yoast_meta wrapper (some Yoast versions expose this)
+        if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+          console.log(`[onpage-fix] Meta write failed (${writeResp.status}), trying yoast_meta wrapper...`);
+          const yoastPayload = {};
+          if (fix.new_meta_title) yoastPayload.yoast_wpseo_title = fix.new_meta_title;
+          if (fix.new_meta_desc) yoastPayload.yoast_wpseo_metadesc = fix.new_meta_desc;
+          if (fix.new_focus_keyword) yoastPayload.yoast_wpseo_focuskw = fix.new_focus_keyword;
+
+          writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ yoast_meta: yoastPayload }),
+            signal: AbortSignal.timeout(15000)
+          });
+        }
+
         if (!writeResp.ok) {
           const errText = await writeResp.text();
+          console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
           results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
           continue;
         }
 
+        // 4. Verify write succeeded by reading back
+        const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+        const verified = verify && (
+          (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) ||
+          (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc)
+        );
+
+        if (!verified) {
+          console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
+          results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The seoroom-helper plugin may be needed to register Yoast meta fields for REST API writes.' });
+          continue;
+        }
+
+        // Save each field change to history ONLY after verified write
+        for (const ch of changes) {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+             VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
+            [projectId, current.wpId, fix.url || '', fix.title || '', ch.field, ch.old, ch.new]
+          );
+        }
+
         results.push({ id: fix.id, success: true, changes: changes.length });
-        console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields)`);
+        console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields) — verified ✓`);
       } catch (e) {
         results.push({ id: fix.id, success: false, error: e.message });
       }
@@ -2114,6 +2734,584 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
     res.json({ results });
   } catch (e) {
     console.error('[onpage-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add internal links to a page via AI (supports Elementor + classic editor)
+app.post('/api/projects/:projectId/onpage-audit/add-links', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, selected_links } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Fetch target page with all fields
+    let pageData, pageType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (pageResp.ok) {
+      pageData = await pageResp.json();
+    } else {
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (pageResp.ok) { pageData = await pageResp.json(); pageType = 'posts'; }
+    }
+    if (!pageData) return res.status(404).json({ error: 'Page not found in WordPress' });
+
+    // Detect Elementor — check for _elementor_data in meta
+    const isElementor = project.is_elementor_site || (pageData.meta && pageData.meta._elementor_data);
+    let elementorData = null;
+    let textWidgets = []; // { path, content } for each text widget
+
+    if (isElementor && pageData.meta?._elementor_data) {
+      try {
+        elementorData = typeof pageData.meta._elementor_data === 'string'
+          ? JSON.parse(pageData.meta._elementor_data) : pageData.meta._elementor_data;
+      } catch { elementorData = null; }
+    }
+
+    // Extract text content from Elementor widgets recursively
+    const extractTextWidgets = (elements, path = '') => {
+      if (!Array.isArray(elements)) return;
+      elements.forEach((el, idx) => {
+        const currentPath = path ? `${path}.${idx}` : `${idx}`;
+        // Text editor widgets contain HTML in settings.editor
+        if (el.widgetType === 'text-editor' && el.settings?.editor) {
+          textWidgets.push({ path: currentPath, field: 'editor', content: el.settings.editor });
+        }
+        // Heading widgets — skip (don't add links in headings)
+        // Recursively check sections/columns/inner sections
+        if (el.elements && el.elements.length > 0) {
+          extractTextWidgets(el.elements, currentPath + '.elements');
+        }
+      });
+    };
+
+    let contentForAI;
+    if (elementorData) {
+      extractTextWidgets(elementorData);
+      if (textWidgets.length === 0) {
+        return res.json({ success: false, message: 'No text editor widgets found in Elementor data', links_added: [] });
+      }
+      // Combine all text widgets for AI, with markers
+      contentForAI = textWidgets.map((tw, i) => `[WIDGET_${i}]\n${tw.content}\n[/WIDGET_${i}]`).join('\n\n');
+      console.log(`[add-links] Elementor page ${page_id}: found ${textWidgets.length} text widgets`);
+    } else {
+      contentForAI = pageData.content?.raw || pageData.content?.rendered || '';
+      if (!contentForAI.trim()) return res.status(400).json({ error: 'Page has no content' });
+      console.log(`[add-links] Classic page ${page_id}: using standard content`);
+    }
+
+    // Fetch all other pages to build link targets
+    const allPages = [];
+    for (const type of ['pages', 'posts']) {
+      let pg = 1;
+      while (true) {
+        try {
+          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&_fields=id,title,link,slug`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!r.ok) break;
+          const items = await r.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          allPages.push(...items.filter(p => p.id !== page_id));
+          if (items.length < 50) break;
+          pg++;
+        } catch { break; }
+      }
+    }
+    if (allPages.length === 0) return res.status(400).json({ error: 'No other pages found to link to' });
+
+    let linkTargets = allPages.map(p => {
+      const pm = p.meta || {};
+      const sr = p.seoroom_yoast || {};
+      const fk = pm._yoast_wpseo_focuskw || pm.yoast_wpseo_focuskw || sr.focus_keyword || '';
+      return { title: p.title?.rendered || p.title, url: p.link || '', focus_keyword: fk };
+    });
+
+    // If selected_links provided (from preview approval), only target those URLs
+    if (Array.isArray(selected_links) && selected_links.length > 0) {
+      linkTargets = linkTargets.filter(t => selected_links.includes(t.url));
+      console.log(`[add-links] Filtered to ${linkTargets.length} selected targets: ${selected_links.join(', ')}`);
+    }
+
+    console.log(`[add-links] Page "${pageData.title?.rendered || pageData.title?.raw}", ${linkTargets.length} link targets, elementor=${!!elementorData}`);
+
+    // Check if this is preview-only mode (suggest but don't apply)
+    const previewOnly = req.body.preview === true;
+
+    // Build AI prompt — different for Elementor vs classic
+    const systemPrompt = elementorData
+      ? `You are an SEO expert. Add internal links to Elementor text widget content.
+The content is split into numbered widgets: [WIDGET_0], [WIDGET_1], etc.
+Return the SAME widget structure with links added inside the widget content.
+
+ANCHOR TEXT RULES (CRITICAL):
+- The anchor text MUST be the target page's focus keyword (exact match or very close variation)
+- If the focus keyword doesn't appear naturally in the content, find the closest matching phrase
+- NEVER use full page titles as anchor text — use the SHORT focus keyword
+- Example: target focus keyword "car key replacement Perth" → anchor "car key replacement Perth" or "car key replacement" if "Perth" isn't nearby
+
+Other rules:
+- ONLY add <a href="URL">anchor text</a> links to EXISTING text — wrap existing phrases
+- Add 3-8 internal links total across all widgets
+- Do NOT link the same target page twice
+- Do NOT add links where there's already an <a> tag
+- Do NOT modify any HTML structure, classes, IDs, styles, or Elementor shortcodes
+- Do NOT change any text content — only wrap existing phrases in <a> tags
+- Keep all existing links intact
+
+Return JSON:
+{
+  "widgets": [
+    {"index": 0, "modified_content": "<widget 0 HTML with links>"},
+    {"index": 1, "modified_content": "<widget 1 HTML with links>"}
+  ],
+  "links_added": [{"anchor": "text used", "target_keyword": "focus keyword of target", "url": "target URL", "widget": 0, "reason": "why this link"}]
+}
+Only include widgets that were actually modified.`
+      : `You are an SEO expert. Add internal links to existing page content.
+
+ANCHOR TEXT RULES (CRITICAL):
+- The anchor text MUST be the target page's focus keyword (exact match or very close variation)
+- If the focus keyword doesn't appear naturally in the content, find the closest matching phrase
+- NEVER use full page titles as anchor text — use the SHORT focus keyword
+- Example: target focus keyword "car key replacement Perth" → anchor "car key replacement Perth"
+
+Other rules:
+- ONLY add <a href="URL">anchor text</a> links to EXISTING text — wrap existing phrases
+- Add 3-8 internal links depending on content length
+- Do NOT link the same target page twice
+- Do NOT add links inside headings (h1-h6)
+- Do NOT add links where there's already an <a> tag
+- Do NOT modify any HTML structure, classes, IDs, or styles
+- Do NOT change any text content — only wrap existing phrases in <a> tags
+- Keep all existing links intact
+- Return the FULL modified HTML content
+
+Return JSON: {"modified_content": "<full HTML with links>", "links_added": [{"anchor": "text used", "target_keyword": "focus keyword of target", "url": "target URL", "reason": "why this link"}]}`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: `Add internal links to this page content.
+
+Page: ${pageData.title?.rendered || pageData.title?.raw || ''}
+
+Available link targets (use the FOCUS KEYWORD as anchor text):
+${linkTargets.map(t => `- "${t.title}" | focus keyword: "${t.focus_keyword || 'none'}" → ${t.url}`).join('\n')}
+
+Current content:
+${contentForAI.slice(0, 12000)}` }],
+    });
+
+    const raw = aiResp.content[0].text;
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: raw.slice(0, 500) });
+    }
+
+    if (!parsed.links_added?.length) {
+      return res.json({ success: false, message: 'AI could not find suitable places to add links', links_added: [] });
+    }
+
+    // Preview mode — return suggestions without applying
+    if (previewOnly) {
+      return res.json({
+        success: true,
+        preview: true,
+        links_added: parsed.links_added,
+        count: parsed.links_added.length,
+        elementor: !!elementorData,
+        page_id: page_id,
+      });
+    }
+
+    // Apply changes based on content type
+    if (elementorData && parsed.widgets) {
+      // Apply to Elementor widgets
+      const originalJson = JSON.stringify(elementorData);
+
+      // Navigate to each widget by path and update settings.editor
+      const setByPath = (obj, pathStr, value) => {
+        const parts = pathStr.split('.');
+        let current = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const key = isNaN(parts[i]) ? parts[i] : parseInt(parts[i]);
+          current = current[key];
+        }
+        const lastKey = isNaN(parts[parts.length - 1]) ? parts[parts.length - 1] : parseInt(parts[parts.length - 1]);
+        current[lastKey] = value;
+      };
+
+      for (const w of parsed.widgets) {
+        const tw = textWidgets[w.index];
+        if (!tw) continue;
+        // The path points to the element, we need to set settings.editor
+        const editorPath = tw.path + '.settings.editor';
+        try { setByPath(elementorData, editorPath, w.modified_content); }
+        catch (e) { console.log(`[add-links] Failed to set widget ${w.index}: ${e.message}`); }
+      }
+
+      // Snapshot for rollback (full data, no truncation)
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', '_elementor_data',
+         originalJson, JSON.stringify(elementorData)]
+      );
+
+      // Write Elementor data back via meta
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elementorData) } }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!writeResp.ok) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+      }
+
+      // Also clear Elementor CSS cache by touching _elementor_css meta
+      await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+
+    } else if (parsed.modified_content) {
+      // Classic editor — write content directly
+      const currentContent = pageData.content?.raw || pageData.content?.rendered || '';
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, page_id, pageData.link, pageData.title?.rendered || '', 'internal-links', 'content',
+         currentContent, parsed.modified_content]
+      );
+
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: parsed.modified_content }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!writeResp.ok) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+      }
+    } else {
+      return res.json({ success: false, message: 'No content modifications returned', links_added: [] });
+    }
+
+    console.log(`[add-links] Added ${parsed.links_added.length} links to page ${page_id} (elementor=${!!elementorData})`);
+    res.json({
+      success: true,
+      links_added: parsed.links_added,
+      count: parsed.links_added.length,
+      elementor: !!elementorData,
+    });
+  } catch (e) {
+    console.error('[add-links] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update focus keyword on WordPress
+app.post('/api/projects/:projectId/onpage-audit/update-keyword', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, keyword } = req.body;
+    if (!page_id) return res.status(400).json({ error: 'page_id required' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress auth not configured' });
+
+    // Read current value for rollback
+    const currentMeta = await readWpYoastMeta(wpUrl, page_id, authHeaders);
+    const oldKeyword = currentMeta?._yoast_wpseo_focuskw || currentMeta?.yoast_wpseo_focuskw || '';
+
+    // Determine page type
+    let pageType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+    if (!pageResp.ok) {
+      pageType = 'posts';
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+    }
+    if (!pageResp.ok) return res.status(404).json({ error: 'Page not found in WordPress' });
+    const pageData = await pageResp.json();
+
+    // Write new keyword
+    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meta: { _yoast_wpseo_focuskw: keyword || '' } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    // Save to change history for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [projectId, page_id, pageData.link || '', pageData.title?.rendered || '', 'focus-keyword', '_yoast_wpseo_focuskw', oldKeyword, keyword || '']
+    );
+
+    console.log(`[onpage] Updated focus keyword for page ${page_id}: "${oldKeyword}" → "${keyword}"`);
+    res.json({ success: true, old: oldKeyword, new: keyword });
+  } catch (e) {
+    console.error('[onpage] Update keyword error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add inbound links — find other pages and add links in them pointing TO this page
+app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, preview, selected_links } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Fetch target page info
+    let targetPage, targetType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (pageResp.ok) { targetPage = await pageResp.json(); }
+    else {
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (pageResp.ok) { targetPage = await pageResp.json(); targetType = 'posts'; }
+    }
+    if (!targetPage) return res.status(404).json({ error: 'Page not found' });
+
+    const targetUrl = targetPage.link || '';
+    const targetTitle = targetPage.title?.rendered || targetPage.title?.raw || '';
+
+    // Fetch all other pages with content
+    const otherPages = [];
+    for (const type of ['pages', 'posts']) {
+      let pg = 1;
+      while (true) {
+        try {
+          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!r.ok) break;
+          const items = await r.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
+          if (items.length < 50) break;
+          pg++;
+        } catch { break; }
+      }
+    }
+
+    if (otherPages.length === 0) return res.json({ success: false, message: 'No other pages found', links_added: [] });
+
+    const isElementor = project.is_elementor_site;
+
+    // Build page summaries for AI to pick the most relevant ones
+    const pageSummaries = otherPages.map(p => {
+      const content = p.content?.rendered || p.content?.raw || '';
+      const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      // Check if already links to target
+      const alreadyLinks = content.toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, ''));
+      return {
+        id: p.id,
+        title: p.title?.rendered || p.title?.raw || '',
+        url: p.link || '',
+        type: p._type,
+        snippet: plainText.slice(0, 200),
+        alreadyLinks,
+        hasElementor: !!(p.meta?._elementor_data),
+      };
+    }).filter(p => !p.alreadyLinks); // Exclude pages that already link to target
+
+    if (pageSummaries.length === 0) return res.json({ success: false, message: 'All pages already link to this page', links_added: [] });
+
+    console.log(`[add-inbound] Target: "${targetTitle}" (${page_id}), ${pageSummaries.length} candidate pages`);
+
+    // Ask AI which pages should link to target and what anchor text to use
+    const pickResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: `You are an SEO expert. Pick the most relevant pages that should link to a target page.
+For each selected page, identify a natural phrase in that page's content that can be wrapped in an <a> tag linking to the target.
+Pick 3-6 pages maximum. Only pick pages where a link would be genuinely relevant and natural.
+
+Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "reason": "why this link makes sense"}]}`,
+      messages: [{ role: 'user', content: `Target page to link TO:
+Title: "${targetTitle}"
+URL: ${targetUrl}
+
+Candidate pages (pick which ones should link to the target):
+${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n')}` }],
+    });
+
+    let picks;
+    try {
+      const jsonMatch = pickResp.content[0].text.match(/\{[\s\S]*\}/);
+      picks = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON for page selection' });
+    }
+
+    if (!picks.pages?.length) {
+      return res.json({ success: false, message: 'AI found no suitable pages for inbound links', links_added: [] });
+    }
+
+    // If selected_links provided, filter picks to only those source page IDs
+    if (Array.isArray(selected_links) && selected_links.length > 0) {
+      picks.pages = picks.pages.filter(p => selected_links.includes(p.id));
+      console.log(`[add-inbound] Filtered to ${picks.pages.length} selected source pages`);
+    }
+
+    // Preview mode — return AI picks without applying
+    if (preview === true) {
+      const previewLinks = picks.pages.map(p => {
+        const src = otherPages.find(op => op.id === p.id);
+        return {
+          source_page_id: p.id,
+          source_title: src ? (src.title?.rendered || src.title?.raw || '') : '',
+          source_url: src ? (src.link || '') : '',
+          anchor: p.anchor,
+          target_url: targetUrl,
+          reason: p.reason,
+        };
+      });
+      return res.json({ success: true, preview: true, links_added: previewLinks, count: previewLinks.length });
+    }
+
+    // Now process each selected page — add the link
+    const linksAdded = [];
+    for (const pick of picks.pages) {
+      const sourcePage = otherPages.find(p => p.id === pick.id);
+      if (!sourcePage) continue;
+
+      const hasElementorData = sourcePage.meta?._elementor_data;
+
+      if (isElementor && hasElementorData) {
+        // Elementor: parse _elementor_data, find text widgets, add link
+        let elData;
+        try {
+          elData = typeof hasElementorData === 'string' ? JSON.parse(hasElementorData) : hasElementorData;
+        } catch { continue; }
+
+        const originalJson = JSON.stringify(elData);
+        let modified = false;
+
+        const processElements = (elements) => {
+          if (!Array.isArray(elements) || modified) return;
+          for (const el of elements) {
+            if (modified) break;
+            if (el.widgetType === 'text-editor' && el.settings?.editor) {
+              const content = el.settings.editor;
+              if (content.includes(pick.anchor) && !content.includes(targetUrl)) {
+                // Replace first occurrence of anchor text with linked version
+                el.settings.editor = content.replace(
+                  pick.anchor,
+                  `<a href="${targetUrl}">${pick.anchor}</a>`
+                );
+                modified = true;
+              }
+            }
+            if (el.elements) processElements(el.elements);
+          }
+        };
+        processElements(elData);
+
+        if (!modified) continue;
+
+        // Snapshot for rollback
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', '_elementor_data',
+           originalJson, JSON.stringify(elData)]
+        );
+
+        const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elData), _elementor_css: '' } }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (writeResp.ok) {
+          linksAdded.push({
+            source_page_id: sourcePage.id,
+            source_title: sourcePage.title?.rendered || '',
+            source_url: sourcePage.link || '',
+            anchor: pick.anchor,
+            target_url: targetUrl,
+            reason: pick.reason,
+          });
+        }
+      } else {
+        // Classic editor
+        const content = sourcePage.content?.raw || sourcePage.content?.rendered || '';
+        if (!content.includes(pick.anchor) || content.includes(targetUrl)) continue;
+
+        const newContent = content.replace(
+          pick.anchor,
+          `<a href="${targetUrl}">${pick.anchor}</a>`
+        );
+
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, sourcePage.id, sourcePage.link, sourcePage.title?.rendered || '', 'inbound-link', 'content',
+           content, newContent]
+        );
+
+        const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${sourcePage._type}/${sourcePage.id}`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: newContent }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (writeResp.ok) {
+          linksAdded.push({
+            source_page_id: sourcePage.id,
+            source_title: sourcePage.title?.rendered || '',
+            source_url: sourcePage.link || '',
+            anchor: pick.anchor,
+            target_url: targetUrl,
+            reason: pick.reason,
+          });
+        }
+      }
+    }
+
+    console.log(`[add-inbound] Added ${linksAdded.length} inbound links to "${targetTitle}"`);
+    res.json({
+      success: linksAdded.length > 0,
+      links_added: linksAdded,
+      count: linksAdded.length,
+      message: linksAdded.length === 0 ? 'Could not find matching anchor text in source pages' : undefined,
+    });
+  } catch (e) {
+    console.error('[add-inbound] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2152,14 +3350,34 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     const current = await readWpYoastMeta(wpBase, change.page_id, authHeaders);
     if (!current) return res.status(404).json({ error: 'Page not found in WordPress' });
 
-    // Write original value back
-    const meta = { [change.field_name]: change.original_value };
+    // Write original value back — handle different field types
+    let payload;
+    if (change.field_name === '_elementor_data') {
+      // Elementor data — write as meta, also clear CSS cache
+      payload = { meta: { _elementor_data: change.original_value } };
+    } else if (change.field_name === 'content') {
+      // Standard content field — write directly
+      payload = { content: change.original_value };
+    } else {
+      // Yoast meta fields — ensure underscore prefix (DB stores without, WP needs with)
+      const wpKey = change.field_name.startsWith('_') ? change.field_name : '_' + change.field_name;
+      payload = { meta: { [wpKey]: change.original_value } };
+    }
     const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${change.page_id}`, {
       method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ meta }),
-      signal: AbortSignal.timeout(15000)
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000)
     });
+    // Clear Elementor CSS cache if we just rolled back Elementor data
+    if (change.field_name === '_elementor_data') {
+      await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${change.page_id}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+    }
 
     if (!writeResp.ok) {
       const errText = await writeResp.text();
@@ -2168,7 +3386,8 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
 
     // Mark as rolled back
     await pool.query('UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id=$1', [changeId]);
-    console.log(`[rollback] Rolled back change ${changeId} — ${change.field_name} on page ${change.page_id}`);
+    const wpKey2 = change.field_name.startsWith('_') ? change.field_name : '_' + change.field_name;
+    console.log(`[rollback] Rolled back change ${changeId} — ${change.field_name} (wpKey: ${wpKey2}) on page ${change.page_id}, original: "${(change.original_value || '').slice(0, 80)}"`);
     res.json({ success: true });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
@@ -2195,33 +3414,78 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     const current = await readWpYoastMeta(wpBase, parseInt(pageId), authHeaders);
     if (!current) return res.status(404).json({ error: 'Page not found in WordPress' });
 
-    // Build meta object with all original values (earliest change = true original)
-    const meta = {};
-    const fieldOriginals = {};
-    for (const ch of chRes.rows) {
-      if (!fieldOriginals[ch.field_name]) {
-        fieldOriginals[ch.field_name] = ch.original_value;
-      }
-    }
-    // Get the very first original per field (oldest change)
+    // Get the very first original per field (oldest change = true original)
     const allChanges = await pool.query(
       'SELECT DISTINCT ON (field_name) field_name, original_value FROM wp_change_history WHERE project_id=$1 AND page_id=$2 ORDER BY field_name, applied_at ASC',
       [projectId, pageId]
     );
+
+    // Split fields: meta fields vs content vs elementor
+    const metaFields = {};
+    let contentValue = null;
+    let elementorValue = null;
     for (const row of allChanges.rows) {
-      meta[row.field_name] = row.original_value;
+      if (row.field_name === 'content') {
+        contentValue = row.original_value;
+      } else if (row.field_name === '_elementor_data') {
+        elementorValue = row.original_value;
+      } else {
+        metaFields[row.field_name] = row.original_value;
+      }
     }
 
-    const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ meta }),
-      signal: AbortSignal.timeout(15000)
-    });
+    // Write meta fields (Yoast etc) — add underscore prefix if missing
+    if (Object.keys(metaFields).length > 0) {
+      const wpMeta = {};
+      for (const [k, v] of Object.entries(metaFields)) {
+        const wpKey = k.startsWith('_') ? k : '_' + k;
+        wpMeta[wpKey] = v;
+      }
+      const metaResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: wpMeta }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!metaResp.ok) {
+        const errText = await metaResp.text();
+        return res.status(500).json({ error: `Meta rollback failed: ${errText.slice(0, 200)}` });
+      }
+    }
 
-    if (!writeResp.ok) {
-      const errText = await writeResp.text();
-      return res.status(500).json({ error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
+    // Write content field
+    if (contentValue !== null) {
+      const contentResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: contentValue }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!contentResp.ok) {
+        const errText = await contentResp.text();
+        return res.status(500).json({ error: `Content rollback failed: ${errText.slice(0, 200)}` });
+      }
+    }
+
+    // Write Elementor data
+    if (elementorValue !== null) {
+      const elemResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_data: elementorValue } }),
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!elemResp.ok) {
+        const errText = await elemResp.text();
+        return res.status(500).json({ error: `Elementor rollback failed: ${errText.slice(0, 200)}` });
+      }
+      // Clear Elementor CSS cache
+      await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${pageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { _elementor_css: '' } }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
     }
 
     // Mark all as rolled back
@@ -2233,6 +3497,3530 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     res.json({ success: true, rolled_back: chRes.rows.length });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COPYWRITER ====================
+
+// List content queue items
+app.get('/api/projects/:projectId/content-queue', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { stage } = req.query; // optional filter: queue, drafts, approved, published
+    let q = 'SELECT * FROM content_queue WHERE project_id=$1';
+    const params = [projectId];
+    if (stage) { q += ' AND stage=$2'; params.push(stage); }
+    q += ' ORDER BY created_at DESC';
+    const r = await pool.query(q, params);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add to content queue (from On-Page Audit or manually)
+app.post('/api/projects/:projectId/content-queue', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, page_url, page_title, content_type, source, priority, brief,
+            current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword } = req.body;
+    // Check for duplicate
+    if (page_id) {
+      const dup = await pool.query('SELECT id FROM content_queue WHERE project_id=$1 AND page_id=$2 AND stage != $3', [projectId, page_id, 'published']);
+      if (dup.rows.length > 0) return res.status(409).json({ error: 'Page already in content queue', existing_id: dup.rows[0].id });
+    }
+
+    // Auto-fetch content from WordPress if not provided
+    let fetchedContent = current_content || null;
+    let fetchedWordCount = current_word_count || 0;
+    if (!fetchedContent && page_id) {
+      try {
+        const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+        const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+        if (wpBase) {
+          const authHeaders = getWpAuthHeaders(project);
+          // Try pages endpoint first, then posts
+          for (const type of ['pages', 'posts']) {
+            try {
+              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${page_id}`, {
+                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+              });
+              if (wpRes.ok) {
+                const wpData = await wpRes.json();
+                fetchedContent = wpData.content?.rendered || '';
+                // For Elementor sites, fetch live HTML if WP REST content is thin
+                const plainText = fetchedContent.replace(/<[^>]+>/g, '').trim();
+                const wc = plainText ? plainText.split(/\s+/).length : 0;
+                if (wc < 50 && project.is_elementor_site && page_url) {
+                  try {
+                    const liveRes = await fetch(page_url);
+                    if (liveRes.ok) {
+                      const liveHtml = await liveRes.text();
+                      const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                                        liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                                        liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
+                                        liveHtml.match(/<div[^>]*class="[^"]*elementor[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+                      if (mainMatch) {
+                        const liveText = mainMatch[1].replace(/<[^>]+>/g, '').trim();
+                        if (liveText.split(/\s+/).length > wc) {
+                          fetchedContent = mainMatch[1];
+                        }
+                      }
+                    }
+                  } catch (e2) { console.log('[content-queue] Live fetch fallback failed:', e2.message); }
+                }
+                fetchedWordCount = fetchedContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+                console.log(`[content-queue] Fetched ${fetchedWordCount} words from WP ${type}/${page_id}`);
+                break;
+              }
+            } catch (e2) { /* try next type */ }
+          }
+        }
+      } catch (e2) { console.log('[content-queue] WP content fetch failed:', e2.message); }
+    }
+
+    const r = await pool.query(
+      `INSERT INTO content_queue (project_id, page_id, page_url, page_title, content_type, source, priority, brief,
+        current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [projectId, page_id, page_url, page_title, content_type || 'rewrite', source || 'onpage-audit',
+       priority || 'medium', brief, fetchedContent, fetchedWordCount,
+       current_meta_title, current_meta_desc, current_focus_keyword]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update content queue item (edit draft, change stage, approve)
+app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
+                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime'];
+    for (const [k, v] of Object.entries(updates)) {
+      if (allowedFields.includes(k)) {
+        fields.push(`${k}=$${idx++}`);
+        vals.push(v);
+      }
+    }
+    if (fields.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+    fields.push(`updated_at=NOW()`);
+    vals.push(id);
+    const r = await pool.query(`UPDATE content_queue SET ${fields.join(',')} WHERE id=$${idx} RETURNING *`, vals);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete content queue item
+app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Helper: build copywriter context block from project settings (tone, wireframe, persona)
+// Returns a string to inject into AI prompts — empty string if none set
+function buildCopywriterContext(project, item) {
+  const parts = [];
+  if (project.tone_of_voice) {
+    parts.push(`TONE OF VOICE (MUST follow strictly):
+${project.tone_of_voice}
+You MUST write in this exact tone. Every sentence should reflect this voice.`);
+  }
+  // Page wireframe — text description (design layout): item-level overrides project-level
+  const wireframe = (item && item.page_wireframe) || project.page_wireframe;
+  if (wireframe) {
+    parts.push(`PAGE WIREFRAME / DESIGN STRUCTURE (MUST follow strictly):
+${wireframe}
+This describes the visual layout and design structure of the page. You MUST write content that fits into these design sections exactly — match the layout blocks, content types, and visual hierarchy described above.`);
+  }
+  // Note: if a wireframe IMAGE is uploaded, it's handled separately via getWireframeImageBlocks()
+  if (item && item.wireframe_image && !wireframe) {
+    parts.push(`PAGE WIREFRAME: A wireframe image has been provided (see the image in this message). You MUST write content that matches the visual layout and design structure shown in that image exactly.`);
+  }
+  if (project.writer_voice) {
+    parts.push(`WRITER VOICE / STYLE (MUST follow):
+${project.writer_voice}
+Adopt this writing style and perspective throughout. This defines HOW you write — sentence structure, vocabulary level, and how you address the reader.`);
+  }
+  if (project.customer_persona) {
+    parts.push(`TARGET CUSTOMER PERSONA (MUST address):
+${project.customer_persona}
+Write directly to this persona. Address their pain points, needs, and language.`);
+  }
+  // Always add human writing rules
+  parts.push(`WRITE LIKE A HUMAN — NOT AN AI (critical):
+- BANNED PHRASES (never use): "In today's", "Whether you're", "Look no further", "When it comes to", "It's important to note", "At the end of the day", "Are you looking for", "In this comprehensive guide", "Navigate the complexities", "rest assured", "peace of mind", "top-notch", "cutting-edge", "state-of-the-art", "second to none", "one-stop shop", "hassle-free", "seamless experience", "don't hesitate to", "feel free to", "game-changer", "a wide range of", "take it to the next level", "dive into", "let's explore"
+- BANNED TRANSITIONS: "Furthermore", "Moreover", "Additionally", "In addition", "It's worth noting", "Notably", "Importantly", "In conclusion", "Needless to say"
+- VARY sentence length — mix short punchy (5-8 words) with longer ones. Never 3+ similar-length sentences in a row
+- USE CONTRACTIONS — "we're", "you'll", "it's", "don't" — stiff formal writing sounds robotic
+- START sentences differently — don't begin 2+ consecutive sentences the same way
+- BE SPECIFIC — instead of "we provide quality services" say exactly what and why
+- Write like explaining to a mate, then polish for a website
+- NO empty filler paragraphs — every paragraph needs a concrete fact or specific detail
+- AVOID generic superlatives — say what makes you different, not "best in Perth"`);
+
+  return '\n\n=== COPYWRITER SETTINGS (these override general defaults) ===\n' + parts.join('\n\n') + '\n=== END COPYWRITER SETTINGS ===\n';
+}
+
+// Helper: get wireframe image content blocks for Anthropic vision API
+function getWireframeImageBlocks(item) {
+  if (!item || !item.wireframe_image) return [];
+  // wireframe_image is base64 data (no data: prefix), wireframe_mime is e.g. 'image/png'
+  const mime = item.wireframe_mime || 'image/png';
+  // Strip data:...;base64, prefix if present
+  const base64 = item.wireframe_image.replace(/^data:[^;]+;base64,/, '');
+  return [
+    { type: 'text', text: 'PAGE WIREFRAME IMAGE — You MUST write content that matches this visual layout and design structure exactly:' },
+    { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } }
+  ];
+}
+
+// Helper: build user message content array, optionally including wireframe image
+function buildUserContent(textPrompt, item) {
+  const imgBlocks = getWireframeImageBlocks(item);
+  if (imgBlocks.length === 0) return textPrompt; // plain string — no image
+  return [...imgBlocks, { type: 'text', text: textPrompt }];
+}
+
+// Helper: fetch live page content for Elementor or when WP REST content is thin
+async function fetchLivePageContent(pageUrl, project, pageId) {
+  let content = '';
+  const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+  // Try WP REST API first
+  if (wpBase && pageId) {
+    const authHeaders = getWpAuthHeaders(project);
+    for (const type of ['pages', 'posts']) {
+      try {
+        const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (wpRes.ok) {
+          const wpData = await wpRes.json();
+          content = wpData.content?.rendered || '';
+          break;
+        }
+      } catch (e) { /* try next */ }
+    }
+  }
+  // If content is thin (Elementor), fetch live HTML
+  const plainText = content.replace(/<[^>]+>/g, '').trim();
+  const wc = plainText ? plainText.split(/\s+/).length : 0;
+  if (wc < 50 && pageUrl) {
+    try {
+      const liveRes = await fetch(pageUrl);
+      if (liveRes.ok) {
+        const liveHtml = await liveRes.text();
+        const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                          liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                          liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+        if (mainMatch) {
+          const liveText = mainMatch[1].replace(/<[^>]+>/g, '').trim();
+          if (liveText.split(/\s+/).length > wc) {
+            content = mainMatch[1];
+          }
+        }
+      }
+    } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
+  }
+  return content;
+}
+
+// Import current copy — fetch live WP content + meta for a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req, res) => {
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+
+    // If current_content already stored, return it
+    if (item.current_content && item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 20) {
+      return res.json({
+        content: item.current_content,
+        meta_title: item.current_meta_title || '',
+        meta_desc: item.current_meta_desc || '',
+        focus_keyword: item.current_focus_keyword || ''
+      });
+    }
+
+    // Otherwise fetch live from WP
+    const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+    const content = await fetchLivePageContent(pageUrl, project, item.page_id);
+
+    // Also try to get Yoast meta
+    let meta = {};
+    const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+    if (wpBase && item.page_id) {
+      const authHeaders = getWpAuthHeaders(project);
+      try {
+        const m = await readWpYoastMeta(wpBase, item.page_id, authHeaders);
+        if (m) { meta = m; }
+      } catch (e) { /* no meta */ }
+    }
+
+    // Save to DB for future use
+    if (content) {
+      await pool.query(
+        'UPDATE content_queue SET current_content=$1, current_meta_title=COALESCE($2, current_meta_title), current_meta_desc=COALESCE($3, current_meta_desc), current_focus_keyword=COALESCE($4, current_focus_keyword) WHERE id=$5',
+        [content, meta.meta_title || null, meta.meta_description || null, meta.focus_keyword || null, req.params.id]
+      );
+    }
+
+    res.json({
+      content: content || '',
+      meta_title: meta.meta_title || item.current_meta_title || '',
+      meta_desc: meta.meta_description || item.current_meta_desc || '',
+      focus_keyword: meta.focus_keyword || item.current_focus_keyword || ''
+    });
+  } catch (e) {
+    console.error('[import-current] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate AI draft for a content queue item (enhanced with keyword context + internal linking)
+app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Auto-fetch content if missing or thin
+    let currentContent = item.current_content || '';
+    const currentPlain = currentContent.replace(/<[^>]+>/g, '').trim();
+    const currentWc = currentPlain ? currentPlain.split(/\s+/).length : 0;
+    if (currentWc < 50 && item.page_url) {
+      console.log(`[generate-draft] Content thin (${currentWc} words), fetching live content for ${item.page_url}`);
+      currentContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const newWc = currentContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+      if (newWc > currentWc) {
+        // Update stored content
+        await pool.query('UPDATE content_queue SET current_content=$1, current_word_count=$2 WHERE id=$3', [currentContent, newWc, id]);
+        console.log(`[generate-draft] Updated stored content: ${currentWc} → ${newWc} words`);
+      }
+    }
+
+    // Get internal linking candidates
+    const pagesRes = await pool.query(
+      `SELECT DISTINCT page_url, page_title FROM content_queue
+       WHERE project_id=$1 AND stage='published' AND id != $2 ORDER BY page_title LIMIT 30`,
+      [projectId, id]
+    );
+
+    // Get target keywords if set
+    const targetKeywords = item.target_keywords || [];
+
+    // Build AI prompt based on content type
+    let systemPrompt, userPrompt;
+    if (item.content_type === 'rewrite') {
+      systemPrompt = `You are an expert SEO copywriter for a local Australian business: "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
+Your job is to rewrite thin/weak page content to be SEO-optimized, engaging, and locally relevant.
+
+RULES:
+- Write naturally — no keyword stuffing
+- Include the focus keyword naturally in the first paragraph, at least one H2, and naturally throughout (3-8 times total)
+- Target 800-1200 words for service pages, 500-800 for suburb pages
+- Use H2 and H3 subheadings to structure content
+- Include a clear call-to-action (CTA)
+- Mention the suburb/location naturally
+- Write in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Return valid HTML content (no full page, just the body content with headings)
+- DO NOT change the page design or layout structure
+- Include 2-3 internal links to other relevant pages naturally within the content
+- If given target keywords, weave them in naturally throughout the content
+
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}
+${buildCopywriterContext(project, item)}`;
+
+      userPrompt = `Rewrite this page for better SEO performance:
+
+Page: ${item.page_title} (${item.page_url})
+Current word count: ${item.current_word_count}
+Current focus keyword: ${item.current_focus_keyword || '(none)'}
+Current meta title: ${item.current_meta_title || '(none)'}
+Current meta description: ${item.current_meta_desc || '(none)'}
+${targetKeywords.length > 0 ? `\nTarget keywords to include: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
+${item.brief ? `\nBrief/Instructions: ${item.brief}` : ''}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+Current content (first 3000 chars):
+${(currentContent || '').slice(0, 3000)}`;
+    } else if (item.content_type === 'meta_only') {
+      systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
+Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}
+${buildCopywriterContext(project, item)}`;
+      userPrompt = `Write optimized meta tags for:
+Page: ${item.page_title} (${item.page_url})
+Business: ${project.business_name || project.name} in ${project.location || 'Australia'}
+Industry: ${project.industry || 'services'}
+Current meta title: ${item.current_meta_title || '(none)'}
+Current meta description: ${item.current_meta_desc || '(none)'}
+Current focus keyword: ${item.current_focus_keyword || '(none)'}
+${item.brief ? `\nBrief: ${item.brief}` : ''}`;
+    } else {
+      // new_page
+      systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
+Write a complete new page with SEO-optimized content.
+
+RULES:
+- Target 800-1200 words
+- Use H2/H3 headings for structure
+- Include a clear call-to-action
+- Write in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Include 2-3 internal links to other relevant pages
+- Use target keywords naturally throughout
+- If any schema markup data is provided, include appropriate structured data
+
+Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}
+${buildCopywriterContext(project, item)}`;
+      userPrompt = `Write a new page:
+Title: ${item.page_title}
+Target URL: ${item.page_url || '(to be determined)'}
+${targetKeywords.length > 0 ? `Target keywords: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
+${item.brief ? `Brief: ${item.brief}` : 'Write comprehensive service/location content.'}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}`;
+    }
+
+    console.log(`[copywriter] Generating draft for item ${id}: ${item.page_title}`);
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }],
+      system: systemPrompt,
+    });
+    const raw = aiResp.content[0].text;
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: raw.slice(0, 500) });
+    }
+
+    // Save draft
+    const plainText = (parsed.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const wordCount = parsed.word_count || plainText.split(/\s+/).filter(Boolean).length;
+    const updated = await pool.query(
+      `UPDATE content_queue SET stage='drafts', draft_content=$1, draft_meta_title=$2, draft_meta_desc=$3,
+       draft_focus_keyword=$4, draft_word_count=$5, ai_notes=$6, schema_markup=$7, updated_at=NOW() WHERE id=$8 RETURNING *`,
+      [parsed.content || '', parsed.meta_title || '', parsed.meta_description || '', parsed.focus_keyword || '',
+       wordCount, parsed.ai_notes || 'Generated draft', JSON.stringify(parsed.schema_markup || null), id]
+    );
+    console.log(`[copywriter] Draft generated: ${wordCount} words`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[copywriter] Draft error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Publish approved content to WordPress
+app.post('/api/projects/:projectId/content-queue/:id/publish', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (item.stage !== 'approved') return res.status(400).json({ error: 'Item must be approved before publishing' });
+    if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID — cannot publish' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Snapshot current values for rollback
+    const currentMeta = await readWpYoastMeta(wpUrl, item.page_id, authHeaders);
+
+    // Build update payload
+    const payload = {};
+    const changes = [];
+
+    // Update content if we have a draft
+    if (item.draft_content && item.content_type !== 'meta_only') {
+      // Snapshot current content
+      const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { headers: authHeaders });
+      if (pageResp.ok) {
+        const pageData = await pageResp.json();
+        changes.push({ field: 'content', old: (pageData.content?.rendered || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+        payload.content = item.draft_content;
+      }
+    }
+
+    // Update meta
+    const metaPayload = {};
+    if (item.draft_meta_title) {
+      changes.push({ field: 'yoast_wpseo_title', old: currentMeta.yoast_wpseo_title || '', new: item.draft_meta_title });
+      metaPayload._yoast_wpseo_title = item.draft_meta_title;
+    }
+    if (item.draft_meta_desc) {
+      changes.push({ field: 'yoast_wpseo_metadesc', old: currentMeta.yoast_wpseo_metadesc || '', new: item.draft_meta_desc });
+      metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc;
+    }
+    if (item.draft_focus_keyword) {
+      changes.push({ field: 'yoast_wpseo_focuskw', old: currentMeta.yoast_wpseo_focuskw || '', new: item.draft_focus_keyword });
+      metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword;
+    }
+    if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
+
+    if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'Nothing to publish' });
+
+    // Try pages first, then posts
+    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!writeResp.ok) {
+      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    // Save to wp_change_history for rollback
+    for (const ch of changes) {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, item.page_id, item.page_url, item.page_title, 'copywriter', ch.field, ch.old, ch.new]
+      );
+    }
+
+    // Update stage to published
+    await pool.query(
+      `UPDATE content_queue SET stage='published', published_at=NOW(), updated_at=NOW() WHERE id=$1`,
+      [id]
+    );
+    console.log(`[copywriter] Published item ${id} to WordPress page ${item.page_id}`);
+    res.json({ success: true, changes: changes.length });
+  } catch (e) {
+    console.error('[copywriter] Publish error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COPYWRITER ADVANCED ENDPOINTS ====================
+
+// Expand — add more content to existing draft
+app.post('/api/projects/:projectId/content-queue/:id/expand', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { projectId, id } = req.params;
+  const { target_words, target_keywords } = req.body;
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get pages for internal linking
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title
+        LIMIT 30
+      ) AS p`,
+      [projectId]
+    );
+
+    const kwList = (target_keywords || item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
+You will be given existing page content and asked to expand it with more sections.
+
+RULES:
+- Write naturally in Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Add NEW sections that complement the existing content (don't repeat existing content)
+- Use H2 and H3 headings for structure
+- Incorporate the target keywords naturally
+- Include internal links where relevant
+- Write engaging, informative content
+- Target total page length: ${target_words || 1500} words
+
+OUTPUT FORMAT (respond in valid JSON only):
+{
+  "additional_html": "<h2>New Section</h2><p>...</p>... (HTML to APPEND after existing content)",
+  "ai_notes": "Brief summary of what was added and keywords used"
+}
+${buildCopywriterContext(project, item)}`;
+
+    const currentHtml = item.draft_content || item.current_content || '';
+    const currentWords = currentHtml.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length;
+
+    const userPrompt = `EXPAND this page with more content:
+URL: ${item.page_url}
+Title: ${item.page_title}
+Focus keyword: ${item.draft_focus_keyword || item.current_focus_keyword}
+Current word count: ${currentWords}
+Target total words: ${target_words || 1500}
+
+TARGET KEYWORDS TO INCLUDE:
+${kwList.length > 0 ? kwList.map(k => `- "${k}"`).join('\n') : '- Use keywords related to the page topic'}
+
+Pages available for internal linking:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+CURRENT CONTENT:
+${currentHtml.slice(0, 4000)}
+
+Add ${Math.max(300, (target_words || 1500) - currentWords)} more words of new content with new sections and headings.`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
+    });
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+    }
+
+    // Append new content to existing
+    const newContent = currentHtml + '\n' + (parsed.additional_html || '');
+    const newNotes = (item.ai_notes || '') + '\n--- Expanded ---\n' + (parsed.ai_notes || '');
+
+    const updated = await pool.query(
+      `UPDATE content_queue SET draft_content=$1, ai_notes=$2, updated_at=NOW() WHERE id=$3 AND project_id=$4 RETURNING *`,
+      [newContent, newNotes, id, projectId]
+    );
+
+    console.log(`[copywriter] Expanded draft ${id}: ${currentWords} → ${(newContent.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length)} words`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[copywriter] Expand error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Optimise — AI improve based on SEO tips (returns preview, doesn't save)
+app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { tips, missing_keywords, target_keywords, content_score, stats } = req.body;
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Auto-fetch content if thin
+    let contentToOptimise = item.draft_content || item.current_content || '';
+    const contentPlain = contentToOptimise.replace(/<[^>]+>/g, '').trim();
+    const contentWc = contentPlain ? contentPlain.split(/\s+/).length : 0;
+    if (contentWc < 50 && item.page_url) {
+      console.log(`[optimise] Content thin (${contentWc} words), fetching live content`);
+      const liveContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const liveWc = liveContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+      if (liveWc > contentWc) {
+        contentToOptimise = liveContent;
+        // Store it for future use
+        await pool.query('UPDATE content_queue SET current_content=$1, current_word_count=$2 WHERE id=$3', [liveContent, liveWc, id]);
+        console.log(`[optimise] Fetched live content: ${contentWc} → ${liveWc} words`);
+      }
+    }
+
+    // Get pages for internal linking — from content_queue and site_pages (exclude current page)
+    let pagesRes = await pool.query(
+      `SELECT DISTINCT page_url, page_title FROM (
+        SELECT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND page_url IS NOT NULL AND page_url != ''
+        UNION
+        SELECT COALESCE(published_url, '/' || slug || '/') AS page_url, page_name AS page_title FROM site_pages
+        WHERE project_id=$1 AND (published_url IS NOT NULL OR slug IS NOT NULL)
+      ) AS all_pages WHERE page_url != $2
+      ORDER BY page_title LIMIT 30`,
+      [projectId, item.page_url || '']
+    ).catch(() => ({ rows: [] }));
+    // Fallback: discover pages from WP if no pages found
+    if (pagesRes.rows.length === 0 && project.wordpress_url) {
+      try {
+        const wpBase = project.wordpress_url.replace(/\/$/, '');
+        const wpPages = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=30&_fields=id,link,title`).then(r => r.ok ? r.json() : []);
+        pagesRes = { rows: wpPages.filter(p => p.link !== item.page_url).map(p => ({ page_url: p.link, page_title: p.title?.rendered || '' })) };
+      } catch(e) { /* WP not available */ }
+    }
+
+    const allMissing = (missing_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || k);
+
+    // Build numbered issue list from tips — filter out success items
+    const issueItems = (tips || []).filter(t => {
+      const type = t.type || '';
+      const msg = t.msg || (typeof t === 'string' ? t : '');
+      return type !== 'success' && type !== 'good' && !msg.startsWith('Great') && msg.length > 0;
+    });
+    const numberedIssues = issueItems.map((t, i) => `${i + 1}. [${(t.type || 'fix').toUpperCase()}] ${t.msg || t}`).join('\n');
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}", a ${project.industry || 'service'} business in ${project.location || 'Australia'}.
+
+You will receive page content and its SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
+
+SCORING SYSTEM (you must hit EVERY threshold):
+1. WORDS: 25 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
+2. H2 HEADINGS: 15 points if 3+ H2s. You MUST include at least 4 <h2> tags.
+3. H3 SUBHEADINGS: 5 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
+4. INTERNAL LINKS: 10 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
+5. IMAGES: 5 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
+6. FOCUS KEYWORD: 20 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
+7. TARGET KEYWORDS: 20 points proportional to how many target keywords appear. Include EVERY one.
+
+MANDATORY:
+- Hit ALL thresholds above — this is how the score reaches 90+
+- Keep existing good content, expand it substantially
+- Australian English ONLY — use "optimise" not "optimize", "colour" not "color", "centre" not "center", "specialise" not "specialize", "organisation" not "organization", "behaviour" not "behavior", "analyse" not "analyze", "licence" (noun), "defence", "favour", "labour", "programme" (not "program" for plans/events). This is MANDATORY for every word in the output.
+- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div
+- Every <a> MUST have a real href from the linking pages provided
+- Add an <img> tag with descriptive alt text where a relevant image should go
+
+WRITE LIKE A HUMAN — NOT AN AI (this is critical):
+- BANNED PHRASES (never use these): "In today's", "In the world of", "Whether you're", "Look no further", "When it comes to", "It's important to note", "At the end of the day", "Are you looking for", "Understanding the importance", "In this comprehensive guide", "Navigate the complexities", "rest assured", "peace of mind", "top-notch", "cutting-edge", "state-of-the-art", "second to none", "the right choice", "your trusted partner", "one-stop shop", "hassle-free", "seamless experience", "don't hesitate to", "feel free to", "game-changer", "unlock the power", "a wide range of", "take it to the next level", "dive into", "let's explore", "without further ado"
+- BANNED TRANSITIONS (never start a sentence with): "Furthermore", "Moreover", "Additionally", "In addition", "It's worth noting", "Notably", "Importantly", "Consequently", "Subsequently", "In conclusion", "Ultimately", "Needless to say"
+- VARY sentence length — mix short punchy sentences (5-8 words) with longer ones. Never write 3+ sentences of similar length in a row
+- USE CONTRACTIONS naturally — "we're", "you'll", "it's", "don't", "won't", "can't" — stiff formal writing sounds robotic
+- START sentences differently — don't begin 2+ consecutive sentences the same way (especially not with "We", "Our", "The", "This")
+- BE SPECIFIC over generic — instead of "we provide quality services" say exactly what you do and why it matters
+- WRITE like you're explaining to a mate over coffee, then polish it for a website — not the other way around
+- NO empty filler paragraphs — every paragraph must contain a concrete fact, example, or specific detail
+- AVOID over-promising superlatives — don't say "best in Perth" unless you can back it up. Say what makes you different instead
+
+WIREFRAME MATCHING (if a page wireframe is provided):
+- You MUST structure your content to match the wireframe sections
+- Wrap each section in <!-- SECTION N: TYPE --> and <!-- /SECTION N --> comment markers
+- For image-text-columns: use <div class="wf-columns"><div class="wf-col">text</div><div class="wf-col"><img ...></div></div>
+- For hero-banner: use <div class="wf-hero"><h1>...</h1><p>...</p></div>
+- For feature-list: use proper <ul>/<ol> lists
+- For cta-bar: use <div class="wf-cta"><p>...</p><a href="..." class="wf-btn">CTA Text</a></div>
+- The preview system will apply the original page's CSS to these sections
+
+OUTPUT FORMAT (JSON only):
+{
+  "content_html": "<h2>...</h2><p>...</p>...",
+  "meta_title": "50-60 chars with focus keyword",
+  "meta_description": "140-160 chars with CTA and focus keyword",
+  "ai_notes": "Score targets hit: X words, Y H2s, Z links, focus kw Nx, N/N keywords used"
+}
+${buildCopywriterContext(project, item)}`;
+
+
+    const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+
+    const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
+
+PAGE: ${item.page_url}
+FOCUS KEYWORD: "${item.draft_focus_keyword || item.current_focus_keyword}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
+
+CURRENT STATS:
+- Words: ${actualWords} (target: 1500+)
+- H2 headings: ${stats?.h2s || 0} (target: 3+)
+- H3 subheadings: ${stats?.h3s || 0} (target: 2+)
+- Internal links: ${stats?.links || 0} (target: 3+)
+- Images: ${stats?.imgs || 0} (target: 1+)
+
+ISSUES TO FIX (you MUST address ALL of these):
+${numberedIssues || '1. General optimisation needed — expand content, improve structure, add keywords'}
+
+TARGET KEYWORDS TO INCLUDE:
+${(target_keywords || []).map(k => `- "${typeof k === 'string' ? k : k.keyword || k}"`).join('\n') || '- No target keywords set'}
+
+MISSING KEYWORDS (MUST add naturally):
+${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All keywords present'}
+
+PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
+${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
+
+${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? `SKELETON TEMPLATE — YOU MUST PRESERVE THIS EXACT HTML STRUCTURE:
+${contentToOptimise.slice(0, 12000)}
+
+===== SKELETON MODE RULES (OVERRIDE ALL OTHER INSTRUCTIONS) =====
+1. OUTPUT the EXACT same HTML skeleton above — every <!-- SECTION comment, every <div class="wf-...">, every opening/closing tag MUST appear in your output
+2. Replace ONLY the placeholder text inside brackets like "[~80 words about...]", "[HERO HEADING]", "[Section Heading]", "[CTA Button Text]" with real, compelling content
+3. NEVER remove, merge, reorder, or flatten sections. NEVER strip wf-hero, wf-cta, wf-columns, wf-col, wf-features, wf-btn classes
+4. NEVER convert the structured HTML into flat h2+p paragraphs. The div structure IS the page layout
+5. Keep all <img src="" alt="[...]"> tags — fill in descriptive alt text only
+6. Each [~N words] placeholder: write EXACTLY that many words (±20%)
+7. The page wireframe/design depends on these CSS classes — removing them breaks the visual layout
+8. Write 2,000+ words total across ALL sections combined
+========================================================` : `CURRENT CONTENT (${actualWords} words):
+${contentToOptimise.slice(0, 12000)}`}
+
+CRITICAL REMINDERS:
+- You MUST produce at least 2,000 words total. This is NON-NEGOTIABLE.
+- Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear EXACTLY 5 times in the entire content. NOT 4, NOT 6, NOT 12. EXACTLY 5.
+- After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
+${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? '- SKELETON MODE: Fill in the skeleton placeholders. Do NOT rewrite or restructure. Keep ALL HTML tags, divs, classes, and section comments exactly as provided.' : '- Rewrite the FULL content fixing ALL numbered issues above.'}`;
+
+    console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix`);
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 16000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
+    });
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+    }
+
+    // Post-process: enforce focus keyword count (3-8 range, target 5)
+    let finalHtml = parsed.content_html || '';
+    const focusKw = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase().trim();
+    if (focusKw && finalHtml) {
+      const kwRegex = new RegExp(focusKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      const matches = finalHtml.match(kwRegex) || [];
+      if (matches.length > 8) {
+        // Too many — replace excess with synonyms/variations
+        let count = 0;
+        const maxKeep = 5;
+        finalHtml = finalHtml.replace(kwRegex, (match) => {
+          count++;
+          if (count <= maxKeep) return match; // Keep first 5
+          // Replace with variation — just remove the match and use surrounding context
+          const words = match.split(/\s+/);
+          if (words.length > 2) {
+            // Multi-word: use partial or rephrase
+            return words.slice(0, Math.ceil(words.length / 2)).join(' ') + ' services';
+          }
+          return 'our services';
+        });
+        console.log(`[optimise] Post-process: reduced focus keyword from ${matches.length}x to ~${maxKeep}x`);
+      } else if (matches.length < 3) {
+        // Too few — inject keyword into content to reach ~5 uses
+        const needed = 5 - matches.length;
+        let injected = 0;
+
+        // Strategy 1: inject into H2 headings that don't already contain it
+        finalHtml = finalHtml.replace(/<h2([^>]*)>(.*?)<\/h2>/gi, (full, attrs, inner) => {
+          if (injected >= needed) return full;
+          if (inner.toLowerCase().includes(focusKw)) return full;
+          injected++;
+          return `<h2${attrs}>${inner} – ${focusKw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</h2>`;
+        });
+
+        // Strategy 2: inject into first paragraph that doesn't contain it
+        if (injected < needed) {
+          let pDone = false;
+          finalHtml = finalHtml.replace(/<p([^>]*)>(.*?)<\/p>/gis, (full, attrs, inner) => {
+            if (pDone || injected >= needed) return full;
+            if (inner.toLowerCase().includes(focusKw)) return full;
+            if (inner.length < 50) return full; // skip tiny paragraphs
+            pDone = true;
+            injected++;
+            const titleCase = focusKw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            return `<p${attrs}>For those searching for ${focusKw} options, ${inner}</p>`;
+          });
+        }
+
+        console.log(`[optimise] Post-process: boosted focus keyword from ${matches.length}x by +${injected} injections`);
+      }
+    }
+
+    // Return proposed changes as preview — don't save yet
+    const proposed = {
+      content_html: finalHtml,
+      meta_title: parsed.meta_title || null,
+      meta_description: parsed.meta_description || null,
+      ai_notes: parsed.ai_notes || 'Content improved',
+    };
+
+    // Compute stats for proposed content
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText2 = contentToOptimise.replace(/<[^>]+>/g, '');
+    const currentWords = currentText2.trim() ? currentText2.trim().split(/\s+/).length : 0;
+
+    console.log(`[optimise] Preview ready: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply Optimise — user approved, save the proposed changes
+app.post('/api/projects/:projectId/content-queue/:id/apply-optimise', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { proposed } = req.body;
+  if (!proposed) return res.status(400).json({ error: 'No proposed changes' });
+
+  try {
+    const updated = await pool.query(
+      `UPDATE content_queue SET
+        draft_content=COALESCE($1, draft_content),
+        draft_meta_title=COALESCE($2, draft_meta_title),
+        draft_meta_desc=COALESCE($3, draft_meta_desc),
+        ai_notes=$4,
+        updated_at=NOW()
+       WHERE id=$5 AND project_id=$6 RETURNING *`,
+      [proposed.content_html, proposed.meta_title, proposed.meta_description,
+       `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId]
+    );
+    if (updated.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    console.log(`[apply-optimise] Applied optimisation to item ${id}`);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[apply-optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Chat — Claude conversation about draft with optional edits
+app.post('/api/projects/:projectId/content-queue/:id/chat', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const { projectId, id } = req.params;
+  const { message, history } = req.body; // history = [{role, content}, ...]
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get pages for internal linking context
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 20
+      ) AS p`,
+      [projectId]
+    );
+
+    const htmlContent = item.draft_content || item.current_content || '';
+    const plainText = htmlContent.replace(/<[^>]+>/g, '');
+    const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+    const focusKw = (item.draft_focus_keyword || item.current_focus_keyword || '').toLowerCase();
+
+    // Compute SEO score
+    const h2s = (htmlContent.match(/<h2[\s>]/gi) || []).length;
+    const h3s = (htmlContent.match(/<h3[\s>]/gi) || []).length;
+    const links = (htmlContent.match(/<a[\s>]/gi) || []).length;
+    const imgs = (htmlContent.match(/<img[\s>]/gi) || []).length;
+    let focusCount = 0;
+    if (focusKw) {
+      const textLower = plainText.toLowerCase();
+      let pos = 0;
+      while ((pos = textLower.indexOf(focusKw, pos)) !== -1) {
+        focusCount++;
+        pos += focusKw.length;
+      }
+    }
+
+    let score = 0;
+    const scoreTips = [];
+    if (wordCount >= 800) score += 15; else scoreTips.push(`Add words (have ${wordCount}, need 800+)`);
+    if (h2s >= 2) score += 15; else scoreTips.push(`Add H2s (have ${h2s}, need 2+)`);
+    if (h3s >= 1) score += 5; else scoreTips.push('Add H3s for structure');
+    if (links >= 2) score += 10; else scoreTips.push(`Add internal links (have ${links}, need 2+)`);
+    if (imgs >= 1) score += 5; else scoreTips.push('Add images');
+    if (focusCount >= 3 && focusCount <= 8) score += 20; else if (focusCount >= 1) score += 10; else if (focusKw) scoreTips.push(`Use focus keyword "${focusKw}" more`);
+    score = Math.min(100, Math.max(0, score + 20));
+
+    const systemPrompt = `You are an SEO copywriter assistant for "${item.page_title}" (${project.business_name || project.name}).
+
+PAGE STATS: ${wordCount} words | ${h2s} H2s | ${h3s} H3s | ${links} links | ${imgs} images | Focus keyword "${focusKw}" used ${focusCount}x | Score: ${score}/100
+${scoreTips.length > 0 ? 'ISSUES: ' + scoreTips.join('. ') : 'Score looks good.'}
+Available internal links: ${pagesRes.rows.slice(0, 8).map(p => p.page_url + ' (' + p.page_title + ')').join(', ')}
+
+YOUR JOB: When the user asks you to edit, rewrite, or change content, you MUST return your changes as JSON so they can be applied to the editor. Always respond with a brief explanation PLUS a JSON block.
+
+RESPONSE FORMAT — always use this when making changes:
+\`\`\`json
+{
+  "revised_html": "<the complete rewritten HTML for the section or selected text>",
+  "find_text": "<the original text to find and replace — use plain text, not HTML>",
+  "meta_title": "optional new meta title",
+  "meta_description": "optional new meta description"
+}
+\`\`\`
+
+RULES:
+- "find_text" = the original plain text (no HTML tags) that should be replaced. Copy it EXACTLY from what the user selected or from the content.
+- "revised_html" = your rewritten version in clean HTML
+- If the user selected specific text ([SELECTED TEXT: "..."]), use that as find_text and rewrite only that portion
+- If the user asks to add new content (e.g. "add a section about X"), set find_text to "" and revised_html to the new HTML to append
+- If no content changes needed (just answering a question), skip the JSON block entirely
+- Australian English ONLY (optimise, colour, centre, favour, labour — NEVER American spellings)
+- Write like a human, not an AI. No filler phrases, no "Furthermore", no "In today's"
+- Keep existing formatting (h2, h3, p, ul, a tags)
+
+CURRENT CONTENT (first 4000 chars):
+${htmlContent.slice(0, 4000)}
+${buildCopywriterContext(project, item)}`;
+
+    // Build conversation history
+    const messages = [];
+    if (history && history.length > 0) {
+      for (const h of history.slice(-4)) {
+        messages.push({ role: h.role, content: h.content });
+      }
+    }
+    messages.push({ role: 'user', content: message });
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages
+    });
+
+    const text = response.content[0]?.text || '';
+    console.log('[chat] Response length:', text.length);
+
+    // Check if response contains JSON update
+    let updates = null;
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try {
+        updates = JSON.parse(jsonMatch[1]);
+        console.log('[chat] Parsed updates, keys:', Object.keys(updates));
+      } catch (e) {
+        console.error('[chat] JSON parse failed:', e.message);
+      }
+    }
+
+    // Return proposed changes WITHOUT applying
+    if (updates) {
+      const pendingChanges = { itemId: id };
+      // New simple format: find_text + revised_html
+      if (updates.revised_html) {
+        pendingChanges.revised_html = updates.revised_html;
+        pendingChanges.find_text = updates.find_text || '';
+      }
+      // Legacy ops format
+      if (updates.ops) pendingChanges.ops = updates.ops;
+      if (updates.content_html) pendingChanges.content_html = updates.content_html;
+      if (updates.meta_title) pendingChanges.meta_title = updates.meta_title;
+      if (updates.meta_description) pendingChanges.meta_description = updates.meta_description;
+      if (updates.focus_keyword) pendingChanges.focus_keyword = updates.focus_keyword;
+
+      // Build human-readable change summary
+      const changeSummary = [];
+      if (updates.revised_html) {
+        if (updates.find_text) changeSummary.push('Rewrite: "' + updates.find_text.slice(0, 60) + '..."');
+        else changeSummary.push('Add new content section');
+      }
+      if (updates.meta_title) changeSummary.push('Update meta title');
+      if (updates.meta_description) changeSummary.push('Update meta description');
+
+      return res.json({ reply: text, applied: false, pending: pendingChanges, change_summary: changeSummary });
+    }
+
+    res.json({ reply: text, applied: false });
+  } catch (e) {
+    console.error('[chat] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply Chat — user approved chat-suggested changes
+app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { pending } = req.body;
+  if (!pending) return res.status(400).json({ error: 'No pending changes' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    let currentHtml = item.draft_content || item.current_content || '';
+    let contentChanged = false;
+
+    // New simple format: find_text + revised_html
+    if (pending.revised_html) {
+      if (pending.find_text && pending.find_text.trim()) {
+        // Find and replace — try plain text match first, then try matching within HTML
+        const plainContent = currentHtml.replace(/<[^>]+>/g, '');
+        if (plainContent.includes(pending.find_text)) {
+          // Find the HTML that contains this plain text and replace it
+          // Strategy: find the text in plain content, locate surrounding HTML tags, replace that chunk
+          const escFind = pending.find_text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Build a regex that matches the find_text with possible HTML tags interspersed
+          const flexRegex = new RegExp(escFind.split(/\s+/).map(w => w).join('[\\s\\S]{0,50}?'), 'i');
+          const htmlMatch = currentHtml.match(flexRegex);
+          if (htmlMatch) {
+            currentHtml = currentHtml.replace(htmlMatch[0], pending.revised_html);
+            contentChanged = true;
+          } else {
+            // Fallback: just append
+            currentHtml += '\n' + pending.revised_html;
+            contentChanged = true;
+          }
+        } else if (currentHtml.includes(pending.find_text)) {
+          // Direct HTML match
+          currentHtml = currentHtml.replace(pending.find_text, pending.revised_html);
+          contentChanged = true;
+        } else {
+          // Can't find — append instead
+          currentHtml += '\n' + pending.revised_html;
+          contentChanged = true;
+        }
+      } else {
+        // No find_text — append new content
+        currentHtml += '\n' + pending.revised_html;
+        contentChanged = true;
+      }
+    }
+
+    // Legacy ops format
+    if (pending.ops && Array.isArray(pending.ops)) {
+      for (const op of pending.ops) {
+        if (op.op === 'append' && op.html) {
+          currentHtml += '\n' + op.html;
+          contentChanged = true;
+        } else if (op.op === 'replace' && op.find && op.html) {
+          if (currentHtml.includes(op.find)) {
+            currentHtml = currentHtml.replace(op.find, op.html);
+            contentChanged = true;
+          }
+        }
+      }
+    }
+    if (pending.content_html) {
+      currentHtml = pending.content_html;
+      contentChanged = true;
+    }
+
+    const setClauses = [];
+    const params = [];
+    let paramIdx = 1;
+    if (contentChanged) {
+      setClauses.push(`draft_content=$${paramIdx++}`);
+      params.push(currentHtml);
+    }
+    if (pending.meta_title) {
+      setClauses.push(`draft_meta_title=$${paramIdx++}`);
+      params.push(pending.meta_title);
+    }
+    if (pending.meta_description) {
+      setClauses.push(`draft_meta_desc=$${paramIdx++}`);
+      params.push(pending.meta_description);
+    }
+    if (pending.focus_keyword) {
+      setClauses.push(`draft_focus_keyword=$${paramIdx++}`);
+      params.push(pending.focus_keyword);
+    }
+
+    let result = item;
+    if (setClauses.length > 0) {
+      setClauses.push('updated_at=NOW()');
+      params.push(id, projectId);
+      const updated = await pool.query(
+        `UPDATE content_queue SET ${setClauses.join(', ')} WHERE id=$${paramIdx++} AND project_id=$${paramIdx++} RETURNING *`,
+        params
+      );
+      result = updated.rows[0];
+    }
+
+    // Add keywords if provided
+    if (pending.add_keywords && Array.isArray(pending.add_keywords)) {
+      const currentKws = result.target_keywords || [];
+      const newKws = [...new Set([...currentKws, ...pending.add_keywords])];
+      const updated = await pool.query(
+        'UPDATE content_queue SET target_keywords=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+        [JSON.stringify(newKws), id]
+      );
+      result = updated.rows[0];
+    }
+
+    console.log(`[apply-chat] Applied chat changes to item ${id}`);
+    res.json({ item: result, applied: true });
+  } catch (e) {
+    console.error('[apply-chat] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Competitor word count analysis — check top SERP results for a keyword
+app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
+  const { keyword, location } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'Missing keyword' });
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    const loc = location || project?.location || 'Perth, Western Australia, Australia';
+
+    console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
+    const serpData = await serpApiSearch({
+      engine: 'google', q: keyword, location: loc, num: 10, gl: 'au', hl: 'en'
+    });
+
+    const organicResults = (serpData.organic_results || []).slice(0, 10);
+    const competitors = [];
+    const ownDomain = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+
+    // Fetch each competitor page and count words (parallel, 10s timeout each)
+    const fetchPromises = organicResults.map(async (result, idx) => {
+      const url = result.link;
+      if (!url) return null;
+      const domain = url.replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+      const isOwn = ownDomain && domain.includes(ownDomain.replace('www.', ''));
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) return { position: idx + 1, url, domain, title: result.title, words: null, error: 'HTTP ' + resp.status, isOwn };
+
+        const html = await resp.text();
+        // Extract main content — strip scripts, styles, nav, header, footer
+        let body = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+          .replace(/<header[\s\S]*?<\/header>/gi, '')
+          .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+          .replace(/<aside[\s\S]*?<\/aside>/gi, '');
+        const text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const words = text.split(' ').filter(w => w.length > 0).length;
+        const h2s = (html.match(/<h2[\s>]/gi) || []).length;
+        const h3s = (html.match(/<h3[\s>]/gi) || []).length;
+
+        return { position: idx + 1, url, domain, title: result.title, words, h2s, h3s, isOwn };
+      } catch (e) {
+        return { position: idx + 1, url, domain, title: result.title, words: null, error: e.message?.includes('abort') ? 'Timeout' : e.message, isOwn };
+      }
+    });
+
+    const results = (await Promise.all(fetchPromises)).filter(Boolean);
+    const withWords = results.filter(r => r.words && !r.isOwn);
+    const wordCounts = withWords.map(r => r.words).sort((a, b) => a - b);
+
+    const avg = wordCounts.length ? Math.round(wordCounts.reduce((a, b) => a + b, 0) / wordCounts.length) : 0;
+    const median = wordCounts.length ? wordCounts[Math.floor(wordCounts.length / 2)] : 0;
+    const top3Avg = wordCounts.slice(0, 3).length ? Math.round(wordCounts.slice(0, 3).reduce((a, b) => a + b, 0) / Math.min(3, wordCounts.length)) : 0;
+    // Recommended: aim for 10-20% more than top 3 average
+    const recommended = top3Avg ? Math.round(top3Avg * 1.15 / 50) * 50 : 1500;
+
+    console.log(`[competitor-wordcount] "${keyword}": avg=${avg}, median=${median}, top3avg=${top3Avg}, recommended=${recommended}`);
+    res.json({
+      keyword,
+      location: loc,
+      results,
+      summary: {
+        avg,
+        median,
+        min: wordCounts.length ? wordCounts[0] : 0,
+        max: wordCounts.length ? wordCounts[wordCounts.length - 1] : 0,
+        top3_avg: top3Avg,
+        recommended,
+        competitors_checked: withWords.length
+      }
+    });
+  } catch (e) {
+    console.error('[competitor-wordcount] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Re-optimise — refine with user feedback after initial optimise
+app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
+  if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_title FROM (
+        SELECT DISTINCT page_url, page_title FROM content_queue
+        WHERE project_id=$1 AND stage='published' ORDER BY page_title LIMIT 20
+      ) AS p`,
+      [projectId]
+    );
+
+    console.log(`[re-optimise] Feedback for item ${id}: "${feedback}"`);
+
+    // Fast path: detect questions/comments — no need to process full content
+    const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
+    const isQuestion = feedbackLower.includes('?') ||
+      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
+
+    let response;
+    if (isQuestion) {
+      // FAST PATH: lightweight prompt with accurate stats, no content return
+      const html = current_proposed.content_html || '';
+      const plainText = html.replace(/<[^>]+>/g, '');
+      const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+      const h2Matches = html.match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
+      const h3Matches = html.match(/<h3[^>]*>(.*?)<\/h3>/gi) || [];
+      const linkMatches = html.match(/<a[\s>]/gi) || [];
+      const imgMatches = html.match(/<img[\s>]/gi) || [];
+      const headings = h2Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const subheadings = h3Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const fk = item.draft_focus_keyword || item.current_focus_keyword || '';
+      let fkCount = 0;
+      if (fk) { const lower = plainText.toLowerCase(); const fkLower = fk.toLowerCase(); let p = 0; while ((p = lower.indexOf(fkLower, p)) !== -1) { fkCount++; p += fkLower.length; } }
+
+      const tipsStr = (tips || []).join('\n');
+      const tkwStr = (target_keywords || []).join(', ');
+
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
+Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
+        messages: [{ role: 'user', content: `Question: ${feedback}
+
+ACTUAL CONTENT STATS (these are accurate — use these numbers):
+- Word count: ${wordCount}
+- H2 headings (${h2Matches.length}): ${headings}
+- H3 subheadings (${h3Matches.length}): ${subheadings}
+- Internal links: ${linkMatches.length}
+- Images: ${imgMatches.length}
+- Focus keyword "${fk}": appears ${fkCount} times
+- Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
+- Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
+- Current SEO score: ${content_score || 'unknown'}/100
+- Target keywords: ${tkwStr || 'none set'}
+
+SEO SCORE TIPS:
+${tipsStr || 'No tips available'}
+
+CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
+
+Respond with ONLY JSON.` }]
+      });
+    } else {
+      // FULL PATH: revision with complete content
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8000,
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Revise the content based on user feedback while keeping all SEO improvements.
+
+RULES:
+- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
+- Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Keep all existing SEO improvements (keywords, headings, links)
+- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
+- Focus keyword must appear 3-8 times
+- Write like a human, not AI — no banned phrases
+
+YOU MUST RESPOND WITH ONLY A JSON OBJECT:
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+        messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
+
+CURRENT SEO SCORE: ${content_score || 'unknown'}/100
+TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
+SEO TIPS:
+${(tips || []).join('\n')}
+
+CURRENT CONTENT (revise this):
+${current_proposed.content_html}
+
+CURRENT META TITLE: ${current_proposed.meta_title || ''}
+CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
+
+PAGES FOR INTERNAL LINKING:
+${pagesRes.rows.map(p => `- ${p.page_url} (${p.page_title})`).join('\n')}
+
+Respond with ONLY the JSON object.`, item) }]
+      });
+    }
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      // Try parsing directly first (we asked for raw JSON)
+      const trimmed = text.trim();
+      if (trimmed.startsWith('{')) {
+        // Find matching closing brace
+        let depth = 0, end = -1;
+        for (let i = 0; i < trimmed.length; i++) {
+          if (trimmed[i] === '{') depth++;
+          else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        parsed = JSON.parse(trimmed.slice(0, end + 1));
+      } else {
+        // Try markdown code block
+        const codeMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeMatch) {
+          parsed = JSON.parse(codeMatch[1]);
+        } else {
+          // Find first { and match braces
+          const start = trimmed.indexOf('{');
+          if (start === -1) throw new Error('No JSON');
+          let depth2 = 0, end2 = -1;
+          for (let i = start; i < trimmed.length; i++) {
+            if (trimmed[i] === '{') depth2++;
+            else if (trimmed[i] === '}') { depth2--; if (depth2 === 0) { end2 = i; break; } }
+          }
+          parsed = JSON.parse(trimmed.slice(start, end2 + 1));
+        }
+      }
+    } catch (e) {
+      console.error('[re-optimise] Parse failed:', e.message, 'Raw start:', text.slice(0, 200));
+      // Last resort: if there's HTML in the response, use it as content
+      if (text.includes('<h2') || text.includes('<p>')) {
+        const htmlStart = text.indexOf('<');
+        parsed = { content_html: text.slice(htmlStart), ai_notes: 'Revised (raw extraction)', meta_title: current_proposed.meta_title, meta_description: current_proposed.meta_description };
+      } else {
+        return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
+      }
+    }
+
+    // If AI said no changes, return content unchanged with just the answer
+    const noChange = parsed.changed === false;
+
+    // Clean literal \n from content_html
+    let cleanHtml = (parsed.content_html || current_proposed.content_html || '');
+    cleanHtml = cleanHtml.replace(/\\n/g, '').replace(/\n(?!<)/g, '');
+
+    const proposed = {
+      content_html: noChange ? current_proposed.content_html : cleanHtml,
+      meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
+      meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
+    };
+
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText = (item.draft_content || item.current_content || '').replace(/<[^>]+>/g, '');
+    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+
+    console.log(`[re-optimise] ${noChange ? 'Question' : 'Revised'} item ${id}: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      changed: !noChange,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[re-optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Re-optimise for site_pages — same as content-queue re-optimise but queries site_pages table
+app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
+  if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get published pages for internal linking context
+    const pagesRes = await pool.query(
+      `SELECT COALESCE(published_url, '/' || slug || '/') as page_url, page_name as page_title FROM site_pages WHERE project_id=$1 AND stage='published' ORDER BY page_name LIMIT 20`,
+      [projectId]
+    );
+
+    console.log(`[re-optimise-sp] Feedback for site_page ${id}: "${feedback}"`);
+
+    const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
+    const isQuestion = feedbackLower.includes('?') ||
+      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
+
+    let response;
+    if (isQuestion) {
+      const html = current_proposed.content_html || '';
+      const plainText = html.replace(/<[^>]+>/g, '');
+      const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+      const h2Matches = html.match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
+      const h3Matches = html.match(/<h3[^>]*>(.*?)<\/h3>/gi) || [];
+      const linkMatches = html.match(/<a[\s>]/gi) || [];
+      const imgMatches = html.match(/<img[\s>]/gi) || [];
+      const headings = h2Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const subheadings = h3Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const fk = item.focus_keyword || '';
+      let fkCount = 0;
+      if (fk) { const lower = plainText.toLowerCase(); const fkLower = fk.toLowerCase(); let p = 0; while ((p = lower.indexOf(fkLower, p)) !== -1) { fkCount++; p += fkLower.length; } }
+
+      const tipsStr = (tips || []).join('\n');
+      const tkwStr = (target_keywords || []).join(', ');
+
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
+Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
+        messages: [{ role: 'user', content: `Question: ${feedback}
+
+ACTUAL CONTENT STATS (these are accurate — use these numbers):
+- Word count: ${wordCount}
+- H2 headings (${h2Matches.length}): ${headings}
+- H3 subheadings (${h3Matches.length}): ${subheadings}
+- Internal links: ${linkMatches.length}
+- Images: ${imgMatches.length}
+- Focus keyword "${fk}": appears ${fkCount} times
+- Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
+- Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
+- Current SEO score: ${content_score || 'unknown'}/100
+- Target keywords: ${tkwStr || 'none set'}
+
+SEO SCORE TIPS:
+${tipsStr || 'No tips available'}
+
+CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
+
+Respond with ONLY JSON.` }]
+      });
+    } else {
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8000,
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Revise the content based on user feedback while keeping all SEO improvements.
+
+RULES:
+- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
+- Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Keep all existing SEO improvements (keywords, headings, links)
+- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
+- Focus keyword must appear 3-8 times
+- Write like a human, not AI — no banned phrases
+
+YOU MUST RESPOND WITH ONLY A JSON OBJECT:
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+        messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
+
+CURRENT SEO SCORE: ${content_score || 'unknown'}/100
+TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
+SEO TIPS:
+${(tips || []).join('\n')}
+
+CURRENT CONTENT (revise this):
+${current_proposed.content_html}
+
+CURRENT META TITLE: ${current_proposed.meta_title || ''}
+CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
+
+PAGES FOR INTERNAL LINKING:
+${pagesRes.rows.map(p => `- ${p.page_url || p.page_title} (${p.page_title})`).join('\n')}
+
+Respond with ONLY the JSON object.` }]
+      });
+    }
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const trimmed = text.trim();
+      if (trimmed.startsWith('{')) {
+        let depth = 0, end = -1;
+        for (let i = 0; i < trimmed.length; i++) {
+          if (trimmed[i] === '{') depth++;
+          else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        parsed = JSON.parse(trimmed.slice(0, end + 1));
+      } else {
+        const codeMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeMatch) {
+          parsed = JSON.parse(codeMatch[1]);
+        } else {
+          const start = trimmed.indexOf('{');
+          if (start === -1) throw new Error('No JSON');
+          let depth2 = 0, end2 = -1;
+          for (let i = start; i < trimmed.length; i++) {
+            if (trimmed[i] === '{') depth2++;
+            else if (trimmed[i] === '}') { depth2--; if (depth2 === 0) { end2 = i; break; } }
+          }
+          parsed = JSON.parse(trimmed.slice(start, end2 + 1));
+        }
+      }
+    } catch (e) {
+      console.error('[re-optimise-sp] Parse failed:', e.message);
+      if (text.includes('<h2') || text.includes('<p>')) {
+        const htmlStart = text.indexOf('<');
+        parsed = { content_html: text.slice(htmlStart), ai_notes: 'Revised (raw extraction)', meta_title: current_proposed.meta_title, meta_description: current_proposed.meta_description };
+      } else {
+        return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
+      }
+    }
+
+    const noChange = parsed.changed === false;
+    let cleanHtml = (parsed.content_html || current_proposed.content_html || '');
+    cleanHtml = cleanHtml.replace(/\\n/g, '').replace(/\n(?!<)/g, '');
+
+    const proposed = {
+      content_html: noChange ? current_proposed.content_html : cleanHtml,
+      meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
+      meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
+    };
+
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText = (item.draft_content || '').replace(/<[^>]+>/g, '');
+    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+
+    console.log(`[re-optimise-sp] ${noChange ? 'Question' : 'Revised'} site_page ${id}: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      changed: !noChange,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[re-optimise-sp] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Live preview ��� fetch live page, extract header/hero/footer, inject draft content
+app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).send('Not found');
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const draftContent = item.draft_content || item.current_content || '';
+    const draftTitle = item.draft_meta_title || item.page_title || '';
+    const draftDesc = item.draft_meta_desc || '';
+
+    // Build the page URL
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) {
+      pageUrl = 'https://' + (project.domain || '') + pageUrl;
+    }
+
+    if (!pageUrl) {
+      // No live page — render standalone preview
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${draftTitle}</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}
+        h1,h2,h3{color:#1a1a1a}img{max-width:100%;height:auto;border-radius:8px}a{color:#2563eb}</style>
+        </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
+    }
+
+    // Fetch the live page
+    console.log(`[preview] Fetching live page: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) {
+      return res.status(502).send(`Failed to fetch live page: ${resp.status}`);
+    }
+    let html = await resp.text();
+
+    // Strategy: extract head (CSS/fonts), header/nav, footer from live page
+    // Then build a new page: site head + site header + draft content + site footer
+    // This preserves the site's look (fonts, colors, nav, footer) without destroying layout
+    const baseUrl = new URL(pageUrl);
+    const base = baseUrl.origin;
+
+    // Extract <head> contents
+    const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+    let headContent = headMatch ? headMatch[1] : '';
+
+    // Generic extraction — works with any WordPress theme
+    // Split the page into: header zone | hero zone | content zone | footer zone
+    // We keep header + hero + footer, replace content zone with draft
+
+    // 1. Find header end
+    let headerBlock = '';
+    const headerMatch = html.match(/<header[^>]*>[\s\S]*?<\/header>/i);
+    if (headerMatch) headerBlock = headerMatch[0];
+    const headerEndPos = headerMatch ? headerMatch.index + headerMatch[0].length : 0;
+
+    // 2. Find footer start
+    let footerBlock = '';
+    const footerMatch = html.match(/<footer[^>]*>[\s\S]*?<\/footer>/i);
+    if (footerMatch) footerBlock = footerMatch[0];
+    const footerStartPos = footerMatch ? footerMatch.index : html.length;
+
+    // 3. Everything between header and footer is the "middle" — hero + content + CTA
+    const middleHtml = html.slice(headerEndPos, footerStartPos);
+
+    // 4. Split middle into blocks by top-level tags (div, section, main, article)
+    const blockRegex = /<(div|section|main|article)([^>]*)>/gi;
+    const blocks = [];
+    let match;
+    while ((match = blockRegex.exec(middleHtml)) !== null) {
+      const tag = match[1].toLowerCase();
+      const attrs = match[2];
+      const blockStart = match.index;
+      // Quick depth scan to find the end of this block
+      let depth = 1;
+      let pos = match.index + match[0].length;
+      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        openRe.lastIndex = pos;
+        closeRe.lastIndex = pos;
+        const nextOpen = openRe.exec(middleHtml);
+        const nextClose = closeRe.exec(middleHtml);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          pos = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            const blockEnd = nextClose.index + nextClose[0].length;
+            const blockContent = middleHtml.slice(blockStart, blockEnd);
+            const textContent = blockContent.replace(/<[^>]+>/g, '').trim();
+            blocks.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent.slice(0, 100) });
+            // Skip blockRegex past this block
+            blockRegex.lastIndex = blockEnd;
+            break;
+          }
+          pos = nextClose.index + nextClose[0].length;
+        }
+      }
+    }
+
+    // 5. Classify blocks: hero (first block or banner-like), content (largest text blocks), CTA (small blocks after content)
+    // Hero: first 1-2 blocks that are small text or have banner/hero/cover keywords
+    let heroBlock = '';
+    let ctaBlock = '';
+    const heroKeywords = /hero|banner|cover|in-ban|page-title|page-header|breadcrumb|featured|slider|jumbotron/i;
+    let heroEndIdx = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (i < 2 && (b.textLen < 200 || heroKeywords.test(b.attrs) || heroKeywords.test(b.html.slice(0, 200)))) {
+        heroBlock += b.html + '\n';
+        heroEndIdx = i + 1;
+      } else if (i < 2 && b.textLen < 100) {
+        heroBlock += b.html + '\n'; // floating buttons, quote forms etc
+        heroEndIdx = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    // CTA: last blocks after the main content that are small (contact, testimonials, services widgets)
+    // Work backwards from end
+    const ctaBlocks = [];
+    for (let i = blocks.length - 1; i > heroEndIdx; i--) {
+      const b = blocks[i];
+      if (b.textLen < 500) {
+        ctaBlocks.unshift(b.html);
+      } else {
+        break; // stop once we hit a big content block
+      }
+    }
+    ctaBlock = ctaBlocks.join('\n');
+
+    console.log(`[preview] Generic extraction: ${blocks.length} blocks, hero=${heroEndIdx}, cta=${ctaBlocks.length}`);
+
+    // Extract body classes for theme styling
+    const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
+    const bodyClasses = bodyClassMatch ? bodyClassMatch[1] : '';
+
+    // Replace meta title in head
+    if (draftTitle) {
+      headContent = headContent.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+    }
+    if (draftDesc) {
+      headContent = headContent.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
+    }
+
+    // Make relative URLs absolute in all parts
+    const fixUrls = (s) => s.replace(/(href|src|action)=["']\//g, `$1="${base}/`);
+    headContent = fixUrls(headContent);
+    headerBlock = fixUrls(headerBlock);
+    footerBlock = fixUrls(footerBlock);
+
+    // Build the preview page
+    const previewHtml = `<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <base href="${base}/">
+  ${headContent}
+  <style>
+    .seo-preview-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
+      background: linear-gradient(135deg, #a855f7, #6366f1); color: #fff;
+      padding: 10px 20px; font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.3);
+    }
+    .seo-preview-spacer { height: 44px; }
+    .seo-draft-content {
+      max-width: 900px; margin: 40px auto; padding: 40px 30px;
+      font-size: 16px; line-height: 1.9;
+    }
+    .seo-draft-content h1, .seo-draft-content h2, .seo-draft-content h3, .seo-draft-content h4 { margin-top: 1.5em; margin-bottom: 0.5em; }
+    .seo-draft-content h2 { font-size: 28px; }
+    .seo-draft-content h3 { font-size: 22px; }
+    .seo-draft-content p { margin-bottom: 1em; }
+    .seo-draft-content img { max-width: 100%; height: auto; border-radius: 8px; margin: 20px 0; }
+    .seo-draft-content a { color: #2563eb; text-decoration: underline; }
+    .seo-draft-content ul, .seo-draft-content ol { margin: 1em 0; padding-left: 2em; }
+    .seo-draft-content li { margin-bottom: 0.5em; }
+    /* Wireframe layout classes */
+    .wf-columns { display: flex; gap: 30px; align-items: center; margin: 30px 0; flex-wrap: wrap; }
+    .wf-columns .wf-col { flex: 1; min-width: 250px; }
+    .wf-columns .wf-col img { width: 100%; border-radius: 8px; }
+    .wf-hero { text-align: center; padding: 40px 20px; margin-bottom: 30px; }
+    .wf-hero h1 { font-size: 36px; margin-bottom: 10px; }
+    .wf-cta { text-align: center; padding: 30px; margin: 30px 0; background: #f5f5f5; border-radius: 8px; }
+    .wf-btn { display: inline-block; padding: 12px 30px; background: #2563eb; color: #fff !important; text-decoration: none !important; border-radius: 6px; font-weight: 600; margin-top: 10px; }
+    .seo-draft-meta {
+      max-width: 900px; margin: 20px auto 0; padding: 16px 30px;
+      background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 8px; font-size: 14px;
+    }
+    .seo-draft-meta .meta-title { font-size: 20px; color: #1a0dab; font-weight: 600; margin-bottom: 4px; }
+    .seo-draft-meta .meta-url { font-size: 13px; color: #006621; margin-bottom: 4px; }
+    .seo-draft-meta .meta-desc { font-size: 14px; color: #545454; }
+    .seo-draft-meta .meta-label { font-size: 11px; color: #888; text-transform: uppercase; font-weight: 600; margin-bottom: 8px; }
+  </style>
+</head>
+<body class="${bodyClasses}">
+  <div class="seo-preview-banner">
+    <span>\u{1F4CB} DRAFT PREVIEW — Content rendered with your site's design</span>
+    <span style="opacity:0.7;font-size:12px">Header &amp; footer from live site</span>
+  </div>
+  <div class="seo-preview-spacer"></div>
+
+  ${headerBlock}
+  ${fixUrls(heroBlock)}
+
+  <div class="seo-draft-meta">
+    <div class="meta-label">Google Search Preview</div>
+    <div class="meta-title">${draftTitle || item.page_title || ''}</div>
+    <div class="meta-url">${pageUrl}</div>
+    <div class="meta-desc">${draftDesc || ''}</div>
+  </div>
+
+  <div id="content" class="site-content">
+    <div class="seo-draft-content entry-content">
+      <div class="container" style="max-width:900px;margin:0 auto;padding:40px 30px">
+        ${draftContent}
+      </div>
+    </div>
+  </div>
+
+  ${fixUrls(ctaBlock)}
+  ${footerBlock}
+
+  <script>
+    document.addEventListener('click', function(e) {
+      if (e.target.closest('a')) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+  </script>
+</body>
+</html>`;
+
+    console.log(`[preview] Built preview for "${item.page_title}" with header=${!!headerMatch}, footer=${!!footerMatch}`);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(previewHtml);
+  } catch (e) {
+    console.error('[preview] Error:', e.message);
+    res.status(500).send('Preview error: ' + e.message);
+  }
+});
+
+// Generate content skeleton — HTML-first: fetch real page DOM, strip text content, keep structure
+app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Build page URL
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
+    if (!pageUrl) return res.status(400).json({ error: 'No page URL set' });
+
+    console.log(`[skeleton] Fetching live page: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch page: ${resp.status}` });
+    const html = await resp.text();
+
+    // Extract content between </header> and <footer>
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
+    );
+
+    // Parse top-level blocks (section, div, main, article) with depth tracking
+    const blockRegex = /<(section|div|main|article)([^>]*)>/gi;
+    const blocks = [];
+    let match;
+    while ((match = blockRegex.exec(middleHtml)) !== null) {
+      const tag = match[1].toLowerCase();
+      const attrs = match[2];
+      const blockStart = match.index;
+      let depth = 1, pos = match.index + match[0].length;
+      const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        openRe.lastIndex = pos; closeRe.lastIndex = pos;
+        const nO = openRe.exec(middleHtml);
+        const nC = closeRe.exec(middleHtml);
+        if (!nC) break;
+        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+        else {
+          depth--;
+          if (depth === 0) {
+            const blockEnd = nC.index + nC[0].length;
+            const blockContent = middleHtml.slice(blockStart, blockEnd);
+            const textContent = blockContent.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            if (textContent.length >= 10) {
+              blocks.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent });
+              blockRegex.lastIndex = blockEnd;
+            }
+            break;
+          }
+          pos = nC.index + nC[0].length;
+        }
+      }
+    }
+
+    console.log(`[skeleton] Found ${blocks.length} top-level blocks`);
+
+    // If a single block contains most of the text, drill into its children instead
+    // This handles pages like Gold PC where DIV#content wraps all sections
+    const totalText = blocks.reduce((sum, b) => sum + b.textLen, 0);
+    const bigBlock = blocks.find(b => b.textLen > totalText * 0.7 && blocks.length <= 5);
+    if (bigBlock) {
+      console.log(`[skeleton] Block "${bigBlock.tag}" has ${bigBlock.textLen}/${totalText} chars — drilling into children`);
+      const innerHtml = bigBlock.html;
+      // Re-parse inside this block: find direct children (section, div, main, article)
+      // Skip the outer tag itself by starting after the first >
+      const innerStart = innerHtml.indexOf('>') + 1;
+      const innerEnd = innerHtml.lastIndexOf('</');
+      const innerContent = innerHtml.slice(innerStart, innerEnd > innerStart ? innerEnd : innerHtml.length);
+
+      const innerBlocks = [];
+      const innerRegex = /<(section|div|main|article)([^>]*)>/gi;
+      let im;
+      while ((im = innerRegex.exec(innerContent)) !== null) {
+        const itag = im[1].toLowerCase();
+        const iattrs = im[2];
+        const iStart = im.index;
+        let idepth = 1, ipos = im.index + im[0].length;
+        const ioRe = new RegExp(`<${itag}[\\s>]`, 'gi');
+        const icRe = new RegExp(`</${itag}\\s*>`, 'gi');
+        while (idepth > 0 && ipos < innerContent.length) {
+          ioRe.lastIndex = ipos; icRe.lastIndex = ipos;
+          const inO = ioRe.exec(innerContent);
+          const inC = icRe.exec(innerContent);
+          if (!inC) break;
+          if (inO && inO.index < inC.index) { idepth++; ipos = inO.index + inO[0].length; }
+          else {
+            idepth--;
+            if (idepth === 0) {
+              const iEnd = inC.index + inC[0].length;
+              const iBlock = innerContent.slice(iStart, iEnd);
+              const iText = iBlock.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+              if (iText.length >= 10) {
+                innerBlocks.push({ html: iBlock, attrs: iattrs, tag: itag, textLen: iText.length, text: iText });
+                innerRegex.lastIndex = iEnd;
+              }
+              break;
+            }
+            ipos = inC.index + inC[0].length;
+          }
+        }
+      }
+
+      if (innerBlocks.length > blocks.length) {
+        // Also keep non-big blocks (like hero banner) that came before/after
+        const heroBlocks = blocks.filter(b => b !== bigBlock);
+        // Put hero blocks first, then inner blocks
+        const heroBefore = heroBlocks.filter(b => blocks.indexOf(b) < blocks.indexOf(bigBlock));
+        const heroAfter = heroBlocks.filter(b => blocks.indexOf(b) > blocks.indexOf(bigBlock));
+        blocks.length = 0;
+        blocks.push(...heroBefore, ...innerBlocks, ...heroAfter);
+        console.log(`[skeleton] Drilled into ${innerBlocks.length} inner blocks (+ ${heroBlocks.length} outer blocks)`);
+      }
+    }
+
+    console.log(`[skeleton] Final: ${blocks.length} content blocks`);
+
+    // Helper: strip text from HTML but keep structure, images, links, headings
+    function stripToSkeleton(blockHtml, sectionNum) {
+      let skeleton = blockHtml;
+
+      // Extract all images with their src and alt for preservation
+      const imgSrcs = [];
+      skeleton.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (m, src) => {
+        const altMatch = m.match(/alt=["']([^"']*?)["']/i);
+        imgSrcs.push({ src, alt: altMatch ? altMatch[1] : '' });
+        return m;
+      });
+
+      // Classify block type
+      const h1s = (skeleton.match(/<h1[^>]*>/gi) || []).length;
+      const h2s = (skeleton.match(/<h2[^>]*>/gi) || []).length;
+      const h3s = (skeleton.match(/<h3[^>]*>/gi) || []).length;
+      const imgs = (skeleton.match(/<img[^>]*>/gi) || []).length;
+      const lists = (skeleton.match(/<(ul|ol)[^>]*>/gi) || []).length;
+      const forms = (skeleton.match(/<form[^>]*>/gi) || []).length;
+      const hasBgImage = /background.*url|bg-img|ban-img|hero|banner/i.test(skeleton.slice(0, 500));
+      const hasColumns = /col-\w+-\d|col-\d|column|wp-block-columns/i.test(skeleton);
+      const text = skeleton.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const wordCount = text.split(/\s+/).length;
+
+      // Detect inner columns (child divs that are side-by-side)
+      const innerDivs = skeleton.match(/<div[^>]*class="[^"]*col[^"]*"[^>]*>/gi) || [];
+      const colCount = innerDivs.length || (hasColumns ? 2 : 1);
+
+      // Determine section type
+      let sectionType = 'content';
+      if (hasBgImage && wordCount < 100) sectionType = 'hero-banner';
+      else if (forms) sectionType = 'form-cta';
+      else if (imgs > 0 && (hasColumns || colCount > 1)) sectionType = 'image-text-columns';
+      else if (hasColumns && wordCount < 150) sectionType = 'multi-column-cta';
+      else if (imgs > 2 && wordCount < 100) sectionType = 'image-gallery';
+      else if (lists && wordCount > 50) sectionType = 'feature-list';
+      else if (wordCount < 80 && (skeleton.match(/<a[^>]*>/gi) || []).length > 0) sectionType = 'cta-bar';
+      else if (wordCount > 200) sectionType = 'long-content';
+      else sectionType = 'short-content';
+
+      // Extract heading text (keep original)
+      const headings = [];
+      skeleton.replace(/<h([1-6])([^>]*)>([\s\S]*?)<\/h\1>/gi, (m, level, attrs, inner) => {
+        headings.push({ level, text: inner.replace(/<[^>]+>/g, '').trim() });
+        return m;
+      });
+
+      // Build the skeleton HTML based on type
+      let out = `<!-- SECTION ${sectionNum}: ${sectionType.toUpperCase()} -->\n`;
+
+      if (sectionType === 'hero-banner') {
+        out += `<div class="wf-hero">\n`;
+        if (headings.length) out += `  <h${headings[0].level}>${headings[0].text}</h${headings[0].level}>\n`;
+        else out += `  <h1>[HERO HEADING]</h1>\n`;
+        out += `  <p>[~30 words hero subtext — brief intro or tagline]</p>\n`;
+        if (imgs > 0) out += `  <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[hero image]'}">\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'image-text-columns') {
+        out += `<div class="wf-columns">\n`;
+        // Determine if image is left or right by checking order in HTML
+        const firstImgPos = skeleton.search(/<img/i);
+        const firstTextPos = skeleton.search(/<(p|h[2-6])/i);
+        const imgFirst = firstImgPos < firstTextPos;
+
+        if (imgFirst) {
+          out += `  <div class="wf-col">\n`;
+          out += `    <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[section image]'}">\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col">\n`;
+          headings.forEach(h => { out += `    <h${h.level}>${h.text}</h${h.level}>\n`; });
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — describe this section's content]</p>\n`;
+          out += `  </div>\n`;
+        } else {
+          out += `  <div class="wf-col">\n`;
+          headings.forEach(h => { out += `    <h${h.level}>${h.text}</h${h.level}>\n`; });
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — describe this section's content]</p>\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col">\n`;
+          out += `    <img src="${imgSrcs[0]?.src || ''}" alt="${imgSrcs[0]?.alt || '[section image]'}">\n`;
+          out += `  </div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'feature-list') {
+        headings.forEach(h => { out += `<h${h.level}>${h.text}</h${h.level}>\n`; });
+        // Count list items
+        const liCount = (skeleton.match(/<li/gi) || []).length;
+        out += `<ul>\n`;
+        for (let i = 0; i < Math.max(3, liCount); i++) {
+          out += `  <li>[Feature/benefit ${i + 1} — ~15 words]</li>\n`;
+        }
+        out += `</ul>\n`;
+      } else if (sectionType === 'cta-bar') {
+        out += `<div class="wf-cta">\n`;
+        if (headings.length) out += `  <h${headings[0].level}>${headings[0].text}</h${headings[0].level}>\n`;
+        out += `  <p>[~20 words CTA text]</p>\n`;
+        out += `  <a href="#" class="wf-btn">[CTA Button Text]</a>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'form-cta') {
+        out += `<div class="wf-cta">\n`;
+        headings.forEach(h => { out += `  <h${h.level}>${h.text}</h${h.level}>\n`; });
+        out += `  <p>[~20 words — form intro text]</p>\n`;
+        out += `  <p><em>[Contact form / enquiry form appears here — not editable]</em></p>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'multi-column-cta') {
+        // Multi-column CTA section (e.g. 3-column with images)
+        const colMatches = skeleton.match(/col-\w+-(\d+)/gi) || [];
+        const colSizes = colMatches.map(c => parseInt(c.match(/\d+$/)[0]));
+        const numCols = colSizes.length || 3;
+        out += `<div class="wf-columns">\n`;
+        for (let ci = 0; ci < Math.min(numCols, 6); ci++) {
+          out += `  <div class="wf-col">\n`;
+          if (imgSrcs[ci]) out += `    <img src="${imgSrcs[ci].src}" alt="${imgSrcs[ci].alt || '[image]'}">\n`;
+          if (headings[ci]) out += `    <h${headings[ci].level}>${headings[ci].text}</h${headings[ci].level}>\n`;
+          out += `    <p>[~20 words — column ${ci + 1} content]</p>\n`;
+          out += `  </div>\n`;
+        }
+        out += `</div>\n`;
+      } else {
+        // long-content or short-content — keep headings, replace body text
+        headings.forEach(h => { out += `<h${h.level}>${h.text}</h${h.level}>\n`; });
+        if (headings.length === 0 && h2s === 0) out += `<h2>[Section Heading]</h2>\n`;
+
+        // Estimate paragraph count
+        const pCount = Math.max(1, (skeleton.match(/<p[^>]*>/gi) || []).length);
+        const wordsPerP = Math.max(40, Math.round(wordCount / pCount));
+        for (let i = 0; i < pCount; i++) {
+          out += `<p>[~${wordsPerP} words — paragraph ${i + 1} content]</p>\n`;
+        }
+        // Keep images in position
+        imgSrcs.forEach(img => {
+          out += `<img src="${img.src}" alt="${img.alt || '[image]'}">\n`;
+        });
+      }
+
+      out += `<!-- /SECTION ${sectionNum} -->\n`;
+      return out;
+    }
+
+    // Build the full skeleton
+    let skeleton = '';
+    blocks.forEach((block, i) => {
+      skeleton += stripToSkeleton(block.html, i + 1) + '\n';
+    });
+
+    // Build wireframe description for AI context
+    const sectionSummary = (skeleton.match(/<!-- SECTION \d+: .+-->/g) || []).join('\n');
+
+    console.log(`[skeleton] Built skeleton: ${skeleton.length} chars, ${blocks.length} sections`);
+
+    // Save as draft content + wireframe description
+    await pool.query(
+      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2 WHERE id=$3',
+      [skeleton, `PAGE SKELETON (${blocks.length} sections from live HTML):\n${sectionSummary}`, id]
+    );
+
+    res.json({ skeleton, sections: blocks.length });
+  } catch (e) {
+    console.error('[skeleton] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ===== PAGE TEMPLATES =====
+
+// List templates for a project
+app.get('/api/projects/:projectId/templates', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, page_type, source_url, section_count, is_default, created_at, updated_at FROM page_templates WHERE project_id=$1 ORDER BY page_type, name',
+      [req.params.projectId]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single template (with full HTML)
+app.get('/api/projects/:projectId/templates/:id', async (req, res) => {
+  try {
+    const row = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create template manually
+app.post('/api/projects/:projectId/templates', async (req, res) => {
+  const { name, page_type, skeleton_html, source_url } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  try {
+    const html = skeleton_html || '';
+    const sections = (html.match(/<!-- SECTION/gi) || []).length;
+    const { rows } = await pool.query(
+      'INSERT INTO page_templates (project_id, name, page_type, skeleton_html, source_url, section_count) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [req.params.projectId, name, page_type || 'service', html, source_url || null, sections]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update template
+app.put('/api/projects/:projectId/templates/:id', async (req, res) => {
+  const { name, page_type, skeleton_html, source_url } = req.body;
+  try {
+    const sets = []; const vals = []; let n = 1;
+    if (name !== undefined) { sets.push(`name=$${n++}`); vals.push(name); }
+    if (page_type !== undefined) { sets.push(`page_type=$${n++}`); vals.push(page_type); }
+    if (skeleton_html !== undefined) {
+      sets.push(`skeleton_html=$${n++}`); vals.push(skeleton_html);
+      sets.push(`section_count=$${n++}`); vals.push((skeleton_html.match(/<!-- SECTION/gi) || []).length);
+    }
+    if (source_url !== undefined) { sets.push(`source_url=$${n++}`); vals.push(source_url); }
+    sets.push(`updated_at=NOW()`);
+    vals.push(req.params.id, req.params.projectId);
+    const row = (await pool.query(
+      `UPDATE page_templates SET ${sets.join(',')} WHERE id=$${n++} AND project_id=$${n++} RETURNING *`, vals
+    )).rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete template
+app.delete('/api/projects/:projectId/templates/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM page_templates WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Import template from URL — fetches page, strips to skeleton, saves as template
+app.post('/api/projects/:projectId/templates/import', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { url, name, page_type } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    const pageUrl = url.startsWith('http') ? url : 'https://' + url;
+    console.log(`[templates] Importing from: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch: ${resp.status}` });
+    const html = await resp.text();
+
+    // Extract content between </header> and <footer>
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
+    );
+
+    // Parse top-level blocks
+    function parseBlocks(sourceHtml) {
+      const blockRegex = /<(section|div|main|article)([^>]*)>/gi;
+      const results = [];
+      let match;
+      while ((match = blockRegex.exec(sourceHtml)) !== null) {
+        const tag = match[1].toLowerCase();
+        const attrs = match[2];
+        const blockStart = match.index;
+        let depth = 1, pos = match.index + match[0].length;
+        const openRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+        const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+        while (depth > 0 && pos < sourceHtml.length) {
+          openRe.lastIndex = pos; closeRe.lastIndex = pos;
+          const nO = openRe.exec(sourceHtml);
+          const nC = closeRe.exec(sourceHtml);
+          if (!nC) break;
+          if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+          else {
+            depth--;
+            if (depth === 0) {
+              const blockEnd = nC.index + nC[0].length;
+              const blockContent = sourceHtml.slice(blockStart, blockEnd);
+              const textContent = blockContent.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+              if (textContent.length >= 10) {
+                results.push({ html: blockContent, attrs, tag, textLen: textContent.length, text: textContent });
+                blockRegex.lastIndex = blockEnd;
+              }
+              break;
+            }
+            pos = nC.index + nC[0].length;
+          }
+        }
+      }
+      return results;
+    }
+
+    let blocks = parseBlocks(middleHtml);
+
+    // Drill into wrapper divs if one block has >70% of text
+    const totalText = blocks.reduce((sum, b) => sum + b.textLen, 0);
+    const bigBlock = blocks.find(b => b.textLen > totalText * 0.7 && blocks.length <= 5);
+    if (bigBlock) {
+      const innerStart = bigBlock.html.indexOf('>') + 1;
+      const innerEnd = bigBlock.html.lastIndexOf('</');
+      const innerContent = bigBlock.html.slice(innerStart, innerEnd > innerStart ? innerEnd : bigBlock.html.length);
+      const innerBlocks = parseBlocks(innerContent);
+      if (innerBlocks.length > blocks.length) {
+        const heroBefore = blocks.filter(b => b !== bigBlock && blocks.indexOf(b) < blocks.indexOf(bigBlock));
+        const heroAfter = blocks.filter(b => b !== bigBlock && blocks.indexOf(b) > blocks.indexOf(bigBlock));
+        blocks = [...heroBefore, ...innerBlocks, ...heroAfter];
+      }
+    }
+
+    // Strip each block to skeleton
+    function stripBlock(blockHtml, sectionNum) {
+      const imgSrcs = [];
+      blockHtml.replace(/<img[^>]*src=["']([^"']+)["'][^>]*>/gi, (m, src) => {
+        const altMatch = m.match(/alt=["']([^"']*?)["']/i);
+        imgSrcs.push({ src, alt: altMatch ? altMatch[1] : '' });
+        return m;
+      });
+
+      const h2s = (blockHtml.match(/<h2[^>]*>/gi) || []).length;
+      const imgs = (blockHtml.match(/<img[^>]*>/gi) || []).length;
+      const lists = (blockHtml.match(/<(ul|ol)[^>]*>/gi) || []).length;
+      const forms = (blockHtml.match(/<form[^>]*>/gi) || []).length;
+      const hasBgImage = /background.*url|bg-img|ban-img|hero|banner/i.test(blockHtml.slice(0, 500));
+      const hasColumns = /col-\w+-\d|col-\d|column|wp-block-columns/i.test(blockHtml);
+      const text = blockHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const wordCount = text.split(/\s+/).length;
+
+      const headings = [];
+      blockHtml.replace(/<h([1-6])([^>]*)>([\s\S]*?)<\/h\1>/gi, (m, level, attrs, inner) => {
+        headings.push({ level, text: inner.replace(/<[^>]+>/g, '').trim() });
+        return m;
+      });
+
+      let sectionType = 'content';
+      if (hasBgImage && wordCount < 100) sectionType = 'hero-banner';
+      else if (forms) sectionType = 'form-cta';
+      else if (imgs > 0 && hasColumns) sectionType = 'image-text-columns';
+      else if (hasColumns && wordCount < 150) sectionType = 'multi-column-cta';
+      else if (imgs > 2 && wordCount < 100) sectionType = 'image-gallery';
+      else if (lists && wordCount > 50) sectionType = 'feature-list';
+      else if (wordCount < 80 && (blockHtml.match(/<a[^>]*>/gi) || []).length > 0) sectionType = 'cta-bar';
+      else if (wordCount > 200) sectionType = 'long-content';
+      else sectionType = 'short-content';
+
+      let out = `<!-- SECTION ${sectionNum}: ${sectionType.toUpperCase()} -->\n`;
+
+      if (sectionType === 'hero-banner') {
+        out += `<div class="wf-hero">\n`;
+        out += headings.length ? `  <h${headings[0].level}>[HERO HEADING — page title with keyword]</h${headings[0].level}>\n` : `  <h1>[HERO HEADING]</h1>\n`;
+        out += `  <p>[~30 words hero subtext — brief intro or tagline]</p>\n`;
+        if (imgs > 0) out += `  <img src="" alt="[hero image alt text]">\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'image-text-columns') {
+        const firstImgPos = blockHtml.search(/<img/i);
+        const firstTextPos = blockHtml.search(/<(p|h[2-6])/i);
+        const imgFirst = firstImgPos < firstTextPos;
+        out += `<div class="wf-columns">\n`;
+        if (imgFirst) {
+          out += `  <div class="wf-col"><img src="" alt="[section image]"></div>\n`;
+          out += `  <div class="wf-col">\n`;
+          out += `    <h2>[Section Heading]</h2>\n`;
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — section content]</p>\n`;
+          out += `  </div>\n`;
+        } else {
+          out += `  <div class="wf-col">\n`;
+          out += `    <h2>[Section Heading]</h2>\n`;
+          out += `    <p>[~${Math.max(60, Math.round(wordCount * 0.8))} words — section content]</p>\n`;
+          out += `  </div>\n`;
+          out += `  <div class="wf-col"><img src="" alt="[section image]"></div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'multi-column-cta') {
+        const colMatches = blockHtml.match(/col-\w+-(\d+)/gi) || [];
+        const numCols = Math.max(2, Math.min(colMatches.length, 6));
+        out += `<div class="wf-columns">\n`;
+        for (let ci = 0; ci < numCols; ci++) {
+          out += `  <div class="wf-col">\n`;
+          if (imgs > ci) out += `    <img src="" alt="[column ${ci + 1} image]">\n`;
+          out += `    <p>[~20 words — column ${ci + 1} content]</p>\n`;
+          out += `  </div>\n`;
+        }
+        out += `</div>\n`;
+      } else if (sectionType === 'feature-list') {
+        out += `<h2>[Features/Benefits Heading]</h2>\n`;
+        const liCount = Math.max(3, (blockHtml.match(/<li/gi) || []).length);
+        out += `<ul>\n`;
+        for (let i = 0; i < liCount; i++) out += `  <li>[Feature/benefit ${i + 1} — ~15 words]</li>\n`;
+        out += `</ul>\n`;
+      } else if (sectionType === 'form-cta') {
+        out += `<div class="wf-cta">\n`;
+        out += `  <h2>[Form Heading — e.g. "Get a Free Quote"]</h2>\n`;
+        out += `  <p>[~20 words — form intro]</p>\n`;
+        out += `  <p><em>[Contact form appears here — not editable]</em></p>\n`;
+        out += `</div>\n`;
+      } else if (sectionType === 'cta-bar') {
+        out += `<div class="wf-cta">\n`;
+        if (headings.length) out += `  <h2>[CTA Heading]</h2>\n`;
+        out += `  <p>[~20 words CTA text]</p>\n`;
+        out += `  <a href="#" class="wf-btn">[CTA Button Text]</a>\n`;
+        out += `</div>\n`;
+      } else {
+        // Long or short content
+        const pCount = Math.max(1, (blockHtml.match(/<p[^>]*>/gi) || []).length);
+        const wordsPerP = Math.max(40, Math.round(wordCount / pCount));
+        // Use generic heading placeholders instead of original text
+        const hCount = Math.max(1, headings.length);
+        for (let hi = 0; hi < hCount; hi++) {
+          out += `<h2>[Section ${sectionNum} Heading ${hi > 0 ? hi + 1 : ''}]</h2>\n`;
+          const parasForH = Math.max(1, Math.ceil(pCount / hCount));
+          for (let pi = 0; pi < parasForH; pi++) {
+            out += `<p>[~${wordsPerP} words — paragraph content]</p>\n`;
+          }
+        }
+        if (imgs > 0) out += `<img src="" alt="[relevant image]">\n`;
+      }
+
+      out += `<!-- /SECTION ${sectionNum} -->\n`;
+      return out;
+    }
+
+    let skeleton = '';
+    blocks.forEach((block, i) => { skeleton += stripBlock(block.html, i + 1) + '\n'; });
+
+    const templateName = name || (page_type ? page_type.charAt(0).toUpperCase() + page_type.slice(1) + ' Page' : 'Imported Template');
+    const sectionCount = (skeleton.match(/<!-- SECTION/gi) || []).length;
+
+    const { rows } = await pool.query(
+      'INSERT INTO page_templates (project_id, name, page_type, skeleton_html, source_url, section_count) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [req.params.projectId, templateName, page_type || 'service', skeleton, pageUrl, sectionCount]
+    );
+
+    console.log(`[templates] Imported "${templateName}" from ${pageUrl}: ${sectionCount} sections, ${skeleton.length} chars`);
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[templates] Import error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Apply template to a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/apply-template', async (req, res) => {
+  const { template_id } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id required' });
+  try {
+    const template = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [template_id, req.params.projectId])).rows[0];
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+
+    await pool.query(
+      'UPDATE content_queue SET draft_content=$1, page_wireframe=$2, updated_at=NOW() WHERE id=$3 AND project_id=$4',
+      [template.skeleton_html, `Template: ${template.name} (${template.section_count} sections)`, req.params.id, req.params.projectId]
+    );
+
+    res.json({ ok: true, skeleton: template.skeleton_html, sections: template.section_count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Apply template to a site_page item
+app.post('/api/projects/:projectId/site-pages/:id/apply-template', async (req, res) => {
+  const { template_id } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id required' });
+  try {
+    const template = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [template_id, req.params.projectId])).rows[0];
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+
+    const updated = await pool.query(
+      'UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND project_id=$3 RETURNING *',
+      [template.skeleton_html, req.params.id, req.params.projectId]
+    );
+
+    res.json({ ok: true, skeleton: template.skeleton_html, sections: template.section_count, page: updated.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Analyze page wireframe — fetches live page, extracts section structure for AI copywriting
+app.post('/api/projects/:projectId/analyze-wireframe', async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  const { projectId } = req.params;
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    const pageUrl = url.startsWith('http') ? url : 'https://' + url;
+    console.log(`[wireframe] Analyzing page structure: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch: ${resp.status}` });
+    const html = await resp.text();
+
+    // Parse the page into sections
+    // Find all top-level sections/divs between header and footer
+    const headerEnd = html.search(/<\/header>/i);
+    const footerStart = html.search(/<footer/i);
+    const middleHtml = html.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : html.length
+    );
+
+    // Extract sections with their content details
+    const sections = [];
+    const sectionRegex = /<(section|div)([^>]*)>/gi;
+    let match;
+    while ((match = sectionRegex.exec(middleHtml)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      const blockStart = match.index;
+      // Quick depth scan
+      let depth = 1, pos = match.index + match[0].length;
+      const oRe = new RegExp(`<${tag}[\\s>]`, 'gi');
+      const cRe = new RegExp(`</${tag}\\s*>`, 'gi');
+      while (depth > 0 && pos < middleHtml.length) {
+        oRe.lastIndex = pos; cRe.lastIndex = pos;
+        const nO = oRe.exec(middleHtml);
+        const nC = cRe.exec(middleHtml);
+        if (!nC) break;
+        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+        else { depth--; if (depth === 0) {
+          const blockEnd = nC.index + nC[0].length;
+          const blockHtml = middleHtml.slice(blockStart, blockEnd);
+          const text = blockHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (text.length < 10) { sectionRegex.lastIndex = blockEnd; break; } // skip empty
+
+          // Analyze section content
+          const h1s = (blockHtml.match(/<h1[^>]*>/gi) || []).length;
+          const h2s = (blockHtml.match(/<h2[^>]*>/gi) || []).length;
+          const h3s = (blockHtml.match(/<h3[^>]*>/gi) || []).length;
+          const imgs = (blockHtml.match(/<img[^>]*>/gi) || []).length;
+          const links = (blockHtml.match(/<a[^>]*>/gi) || []).length;
+          const lists = (blockHtml.match(/<(ul|ol)[^>]*>/gi) || []).length;
+          const forms = (blockHtml.match(/<form[^>]*>/gi) || []).length;
+          const buttons = (blockHtml.match(/<button[^>]*>/gi) || []).length + (blockHtml.match(/class="[^"]*btn[^"]*"/gi) || []).length;
+
+          // Detect layout type
+          const hasColumns = /col-|column|grid|flex|row/i.test(attrs + blockHtml.slice(0, 500));
+          const hasBgImage = /background.*url|bg-img|ban-img/i.test(blockHtml.slice(0, 500));
+          const headings = [];
+          const hMatches = blockHtml.matchAll(/<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/gi);
+          for (const hm of hMatches) headings.push(hm[2].replace(/<[^>]+>/g, '').trim().slice(0, 80));
+
+          // Classify section type
+          let sectionType = 'content';
+          if (hasBgImage && (h1s || h2s) && text.length < 300) sectionType = 'hero-banner';
+          else if (forms) sectionType = 'form/cta';
+          else if (imgs > 0 && hasColumns) sectionType = 'image-text-columns';
+          else if (imgs > 1 && text.length < 200) sectionType = 'image-gallery';
+          else if (lists && text.length > 200) sectionType = 'feature-list';
+          else if (buttons > 1 || (text.length < 150 && links > 2)) sectionType = 'cta-bar';
+          else if (text.length > 500) sectionType = 'long-content';
+          else if (text.length < 150) sectionType = 'short-content';
+
+          const cls = (attrs.match(/class="([^"]*)"/i) || [])[1] || '';
+          sections.push({
+            type: sectionType,
+            className: cls.split(' ').filter(c => c && !c.match(/^(col|row|d-|p-|m-|w-)/)).slice(0, 3).join(' '),
+            headings,
+            wordCount: text.split(/\s+/).length,
+            images: imgs,
+            links,
+            lists,
+            hasColumns,
+            textPreview: text.slice(0, 120)
+          });
+          sectionRegex.lastIndex = blockEnd;
+          break;
+        }
+        pos = nC.index + nC[0].length; }
+      }
+    }
+
+    // Build a human-readable wireframe description
+    const wireframeLines = sections.map((s, i) => {
+      let desc = `SECTION ${i + 1}: ${s.type.toUpperCase()}`;
+      if (s.headings.length) desc += `\n  Headings: ${s.headings.map(h => `"${h}"`).join(', ')}`;
+      desc += `\n  Layout: ${s.hasColumns ? 'Multi-column' : 'Full-width'}`;
+      if (s.images) desc += ` | ${s.images} image(s)`;
+      if (s.links) desc += ` | ${s.links} link(s)`;
+      if (s.lists) desc += ` | ${s.lists} list(s)`;
+      desc += `\n  Content: ~${s.wordCount} words`;
+      desc += `\n  Preview: "${s.textPreview}"`;
+      return desc;
+    });
+
+    const wireframeText = `PAGE WIREFRAME STRUCTURE (${sections.length} sections):\n\n` + wireframeLines.join('\n\n');
+    console.log(`[wireframe] Analyzed ${pageUrl}: ${sections.length} sections found`);
+    res.json({ wireframe: wireframeText, sections });
+  } catch (e) {
+    console.error('[wireframe] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Full-page screenshot capture — uses Google PageSpeed API (returns screenshot in response)
+app.post('/api/projects/:projectId/screenshot', async (req, res) => {
+  req.setTimeout(90000);
+  res.setTimeout(90000);
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+  try {
+    const apiKey = process.env.PAGESPEED_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'PageSpeed API key not configured' });
+    const psiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&category=PERFORMANCE&strategy=MOBILE&key=${apiKey}`;
+    console.log(`[screenshot] Capturing via PageSpeed API: ${url}`);
+    const resp = await fetch(psiUrl, { signal: AbortSignal.timeout(75000) });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      console.error(`[screenshot] PageSpeed API error ${resp.status}:`, errText);
+      return res.status(500).json({ error: `PageSpeed API failed: ${resp.status}` });
+    }
+    const data = await resp.json();
+    // Extract final screenshot from Lighthouse audits
+    const screenshot = data?.lighthouseResult?.audits?.['final-screenshot']?.details?.data;
+    if (!screenshot) {
+      // Try full-page-screenshot audit
+      const fullPage = data?.lighthouseResult?.audits?.['full-page-screenshot']?.details?.screenshot?.data;
+      if (!fullPage) return res.status(500).json({ error: 'No screenshot in PageSpeed response' });
+      const base64 = fullPage.replace(/^data:[^;]+;base64,/, '');
+      console.log(`[screenshot] Captured full-page ${url}: ${Math.round(base64.length * 0.75 / 1024)}KB`);
+      return res.json({ image: base64, mime: 'image/jpeg' });
+    }
+    const base64 = screenshot.replace(/^data:[^;]+;base64,/, '');
+    console.log(`[screenshot] Captured ${url}: ${Math.round(base64.length * 0.75 / 1024)}KB`);
+    res.json({ image: base64, mime: 'image/jpeg' });
+  } catch (e) {
+    console.error('[screenshot] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== CONTENT KEYWORDS ====================
+
+// List all keywords for a project
+app.get('/api/projects/:projectId/content-keywords', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM content_keywords WHERE project_id=$1 ORDER BY page_type, keyword', [req.params.projectId]);
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk add keywords (from CSV, paste, or manual)
+app.post('/api/projects/:projectId/content-keywords/bulk', async (req, res) => {
+  try {
+    const { keywords, search_volumes } = req.body; // keywords: array of string or { keyword, page_type?, page_name? }, search_volumes: { keyword: volume } optional
+    if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+    const projectId = req.params.projectId;
+    const volMap = search_volumes || {};
+    const added = [];
+    for (const kw of keywords) {
+      const keyword = (kw.keyword || kw).toString().trim();
+      if (!keyword) continue;
+      // Skip duplicates
+      const exists = await pool.query('SELECT id FROM content_keywords WHERE project_id=$1 AND LOWER(keyword)=LOWER($2)', [projectId, keyword]);
+      if (exists.rows.length > 0) continue;
+      const vol = volMap[keyword] || volMap[keyword.toLowerCase()] || (kw.search_volume != null ? kw.search_volume : null);
+      const r = await pool.query(
+        `INSERT INTO content_keywords (project_id, keyword, page_type, page_name, search_volume) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [projectId, keyword, kw.page_type || 'unassigned', kw.page_name || null, vol]
+      );
+      added.push(r.rows[0]);
+    }
+    res.json({ success: true, added: added.length, keywords: added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk update keywords (assign multiple to a page type) — MUST be before :id route
+app.put('/api/projects/:projectId/content-keywords/bulk-assign', async (req, res) => {
+  try {
+    const { keyword_ids, page_type, page_name } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=$2 WHERE id = ANY($3) AND project_id=$4`,
+      [page_type, page_name || null, keyword_ids, req.params.projectId]
+    );
+    res.json({ success: true, updated: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update keyword (assign to page type, rename, etc.)
+app.put('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
+  try {
+    const { keyword, page_type, page_name, search_volume } = req.body;
+    const fields = []; const vals = []; let idx = 1;
+    if (keyword !== undefined) { fields.push(`keyword=$${idx++}`); vals.push(keyword); }
+    if (page_type !== undefined) { fields.push(`page_type=$${idx++}`); vals.push(page_type); }
+    if (page_name !== undefined) { fields.push(`page_name=$${idx++}`); vals.push(page_name); }
+    if (search_volume !== undefined) { fields.push(`search_volume=$${idx++}`); vals.push(search_volume); }
+    if (fields.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+    vals.push(req.params.id, req.params.projectId);
+    const r = await pool.query(`UPDATE content_keywords SET ${fields.join(',')} WHERE id=$${idx++} AND project_id=$${idx} RETURNING *`, vals);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Keyword not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete keyword
+app.delete('/api/projects/:projectId/content-keywords/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_keywords WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk delete keywords
+app.post('/api/projects/:projectId/content-keywords/bulk-delete', async (req, res) => {
+  try {
+    const { keyword_ids } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query('DELETE FROM content_keywords WHERE id = ANY($1) AND project_id=$2', [keyword_ids, req.params.projectId]);
+    res.json({ success: true, deleted: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== KEYWORD RESEARCH (DataForSEO + SerpAPI) ====================
+
+// Australian location codes for DataForSEO (Google Ads location IDs)
+const AU_LOCATIONS = {
+  country: { name: 'Australia', code: 2036 },
+  states: {
+    'New South Wales': { code: 20532, cities: { 'Sydney': 1003854, 'Newcastle': 1003821, 'Wollongong': 1003871, 'Central Coast': 9069149, 'Coffs Harbour': 1003799, 'Wagga Wagga': 1003865, 'Albury': 1003783, 'Tamworth': 1003860, 'Orange': 1003825, 'Dubbo': 1003803, 'Bathurst': 1003788, 'Lismore': 1003817, 'Port Macquarie': 1003833 } },
+    'Victoria': { code: 20533, cities: { 'Melbourne': 1003819, 'Geelong': 1003806, 'Ballarat': 1003787, 'Bendigo': 1003789, 'Shepparton': 1003847, 'Mildura': 1003820, 'Warrnambool': 1003867, 'Wodonga': 1003870, 'Traralgon': 1003862 } },
+    'Queensland': { code: 20534, cities: { 'Brisbane': 1003793, 'Gold Coast': 1003808, 'Sunshine Coast': 1003857, 'Townsville': 1003861, 'Cairns': 1003795, 'Toowoomba': 1003858, 'Mackay': 1003818, 'Rockhampton': 1003841, 'Bundaberg': 1003794, 'Hervey Bay': 1003811, 'Gladstone': 1003807 } },
+    'Western Australia': { code: 20535, cities: { 'Perth': 1003829, 'Mandurah': 9069155, 'Bunbury': 1003792, 'Geraldton': 1003805, 'Kalgoorlie': 1003813, 'Albany': 1003782, 'Broome': 1003791, 'Karratha': 1003814 } },
+    'South Australia': { code: 20536, cities: { 'Adelaide': 1003781, 'Mount Gambier': 1003822, 'Whyalla': 1003869, 'Murray Bridge': 1003823, 'Port Augusta': 1003831, 'Port Lincoln': 1003832 } },
+    'Tasmania': { code: 20537, cities: { 'Hobart': 1003812, 'Launceston': 1003816, 'Devonport': 1003801, 'Burnie': 1003796 } },
+    'Northern Territory': { code: 20538, cities: { 'Darwin': 1003800, 'Alice Springs': 1003784 } },
+    'Australian Capital Territory': { code: 20539, cities: { 'Canberra': 1003797 } },
+  }
+};
+
+// City/state populations for local volume estimation (ABS 2024 estimates)
+const AU_POPULATION = 26500000;
+const AU_CITY_POP = {
+  'Sydney': 5450000, 'Melbourne': 5150000, 'Brisbane': 2600000, 'Perth': 2200000,
+  'Adelaide': 1420000, 'Gold Coast': 720000, 'Newcastle': 510000, 'Canberra': 470000,
+  'Sunshine Coast': 370000, 'Wollongong': 310000, 'Geelong': 270000, 'Hobart': 250000,
+  'Townsville': 195000, 'Cairns': 160000, 'Toowoomba': 170000, 'Darwin': 150000,
+  'Ballarat': 115000, 'Bendigo': 100000, 'Launceston': 90000, 'Mackay': 85000,
+  'Rockhampton': 80000, 'Bunbury': 75000, 'Bundaberg': 75000, 'Hervey Bay': 70000,
+  'Wagga Wagga': 65000, 'Coffs Harbour': 55000, 'Shepparton': 55000, 'Mildura': 55000,
+  'Gladstone': 45000, 'Tamworth': 45000, 'Albury': 55000, 'Orange': 42000,
+  'Dubbo': 40000, 'Bathurst': 40000, 'Lismore': 30000, 'Port Macquarie': 50000,
+  'Central Coast': 340000, 'Mandurah': 100000, 'Geraldton': 40000, 'Kalgoorlie': 32000,
+  'Albany': 38000, 'Broome': 16000, 'Karratha': 22000, 'Mount Gambier': 30000,
+  'Whyalla': 21000, 'Murray Bridge': 22000, 'Port Augusta': 14000, 'Port Lincoln': 15000,
+  'Devonport': 30000, 'Burnie': 20000, 'Alice Springs': 25000, 'Warrnambool': 35000,
+  'Wodonga': 42000, 'Traralgon': 28000,
+};
+const AU_STATE_POP = {
+  'New South Wales': 8350000, 'Victoria': 6750000, 'Queensland': 5450000,
+  'Western Australia': 2900000, 'South Australia': 1850000, 'Tasmania': 570000,
+  'Northern Territory': 250000, 'Australian Capital Territory': 470000,
+};
+
+app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
+  const { projectId } = req.params;
+  const { seeds, country, state, city, is_local, package_size, exclude_keywords, min_volume } = req.body;
+  // seeds: string[] of seed keywords
+  // country: 'Australia' (future: others)
+  // state: e.g. 'Western Australia'
+  // city: e.g. 'Perth'
+  // is_local: boolean — if true, append city/state to keywords
+  // package_size: 10|20|30|40|50
+  // exclude_keywords: string[] — keywords to exclude (for "Fetch More")
+  // min_volume: number — minimum search volume filter
+
+  if (!Array.isArray(seeds) || seeds.length === 0) return res.status(400).json({ error: 'Provide at least one seed keyword' });
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
+
+  const cap = package_size || 20;
+  const locationCity = city || null;
+  const locationState = state || null;
+
+  // Always use COUNTRY-level location code for volume data (city-level gives tiny buckets)
+  const locationCode = AU_LOCATIONS.country.code; // 2036 = Australia
+  let locationName = 'Australia';
+  if (locationCity && locationState) {
+    locationName = locationCity + ', ' + locationState + ', Australia';
+  } else if (locationState) {
+    locationName = locationState + ', Australia';
+  }
+
+  // Calculate local volume ratio from population
+  let localRatio = 1;
+  if (is_local && locationCity && AU_CITY_POP[locationCity]) {
+    localRatio = AU_CITY_POP[locationCity] / AU_POPULATION;
+  } else if (is_local && locationState && AU_STATE_POP[locationState]) {
+    localRatio = AU_STATE_POP[locationState] / AU_POPULATION;
+  }
+
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} | Local: ${is_local} (ratio: ${(localRatio*100).toFixed(1)}%) | Cap: ${cap}`);
+
+  try {
+    // Step 1: Expand seeds with SerpAPI autocomplete
+    let expandedSeeds = [...seeds];
+    if (SERPAPI_KEY) {
+      for (const seed of seeds.slice(0, 5)) { // cap seed expansion to 5 seeds
+        try {
+          const acUrl = `https://serpapi.com/search.json?engine=google_autocomplete&q=${encodeURIComponent(seed)}&gl=au&api_key=${SERPAPI_KEY}`;
+          const acResp = await fetch(acUrl, { signal: AbortSignal.timeout(8000) });
+          if (acResp.ok) {
+            const acData = await acResp.json();
+            const suggestions = (acData.suggestions || []).map(s => s.value).filter(Boolean);
+            expandedSeeds.push(...suggestions.slice(0, 5));
+          }
+        } catch (e) { console.log(`[kw-research] Autocomplete error for "${seed}": ${e.message}`); }
+      }
+    }
+
+    // If local, also create location variants
+    if (is_local && locationCity) {
+      const localVariants = seeds.map(s => `${s} ${locationCity}`);
+      expandedSeeds.push(...localVariants);
+    }
+    if (is_local && locationState) {
+      const stateVariants = seeds.map(s => `${s} ${locationState}`);
+      expandedSeeds.push(...stateVariants);
+    }
+
+    // Deduplicate
+    expandedSeeds = [...new Set(expandedSeeds.map(s => s.trim().toLowerCase()))].filter(Boolean);
+    console.log(`[kw-research] Expanded to ${expandedSeeds.length} seed keywords`);
+
+    // Step 2: DataForSEO Labs — keyword suggestions (clickstream-adjusted, like Ahrefs)
+    let allKeywords = [];
+    for (const seed of expandedSeeds.slice(0, 10)) { // Labs takes one seed at a time
+      try {
+        const dfsResp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{
+            keyword: seed,
+            location_code: locationCode,
+            language_name: 'English',
+            limit: Math.min(cap * 2, 100),
+            include_seed_keyword: true,
+            include_serp_info: false,
+          }]),
+          signal: AbortSignal.timeout(20000),
+        });
+        if (dfsResp.ok) {
+          const dfsData = await dfsResp.json();
+          const items = dfsData?.tasks?.[0]?.result?.[0]?.items || [];
+          for (const item of items) {
+            const kd = item.keyword_data || item;
+            const ki = kd.keyword_info || {};
+            if (kd.keyword && ki.search_volume != null) {
+              allKeywords.push({
+                keyword: kd.keyword,
+                volume: ki.search_volume || 0,
+                competition: ki.competition != null ? (ki.competition > 0.66 ? 'HIGH' : ki.competition > 0.33 ? 'MEDIUM' : 'LOW') : null,
+                competition_index: ki.competition != null ? Math.round(ki.competition * 100) : null,
+                cpc: ki.cpc || null,
+                intent: ki.keyword_properties?.keyword_intent || null,
+                difficulty: kd.keyword_properties?.keyword_difficulty || null,
+              });
+            }
+          }
+        } else {
+          const errText = await dfsResp.text();
+          console.log(`[kw-research] DFS Labs error: ${dfsResp.status} ${errText.substring(0, 300)}`);
+        }
+      } catch (e) { console.log(`[kw-research] DFS Labs error for "${seed}": ${e.message}`); }
+    }
+
+    // Fallback: if Labs returned nothing, try Google Ads search_volume on the seeds
+    if (allKeywords.length === 0) {
+      console.log(`[kw-research] Labs returned nothing, falling back to google_ads search_volume`);
+      try {
+        const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{
+            keywords: expandedSeeds.slice(0, 100),
+            location_code: locationCode,
+            language_name: 'English',
+          }]),
+          signal: AbortSignal.timeout(20000),
+        });
+        if (dfsResp.ok) {
+          const dfsData = await dfsResp.json();
+          const results = dfsData?.tasks?.[0]?.result || [];
+          for (const r of results) {
+            if (r.keyword && r.search_volume != null) {
+              allKeywords.push({
+                keyword: r.keyword,
+                volume: r.search_volume || 0,
+                competition: r.competition || null,
+                competition_index: r.competition_index != null ? r.competition_index : null,
+                cpc: r.cpc || null,
+                intent: null,
+              });
+            }
+          }
+        }
+      } catch (e) { console.log(`[kw-research] search_volume fallback error: ${e.message}`); }
+    }
+
+    // Deduplicate by keyword (keep highest volume)
+    const kwMap = {};
+    for (const kw of allKeywords) {
+      const key = kw.keyword.toLowerCase();
+      if (!kwMap[key] || (kw.volume || 0) > (kwMap[key].volume || 0)) {
+        kwMap[key] = kw;
+      }
+    }
+    let final = Object.values(kwMap);
+
+    // Collapse Google Ads "near me" clusters — when multiple keywords share the exact same
+    // volume AND are "near me" variants, keep only the shortest (most generic) one.
+    // Google Ads groups these into one cluster with identical volumes.
+    const volumeGroups = {};
+    for (const kw of final) {
+      const v = kw.volume || 0;
+      if (!volumeGroups[v]) volumeGroups[v] = [];
+      volumeGroups[v].push(kw);
+    }
+    const collapsed = [];
+    for (const [vol, group] of Object.entries(volumeGroups)) {
+      if (group.length > 3) {
+        // Likely a Google Ads cluster — keep the 2 shortest (most generic) keywords
+        group.sort((a, b) => a.keyword.length - b.keyword.length);
+        collapsed.push(group[0], group[1]);
+      } else {
+        collapsed.push(...group);
+      }
+    }
+    final = collapsed;
+
+    // Exclude already-shown keywords (for "Fetch More")
+    if (Array.isArray(exclude_keywords) && exclude_keywords.length > 0) {
+      const excludeSet = new Set(exclude_keywords.map(k => k.toLowerCase()));
+      final = final.filter(kw => !excludeSet.has(kw.keyword.toLowerCase()));
+    }
+
+    // Filter by minimum volume
+    if (min_volume && min_volume > 0) {
+      final = final.filter(kw => (kw.volume || 0) >= min_volume);
+    }
+
+    // Add local volume estimate
+    if (is_local && localRatio < 1) {
+      final = final.map(kw => ({
+        ...kw,
+        local_volume: Math.round((kw.volume || 0) * localRatio),
+      }));
+    }
+
+    // Sort by volume descending
+    final.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+
+    // Cap to package size
+    final = final.slice(0, cap);
+
+    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, local_ratio: ${(localRatio*100).toFixed(1)}%)`);
+    res.json({
+      keywords: final,
+      total_found: Object.keys(kwMap).length,
+      location: locationName,
+      location_code: locationCode,
+      local_ratio: is_local ? localRatio : null,
+    });
+  } catch (e) {
+    console.error('[kw-research] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== SITE PAGES (Staging Zone) ====================
+
+// Generate site map from Page Setup — cluster, detect cornerstones, plan internal links
+app.post('/api/projects/:projectId/site-pages/generate', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    // Get all assigned keywords from content_keywords
+    const kwResult = await pool.query(
+      `SELECT * FROM content_keywords WHERE project_id=$1 AND page_type IS NOT NULL AND page_type != 'unassigned' ORDER BY page_type, page_name`,
+      [projectId]
+    );
+    const keywords = kwResult.rows;
+    if (keywords.length === 0) return res.status(400).json({ error: 'No keywords assigned to pages yet. Go to Page Setup first.' });
+
+    // Get project info
+    const projResult = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    const project = projResult.rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Group keywords by page_type + page_name
+    const pageMap = {};
+    keywords.forEach(kw => {
+      const key = kw.page_type + '::' + (kw.page_name || 'unnamed');
+      if (!pageMap[key]) pageMap[key] = { type: kw.page_type, name: kw.page_name || 'unnamed', keywords: [] };
+      pageMap[key].keywords.push({ keyword: kw.keyword, volume: kw.search_volume || 0 });
+    });
+    const pages = Object.values(pageMap);
+
+    // Also include empty pages from nw_page_labels or project settings
+    // (empty pages are tracked in frontend state — they'll appear if they have keywords)
+
+    // Send to Haiku for clustering, cornerstone detection, and internal linking plan
+    const pagesSummary = pages.map((p, i) => `Page ${i + 1}: [${p.type}] "${p.name}" — Keywords: ${p.keywords.map(k => k.keyword + ' (' + k.volume + ')').join(', ')}`).join('\n');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: `You are an SEO content strategist. Analyze these pages for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
+
+PAGES:
+${pagesSummary}
+
+Return a JSON object with this exact structure:
+{
+  "pages": [
+    {
+      "page_index": 0,
+      "is_cornerstone": true/false,
+      "cluster_id": "cluster-name",
+      "focus_keyword": "best keyword for this page",
+      "suggested_slug": "/page-slug",
+      "suggested_meta_title": "Page Title | Brand (max 60 chars)",
+      "suggested_meta_description": "Description (max 155 chars)",
+      "internal_links": [
+        { "target_index": 2, "anchor_text": "anchor text to use", "context": "where in the content to place this link" }
+      ]
+    }
+  ],
+  "clusters": [
+    { "id": "cluster-name", "label": "Cluster Display Name", "cornerstone_index": 0 }
+  ]
+}
+
+Rules:
+- Cornerstone pages are broad topic hubs (e.g., main service pages). Cluster pages are specific subtopics that link to the cornerstone.
+- Every cluster page should link to its cornerstone. Cornerstones should link to their cluster pages.
+- Home page links to all cornerstones.
+- Focus keyword should be the most relevant keyword to the page name/topic AND have good volume. It MUST relate to the page name.
+- Meta title and meta description MUST be specifically about the page name/topic, not generic.
+- Slugs should be SEO-friendly, lowercase, hyphenated, derived from the page name.
+- Internal links should form a logical silo structure.
+- Return ONLY the JSON, no markdown.`
+      }]
+    });
+
+    let aiPlan;
+    try {
+      const text = aiResponse.content[0].text.trim();
+      aiPlan = JSON.parse(text.replace(/^```json?\n?/, '').replace(/\n?```$/, ''));
+    } catch (e) {
+      console.error('[site-pages] AI parse error:', e.message);
+      return res.status(500).json({ error: 'Failed to parse AI response' });
+    }
+
+    // Delete existing site_pages for this project
+    await pool.query('DELETE FROM site_pages WHERE project_id=$1', [projectId]);
+
+    // Insert pages from AI plan
+    const insertedPages = [];
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const plan = aiPlan.pages[i] || {};
+      const result = await pool.query(
+        `INSERT INTO site_pages (project_id, page_type, page_name, slug, is_cornerstone, cluster_id, keywords, internal_links, meta_title, meta_description, focus_keyword, stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft')
+         RETURNING *`,
+        [
+          projectId, page.type, page.name,
+          plan.suggested_slug || '/' + page.name.toLowerCase().replace(/\s+/g, '-'),
+          plan.is_cornerstone || false,
+          plan.cluster_id || null,
+          JSON.stringify(page.keywords),
+          JSON.stringify(plan.internal_links || []),
+          plan.suggested_meta_title || page.name,
+          plan.suggested_meta_description || '',
+          plan.focus_keyword || (page.keywords[0] ? page.keywords[0].keyword : '')
+        ]
+      );
+      insertedPages.push(result.rows[0]);
+    }
+
+    // Now resolve internal_links target_index → actual page IDs
+    for (const sp of insertedPages) {
+      if (sp.internal_links && sp.internal_links.length > 0) {
+        const resolved = sp.internal_links.map(link => ({
+          target_page_id: insertedPages[link.target_index] ? insertedPages[link.target_index].id : null,
+          target_page_name: insertedPages[link.target_index] ? insertedPages[link.target_index].page_name : '',
+          anchor_text: link.anchor_text,
+          context: link.context
+        })).filter(l => l.target_page_id);
+        await pool.query('UPDATE site_pages SET internal_links=$1 WHERE id=$2', [JSON.stringify(resolved), sp.id]);
+        sp.internal_links = resolved;
+      }
+    }
+
+    // Build inbound links (reverse of internal_links)
+    for (const sp of insertedPages) {
+      const inbound = [];
+      for (const other of insertedPages) {
+        if (other.id === sp.id) continue;
+        const linksToMe = (other.internal_links || []).filter(l => l.target_page_id === sp.id);
+        linksToMe.forEach(l => inbound.push({ source_page_id: other.id, source_page_name: other.page_name, anchor_text: l.anchor_text }));
+      }
+      if (inbound.length > 0) {
+        await pool.query('UPDATE site_pages SET inbound_links=$1 WHERE id=$2', [JSON.stringify(inbound), sp.id]);
+        sp.inbound_links = inbound;
+      }
+    }
+
+    res.json({ pages: insertedPages, clusters: aiPlan.clusters || [] });
+  } catch (e) {
+    console.error('[site-pages] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== OPTIMISE WEBSITE — SITE GRAPH ====================
+
+// Helper: run the actual site graph crawl
+async function crawlSiteGraph(project) {
+  const siteUrl = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const fullUrl = 'https://' + siteUrl;
+  const wpUrl = project.wordpress_url || null;
+
+  const pages = await discoverPages(fullUrl, wpUrl, getWpAuthHeaders(project));
+
+  // Resolve slug-based page_ids to numeric WordPress IDs
+  const authHeaders = getWpAuthHeaders(project);
+  if (wpUrl && authHeaders) {
+    const wpBase = wpUrl.replace(/\/$/, '');
+    const slugToId = {};
+    try {
+      for (const type of ['pages', 'posts']) {
+        let page = 1;
+        while (page <= 5) {
+          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          if (!resp.ok) break;
+          const items = await resp.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          items.forEach(item => {
+            slugToId[item.slug] = item.id;
+            if (item.link) {
+              const linkSlug = item.link.replace(fullUrl, '').replace(/^\/|\/$/g, '') || 'home';
+              slugToId[linkSlug] = item.id;
+            }
+          });
+          if (items.length < 100) break;
+          page++;
+        }
+      }
+    } catch (e) { console.log('[site-graph] WP ID resolution failed:', e.message); }
+
+    // Update pages with numeric IDs
+    for (const p of pages) {
+      if (isNaN(Number(p.page_id))) {
+        const wpId = slugToId[p.slug] || slugToId[p.page_id];
+        if (wpId) p.page_id = String(wpId);
+      }
+    }
+  }
+
+  const nodes = [];
+  const edges = [];
+  const urlToIdx = {};
+  pages.forEach((p, i) => { urlToIdx[p.url] = i; urlToIdx[p.url.replace(/\/$/, '')] = i; });
+
+  const batchSize = 5;
+  for (let b = 0; b < pages.length; b += batchSize) {
+    const batch = pages.slice(b, b + batchSize);
+    const results = await Promise.allSettled(batch.map(async (p) => {
+      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [] };
+      try {
+        const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const html = await resp.text();
+          const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+          node.meta_title = titleMatch ? titleMatch[1].trim() : '';
+          const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
+          node.meta_description = descMatch ? descMatch[1].trim() : '';
+          const h1Match = html.match(/<h1[^>]*>([^<]*)<\/h1>/i);
+          node.h1 = h1Match ? h1Match[1].trim() : '';
+          const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+          if (bodyMatch) {
+            const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
+            node.word_count = text.split(/\s+/).filter(w => w.length > 0).length;
+          }
+          const linkRegex = /href=["'](https?:\/\/[^"']*|\/[^"']*)/gi;
+          let lm;
+          const seenLinks = new Set();
+          while ((lm = linkRegex.exec(html)) !== null) {
+            let href = lm[1];
+            if (href.startsWith('/')) href = fullUrl + href;
+            const clean = href.replace(/\/$/, '').replace(/#.*$/, '').replace(/\?.*$/, '');
+            if (clean.includes(siteUrl) && !seenLinks.has(clean)) {
+              seenLinks.add(clean);
+              node.internal_links.push(clean);
+              const targetIdx = urlToIdx[clean] || urlToIdx[clean + '/'];
+              if (targetIdx !== undefined && targetIdx !== (b + batch.indexOf(p))) {
+                edges.push({ source: p.page_id, target: pages[targetIdx].page_id });
+              }
+            } else if (!clean.includes(siteUrl) && clean.startsWith('http')) {
+              node.external_links++;
+            }
+          }
+        }
+      } catch (e) { /* timeout or fetch error */ }
+      return node;
+    }));
+    for (const r of results) {
+      if (r.status === 'fulfilled') nodes.push(r.value);
+    }
+  }
+
+  const inboundMap = {};
+  edges.forEach(e => { inboundMap[e.target] = (inboundMap[e.target] || 0) + 1; });
+  nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
+
+  nodes.forEach(n => {
+    if (!n.meta_title || n.meta_title.length < 10) n.issues.push('Missing or short meta title');
+    if (!n.meta_description || n.meta_description.length < 50) n.issues.push('Missing or short meta description');
+    if (n.meta_title && n.meta_title.length > 60) n.issues.push('Meta title too long (' + n.meta_title.length + ' chars)');
+    if (n.meta_description && n.meta_description.length > 160) n.issues.push('Meta description too long (' + n.meta_description.length + ' chars)');
+    if (!n.h1) n.issues.push('Missing H1 tag');
+    if (n.word_count < 300) n.issues.push('Thin content (' + n.word_count + ' words)');
+    if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
+    if (n.inbound_count === 0) n.issues.push('Orphan page — no inbound links');
+  });
+
+  const orphans = nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '');
+  const issueCount = nodes.reduce((sum, n) => sum + n.issues.length, 0);
+
+  return { nodes, edges, stats: { total: nodes.length, orphans: orphans.length, issues: issueCount } };
+}
+
+// GET — return cached site graph if exists
+app.get('/api/projects/:projectId/site-graph', async (req, res) => {
+  try {
+    const cached = await pool.query(
+      `SELECT audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (cached.rows.length > 0) {
+      return res.json({ ...cached.rows[0].audit_data, scanned_at: cached.rows[0].completed_at });
+    }
+    res.json({ nodes: null, edges: null, stats: null, scanned_at: null });
+  } catch (e) {
+    console.error('[site-graph] GET Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST — fresh crawl, save to DB, return results
+app.post('/api/projects/:projectId/site-graph', async (req, res) => {
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+
+    const data = await crawlSiteGraph(proj.rows[0]);
+
+    // Save to audits table
+    await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
+       VALUES ($1, 'site_graph', 'completed', $2, NOW(), NOW())`,
+      [req.params.projectId, JSON.stringify(data)]
+    );
+
+    res.json({ ...data, scanned_at: new Date().toISOString() });
+  } catch (e) {
+    console.error('[site-graph] POST Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Quick-create a single site page (e.g. from Maps advice)
+app.post('/api/projects/:projectId/site-pages/quick-create', async (req, res) => {
+  try {
+    const { page_name, page_type, keyword, location } = req.body;
+    if (!page_name) return res.status(400).json({ error: 'page_name required' });
+    const slug = '/' + page_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const keywords = keyword ? JSON.stringify([{ keyword, location: location || '' }]) : '[]';
+    const result = await pool.query(
+      `INSERT INTO site_pages (project_id, page_type, page_name, slug, is_cornerstone, keywords, meta_title, meta_description, focus_keyword, stage)
+       VALUES ($1, $2, $3, $4, false, $5, $6, '', $7, 'draft') RETURNING *`,
+      [req.params.projectId, page_type || 'suburb', page_name, slug, keywords, page_name, keyword || '']
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get all site pages for a project
+app.get('/api/projects/:projectId/site-pages', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM site_pages WHERE project_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name',
+      [req.params.projectId]
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update a site page (edit meta, content, stage)
+app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
+  try {
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name } = req.body;
+    const result = await pool.query(
+      `UPDATE site_pages SET
+        meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
+        focus_keyword=COALESCE($5, focus_keyword), draft_content=COALESCE($6, draft_content),
+        word_count=COALESCE($7, word_count), stage=COALESCE($8, stage), slug=COALESCE($9, slug),
+        is_cornerstone=COALESCE($10, is_cornerstone), page_name=COALESCE($11, page_name),
+        updated_at=NOW()
+       WHERE id=$1 AND project_id=$2 RETURNING *`,
+      [req.params.pageId, req.params.projectId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate content for a site page
+app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+
+    // Get all pages for linking context
+    const allPages = await pool.query('SELECT id, page_name, slug, is_cornerstone, cluster_id, focus_keyword FROM site_pages WHERE project_id=$1', [projectId]);
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get content settings for this page type
+    const settingsResult = await pool.query('SELECT * FROM content_settings WHERE project_id=$1 AND page_type=$2', [projectId, page.page_type]);
+    const settings = settingsResult.rows[0] || { target_word_count: 1500, tone: 'professional', style: 'informative' };
+
+    const linksContext = (page.internal_links || []).map(l => {
+      const target = allPages.rows.find(p => p.id === l.target_page_id);
+      return target ? `Link to "${target.page_name}" (${target.slug}) with anchor text "${l.anchor_text}" — ${l.context || 'naturally in context'}` : '';
+    }).filter(Boolean).join('\n');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
+
+CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
+
+PAGE TOPIC: "${page.page_name}" (${page.page_type})
+FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
+TARGET KEYWORDS: ${(page.keywords || []).map(k => k.keyword).join(', ')}
+${page.is_cornerstone ? 'This is a CORNERSTONE page — it should be comprehensive and link to subtopic pages.' : 'This is a cluster page — it should link back to the cornerstone.'}
+
+SUGGESTED META (update to match "${page.page_name}" topic):
+META TITLE: ${page.meta_title}
+META DESCRIPTION: ${page.meta_description}
+
+INTERNAL LINKS TO INCLUDE:
+${linksContext || 'No internal links planned.'}
+
+REQUIREMENTS:
+- The H1 MUST include "${page.page_name}" or a close variation
+- Target word count: ${settings.target_word_count} words
+- Tone: ${settings.tone}
+- Style: ${settings.style}
+${settings.tone_of_voice ? '- Brand voice: ' + settings.tone_of_voice : ''}
+- Include the focus keyword in the H1 and first paragraph
+- Use H2 and H3 subheadings naturally
+- Include internal links as HTML <a> tags with the specified anchor text and href
+- Write for SEO but make it read naturally for humans
+- Include a clear call to action
+- Do NOT include the <html>, <head>, or <body> tags — just the page content HTML starting with <h1>
+- Do NOT include any placeholder text — all content must be real and specific to this business
+
+Return ONLY the HTML content, no markdown wrapping.`
+      }]
+    });
+
+    const content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+
+    // Save to DB
+    await pool.query(
+      'UPDATE site_pages SET draft_content=$1, word_count=$2, stage=$3, updated_at=NOW() WHERE id=$4',
+      [content, wordCount, page.stage === 'draft' ? 'written' : page.stage, pageId]
+    );
+
+    res.json({ content, word_count: wordCount });
+  } catch (e) {
+    console.error('[site-pages] Content gen error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Publish a site page to WordPress
+app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+    if (!page.draft_content) return res.status(400).json({ error: 'No content to publish. Generate content first.' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url;
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured in project settings.' });
+
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured.' });
+
+    // Create page on WordPress
+    const wpType = page.page_type === 'blog' ? 'posts' : 'pages';
+    const wpResponse = await fetch(`${wpUrl}/wp-json/wp/v2/${wpType}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: page.page_name,
+        content: page.draft_content,
+        status: 'publish',
+        slug: (page.slug || '').replace(/^\//, ''),
+        meta: {
+          _yoast_wpseo_title: page.meta_title || '',
+          _yoast_wpseo_metadesc: page.meta_description || '',
+          _yoast_wpseo_focuskw: page.focus_keyword || ''
+        }
+      })
+    });
+
+    if (!wpResponse.ok) {
+      const err = await wpResponse.text();
+      return res.status(500).json({ error: 'WordPress publish failed: ' + err });
+    }
+    const wpPage = await wpResponse.json();
+
+    // Update stage and published URL
+    await pool.query(
+      'UPDATE site_pages SET stage=$1, published_url=$2, published_at=NOW(), updated_at=NOW() WHERE id=$3',
+      ['published', wpPage.link || wpUrl + page.slug, pageId]
+    );
+
+    // Record in wp_change_history for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1, $2, $3, $4, 'create', 'new_page', '', $5)`,
+      [projectId, wpPage.id, wpPage.link, page.page_name, 'Created via Site Staging']
+    );
+
+    res.json({ success: true, url: wpPage.link, wp_id: wpPage.id });
+  } catch (e) {
+    console.error('[site-pages] Publish error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// AI Optimise a site page — takes score tips + content, returns improved version
+app.post('/api/projects/:projectId/site-pages/:pageId/optimise', async (req, res) => {
+  const { projectId, pageId } = req.params;
+  const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get all pages for internal linking
+    const allPages = await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [projectId, pageId]);
+
+    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
+    const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `You are an SEO content optimizer for ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}.
+
+CURRENT CONTENT (score: ${content_score || 0}/100):
+${page.draft_content || ''}
+
+ISSUES TO FIX:
+${issuesText || 'None'}
+
+MISSING KEYWORDS TO ADD NATURALLY:
+${missingKwsText || 'None'}
+
+FOCUS KEYWORD: ${focus_keyword || page.focus_keyword || 'N/A'}
+Current stats: ${JSON.stringify(stats || {})}
+
+AVAILABLE INTERNAL LINKS:
+${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
+
+REQUIREMENTS:
+- Fix ALL listed issues
+- Weave missing keywords naturally (don't keyword stuff)
+- Target 1500+ words
+- Ensure focus keyword appears 3-8 times
+- Add H2/H3 subheadings if lacking
+- Add internal links as <a href="slug">anchor text</a>
+- Keep the same overall structure and tone, just improve
+- Return ONLY the optimized HTML content (no wrapping markdown)
+- Also return updated meta title (max 60 chars) and meta description (max 155 chars)
+
+Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
+      }]
+    });
+
+    let result;
+    try {
+      const text = aiResponse.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+      result = JSON.parse(text);
+    } catch (e) {
+      // If not JSON, treat as raw HTML
+      result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+    }
+
+    res.json(result);
+  } catch (e) {
+    console.error('[site-pages] Optimise error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
 });
@@ -3426,6 +8214,7 @@ RULES — follow exactly:
 6. Severity must be one of: Critical, High, Medium, Low
 7. Include current_value and recommended_value when the report states them (numbers, text, or status). Use empty string if not stated.
 8. The title should be a short actionable statement (e.g. "Add missing business description" not "Business Description Analysis")
+9. The recommendation MUST include step-by-step instructions for a human to execute. For GBP profile changes, always include: (a) Go to business.google.com → select the business, (b) Click "Edit profile" in the sidebar, (c) Navigate to the specific section (e.g. "Business information", "Contact", "Hours"), (d) The exact field to change and what to enter, (e) Click Save. Be specific — name the exact menu items and fields.
 
 Return a JSON array — ONLY valid JSON, no explanation:
 [{
@@ -3636,9 +8425,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
         console.log(`[gbp-external] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -3741,9 +8528,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
         console.log(`[website-agent] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'website', projectId, auditId);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[website-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -3876,6 +8661,12 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
     res.json({ auditId, status: 'running', sessionId: session.id });
 
+    // Store raw GSC data for structured orchestrator use
+    const gscRawRows = (gscData && gscData.rows) ? gscData.rows.slice(0, 200).map(r => ({
+      query: r.keys[0], page: r.keys[1], clicks: r.clicks, impressions: r.impressions,
+      ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1)),
+    })) : null;
+
     (async () => {
       try {
         await waitForSessionReady(apiBase, agentHeaders, session.id, 'gsc-agent');
@@ -3883,11 +8674,9 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gsc-agent');
 
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-        console.log(`[gsc-agent] Report stored (${finalText.length} chars)`);
-
-        // Extract structured findings for Action Plan
-        await extractFindingsFromReport(finalText, 'gsc_agent', projectId, auditId);
+          ['completed', JSON.stringify({ report: finalText, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
+        console.log(`[gsc-agent] Report stored (${finalText.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
+        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -4634,21 +9423,123 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
          ON CONFLICT (project_id, keyword, location) DO UPDATE SET search_volume=COALESCE(EXCLUDED.search_volume, rank_keywords.search_volume), competition=COALESCE(EXCLUDED.competition, rank_keywords.competition)`,
         [projectId, kw, k.volume || null, k.competition || null]
       );
-      // Insert into rank_tracking with SERP position + URL (unique timestamp per keyword)
-      if (k.position) {
-        const ts = new Date(baseTime + i).toISOString();
-        await pool.query(
-          `INSERT INTO rank_tracking (project_id, keyword, serp_position, serp_url, checked_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (project_id, keyword, location, checked_at) DO NOTHING`,
-          [projectId, kw, k.position, k.url || null, ts]
-        );
-      }
+      // Don't insert GSC position as SERP rank — only real SERP checks should populate rank_tracking
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
     res.json({ ok: true, added, total: rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// AI suggest service keywords for Maps
+app.post('/api/projects/:projectId/rank-tracking/suggest-services', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const p = projRes.rows[0];
+    const existing = (req.body.existing || []).join(', ');
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: `You are a local SEO expert. Generate service keywords for a Maps ranking campaign.
+
+Business: ${p.business_name || p.name}
+Industry: ${p.industry || 'general'}
+Location: ${p.location || 'Australia'}
+${existing ? `Already have: ${existing}` : ''}
+
+Generate 20-30 service keyword variations that people would search on Google Maps to find this business. Include:
+- Core services (e.g., "auto locksmith", "car key replacement")
+- Specific service variations (e.g., "transponder key programming", "emergency car lockout")
+- Near-me style keywords (e.g., "locksmith near me", "24 hour locksmith")
+- Problem-based keywords (e.g., "locked out of car", "lost car keys")
+
+IMPORTANT: Do NOT include city names, suburb names, or location names in the keywords. The location will be added separately as a suburb. For example return "auto locksmith" NOT "auto locksmith Perth".
+
+Return ONLY a JSON array of strings, no duplicates, no explanation. Example: ["service 1", "service 2"]` }]
+    });
+    const text = msg.content[0].text.trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    const services = match ? JSON.parse(match[0]) : [];
+    res.json({ services });
+  } catch (e) {
+    console.error('[suggest-services] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// AI generate smart keyword combos
+app.post('/api/projects/:projectId/rank-tracking/generate-combos', async (req, res) => {
+  const { projectId } = req.params;
+  const { services, suburbs, count, mode } = req.body; // mode: '1:1' or 'many'
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const p = projRes.rows[0];
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: `You are a local SEO expert generating Google Maps keyword combinations.
+
+Business: ${p.business_name || p.name}
+Industry: ${p.industry || 'general'}
+Location: ${p.location || 'Australia'}
+
+Services: ${services.join(', ')}
+Suburbs: ${suburbs.join(', ')}
+Target count: ${count} keywords
+Mode: ${mode === '1:1' ? 'One service per suburb (spread evenly)' : 'Multiple services per suburb (full coverage)'}
+
+Generate exactly ${count} keyword combinations pairing services with suburbs. Each combo is a service keyword that will be searched in a specific suburb on Google Maps.
+
+Strategy:
+- Prioritize high-intent, high-volume service keywords with closest/most relevant suburbs
+- For "1:1" mode: spread services across different suburbs for maximum coverage
+- For "many" mode: pair top services with multiple suburbs, prioritize closest suburbs
+- Put the most impactful combos first (highest expected search volume)
+- Each combo should be a realistic search someone would do on Google Maps
+
+Return ONLY a JSON array of objects with "service" and "suburb" keys. No explanation.
+Example: [{"service": "auto locksmith", "suburb": "Vincent"}, ...]` }]
+    });
+    const text = msg.content[0].text.trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    let combos = match ? JSON.parse(match[0]) : [];
+
+    // Estimate volumes via DataForSEO if available
+    if (DATAFORSEO_AUTH && combos.length > 0) {
+      try {
+        const keywords = combos.map(c => `${c.service} ${c.suburb}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords, location_name: 'Australia', language_name: 'English' }]),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (dfsRes.ok) {
+          const dfsData = await dfsRes.json();
+          const volResults = dfsData?.tasks?.[0]?.result || [];
+          const volMap = {};
+          for (const r of volResults) {
+            if (r.keyword && r.search_volume != null) volMap[r.keyword.toLowerCase()] = r.search_volume;
+          }
+          combos = combos.map(c => ({
+            ...c,
+            volume: volMap[`${c.service} ${c.suburb}`.toLowerCase()] ?? null
+          }));
+        }
+      } catch (volErr) { console.log(`[generate-combos] Volume error: ${volErr.message}`); }
+    }
+
+    res.json({ combos });
+  } catch (e) {
+    console.error('[generate-combos] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Add keywords to track
@@ -4679,6 +9570,17 @@ app.delete('/api/projects/:projectId/rank-tracking/keywords/:keywordId', async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk delete keywords by IDs
+app.post('/api/projects/:projectId/rank-tracking/keywords/bulk-delete', async (req, res) => {
+  const { ids } = req.body;
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No IDs provided' });
+  try {
+    await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1::int[]) AND project_id=$2', [ids, req.params.projectId]);
+    await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1::int[]) AND project_id=$2', [ids, req.params.projectId]);
+    res.json({ ok: true, deleted: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete ALL tracked keywords for a project
 app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   try {
@@ -4696,13 +9598,18 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
       `DELETE FROM rank_tracking WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
       [req.params.projectId]
     );
+    // Delete grid scans
+    const gridDel = await pool.query(
+      `DELETE FROM grid_scans WHERE project_id=$1`,
+      [req.params.projectId]
+    );
     // Delete the maps keywords themselves
     const kwDel = await pool.query(
       `DELETE FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != ''`,
       [req.params.projectId]
     );
-    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking records for project ${req.params.projectId}`);
-    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount });
+    console.log(`[maps-clean] Cleaned ${kwDel.rowCount} keywords + ${trackDel.rowCount} tracking + ${gridDel.rowCount} grid scans for project ${req.params.projectId}`);
+    res.json({ ok: true, keywords_deleted: kwDel.rowCount, tracking_deleted: trackDel.rowCount, grid_scans_deleted: gridDel.rowCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4824,8 +9731,11 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
           let serp = { position: null, url: null, title: null, snippet: null, type: null };
           const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
           for (const item of (data.organic_results || [])) {
-            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
-            if (domain && (itemDomain.includes(domain) || domain.includes(itemDomain.split('/')[0]))) {
+            let itemHost = '';
+            try { itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch (e) {
+              itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase();
+            }
+            if (domain && (itemHost === domain || itemHost.endsWith('.' + domain))) {
               serp = { position: item.position, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               break;
             }
@@ -4895,15 +9805,10 @@ app.post('/api/projects/:projectId/maps/sync-localfalcon', async (req, res) => {
     });
 
     if (relevantReports.length === 0) {
-      // Try all reports if no name match (user might have only one location)
-      if (reports.length > 0) {
-        console.log(`[maps-localfalcon] No name match for "${businessName}", using all ${reports.length} reports`);
-      } else {
-        return res.status(400).json({ error: 'No scan reports found in Local Falcon. Run scans there first.' });
-      }
+      return res.status(400).json({ error: `No Local Falcon reports match business "${businessName}". Found ${reports.length} reports for other businesses. Check your business name in Project Settings.` });
     }
 
-    const reportsToUse = relevantReports.length > 0 ? relevantReports : reports;
+    const reportsToUse = relevantReports;
     const baseTime = Date.now();
     let synced = 0;
 
@@ -4964,6 +9869,265 @@ app.post('/api/projects/:projectId/maps/sync-localfalcon', async (req, res) => {
     console.error('[maps-localfalcon] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ==================== GRID SCAN (SerpAPI Maps — replaces Local Falcon) ====================
+
+// Generate NxN grid of GPS points around a center
+function generateGrid(centerLat, centerLng, radiusKm, gridSize) {
+  const points = [];
+  const latPerKm = 1 / 111.32;
+  const lngPerKm = 1 / (111.32 * Math.cos(centerLat * Math.PI / 180));
+  const step = (radiusKm * 2) / (gridSize - 1);
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      const offsetKmY = radiusKm - (row * step); // top to bottom
+      const offsetKmX = -radiusKm + (col * step); // left to right
+      points.push({
+        row, col,
+        lat: Math.round((centerLat + offsetKmY * latPerKm) * 100000) / 100000,
+        lng: Math.round((centerLng + offsetKmX * lngPerKm) * 100000) / 100000,
+      });
+    }
+  }
+  return points;
+}
+
+// Run grid scan for selected keywords
+app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  const { projectId } = req.params;
+  const { keyword_ids, grid_size = 5, radius_km = 10 } = req.body;
+
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const businessName = project.business_name || project.name || '';
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+
+    if (!businessName) return res.status(400).json({ error: 'Business name not set in Project Settings' });
+
+    // Get business center GPS from project location
+    const rawLocation = (project.location || '').trim();
+    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+    let centerGps = null;
+    const candidates = [rawLocation.toLowerCase().trim(), locParts[0], locParts.slice(0, 2).join(' ')].filter(Boolean);
+    for (const c of candidates) { if (SUBURB_GPS[c]) { centerGps = SUBURB_GPS[c]; break; } }
+
+    // If GBP location has GPS in the name (like "place_id:xxx"), fall back to project location
+    if (!centerGps) {
+      // Try to use the first service area as fallback
+      const areas = project.service_areas || [];
+      if (areas.length > 0) {
+        const firstArea = (areas[0].name || areas[0] || '').toLowerCase().trim();
+        if (SUBURB_GPS[firstArea]) centerGps = SUBURB_GPS[firstArea];
+      }
+    }
+    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for location "${rawLocation}". Add a known suburb as your project location.` });
+
+    // Get keywords to scan
+    let kwFilter = '';
+    let kwParams = [projectId];
+    if (keyword_ids && keyword_ids.length > 0) {
+      kwFilter = ` AND id = ANY($2)`;
+      kwParams.push(keyword_ids);
+    }
+    const kwRes = await pool.query(`SELECT * FROM rank_keywords WHERE project_id=$1${kwFilter} ORDER BY keyword`, kwParams);
+    const keywords = kwRes.rows.filter(k => k.location); // only maps keywords (have location)
+
+    if (keywords.length === 0) return res.status(400).json({ error: 'No maps keywords found. Add service + location keywords first.' });
+
+    const gridSizeInt = Math.min(Math.max(parseInt(grid_size) || 5, 3), 7);
+    const radiusFloat = Math.min(Math.max(parseFloat(radius_km) || 10, 2), 30);
+    const totalPoints = gridSizeInt * gridSizeInt;
+    const totalCalls = keywords.length * totalPoints;
+
+    console.log(`[grid-scan] Starting: ${keywords.length} keywords × ${totalPoints} points = ${totalCalls} API calls, grid=${gridSizeInt}×${gridSizeInt}, radius=${radiusFloat}km, center=${centerGps.lat},${centerGps.lng}`);
+
+    // Generate grid points
+    const gridPoints = generateGrid(centerGps.lat, centerGps.lng, radiusFloat, gridSizeInt);
+
+    const results = [];
+    const nameLower = businessName.toLowerCase();
+    const nameNoSpaces = nameLower.replace(/\s+/g, '');
+    const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+
+    // Process keywords sequentially, grid points in parallel batches of 5
+    for (const kw of keywords) {
+      const kwLabel = `${kw.keyword} ${kw.location}`;
+      const pointResults = [];
+      let ourBusiness = null;
+
+      for (let i = 0; i < gridPoints.length; i += 5) {
+        const batch = gridPoints.slice(i, i + 5);
+        const promises = batch.map(async (point) => {
+          try {
+            const data = await serpApiSearch({
+              engine: 'google_maps',
+              q: kwLabel,
+              ll: `@${point.lat},${point.lng},14z`,
+              type: 'search',
+            });
+
+            const localResults = data.local_results || [];
+            let position = null;
+            let found = false;
+            const top3 = [];
+
+            for (let p = 0; p < localResults.length && p < 20; p++) {
+              const place = localResults[p];
+              const titleLower = (place.title || '').toLowerCase();
+              const titleNoSpaces = titleLower.replace(/\s+/g, '');
+              const placePos = place.position || (p + 1);
+
+              // Capture top 3 for competitor analysis
+              if (placePos <= 3) {
+                top3.push({
+                  position: placePos,
+                  title: place.title || '',
+                  rating: place.rating || null,
+                  reviews: place.reviews || 0,
+                  type: place.type || '',
+                  address: place.address || '',
+                  website: place.website || '',
+                });
+              }
+
+              const nameMatch = nameLower && (
+                titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+                (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
+              );
+
+              // Also match by domain/website
+              const placeWebsite = (place.website || '').toLowerCase();
+              const domainMatch = domain && placeWebsite && (placeWebsite.includes(domain) || domain.includes(placeWebsite.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')));
+
+              if ((nameMatch || domainMatch) && !found) {
+                position = placePos;
+                found = true;
+                // Capture our own business stats
+                if (!ourBusiness) {
+                  ourBusiness = { rating: place.rating || null, reviews: place.reviews || 0, type: place.type || '', title: place.title || '' };
+                }
+              }
+            }
+
+            return { ...point, position, found, top3, error: null };
+          } catch (err) {
+            console.error(`[grid-scan] Error at (${point.row},${point.col}) for "${kwLabel}":`, err.message);
+            return { ...point, position: null, found: false, error: err.message };
+          }
+        });
+
+        const batchResults = await Promise.all(promises);
+        pointResults.push(...batchResults);
+      }
+
+      // Calculate metrics
+      const successPoints = pointResults.filter(p => !p.error);
+      const foundPoints = successPoints.filter(p => p.found);
+      const totalScanned = successPoints.length;
+      const foundCount = foundPoints.length;
+
+      // ARP: average rank of found positions
+      const arp = foundCount > 0
+        ? Math.round((foundPoints.reduce((s, p) => s + p.position, 0) / foundCount) * 10) / 10
+        : null;
+
+      // ATRP: average true rank (unfound = 21)
+      const atrp = totalScanned > 0
+        ? Math.round((successPoints.reduce((s, p) => s + (p.found ? p.position : 21), 0) / totalScanned) * 10) / 10
+        : null;
+
+      // SOLV: share of local voice = % of points where found in top 3
+      const top3Count = foundPoints.filter(p => p.position <= 3).length;
+      const solv = totalScanned > 0
+        ? Math.round((top3Count / totalScanned) * 1000) / 10
+        : 0;
+
+      // Aggregate competitor data across all grid points
+      const compMap = {};
+      for (const pt of successPoints) {
+        for (const c of (pt.top3 || [])) {
+          const cName = c.title.trim();
+          if (!cName) continue;
+          // Skip our own business
+          const cLower = cName.toLowerCase();
+          const cNoSpaces = cLower.replace(/\s+/g, '');
+          const isUs = cLower.includes(nameLower) || cNoSpaces.includes(nameNoSpaces) ||
+            (nameWords.length >= 2 && nameWords.every(w => cLower.includes(w)));
+          if (isUs) continue;
+          if (!compMap[cName]) {
+            compMap[cName] = { name: cName, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, top1: 0, top3: 0, positions: [] };
+          }
+          compMap[cName].appearances++;
+          if (c.position === 1) compMap[cName].top1++;
+          if (c.position <= 3) compMap[cName].top3++;
+          compMap[cName].positions.push(c.position);
+          // Update to latest non-null values
+          if (c.rating && (!compMap[cName].rating || c.rating > compMap[cName].rating)) compMap[cName].rating = c.rating;
+          if (c.reviews && c.reviews > compMap[cName].reviews) compMap[cName].reviews = c.reviews;
+          if (c.type && !compMap[cName].type) compMap[cName].type = c.type;
+          if (c.website && !compMap[cName].website) compMap[cName].website = c.website;
+        }
+      }
+      // Sort by appearances (most dominant competitors first)
+      const competitors = Object.values(compMap)
+        .map(c => ({
+          ...c,
+          avg_position: Math.round((c.positions.reduce((s,p) => s+p, 0) / c.positions.length) * 10) / 10,
+          dominance: Math.round((c.top3 / totalScanned) * 1000) / 10, // % of grid points in top 3
+        }))
+        .sort((a, b) => b.appearances - a.appearances)
+        .slice(0, 10); // top 10 competitors
+
+      // Save to grid_scans table
+      await pool.query(
+        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
+        [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat,
+         JSON.stringify(pointResults), JSON.stringify({ top: competitors.slice(0, 3), our_business: ourBusiness }), arp, atrp, solv, foundCount, totalScanned]
+      );
+
+      // Also update rank_tracking with grid metrics (compatible with existing table display)
+      const gridMetrics = {
+        arp, atrp, solv, found_in: foundCount, data_points: totalScanned,
+        grid_size: gridSizeInt, radius_km: radiusFloat,
+        source: 'serpapi_grid'
+      };
+
+      await pool.query(
+        `INSERT INTO rank_tracking (project_id, keyword, location, serp_position, maps_position, maps_title, competitors, checked_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+        [projectId, kw.keyword, kw.location, null, arp ? Math.round(arp) : null, businessName, JSON.stringify([gridMetrics])]
+      );
+
+      const result = { keyword: kw.keyword, location: kw.location, keyword_id: kw.id, arp, atrp, solv, found_in: foundCount, data_points: totalScanned, grid_points: pointResults, competitors, our_business: ourBusiness };
+      results.push(result);
+      console.log(`[grid-scan] "${kwLabel}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%, found=${foundCount}/${totalScanned}`);
+    }
+
+    console.log(`[grid-scan] Done. Scanned ${keywords.length} keywords, ${totalCalls} API calls.`);
+    res.json({ ok: true, scanned: keywords.length, total_api_calls: totalCalls, results });
+  } catch (e) {
+    console.error('[grid-scan] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest grid scan results for a project
+app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
+  try {
+    // Get latest scan per keyword using DISTINCT ON
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (keyword, location) *
+      FROM grid_scans
+      WHERE project_id=$1
+      ORDER BY keyword, location, scanned_at DESC
+    `, [req.params.projectId]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Get tracked keywords
@@ -5049,23 +10213,32 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           // Parse organic results
           let serp = { position: null, url: null, title: null, snippet: null, type: null };
           let kwCompetitors = [];
+          const domainLower = domain.toLowerCase();
+          if (idx < 3) console.log(`[rank-sync] "${query}" matching domain: "${domainLower}", organic_results: ${(data.organic_results || []).length}`);
           for (const item of (data.organic_results || [])) {
-            const itemDomain = (item.displayed_link || item.link || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
             const pos = item.position;
 
-            if (domain && (itemDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(itemDomain.split('/')[0]))) {
+            // Use item.link (actual URL) for domain matching — NOT displayed_link which has Google's display format
+            let itemHost = '';
+            try {
+              itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase();
+            } catch (e) {
+              itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase();
+            }
+            if (idx < 3 && pos <= 5) console.log(`[rank-sync]   #${pos} itemHost="${itemHost}" link="${(item.link || '').slice(0, 60)}" vs domain="${domainLower}" match=${itemHost === domainLower}`);
+            if (domainLower && (itemHost === domainLower || itemHost === 'www.' + domainLower || itemHost.endsWith('.' + domainLower))) {
               if (!serp.position) {
                 serp = { position: pos, url: item.link, title: item.title, snippet: item.snippet, type: 'organic' };
               }
             } else {
               if (kwCompetitors.filter(c => c.source === 'serp').length < 3) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
+                kwCompetitors.push({ domain: itemHost, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
-            // Named competitors
+            // Named competitors — strict host match
             for (const cd of competitorDomains) {
-              if ((itemDomain.includes(cd) || cd.includes(itemDomain)) && !kwCompetitors.find(c => c.domain === itemDomain && c.source === 'serp')) {
-                kwCompetitors.push({ domain: itemDomain, position: pos, url: item.link, title: item.title, source: 'serp' });
+              if ((itemHost === cd || itemHost === 'www.' + cd || itemHost.endsWith('.' + cd)) && !kwCompetitors.find(c => c.domain === itemHost && c.source === 'serp')) {
+                kwCompetitors.push({ domain: itemHost, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
           }
@@ -5133,9 +10306,41 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
       await Promise.all(promises);
     }
 
-    // Search volume via SerpAPI — use google_trends or keyword info if available
-    // SerpAPI doesn't have a bulk volume endpoint like DataForSEO, so we skip bulk volume fetch
-    // Volume data can be populated via GSC import or manual CSV upload instead
+    // Fetch search volumes via DataForSEO for all tracked keywords
+    if (DATAFORSEO_AUTH && kwRes.rows.length > 0) {
+      try {
+        const allKws = kwRes.rows.map(k => k.keyword);
+        console.log(`[rank-sync] Fetching DataForSEO volumes for ${allKws.length} keywords`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords: allKws, location_name: 'Australia', language_name: 'English' }]),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (dfsRes.ok) {
+          const dfsData = await dfsRes.json();
+          const volResults = dfsData?.tasks?.[0]?.result || [];
+          let updated = 0;
+          for (const r of volResults) {
+            if (r.keyword && r.search_volume != null) {
+              await pool.query(
+                'UPDATE rank_keywords SET search_volume=$1 WHERE project_id=$2 AND LOWER(keyword)=LOWER($3)',
+                [r.search_volume, projectId, r.keyword]
+              );
+              updated++;
+            }
+          }
+          console.log(`[rank-sync] Updated ${updated} keyword volumes via DataForSEO`);
+        } else {
+          console.log(`[rank-sync] DataForSEO volume fetch failed: HTTP ${dfsRes.status}`);
+        }
+      } catch (volErr) {
+        console.log(`[rank-sync] DataForSEO volume fetch error: ${volErr.message}`);
+      }
+    }
 
     const synced = results.filter(r => r && !r.error).length;
     console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords.`);
@@ -5213,6 +10418,7 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
 app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
+  const limit = parseInt(req.body.limit) || 50; // Default 50, accepts 10/20/30/40/50
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -5221,7 +10427,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
 
     if (!domain) return res.status(400).json({ error: 'Project has no website/domain configured' });
 
-    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI`);
+    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI (limit: ${limit})`);
 
     // Use Google organic search with site: to find pages that rank, then extract keywords
     // Also check GSC data first as a primary keyword source
@@ -5231,14 +10437,14 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
     // 1. Pull from GSC if available
     try {
       const gscRes = await pool.query(
-        `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT 200`,
-        [projectId]
+        `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT $2`,
+        [projectId, limit * 4]
       );
       for (const r of gscRes.rows) {
         const kw = r.keyword.toLowerCase().trim();
         if (kw && !seen.has(kw)) {
           seen.add(kw);
-          keywords.push({ keyword: r.keyword, volume: null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
+          keywords.push({ keyword: r.keyword, volume: r.impressions || null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
         }
       }
       console.log(`[discover] Found ${keywords.length} keywords from GSC`);
@@ -5292,8 +10498,62 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
       }
     }
 
-    console.log(`[discover] Found ${keywords.length} total keywords for ${domain}`);
-    res.json({ ok: true, keywords, total: keywords.length });
+    // Sort by relevance: GSC keywords with impressions first, then by position
+    keywords.sort((a, b) => {
+      if (a.source === 'gsc' && b.source !== 'gsc') return -1;
+      if (b.source === 'gsc' && a.source !== 'gsc') return 1;
+      if (a.impressions && b.impressions) return b.impressions - a.impressions;
+      if (a.position && b.position) return a.position - b.position;
+      return 0;
+    });
+
+    const capped = keywords.slice(0, limit);
+    console.log(`[discover] Found ${keywords.length} total, returning top ${capped.length} (limit: ${limit}) for ${domain}`);
+
+    // Fetch search volume from DataForSEO Keywords Data API
+    if (DATAFORSEO_AUTH && capped.length > 0) {
+      try {
+        console.log(`[discover] Fetching search volume for ${capped.length} keywords via DataForSEO`);
+        const dfsBody = [{
+          keywords: capped.map(k => k.keyword),
+          location_name: 'Australia',
+          language_name: 'English',
+        }];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const dfsRes = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify(dfsBody),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        const dfsText = await dfsRes.text();
+        console.log(`[discover] DataForSEO HTTP ${dfsRes.status}, body length: ${dfsText.length}`);
+        console.log(`[discover] DataForSEO raw (first 500): ${dfsText.slice(0, 500)}`);
+        const dfsData = JSON.parse(dfsText);
+        const task = dfsData.tasks?.[0];
+        if (task?.result) {
+          const volMap = {};
+          for (const r of task.result) {
+            if (r.keyword && r.search_volume != null) {
+              volMap[r.keyword.toLowerCase()] = r.search_volume;
+            }
+          }
+          for (const kw of capped) {
+            const vol = volMap[kw.keyword.toLowerCase()];
+            if (vol != null) kw.volume = vol;
+          }
+          console.log(`[discover] Got volume for ${Object.keys(volMap).length}/${capped.length} keywords`);
+        } else {
+          console.log(`[discover] DataForSEO no results. Status: ${task?.status_code} ${task?.status_message}`);
+        }
+      } catch (e) {
+        console.log(`[discover] DataForSEO volume lookup failed: ${e.name}: ${e.message}`);
+      }
+    }
+
+    res.json({ ok: true, keywords: capped, total: keywords.length, limit });
   } catch (e) {
     console.error('[discover] Error:', e.message);
     res.status(500).json({ error: e.message });

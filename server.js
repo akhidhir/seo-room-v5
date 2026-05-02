@@ -4147,8 +4147,8 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
         SELECT page_url, page_title FROM content_queue
         WHERE project_id=$1 AND page_url IS NOT NULL AND page_url != ''
         UNION
-        SELECT url AS page_url, title AS page_title FROM site_pages
-        WHERE project_id=$1 AND url IS NOT NULL AND url != ''
+        SELECT COALESCE(published_url, '/' || slug || '/') AS page_url, page_name AS page_title FROM site_pages
+        WHERE project_id=$1 AND (published_url IS NOT NULL OR slug IS NOT NULL)
       ) AS all_pages WHERE page_url != $2
       ORDER BY page_title LIMIT 30`,
       [projectId, item.page_url || '']
@@ -4965,7 +4965,7 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
 
     // Get published pages for internal linking context
     const pagesRes = await pool.query(
-      `SELECT page_url, page_name as page_title FROM site_pages WHERE project_id=$1 AND stage='published' ORDER BY page_name LIMIT 20`,
+      `SELECT COALESCE(published_url, '/' || slug || '/') as page_url, page_name as page_title FROM site_pages WHERE project_id=$1 AND stage='published' ORDER BY page_name LIMIT 20`,
       [projectId]
     );
 
