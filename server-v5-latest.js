@@ -4800,8 +4800,10 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
     // Fast path: detect questions/comments — no need to process full content
     const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
-    const isQuestion = feedbackLower.includes('?') ||
-      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
+    // Action commands should go to revision path, not question path
+    const isAction = /^(do it|fix it|go|yes|ok|make it|expand|increase|add more|write|rewrite|update|change|improve|optimise|optimize|longer|shorter|beef)/i.test(feedbackLower);
+    const isQuestion = !isAction && (feedbackLower.includes('?') ||
+      /^(what|how much|how many|why|where|when|which|who|is |are |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count|check)/i.test(feedbackLower));
 
     let response;
     if (isQuestion) {
@@ -4824,8 +4826,8 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
       response = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
-        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
+        max_tokens: 300,
+        system: `You are an SEO copywriter assistant. Answer the question in 2-3 sentences MAX. Be direct — numbers first, then one actionable suggestion. No fluff, no repetition. Australian English.
 Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
         messages: [{ role: 'user', content: `Question: ${feedback}
 
@@ -4999,8 +5001,10 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
     console.log(`[re-optimise-sp] Feedback for site_page ${id}: "${feedback}", competitor_data: ${competitor_data ? 'YES (' + competitor_data.competitors_checked + ' checked)' : 'NONE'}, word_target: ${word_target}`);
 
     const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
-    const isQuestion = feedbackLower.includes('?') ||
-      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
+    // Action commands should go to revision path, not question path
+    const isAction = /^(do it|fix it|go|yes|ok|make it|expand|increase|add more|write|rewrite|update|change|improve|optimise|optimize|longer|shorter|beef)/i.test(feedbackLower);
+    const isQuestion = !isAction && (feedbackLower.includes('?') ||
+      /^(what|how much|how many|why|where|when|which|who|is |are |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count|check)/i.test(feedbackLower));
 
     let response;
     if (isQuestion) {
@@ -5022,8 +5026,8 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
 
       response = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
-        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
+        max_tokens: 300,
+        system: `You are an SEO copywriter assistant. Answer the question in 2-3 sentences MAX. Be direct — numbers first, then one actionable suggestion. No fluff, no repetition. Australian English.
 Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
         messages: [{ role: 'user', content: `Question: ${feedback}
 
