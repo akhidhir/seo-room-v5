@@ -6888,103 +6888,28 @@
     // ============ NEW WEBSITE — SITE PAGE EDITOR (v4-style Copywriter) ============
     function SitePageEditor({ page, project, onBack, onUpdate }) {
       var pid = project ? project.id : null;
-      var [editing, setEditing] = React.useState(false);
-      var [editData, setEditData] = React.useState({
-        meta_title: page.meta_title || '', meta_description: page.meta_description || '',
-        focus_keyword: page.focus_keyword || '', draft_content: page.draft_content || ''
+      var isPublished = page.stage === 'published';
+      var [editContent, setEditContent] = React.useState(page.draft_content || '');
+      var [editMeta, setEditMeta] = React.useState({
+        meta_title: page.meta_title || '', meta_desc: page.meta_description || '', focus_keyword: page.focus_keyword || ''
       });
       var [generating, setGenerating] = React.useState(false);
       var [optimising, setOptimising] = React.useState(false);
       var [publishing, setPublishing] = React.useState(false);
-      var [addKw, setAddKw] = React.useState('');
       var [targetKeywords, setTargetKeywords] = React.useState((page.keywords || []).map(function(k) { return k.keyword || k; }));
       var [optimisePreview, setOptimisePreview] = React.useState(null);
       var [applyingOptimise, setApplyingOptimise] = React.useState(false);
-      var [spScoreData, setSpScoreData] = React.useState(null);
+      var [scoreData, setScoreData] = React.useState(null);
+      var [pageTemplates, setPageTemplates] = React.useState([]);
+      var [applyingTemplate, setApplyingTemplate] = React.useState(false);
+      var [comments, setComments] = React.useState([]);
 
-      var content = editing ? editData.draft_content : (page.draft_content || '');
-      var metaTitle = editing ? editData.meta_title : (page.meta_title || '');
-      var metaDesc = editing ? editData.meta_description : (page.meta_description || '');
-      var focusKw = editing ? editData.focus_keyword : (page.focus_keyword || '');
+      var hasDraft = !!editContent;
 
-      // Parse stats from HTML content
-      var stats = React.useMemo(function() {
-        if (!content) return { words: 0, h2s: 0, h3s: 0, links: 0, imgs: 0, paragraphs: 0 };
-        var div = document.createElement('div');
-        div.innerHTML = content;
-        var text = div.textContent || div.innerText || '';
-        return {
-          words: text.trim() ? text.trim().split(/\s+/).length : 0,
-          h2s: div.querySelectorAll('h2').length,
-          h3s: div.querySelectorAll('h3').length,
-          links: div.querySelectorAll('a').length,
-          imgs: div.querySelectorAll('img').length,
-          paragraphs: div.querySelectorAll('p').length
-        };
-      }, [content]);
-
-      // Keyword analysis
-      var keywordAnalysis = React.useMemo(function() {
-        if (!content) return [];
-        var div = document.createElement('div');
-        div.innerHTML = content;
-        var text = (div.textContent || '').toLowerCase();
-        return targetKeywords.map(function(kw) {
-          var kwLower = kw.toLowerCase();
-          var count = 0; var pos = 0;
-          while ((pos = text.indexOf(kwLower, pos)) !== -1) { count++; pos += kwLower.length; }
-          return { keyword: kw, count: count };
-        });
-      }, [content, targetKeywords]);
-
-      var focusCount = React.useMemo(function() {
-        if (!content || !focusKw) return 0;
-        var div = document.createElement('div');
-        div.innerHTML = content;
-        var text = (div.textContent || '').toLowerCase();
-        var kwLower = focusKw.toLowerCase();
-        var count = 0; var pos = 0;
-        while ((pos = text.indexOf(kwLower, pos)) !== -1) { count++; pos += kwLower.length; }
-        return count;
-      }, [content, focusKw]);
-
-      // Content score (v4 algorithm)
-      var scoreData = React.useMemo(function() {
-        var score = 0;
-        var tips = [];
-        // Word count (25 pts)
-        if (stats.words >= 1500) { score += 25; tips.push({ type: 'success', text: stats.words + ' words (target: 1,500+)' }); }
-        else if (stats.words >= 800) { score += 15; tips.push({ type: 'warn', text: 'Content short (' + stats.words + ' words). Aim for 1,500+' }); }
-        else if (stats.words >= 400) { score += 8; tips.push({ type: 'error', text: 'Content too short (' + stats.words + ' words). Aim for 1,500+' }); }
-        else { tips.push({ type: 'error', text: 'Content too short (' + stats.words + ' words). Aim for 1,500+' }); }
-        // H2 headings (15 pts)
-        if (stats.h2s >= 3) { score += 15; tips.push({ type: 'success', text: stats.h2s + ' H2 headings (target: 3+)' }); }
-        else if (stats.h2s >= 1) { score += 8; tips.push({ type: 'warn', text: stats.h2s + ' H2 heading' + (stats.h2s !== 1 ? 's' : '') + ' (target: 3+)' }); }
-        else { tips.push({ type: 'error', text: 'No H2 headings (target: 3+)' }); }
-        // H3 subheadings (5 pts)
-        if (stats.h3s >= 2) { score += 5; tips.push({ type: 'success', text: stats.h3s + ' H3 subheadings' }); }
-        else { tips.push({ type: 'warn', text: stats.h3s + ' H3 subheading' + (stats.h3s !== 1 ? 's' : '') + ' (target: 2+)' }); }
-        // Internal links (10 pts)
-        if (stats.links >= 3) { score += 10; tips.push({ type: 'success', text: stats.links + ' internal links' }); }
-        else if (stats.links >= 1) { score += 5; tips.push({ type: 'warn', text: stats.links + ' internal link' + (stats.links !== 1 ? 's' : '') + ' (target: 3+)' }); }
-        else { tips.push({ type: 'error', text: 'No internal links (target: 3+)' }); }
-        // Images (5 pts)
-        if (stats.imgs >= 1) { score += 5; tips.push({ type: 'success', text: 'Add at least 1 image' }); }
-        else { tips.push({ type: 'warn', text: 'Add at least 1 image' }); }
-        // Focus keyword (20 pts)
-        if (focusCount >= 3 && focusCount <= 8) { score += 20; tips.push({ type: 'success', text: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
-        else if (focusCount > 8) { score += 12; tips.push({ type: 'warn', text: 'Focus keyword used ' + focusCount + 'x — reduce to 3-8' }); }
-        else if (focusCount >= 1) { score += 10; tips.push({ type: 'warn', text: 'Focus keyword used ' + focusCount + 'x (ideal: 3-8)' }); }
-        else if (focusKw) { tips.push({ type: 'error', text: 'Focus keyword not found in content' }); }
-        // Keyword coverage (20 pts)
-        var usedKws = keywordAnalysis.filter(function(k) { return k.count > 0; });
-        var coverage = targetKeywords.length > 0 ? Math.round((usedKws.length / targetKeywords.length) * 100) : 0;
-        var kwScore = targetKeywords.length > 0 ? Math.round((usedKws.length / targetKeywords.length) * 20) : 20;
-        score += kwScore;
-        if (coverage < 50 && targetKeywords.length > 0) { tips.push({ type: 'warn', text: 'Using ' + usedKws.length + '/' + targetKeywords.length + ' target keywords. Add more.' }); }
-        else if (targetKeywords.length > 0) { tips.push({ type: 'success', text: 'Using ' + usedKws.length + '/' + targetKeywords.length + ' target keywords' }); }
-        return { score: Math.min(score, 100), tips: tips };
-      }, [stats, focusCount, focusKw, keywordAnalysis, targetKeywords]);
+      // Load templates
+      React.useEffect(function() {
+        if (pid) api('/projects/' + pid + '/templates').then(function(d) { setPageTemplates(Array.isArray(d) ? d : (d && d.templates) || []); }).catch(function() {});
+      }, [pid]);
 
       var handleGenerate = async function() {
         setGenerating(true);
@@ -6992,38 +6917,53 @@
           var data = await api('/projects/' + pid + '/site-pages/' + page.id + '/generate-content', { method: 'POST' });
           if (data.content) {
             onUpdate(Object.assign({}, page, { draft_content: data.content, word_count: data.word_count, stage: 'written' }));
-            setEditData(function(prev) { return Object.assign({}, prev, { draft_content: data.content }); });
+            setEditContent(data.content);
           }
         } catch (e) { alert('Error: ' + e.message); }
         setGenerating(false);
       };
 
       var handleOptimise = async function() {
+        if (!pid || optimising) return;
         setOptimising(true);
         try {
-          var missingKws = keywordAnalysis.filter(function(k) { return k.count === 0; }).map(function(k) { return k.keyword; });
+          var tips = scoreData ? scoreData.tips : [];
+          var allKwAnalysis = scoreData ? scoreData.keywordAnalysis || [] : [];
+          var missingKws = allKwAnalysis.filter(function(k) { return k.count === 0; });
           var data = await api('/projects/' + pid + '/site-pages/' + page.id + '/optimise', {
             method: 'POST',
-            body: { tips: scoreData.tips, stats: stats, content_score: scoreData.score, missing_keywords: missingKws, focus_keyword: focusKw }
+            body: {
+              tips: tips,
+              missing_keywords: missingKws.map(function(k) { return k.keyword; }),
+              target_keywords: targetKeywords.map(function(k) { return typeof k === 'string' ? { keyword: k } : k; }),
+              content_score: scoreData ? scoreData.score : 0,
+              stats: scoreData ? scoreData.stats : {},
+              focus_keyword: editMeta.focus_keyword
+            }
           });
-          if (data.content_html) {
-            // Open in preview modal instead of directly applying
-            var plain = data.content_html.replace(/<[^>]+>/g, '');
-            var proposedWords = plain.trim() ? plain.trim().split(/\s+/).length : 0;
-            setOptimisePreview({
-              preview: true,
-              proposed: {
-                content_html: data.content_html,
-                meta_title: data.meta_title || metaTitle,
-                meta_description: data.meta_description || metaDesc,
-                ai_notes: data.ai_notes || null
-              },
-              stats: {
-                current: { words: stats.words },
-                proposed: { words: proposedWords, h2s: (data.content_html.match(/<h2/gi) || []).length, h3s: (data.content_html.match(/<h3/gi) || []).length, links: (data.content_html.match(/<a[\s>]/gi) || []).length }
-              },
-              item_id: page.id
-            });
+          if (data.error) { alert('Optimise failed: ' + data.error); }
+          else if (data.preview || data.content_html) {
+            var html = data.content_html || (data.proposed && data.proposed.content_html);
+            if (html) {
+              var plain = html.replace(/<[^>]+>/g, '');
+              var proposedWords = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+              setOptimisePreview({
+                preview: true,
+                proposed: {
+                  content_html: html,
+                  meta_title: data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title,
+                  meta_description: data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc,
+                  ai_notes: data.ai_notes || null
+                },
+                stats: {
+                  current: { words: scoreData ? scoreData.stats.words : 0 },
+                  proposed: { words: proposedWords, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
+                },
+                item_id: page.id
+              });
+            } else {
+              setOptimisePreview(data);
+            }
           }
         } catch (e) { alert('Error: ' + e.message); }
         setOptimising(false);
@@ -7038,50 +6978,33 @@
             method: 'PUT',
             body: { draft_content: proposed.content_html, meta_title: proposed.meta_title, meta_description: proposed.meta_description }
           });
-          var updated = Object.assign({}, page, {
-            draft_content: proposed.content_html,
-            meta_title: proposed.meta_title,
-            meta_description: proposed.meta_description,
-            stage: 'written'
-          });
-          onUpdate(updated);
-          setEditData({ meta_title: proposed.meta_title, meta_description: proposed.meta_description, focus_keyword: focusKw, draft_content: proposed.content_html });
+          onUpdate(Object.assign({}, page, {
+            draft_content: proposed.content_html, meta_title: proposed.meta_title, meta_description: proposed.meta_description, stage: 'written'
+          }));
+          setEditContent(proposed.content_html);
+          setEditMeta({ meta_title: proposed.meta_title, meta_desc: proposed.meta_description, focus_keyword: editMeta.focus_keyword });
           setOptimisePreview(null);
         } catch (e) { alert('Error: ' + e.message); }
         setApplyingOptimise(false);
       };
 
-      var handleOpenAiEditor = function() {
-        setOptimisePreview({
-          preview: true,
-          proposed: {
-            content_html: content,
-            meta_title: metaTitle,
-            meta_description: metaDesc,
-            ai_notes: null
-          },
-          stats: {
-            current: { words: stats.words },
-            proposed: { words: stats.words, h2s: stats.h2s, h3s: stats.h3s, links: stats.links }
-          },
-          item_id: page.id
-        });
-      };
-
       var handleSaveEdit = async function() {
+        if (!pid) return;
         try {
-          var wordCount = 0;
-          if (editData.draft_content) {
-            var div = document.createElement('div'); div.innerHTML = editData.draft_content;
-            wordCount = (div.textContent || '').trim().split(/\s+/).length;
-          }
           await api('/projects/' + pid + '/site-pages/' + page.id, {
             method: 'PUT',
-            body: { meta_title: editData.meta_title, meta_description: editData.meta_description, focus_keyword: editData.focus_keyword, draft_content: editData.draft_content, word_count: wordCount }
+            body: {
+              draft_content: editContent,
+              meta_title: editMeta.meta_title,
+              meta_description: editMeta.meta_desc,
+              focus_keyword: editMeta.focus_keyword,
+              target_keywords: targetKeywords
+            }
           });
-          onUpdate(Object.assign({}, page, editData, { word_count: wordCount }));
-          setEditing(false);
-        } catch (e) { alert('Error: ' + e.message); }
+          onUpdate(Object.assign({}, page, {
+            draft_content: editContent, meta_title: editMeta.meta_title, meta_description: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword
+          }));
+        } catch (e) { alert('Error saving: ' + e.message); }
       };
 
       var handleApprove = async function() {
@@ -7101,149 +7024,234 @@
         setPublishing(false);
       };
 
-      var handleAddKeyword = function() {
-        if (!addKw.trim()) return;
-        if (targetKeywords.indexOf(addKw.trim()) === -1) setTargetKeywords(function(prev) { return prev.concat([addKw.trim()]); });
-        setAddKw('');
-      };
-
-      var stageColors = { draft: '#6b7280', written: '#3b82f6', reviewed: '#f59e0b', published: '#22c55e' };
-      var stageLabel = page.stage || 'draft';
-
-      return React.createElement('div', { style: { padding: '24px 32px' } },
-        // Back link
-        React.createElement('div', { onClick: onBack, style: { cursor: 'pointer', fontSize: 13, color: 'var(--accent)', marginBottom: 16, display: 'inline-flex', alignItems: 'center', gap: 6 } },
-          React.createElement('i', { className: 'fas fa-arrow-left' }), 'Back to list'
-        ),
-
-        // Title + status + actions
-        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 } },
+      return React.createElement('div', null,
+        // Header with action buttons (matches CopywriterPage)
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 } },
           React.createElement('div', null,
-            React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 800 } }, page.page_name),
-            React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' } },
-              React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (stageColors[stageLabel] || '#6b7280') + '20', color: stageColors[stageLabel], fontWeight: 600, textTransform: 'uppercase' } },
-                React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 4, fontSize: 9 } }), stageLabel
-              ),
-              page.page_type && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: 'var(--bg)', color: 'var(--text3)' } }, page.page_type),
-              page.is_cornerstone && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone')
+            React.createElement('a', { href: '#', onClick: function(e) { e.preventDefault(); onBack(); }, style: { color: 'var(--accent)', fontSize: 14, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 } },
+              React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
+            ),
+            React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, page.page_name),
+            page.slug && React.createElement('a', { href: '#', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
+              React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' /' + page.slug + '/'
             )
           ),
-          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-            !content && React.createElement('button', {
-              onClick: handleGenerate, disabled: generating,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, generating ? 'Generating...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Generate')),
-            content && React.createElement('button', {
+          React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+            // AI Optimise
+            !isPublished && hasDraft && React.createElement('button', {
               onClick: handleOptimise, disabled: optimising,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, optimising ? 'Optimising...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'AI Optimise')),
-            content && React.createElement('button', {
-              onClick: handleOpenAiEditor,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+              style: { background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
+                border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer',
+                boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
+            }, optimising
+              ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Optimising...')
+              : React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Optimise')
+            ),
+            // AI Editor
+            !isPublished && hasDraft && React.createElement('button', {
+              onClick: function() {
+                var html = editContent || '';
+                var plain = html.replace(/<[^>]+>/g, '');
+                var words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+                setOptimisePreview({
+                  preview: true,
+                  proposed: { content_html: html, meta_title: editMeta.meta_title || '', meta_description: editMeta.meta_desc || '', ai_notes: null },
+                  stats: { current: { words: words }, proposed: { words: words, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length } },
+                  item_id: page.id
+                });
+              },
+              style: { background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
+                border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer',
+                boxShadow: '0 2px 12px rgba(99,102,241,0.3)' }
             }, React.createElement('i', { className: 'fa-solid fa-comments', style: { marginRight: 6 } }), 'AI Editor'),
-            content && stageLabel !== 'published' && React.createElement('button', {
-              onClick: handleApprove,
-              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #22c55e', background: 'transparent', color: '#22c55e', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Approve'),
-            content && React.createElement('button', {
-              onClick: function() { if (editing) handleSaveEdit(); else { setEditData({ meta_title: page.meta_title || '', meta_description: page.meta_description || '', focus_keyword: page.focus_keyword || '', draft_content: page.draft_content || '' }); setEditing(true); } },
-              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }
-            }, React.createElement('i', { className: editing ? 'fas fa-save' : 'fas fa-pen', style: { marginRight: 6 } }), editing ? 'Save' : 'Edit'),
-            editing && React.createElement('button', {
-              onClick: function() { setEditing(false); },
-              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text3)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }
-            }, 'Cancel'),
-            content && React.createElement('button', {
-              onClick: handleGenerate, disabled: generating,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, generating ? '...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-redo', style: { marginRight: 6 } }), 'Regenerate')),
-            content && stageLabel !== 'published' && React.createElement('button', {
-              onClick: handlePublish, disabled: publishing,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, publishing ? 'Publishing...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), 'Publish'))
-          )
-        ),
-
-        // Meta section
-        React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20 } },
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, marginBottom: 12 } },
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'META TITLE'),
-              editing
-                ? React.createElement('input', { type: 'text', value: editData.meta_title, onChange: function(e) { setEditData(Object.assign({}, editData, { meta_title: e.target.value })); }, style: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', fontSize: 14, fontWeight: 600, boxSizing: 'border-box' } })
-                : React.createElement('div', { style: { fontSize: 14, color: 'var(--accent)', fontWeight: 600 } }, metaTitle || '—'),
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } }, (metaTitle || '').length + ' / 60 chars')
+            // Save
+            !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
+              React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
             ),
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'FOCUS KEYWORD'),
-              editing
-                ? React.createElement('input', { type: 'text', value: editData.focus_keyword, onChange: function(e) { setEditData(Object.assign({}, editData, { focus_keyword: e.target.value })); }, style: { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: '#22c55e', fontSize: 14, fontWeight: 700, width: 200 } })
-                : React.createElement('div', { style: { fontSize: 14, color: '#22c55e', fontWeight: 700 } }, focusKw || '—')
-            )
-          ),
-          React.createElement('div', null,
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 } }, 'META DESCRIPTION'),
-            editing
-              ? React.createElement('textarea', { value: editData.meta_description, onChange: function(e) { setEditData(Object.assign({}, editData, { meta_description: e.target.value })); }, rows: 2, style: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box', resize: 'vertical' } })
-              : React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, metaDesc || '—'),
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } }, (metaDesc || '').length + ' / 160 chars')
-          )
-        ),
-
-        // Content + Score panel
-        content ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' } },
-          // Left: Content preview / editor
-          React.createElement('div', null,
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
-              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700 } }, 'Content Preview'),
-              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, stats.words + ' words')
-            ),
-            React.createElement('div', {
-              contentEditable: editing ? 'true' : 'false',
-              suppressContentEditableWarning: true,
-              onBlur: editing ? function(e) { setEditData(Object.assign({}, editData, { draft_content: e.currentTarget.innerHTML })); } : undefined,
-              style: { padding: 24, borderRadius: 12, border: editing ? '2px solid var(--accent)' : '1px solid var(--border)', background: 'var(--card)', fontSize: 14, lineHeight: 1.8, color: 'var(--text)', minHeight: 400, outline: 'none', cursor: editing ? 'text' : 'default' },
-              dangerouslySetInnerHTML: { __html: content }
-            })
-          ),
-
-          // Right: Shared Content Score Panel
-          React.createElement(ContentScorePanel, {
-            content: content,
-            focusKeyword: focusKw,
-            keywords: [],
-            targetKeywords: targetKeywords,
-            onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(function(prev) { return prev.concat([kw]); }); },
-            onRemoveKeyword: function(kw) { setTargetKeywords(function(prev) { return prev.filter(function(k) { return k !== kw; }); }); },
-            onScoreChange: function(data) { setSpScoreData(data); },
-            projectId: pid,
-            itemId: page.id
-          })
-        )
-        : !generating ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px', background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)' } },
-            React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16 } }),
-            React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No content yet'),
-            React.createElement('button', { onClick: handleGenerate, style: { padding: '12px 24px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' } },
-              React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8 } }), 'Generate Content'
+            // Approve
+            !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove, style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
+            // Publish
+            page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing, style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } },
+              publishing ? 'Publishing...' : 'Publish'
             )
           )
-        : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
-            React.createElement('div', { className: 'spinner-large' }),
-            React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
-          ),
+        ),
 
         // OptimisePreviewModal (AI Content Editor)
         optimisePreview && React.createElement(OptimisePreviewModal, {
           preview: optimisePreview,
-          item: Object.assign({}, page, { target_keywords: targetKeywords }),
+          item: Object.assign({}, page, { target_keywords: targetKeywords, draft_content: editContent }),
           project: project,
-          scoreData: spScoreData || { score: scoreData.score, tips: scoreData.tips, stats: stats },
+          scoreData: scoreData,
           applyingOptimise: applyingOptimise,
           onApply: handleApplyOptimise,
           onReject: function() { setOptimisePreview(null); },
           onUpdate: setOptimisePreview,
           apiPrefix: 'site-pages'
-        })
+        }),
+
+        // Page Wireframe (matches CopywriterPage wireframe section)
+        React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid var(--border)' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } },
+              React.createElement('i', { className: 'fas fa-drafting-compass', style: { marginRight: 6, color: '#8b5cf6' } }),
+              'Page Wireframe'
+            ),
+            React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'Optional — upload design or describe layout')
+          ),
+          // Wireframe image upload + template dropdown
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 10 } },
+            React.createElement('button', {
+              className: 'btn btn-secondary btn-small',
+              onClick: function() {
+                var input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*,.pdf';
+                input.onchange = async function(e) {
+                  var file = e.target.files[0];
+                  if (!file) return;
+                  if (file.size > 20 * 1024 * 1024) { alert('File too large (max 20MB)'); return; }
+                  if (file.type.startsWith('image/')) {
+                    var img = new Image();
+                    img.onload = async function() {
+                      var maxW = 1400;
+                      var w = img.width, h = img.height;
+                      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+                      var canvas = document.createElement('canvas');
+                      canvas.width = w; canvas.height = h;
+                      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                      var compressed = canvas.toDataURL('image/jpeg', 0.8);
+                      var base64 = compressed.split(',')[1];
+                      onUpdate(Object.assign({}, page, { wireframe_image: base64, wireframe_mime: 'image/jpeg' }));
+                    };
+                    img.src = URL.createObjectURL(file);
+                  } else {
+                    var reader = new FileReader();
+                    reader.onload = async function() {
+                      var base64 = reader.result.split(',')[1];
+                      onUpdate(Object.assign({}, page, { wireframe_image: base64, wireframe_mime: file.type || 'application/pdf' }));
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                };
+                input.click();
+              }
+            },
+              React.createElement('i', { className: 'fas fa-upload', style: { marginRight: 6 } }),
+              page.wireframe_image ? 'Replace Image' : 'Upload Wireframe'
+            ),
+            // Apply Template dropdown
+            React.createElement('select', {
+              className: 'form-input',
+              style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' },
+              value: '',
+              disabled: applyingTemplate || pageTemplates.length === 0,
+              onChange: async function(e) {
+                var templateId = e.target.value;
+                if (!templateId) return;
+                setApplyingTemplate(true);
+                try {
+                  // Templates are for content_queue — for site_pages just note the template choice
+                  alert('Templates are currently available for Optimise Website Copy pages. Use Generate to create content for new website pages.');
+                } catch (err) { console.warn(err); }
+                setApplyingTemplate(false);
+                e.target.value = '';
+              }
+            },
+              React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : pageTemplates.length === 0 ? 'No templates' : 'Apply Template...'),
+              pageTemplates.map(function(t) { return React.createElement('option', { key: t.id, value: t.id }, t.name + ' (' + t.page_type + ')'); })
+            )
+          ),
+          // Wireframe image preview
+          page.wireframe_image && React.createElement('div', { style: { marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', maxHeight: 200 } },
+            page.wireframe_mime && page.wireframe_mime.startsWith('image/')
+              ? React.createElement('img', {
+                  src: 'data:' + page.wireframe_mime + ';base64,' + page.wireframe_image,
+                  style: { width: '100%', maxHeight: 200, objectFit: 'contain', background: '#f9fafb' }
+                })
+              : React.createElement('div', { style: { padding: 16, textAlign: 'center', color: 'var(--text2)', fontSize: 13 } },
+                  React.createElement('i', { className: 'fas fa-file-pdf', style: { fontSize: 24, marginBottom: 6, color: '#ef4444', display: 'block' } }),
+                  'PDF wireframe uploaded'
+                )
+          ),
+          // Text description
+          React.createElement('textarea', {
+            value: page.page_wireframe || '',
+            onChange: function(e) { onUpdate(Object.assign({}, page, { page_wireframe: e.target.value })); },
+            placeholder: page.wireframe_image
+              ? 'Optional — add notes about the wireframe design above'
+              : 'Describe the page design layout, or upload a wireframe image/PDF above',
+            rows: 3,
+            style: { width: '100%', padding: 10, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }
+          })
+        ),
+
+        // Meta info card (always editable, matches CopywriterPage)
+        React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, marginBottom: 20, border: '1px solid var(--border)' } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Title'),
+              React.createElement('input', { value: editMeta.meta_title, onChange: function(e) { setEditMeta(Object.assign({}, editMeta, { meta_title: e.target.value })); },
+                readOnly: isPublished,
+                style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#3b82f6', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, boxSizing: 'border-box' } }),
+              React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_title || '').length + ' / 60 chars')
+            ),
+            React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Focus Keyword'),
+              React.createElement('input', { value: editMeta.focus_keyword, onChange: function(e) { setEditMeta(Object.assign({}, editMeta, { focus_keyword: e.target.value })); },
+                readOnly: isPublished,
+                style: { width: '100%', padding: 8, background: 'var(--bg)', color: '#22c55e', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, fontWeight: 600, boxSizing: 'border-box' } })
+            )
+          ),
+          React.createElement('div', { style: { marginTop: 16 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 } }, 'Meta Description'),
+            React.createElement('textarea', { value: editMeta.meta_desc, onChange: function(e) { setEditMeta(Object.assign({}, editMeta, { meta_desc: e.target.value })); },
+              readOnly: isPublished, rows: 2,
+              style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' } }),
+            React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
+          )
+        ),
+
+        // Content editor + Score panel side by side (matches CopywriterPage flex layout)
+        React.createElement('div', { style: { display: 'flex', gap: 20, alignItems: 'flex-start' } },
+          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+            React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' } },
+              hasDraft
+                ? React.createElement(QuillEditor, {
+                    value: editContent,
+                    onChange: isPublished ? undefined : setEditContent,
+                    readOnly: isPublished,
+                    initialComments: comments,
+                    onCommentsChange: isPublished ? undefined : setComments
+                  })
+                : !generating
+                  ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
+                      React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16, display: 'block' } }),
+                      React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No content yet'),
+                      React.createElement('button', { onClick: handleGenerate, style: { padding: '12px 24px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' } },
+                        React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8 } }), 'Generate Content'
+                      )
+                    )
+                  : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
+                      React.createElement('div', { className: 'spinner-large' }),
+                      React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
+                    )
+            )
+          ),
+          React.createElement('div', { style: { width: 300, minWidth: 300, position: 'sticky', top: 20 } },
+            React.createElement(ContentScorePanel, {
+              content: editContent,
+              focusKeyword: editMeta.focus_keyword,
+              keywords: project && project.keywords ? project.keywords : [],
+              targetKeywords: targetKeywords,
+              projectId: pid,
+              itemId: page.id,
+              onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(targetKeywords.concat([kw])); },
+              onRemoveKeyword: function(kw) { setTargetKeywords(targetKeywords.filter(function(k) { return k !== kw; })); },
+              onScoreChange: setScoreData
+            })
+          )
+        )
       );
     }
 
