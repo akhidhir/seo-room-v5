@@ -1821,13 +1821,17 @@
         }
       }, [report, savedActionItems, section]);
 
+      // Track if we resumed polling after navigating back
+      const [resumedPolling, setResumedPolling] = useState(false);
+
       useEffect(() => {
         if (project) checkStatus();
         return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
       }, [project?.id, auditKey]);
 
-      const startPolling = (pid, ak) => {
+      const startPolling = (pid, ak, resumed = false) => {
         if (pollRef.current) clearInterval(pollRef.current);
+        if (resumed) setResumedPolling(true);
         const pollStart = Date.now();
         pollRef.current = setInterval(async () => {
           try {
@@ -1836,6 +1840,7 @@
               clearInterval(pollRef.current); pollRef.current = null;
               setError('Audit timed out after 10 minutes. Click "Run Audit" to try again.');
               setLoading(false);
+              setResumedPolling(false);
               return;
             }
             const data = await api(`/projects/${pid}/audits/${ak}/status`);
@@ -1843,12 +1848,14 @@
               clearInterval(pollRef.current); pollRef.current = null;
               if (data.report) setReport(data.report);
               setLoading(false);
+              setResumedPolling(false);
             } else if (data.status === 'failed') {
               clearInterval(pollRef.current); pollRef.current = null;
               setError(data.error || 'Audit failed');
               setLoading(false);
+              setResumedPolling(false);
             }
-          } catch (e) { clearInterval(pollRef.current); pollRef.current = null; setLoading(false); }
+          } catch (e) { clearInterval(pollRef.current); pollRef.current = null; setLoading(false); setResumedPolling(false); }
         }, 5000);
       };
 
@@ -1863,7 +1870,7 @@
               return;
             }
             setLoading(true);
-            startPolling(project.id, auditKey);
+            startPolling(project.id, auditKey, true); // resumed=true since we're restoring state
           } else if (data.status === 'completed' && data.report) {
             setReport(data.report);
           } else if (data.status === 'failed' && data.error) {
@@ -2289,8 +2296,9 @@
           <div className="audit-loading-overlay">
             <span className="spinner-large"></span>
             <div className="audit-loading-text">{title}</div>
-            <div className="audit-loading-sub">{loadingText}</div>
-            <button onClick={() => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } setLoading(false); setError('Audit cancelled. Click "Run Audit" to try again.'); }} style={{ marginTop: 20, padding: '8px 20px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+            <div className="audit-loading-sub">{resumedPolling ? 'Audit is still running in the background. You can navigate away safely — it won\'t stop.' : loadingText}</div>
+            {resumedPolling && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Reconnected to running audit</div>}
+            <button onClick={() => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } setLoading(false); setResumedPolling(false); setError('Audit cancelled. Click "Run Audit" to try again.'); }} style={{ marginTop: 20, padding: '8px 20px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
           </div>
         );
       }

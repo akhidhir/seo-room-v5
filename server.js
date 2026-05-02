@@ -1501,11 +1501,9 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
           gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
         };
 
-        // Clean slate — delete ALL action items and findings for this project
-        await pool.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
-        await pool.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
-
-        let savedCount = 0;
+        // Build new items first, then delete old + insert in a transaction (no data loss on failure)
+        const newFindings = [];
+        const newActions = [];
         let skippedCount = 0;
         for (const item of uniqueItems) {
           const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
@@ -1521,25 +1519,39 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
           if (!item.title) { skippedCount++; continue; }
 
           const auditId = reports[pillar]?.auditId || null;
+          newFindings.push({ projectId, auditId, pillar, category, title: item.title.slice(0, 200), description: (item.description || '').slice(0, 1000), recommendation: (item.recommendation || '').slice(0, 1000), severity, current_value: (item.current_value || '').slice(0, 500), new_value: (item.new_value || '').slice(0, 500) });
+          newActions.push({ projectId, pillar, category, title: item.title.slice(0, 200), description: (item.recommendation || item.description || '').slice(0, 1000), current_value: (item.current_value || '').slice(0, 500), new_value: (item.new_value || '').slice(0, 500), severity, execType, assigneeLabel });
+        }
 
-          // Save finding
-          const fRes = await pool.query(
-            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
-            [projectId, auditId, pillar, category, item.title.slice(0, 200), (item.description || '').slice(0, 1000),
-             (item.recommendation || '').slice(0, 1000), severity, (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500)]
-          );
+        // Transaction: delete old → insert new (atomic — no data loss if insert fails)
+        const client = await pool.connect();
+        let savedCount = 0;
+        try {
+          await client.query('BEGIN');
+          await client.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
+          await client.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
 
-          // Save action item
-          await pool.query(
-            `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
-            [projectId, fRes.rows[0].id, pillar, category, category, item.title.slice(0, 200),
-             (item.recommendation || item.description || '').slice(0, 1000),
-             (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500),
-             severity, execType, assigneeLabel]
-          );
-          savedCount++;
+          for (let i = 0; i < newFindings.length; i++) {
+            const f = newFindings[i];
+            const a = newActions[i];
+            const fRes = await client.query(
+              `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+              [f.projectId, f.auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.new_value]
+            );
+            await client.query(
+              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+              [a.projectId, fRes.rows[0].id, a.pillar, a.category, a.category, a.title, a.description, a.current_value, a.new_value, a.severity, a.execType, a.assigneeLabel]
+            );
+            savedCount++;
+          }
+          await client.query('COMMIT');
+        } catch (txErr) {
+          await client.query('ROLLBACK');
+          throw txErr;
+        } finally {
+          client.release();
         }
 
         console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
@@ -4399,13 +4411,18 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    // Fetch the action items
+    // Fetch the action items — cast IDs to integers
+    const intIds = action_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    console.log(`[bulk-copywriter] project=${projectId}, action_ids=${JSON.stringify(intIds)}`);
+    if (!intIds.length) return res.status(400).json({ error: 'No valid action IDs provided' });
+
     const actionRes = await pool.query(
-      `SELECT * FROM action_items WHERE id = ANY($1) AND project_id=$2`,
-      [action_ids, projectId]
+      `SELECT * FROM action_items WHERE id = ANY($1::int[]) AND project_id=$2`,
+      [intIds, parseInt(projectId, 10)]
     );
     const actions = actionRes.rows;
-    if (!actions.length) return res.status(404).json({ error: 'No matching action items found' });
+    console.log(`[bulk-copywriter] Found ${actions.length} action items in DB`);
+    if (!actions.length) return res.status(404).json({ error: `No matching action items found (searched ${intIds.length} IDs in project ${projectId})` });
 
     const created = [];
     const skipped = [];
