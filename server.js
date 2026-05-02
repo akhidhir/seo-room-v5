@@ -5003,10 +5003,12 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-optimise', async (req
         draft_content=COALESCE($1, draft_content),
         draft_meta_title=COALESCE($2, draft_meta_title),
         draft_meta_desc=COALESCE($3, draft_meta_desc),
-        ai_notes=$4,
+        draft_focus_keyword=COALESCE($4, draft_focus_keyword),
+        ai_notes=$5,
         updated_at=NOW()
-       WHERE id=$5 AND project_id=$6 RETURNING *`,
+       WHERE id=$6 AND project_id=$7 RETURNING *`,
       [proposed.content_html, proposed.meta_title, proposed.meta_description,
+       proposed.focus_keyword || null,
        `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId]
     );
     if (updated.rows.length === 0) return res.status(404).json({ error: 'Not found' });
@@ -5487,13 +5489,24 @@ RULES:
 - Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
-- Focus keyword must appear 3-8 times
+- Focus keyword must appear 3-8 times naturally in the content
 - Write like a human, not AI — no banned phrases
+- ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
+
+SCORING SYSTEM (how the dashboard calculates score — predict accurately):
+- Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
+- H2 >= 3: 15 pts | >= 1: 8 pts
+- H3 >= 2: 5 pts
+- Links >= 3: 10 pts | >= 1: 5 pts
+- Images >= 1: 5 pts
+- Focus keyword 3-8x in content: 20 pts (REQUIRES focus_keyword field!)
+- Target keywords coverage: up to 20 pts
+Max 100. Without focus_keyword, score CAPS at 60.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "1-2 sentence max summary", "changed": true}
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "ai_notes": "1-2 sentence max summary", "changed": true}
 
-CRITICAL: ai_notes must be SHORT — max 2 sentences. Example: "Added 3 paragraphs (+400 words), score ~50→85+." Do NOT list every change.${buildCopywriterContext(project, item)}`,
+CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
@@ -5566,6 +5579,7 @@ Respond with ONLY the JSON object.`, item) }]
       content_html: noChange ? current_proposed.content_html : cleanHtml,
       meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
       meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      focus_keyword: parsed.focus_keyword || current_proposed.focus_keyword || '',
       ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
     };
 
@@ -5688,13 +5702,24 @@ RULES:
 - Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
-- Focus keyword must appear 3-8 times
+- Focus keyword must appear 3-8 times naturally in the content
 - Write like a human, not AI — no banned phrases
+- ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
+
+SCORING SYSTEM (how the dashboard calculates score — predict accurately):
+- Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
+- H2 >= 3: 15 pts | >= 1: 8 pts
+- H3 >= 2: 5 pts
+- Links >= 3: 10 pts | >= 1: 5 pts
+- Images >= 1: 5 pts
+- Focus keyword 3-8x in content: 20 pts (REQUIRES focus_keyword field!)
+- Target keywords coverage: up to 20 pts
+Max 100. Without focus_keyword, score CAPS at 60.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "1-2 sentence max summary", "changed": true}
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "ai_notes": "1-2 sentence max summary", "changed": true}
 
-CRITICAL: ai_notes must be SHORT — max 2 sentences. Example: "Added 3 paragraphs (+400 words), score ~50→85+." Do NOT list every change.${buildCopywriterContext(project, item)}`,
+CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
@@ -5759,6 +5784,7 @@ Respond with ONLY the JSON object.` }]
       content_html: noChange ? current_proposed.content_html : cleanHtml,
       meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
       meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      focus_keyword: parsed.focus_keyword || current_proposed.focus_keyword || '',
       ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
     };
 
