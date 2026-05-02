@@ -4998,18 +4998,32 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-optimise', async (req
   if (!proposed) return res.status(400).json({ error: 'No proposed changes' });
 
   try {
+    // Merge AI-suggested target keywords with existing
+    let mergedKws = [];
+    if (proposed.target_keywords?.length) {
+      const existing = (await pool.query('SELECT target_keywords FROM content_queue WHERE id=$1', [id])).rows[0]?.target_keywords || [];
+      const existingSet = new Set(existing.map(k => typeof k === 'string' ? k : k.keyword || k));
+      mergedKws = [...existing, ...proposed.target_keywords.filter(k => !existingSet.has(k))];
+    }
+
     const updated = await pool.query(
       `UPDATE content_queue SET
         draft_content=COALESCE($1, draft_content),
         draft_meta_title=COALESCE($2, draft_meta_title),
         draft_meta_desc=COALESCE($3, draft_meta_desc),
         draft_focus_keyword=COALESCE($4, draft_focus_keyword),
+        ${mergedKws.length ? 'target_keywords=$8,' : ''}
         ai_notes=$5,
         updated_at=NOW()
        WHERE id=$6 AND project_id=$7 RETURNING *`,
-      [proposed.content_html, proposed.meta_title, proposed.meta_description,
-       proposed.focus_keyword || null,
-       `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId]
+      mergedKws.length
+        ? [proposed.content_html, proposed.meta_title, proposed.meta_description,
+           proposed.focus_keyword || null,
+           `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId,
+           JSON.stringify(mergedKws)]
+        : [proposed.content_html, proposed.meta_title, proposed.meta_description,
+           proposed.focus_keyword || null,
+           `AI Optimised: ${proposed.ai_notes || 'Content improved'}`, id, projectId]
     );
     if (updated.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     console.log(`[apply-optimise] Applied optimisation to item ${id}`);
@@ -5492,6 +5506,9 @@ RULES:
 - Focus keyword must appear 3-8 times naturally in the content
 - Write like a human, not AI — no banned phrases
 - ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
+- ALWAYS return target_keywords — 3-5 secondary keywords/phrases relevant to the page
+- Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
+- Use target keywords naturally 1-2 times each in the content
 
 SCORING SYSTEM (how the dashboard calculates score — predict accurately):
 - Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
@@ -5499,12 +5516,12 @@ SCORING SYSTEM (how the dashboard calculates score — predict accurately):
 - H3 >= 2: 5 pts
 - Links >= 3: 10 pts | >= 1: 5 pts
 - Images >= 1: 5 pts
-- Focus keyword 3-8x in content: 20 pts (REQUIRES focus_keyword field!)
-- Target keywords coverage: up to 20 pts
-Max 100. Without focus_keyword, score CAPS at 60.
+- Focus keyword 3-8x in content: 20 pts | >8x: only 12 pts (overused!)
+- Target keywords coverage: up to 20 pts (each keyword found = points)
+Max 100. Without focus_keyword + target_keywords, score CAPS at 60.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "ai_notes": "1-2 sentence max summary", "changed": true}
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "target_keywords": ["kw1", "kw2", "kw3"], "ai_notes": "1-2 sentence max summary", "changed": true}
 
 CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
@@ -5580,6 +5597,7 @@ Respond with ONLY the JSON object.`, item) }]
       meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
       meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
       focus_keyword: parsed.focus_keyword || current_proposed.focus_keyword || '',
+      target_keywords: parsed.target_keywords || [],
       ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
     };
 
@@ -5705,6 +5723,9 @@ RULES:
 - Focus keyword must appear 3-8 times naturally in the content
 - Write like a human, not AI — no banned phrases
 - ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
+- ALWAYS return target_keywords — 3-5 secondary keywords/phrases relevant to the page
+- Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
+- Use target keywords naturally 1-2 times each in the content
 
 SCORING SYSTEM (how the dashboard calculates score — predict accurately):
 - Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
@@ -5712,12 +5733,12 @@ SCORING SYSTEM (how the dashboard calculates score — predict accurately):
 - H3 >= 2: 5 pts
 - Links >= 3: 10 pts | >= 1: 5 pts
 - Images >= 1: 5 pts
-- Focus keyword 3-8x in content: 20 pts (REQUIRES focus_keyword field!)
-- Target keywords coverage: up to 20 pts
-Max 100. Without focus_keyword, score CAPS at 60.
+- Focus keyword 3-8x in content: 20 pts | >8x: only 12 pts (overused!)
+- Target keywords coverage: up to 20 pts (each keyword found = points)
+Max 100. Without focus_keyword + target_keywords, score CAPS at 60.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "ai_notes": "1-2 sentence max summary", "changed": true}
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "target_keywords": ["kw1", "kw2", "kw3"], "ai_notes": "1-2 sentence max summary", "changed": true}
 
 CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
@@ -5785,6 +5806,7 @@ Respond with ONLY the JSON object.` }]
       meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
       meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
       focus_keyword: parsed.focus_keyword || current_proposed.focus_keyword || '',
+      target_keywords: parsed.target_keywords || [],
       ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
     };
 
