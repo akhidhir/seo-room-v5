@@ -1401,10 +1401,13 @@ ASSIGN execution_type AND assignee_label — choose the BEST match:
 - "api" + "Automated" — API tasks: URL indexing submission, sitemap submission
 
 DECISION GUIDE for website pillar:
-- "Add title & description" → On-Page Audit (meta fix)
+- "Add/fix meta title" or "Add/fix meta description" → Copywriter (writing copy)
 - "Optimize for ranking" / "Improve ranking" → Copywriter (content work)
-- "Add schema" / "Fix canonical" / "Fix redirect" → SEO Specialist (technical)
-- "Improve content" / "Expand content" / "Add location keywords" → Copywriter
+- "Improve content" / "Expand content" / "Add location keywords" / "Rewrite" → Copywriter
+- "Add schema" / "Fix canonical" / "Fix redirect" / "Fix robots" → SEO Specialist (technical)
+- "Fix heading" / "Fix H1" → On-Page Audit (structural fix)
+
+IMPORTANT: Most website content tasks go to Copywriter. On-Page Audit is ONLY for structural HTML fixes (H1 tags, heading hierarchy). SEO Specialist is for server/technical changes.
 
 SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
 PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
