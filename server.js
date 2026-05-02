@@ -9296,6 +9296,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     // Delete old external findings
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp_external'`, [projectId]);
+    await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='gbp_external' AND status='running'`, [projectId]);
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gbp_external', 'running', NOW()) RETURNING id`,
@@ -9414,6 +9415,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
     const project = proj.rows[0];
 
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]);
+    await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='website' AND status='running'`, [projectId]);
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
@@ -9517,6 +9519,8 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
     const project = proj.rows[0];
 
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gsc_agent'`, [projectId]);
+    // Mark any stuck running audits as failed
+    await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='gsc_agent' AND status='running'`, [projectId]);
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'gsc_agent', 'running', NOW()) RETURNING id`,
