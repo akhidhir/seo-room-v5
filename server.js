@@ -4972,8 +4972,10 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
 
     // Always push draft_content if it exists — user explicitly wrote/edited this content
     if (item.draft_content) {
-      payload.content = item.draft_content;
-      changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: item.draft_content.slice(0, 5000) });
+      // Strip leading H1 to avoid repetition — WP themes render page title as H1 already
+      let cleanContent = item.draft_content.replace(/^\s*<h1[^>]*>.*?<\/h1>\s*/i, '');
+      payload.content = cleanContent;
+      changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: cleanContent.slice(0, 5000) });
     }
 
     const metaPayload = {};
@@ -6382,7 +6384,9 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     if (!item) return res.status(404).send('Not found');
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
-    const draftContent = item.draft_content || item.current_content || '';
+    // Strip leading H1 from draft content — WP themes render page title as H1 already
+    const rawDraftContent = item.draft_content || item.current_content || '';
+    const draftContent = rawDraftContent.replace(/^\s*<h1[^>]*>.*?<\/h1>\s*/i, '');
     const draftTitle = item.draft_meta_title || item.page_title || '';
     const draftDesc = item.draft_meta_desc || '';
 

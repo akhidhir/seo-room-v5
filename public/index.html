@@ -7406,6 +7406,9 @@
               readOnly: isPublished, rows: 2,
               style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' } }),
             React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
+          ),
+          !isPublished && React.createElement('div', { style: { marginTop: 16, display: 'flex', justifyContent: 'flex-end' } },
+            React.createElement('button', { onClick: handleSaveEdit, style: { padding: '6px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, 'Save Meta')
           )
         ),
 
@@ -10109,6 +10112,9 @@
                 readOnly: isPublished, rows: 2,
                 style: { width: '100%', padding: 8, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, resize: 'vertical', fontFamily: 'inherit' } }),
               React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
+            ),
+            !isPublished && React.createElement('div', { style: { marginTop: 16, display: 'flex', justifyContent: 'flex-end' } },
+              React.createElement('button', { onClick: handleSaveEdit, style: { padding: '6px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, 'Save Meta')
             )
           ),
 
