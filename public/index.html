@@ -9622,6 +9622,8 @@
                     if (r.content) {
                       const cleaned = cleanWpHtml(r.content);
                       setEditContent(cleaned);
+                    } else {
+                      alert('No content found — the page may use Elementor or have no text body. Try checking the live page.');
                     }
                     setEditMeta({
                       meta_title: r.meta_title || editMeta.meta_title,

@@ -4309,16 +4309,32 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
   const wc = plainText ? plainText.split(/\s+/).length : 0;
   if (wc < 50 && pageUrl) {
     try {
-      const liveRes = await fetch(pageUrl);
+      const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000) });
       if (liveRes.ok) {
         const liveHtml = await liveRes.text();
+        // Try structured content areas first
         const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
                           liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
                           liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-        if (mainMatch) {
-          const liveText = mainMatch[1].replace(/<[^>]+>/g, '').trim();
+        let extracted = mainMatch ? mainMatch[1] : '';
+        // Fallback for Elementor: extract body, strip non-content elements
+        if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
+          const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+          if (bodyMatch) {
+            extracted = bodyMatch[1]
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+              .replace(/<header[\s\S]*?<\/header>/gi, '')
+              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+              .replace(/<!--[\s\S]*?-->/g, '');
+          }
+        }
+        if (extracted) {
+          const liveText = extracted.replace(/<[^>]+>/g, '').trim();
           if (liveText.split(/\s+/).length > wc) {
-            content = mainMatch[1];
+            content = extracted;
           }
         }
       }
