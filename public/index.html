@@ -7831,8 +7831,8 @@
         node.append('circle')
           .attr('r', d => d.slug === 'home' || d.slug === '' ? RHome : R)
           .attr('fill', d => getColor(d))
-          .attr('stroke', d => d.issues.length > 0 ? '#ef4444' : 'transparent')
-          .attr('stroke-width', d => d.issues.length > 0 ? 1.5 : 0)
+          .attr('stroke', d => d.issues.filter(i => !i.startsWith('Orphan page')).length > 0 ? '#ef4444' : 'transparent')
+          .attr('stroke-width', d => d.issues.filter(i => !i.startsWith('Orphan page')).length > 0 ? 1.5 : 0)
           .attr('opacity', 0.85)
           .style('cursor', 'pointer')
           .on('click', (e, d) => { e.stopPropagation(); setSelectedNode(d); });
@@ -7848,12 +7848,14 @@
         node.on('mouseenter', (e, d) => { labels.filter(l => l.id === d.id).attr('opacity', 1); })
             .on('mouseleave', (e, d) => { labels.filter(l => l.id === d.id).attr('opacity', 0); });
 
-        // Issue count badge (smaller)
-        node.filter(d => d.issues.length > 0).append('circle')
+        // Issue count badge (smaller) — exclude orphan issues
+        const hasNonOrphan = d => d.issues.filter(i => !i.startsWith('Orphan page')).length > 0;
+        const nonOrphanCount = d => d.issues.filter(i => !i.startsWith('Orphan page')).length;
+        node.filter(hasNonOrphan).append('circle')
           .attr('r', 5).attr('cx', R - 1).attr('cy', -(R - 1))
           .attr('fill', '#ef4444');
-        node.filter(d => d.issues.length > 0).append('text')
-          .text(d => d.issues.length).attr('x', R - 1).attr('y', -(R - 4))
+        node.filter(hasNonOrphan).append('text')
+          .text(nonOrphanCount).attr('x', R - 1).attr('y', -(R - 4))
           .attr('text-anchor', 'middle').attr('font-size', 7).attr('fill', '#fff').attr('font-weight', 700);
 
         const zoomToFit = (animate) => {
@@ -8066,12 +8068,12 @@
                   {selectedNode.meta_title && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Title:</strong> <span style={{ color: selectedNode.meta_title.length > 60 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_title} ({selectedNode.meta_title.length})</span></div>}
                   {selectedNode.meta_description && <div style={{ fontSize: 11, marginBottom: 4 }}><strong>Description:</strong> <span style={{ color: selectedNode.meta_description.length > 160 ? '#ef4444' : 'var(--text2)' }}>{selectedNode.meta_description.substring(0, 80)}... ({selectedNode.meta_description.length})</span></div>}
                   {selectedNode.h1 && <div style={{ fontSize: 11, marginBottom: 12 }}><strong>H1:</strong> {selectedNode.h1}</div>}
-                  {selectedNode.issues.length > 0 && (
+                  {selectedNode.issues.filter(i => !i.startsWith('Orphan page')).length > 0 && (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
-                        <i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />{selectedNode.issues.length} Issue{selectedNode.issues.length > 1 ? 's' : ''}
+                        <i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />{selectedNode.issues.filter(i => !i.startsWith('Orphan page')).length} Issue{selectedNode.issues.filter(i => !i.startsWith('Orphan page')).length > 1 ? 's' : ''}
                       </div>
-                      {selectedNode.issues.map((issue, i) => (
+                      {selectedNode.issues.filter(i => !i.startsWith('Orphan page')).map((issue, i) => (
                         <div key={i} style={{ fontSize: 11, color: '#ef4444', display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 4 }}>
                           <i className="fas fa-circle-xmark" style={{ fontSize: 10, marginTop: 2 }} />{issue}
                         </div>
@@ -8115,11 +8117,11 @@
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.inbound_count === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.inbound_count}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.internal_links.length === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.internal_links.length}</td>
                         <td style={{ padding: '10px 14px' }}>
-                          {n.issues.length === 0 ? (
+                          {n.issues.filter(i => !i.startsWith('Orphan page')).length === 0 ? (
                             <span style={{ color: '#22c55e', fontSize: 12 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Healthy</span>
                           ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              {n.issues.map((issue, j) => (
+                              {n.issues.filter(i => !i.startsWith('Orphan page')).map((issue, j) => (
                                 <span key={j} style={{ fontSize: 11, color: '#ef4444' }}><i className="fas fa-xmark" style={{ marginRight: 4, fontSize: 9 }} />{issue}</span>
                               ))}
                             </div>
