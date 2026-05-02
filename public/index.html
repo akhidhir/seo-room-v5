@@ -7151,9 +7151,17 @@
                 if (!templateId) return;
                 setApplyingTemplate(true);
                 try {
-                  // Templates are for content_queue — for site_pages just note the template choice
-                  alert('Templates are currently available for Optimise Website Copy pages. Use Generate to create content for new website pages.');
-                } catch (err) { console.warn(err); }
+                  var result = await api('/projects/' + pid + '/site-pages/' + page.id + '/apply-template', {
+                    method: 'POST', body: { template_id: parseInt(templateId) }
+                  });
+                  if (result && result.skeleton) {
+                    setEditContent(result.skeleton);
+                    onUpdate(Object.assign({}, page, { draft_content: result.skeleton, stage: page.stage === 'draft' ? 'written' : page.stage }));
+                  } else if (result && result.page) {
+                    setEditContent(result.page.draft_content || '');
+                    onUpdate(result.page);
+                  }
+                } catch (err) { alert('Error applying template: ' + err.message); }
                 setApplyingTemplate(false);
                 e.target.value = '';
               }

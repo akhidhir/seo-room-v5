@@ -5906,6 +5906,23 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-template', async (req
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Apply template to a site_page item
+app.post('/api/projects/:projectId/site-pages/:id/apply-template', async (req, res) => {
+  const { template_id } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id required' });
+  try {
+    const template = (await pool.query('SELECT * FROM page_templates WHERE id=$1 AND project_id=$2', [template_id, req.params.projectId])).rows[0];
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+
+    const updated = await pool.query(
+      'UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND project_id=$3 RETURNING *',
+      [template.skeleton_html, req.params.id, req.params.projectId]
+    );
+
+    res.json({ ok: true, skeleton: template.skeleton_html, sections: template.section_count, page: updated.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Analyze page wireframe — fetches live page, extracts section structure for AI copywriting
 app.post('/api/projects/:projectId/analyze-wireframe', async (req, res) => {
   req.setTimeout(30000);
