@@ -5491,7 +5491,9 @@ RULES:
 - Write like a human, not AI — no banned phrases
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "1-2 sentence max summary", "changed": true}
+
+CRITICAL: ai_notes must be SHORT — max 2 sentences. Example: "Added 3 paragraphs (+400 words), score ~50→85+." Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
@@ -5690,7 +5692,9 @@ RULES:
 - Write like a human, not AI — no banned phrases
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "1-2 sentence max summary", "changed": true}
+
+CRITICAL: ai_notes must be SHORT — max 2 sentences. Example: "Added 3 paragraphs (+400 words), score ~50→85+." Do NOT list every change.${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
