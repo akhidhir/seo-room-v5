@@ -9788,11 +9788,7 @@
       }, [messages, sending]);
 
       // Initial AI message from ai_notes
-      useEffect(() => {
-        if (preview.proposed.ai_notes && messages.length === 0) {
-          setMessages([{ role: 'assistant', content: preview.proposed.ai_notes }]);
-        }
-      }, []);
+      // No initial message — clean chat, user starts the conversation
 
       function handleApply() {
         preview.proposed.meta_title = metaTitle;
