@@ -6453,67 +6453,81 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // Find and replace the content area — try multiple selectors in priority order
-    // Each pattern: find the container opening tag, then its innerHTML, replace innerHTML with draft
-    const contentSelectors = [
-      // Elementor post content widget
-      { regex: /(<div[^>]*class="[^"]*elementor-widget-theme-post-content[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*elementor-widget-container[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*<\/div>\s*<\/div>)/i, group: 2 },
-      // Standard WP entry-content
-      { regex: /(<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*(?:<\/(?:article|main|div)>|<(?:footer|aside|div[^>]*class="[^"]*(?:sidebar|widget|comment))))/i, group: 2 },
-      // Article content
-      { regex: /(<article[^>]*>[\s\S]*?<div[^>]*class="[^"]*(?:content|post-content|article-content)[^"]*"[^>]*>)([\s\S]*?)(<\/div>\s*<\/article>)/i, group: 2 },
+    // Depth-aware content swap: find container by class, count nested divs to find matching close
+    function swapByClass(fullHtml, className, replacement) {
+      const idx = fullHtml.search(new RegExp(`class="[^"]*${className}`, 'i'));
+      if (idx === -1) return null;
+      // Find the opening tag start
+      let tagStart = fullHtml.lastIndexOf('<', idx);
+      if (tagStart === -1) return null;
+      // Find the end of the opening tag
+      let tagEnd = fullHtml.indexOf('>', tagStart);
+      if (tagEnd === -1) return null;
+      tagEnd += 1; // past the >
+      // Get the tag name
+      const tagNameMatch = fullHtml.slice(tagStart).match(/^<(\w+)/);
+      if (!tagNameMatch) return null;
+      const tagName = tagNameMatch[1].toLowerCase();
+      // Count depth to find matching close tag
+      let depth = 1;
+      let pos = tagEnd;
+      const openPattern = '<' + tagName;
+      const closePattern = '</' + tagName;
+      while (depth > 0 && pos < fullHtml.length) {
+        const nextOpen = fullHtml.toLowerCase().indexOf(openPattern, pos);
+        const nextClose = fullHtml.toLowerCase().indexOf(closePattern, pos);
+        if (nextClose === -1) break;
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          depth++;
+          pos = nextOpen + openPattern.length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            return fullHtml.slice(0, tagEnd) + replacement + fullHtml.slice(nextClose);
+          }
+          pos = nextClose + closePattern.length;
+        }
+      }
+      return null;
+    }
+
+    const contentClasses = [
+      'entry-content', 'post-content', 'page-content', 'the-content',
+      'content-area', 'article-content', 'elementor-widget-container',
+      'et_pb_text_inner', 'wp-block-post-content', 'site-content',
     ];
 
     let swapped = false;
-    for (const sel of contentSelectors) {
-      const m = html.match(sel.regex);
-      if (m) {
-        html = html.replace(sel.regex, `$1${draftContent}$3`);
+    for (const cls of contentClasses) {
+      const result = swapByClass(html, cls, draftContent);
+      if (result) {
+        html = result;
         swapped = true;
-        console.log(`[preview] Content swapped using selector: ${sel.regex.source.slice(0, 60)}...`);
+        console.log(`[preview] Content swapped using class: ${cls}`);
         break;
       }
     }
 
-    // Fallback: find the largest text block and replace it
+    // Fallback: try <article> tag
     if (!swapped) {
-      // Find all entry-content or post-content divs more loosely
-      const looseMatch = html.match(/(<div[^>]*class="[^"]*(?:entry-content|post-content|page-content|the-content|content-area)[^"]*"[^>]*>)([\s\S]{200,}?)(<\/div>)/i);
-      if (looseMatch) {
-        html = html.replace(looseMatch[0], looseMatch[1] + draftContent + looseMatch[3]);
+      const artOpen = html.search(/<article[^>]*>/i);
+      const artClose = html.indexOf('</article>', artOpen > -1 ? artOpen : 0);
+      if (artOpen > -1 && artClose > artOpen) {
+        const artTagEnd = html.indexOf('>', artOpen) + 1;
+        html = html.slice(0, artTagEnd) + `<div style="padding:30px">${draftContent}</div>` + html.slice(artClose);
         swapped = true;
-        console.log('[preview] Content swapped using loose entry-content match');
+        console.log('[preview] Content swapped inside <article>');
       }
     }
 
-    // Last resort: find the biggest content block between header and footer
+    // Last resort: inject after header
     if (!swapped) {
+      console.log('[preview] WARNING: No content area found, injecting after header');
       const headerEnd = html.search(/<\/header>/i);
-      const footerStart = html.search(/<footer/i);
-      if (headerEnd > 0 && footerStart > headerEnd) {
-        const middle = html.slice(headerEnd + 9, footerStart);
-        // Find the div with the most text
-        const divMatches = [...middle.matchAll(/<div([^>]*)>([\s\S]*?)<\/div>/gi)];
-        let biggest = null;
-        let biggestLen = 0;
-        for (const dm of divMatches) {
-          const textLen = dm[2].replace(/<[^>]+>/g, '').trim().length;
-          if (textLen > biggestLen) { biggestLen = textLen; biggest = dm; }
-        }
-        if (biggest && biggestLen > 200) {
-          html = html.replace(biggest[0], `<div${biggest[1]}>${draftContent}</div>`);
-          swapped = true;
-          console.log(`[preview] Content swapped using biggest-block fallback (${biggestLen} chars)`);
-        }
-      }
-    }
-
-    if (!swapped) {
-      console.log('[preview] WARNING: Could not find content area to swap, injecting after header');
-      const insertPoint = html.search(/<\/header>/i);
-      if (insertPoint > 0) {
-        html = html.slice(0, insertPoint + 9) + `<div class="seo-draft-content" style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.9">${draftContent}</div>` + html.slice(insertPoint + 9);
-      }
+      const insertAt = headerEnd > 0 ? headerEnd + 9 : html.indexOf('<body') + html.slice(html.indexOf('<body')).indexOf('>') + 1;
+      const injection = `<div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.9">${draftContent}</div>`;
+      html = html.slice(0, insertAt) + injection + html.slice(insertAt);
+      swapped = true;
     }
 
     // Add preview banner + disable links
