@@ -6453,22 +6453,22 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // Depth-aware content swap: find container by class, count nested divs to find matching close
-    function swapByClass(fullHtml, className, replacement) {
-      const idx = fullHtml.search(new RegExp(`class="[^"]*${className}`, 'i'));
-      if (idx === -1) return null;
-      // Find the opening tag start
+    // Depth-aware content swap: find container by class, count nested tags to find matching close
+    // Returns { start: tagEnd, end: closeStart, textLen } for a given class match starting at searchFrom
+    function findContainerByClass(fullHtml, className, searchFrom) {
+      const searchRegex = new RegExp(`class="[^"]*${className}`, 'gi');
+      searchRegex.lastIndex = searchFrom || 0;
+      const m = searchRegex.exec(fullHtml);
+      if (!m) return null;
+      const idx = m.index;
       let tagStart = fullHtml.lastIndexOf('<', idx);
       if (tagStart === -1) return null;
-      // Find the end of the opening tag
       let tagEnd = fullHtml.indexOf('>', tagStart);
       if (tagEnd === -1) return null;
-      tagEnd += 1; // past the >
-      // Get the tag name
+      tagEnd += 1;
       const tagNameMatch = fullHtml.slice(tagStart).match(/^<(\w+)/);
       if (!tagNameMatch) return null;
       const tagName = tagNameMatch[1].toLowerCase();
-      // Count depth to find matching close tag
       let depth = 1;
       let pos = tagEnd;
       const openPattern = '<' + tagName;
@@ -6483,7 +6483,9 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
         } else {
           depth--;
           if (depth === 0) {
-            return fullHtml.slice(0, tagEnd) + replacement + fullHtml.slice(nextClose);
+            const innerHTML = fullHtml.slice(tagEnd, nextClose);
+            const textLen = innerHTML.replace(/<[^>]+>/g, '').trim().length;
+            return { start: tagEnd, end: nextClose, textLen, searchEnd: searchRegex.lastIndex };
           }
           pos = nextClose + closePattern.length;
         }
@@ -6494,29 +6496,52 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const contentClasses = [
       'entry-content', 'post-content', 'page-content', 'the-content',
       'content-area', 'article-content', 'elementor-widget-container',
-      'et_pb_text_inner', 'wp-block-post-content', 'site-content',
+      'et_pb_text_inner', 'wp-block-post-content',
     ];
 
     let swapped = false;
+
+    // Find ALL matches for each class, pick the one with the MOST text (= main content area)
+    let bestMatch = null;
+    let bestClass = '';
     for (const cls of contentClasses) {
-      const result = swapByClass(html, cls, draftContent);
-      if (result) {
-        html = result;
-        swapped = true;
-        console.log(`[preview] Content swapped using class: ${cls}`);
-        break;
+      let searchFrom = 0;
+      while (true) {
+        const match = findContainerByClass(html, cls, searchFrom);
+        if (!match) break;
+        if (!bestMatch || match.textLen > bestMatch.textLen) {
+          bestMatch = match;
+          bestClass = cls;
+        }
+        searchFrom = match.searchEnd;
       }
     }
 
-    // Fallback: try <article> tag
+    if (bestMatch && bestMatch.textLen > 100) {
+      html = html.slice(0, bestMatch.start) + draftContent + html.slice(bestMatch.end);
+      swapped = true;
+      console.log(`[preview] Content swapped using largest "${bestClass}" container (${bestMatch.textLen} chars text)`);
+    }
+
+    // Fallback: try <article> tag — pick the one with the most content
     if (!swapped) {
-      const artOpen = html.search(/<article[^>]*>/i);
-      const artClose = html.indexOf('</article>', artOpen > -1 ? artOpen : 0);
-      if (artOpen > -1 && artClose > artOpen) {
-        const artTagEnd = html.indexOf('>', artOpen) + 1;
-        html = html.slice(0, artTagEnd) + `<div style="padding:30px">${draftContent}</div>` + html.slice(artClose);
+      const articleRegex = /<article[^>]*>/gi;
+      let artMatch;
+      let bestArt = null;
+      while ((artMatch = articleRegex.exec(html)) !== null) {
+        const artTagEnd = artMatch.index + artMatch[0].length;
+        const artClose = html.indexOf('</article>', artTagEnd);
+        if (artClose > artTagEnd) {
+          const textLen = html.slice(artTagEnd, artClose).replace(/<[^>]+>/g, '').trim().length;
+          if (!bestArt || textLen > bestArt.textLen) {
+            bestArt = { start: artTagEnd, end: artClose, textLen };
+          }
+        }
+      }
+      if (bestArt && bestArt.textLen > 100) {
+        html = html.slice(0, bestArt.start) + `<div style="padding:30px">${draftContent}</div>` + html.slice(bestArt.end);
         swapped = true;
-        console.log('[preview] Content swapped inside <article>');
+        console.log(`[preview] Content swapped inside largest <article> (${bestArt.textLen} chars)`);
       }
     }
 
