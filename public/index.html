@@ -12033,13 +12033,14 @@
         );
       };
 
-      const RptSection = ({ title, icon, color, children }) => (
+      const RptSection = ({ title, icon, color, children, onClick }) => (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: color || 'var(--text1)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div onClick={onClick} style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: color || 'var(--text1)', display: 'flex', alignItems: 'center', gap: 8, cursor: onClick ? 'pointer' : 'default' }} onMouseEnter={e => { if (onClick) e.currentTarget.style.opacity = '0.8'; }} onMouseLeave={e => { if (onClick) e.currentTarget.style.opacity = '1'; }}>
             <span style={{ width: 28, height: 28, borderRadius: 6, background: (color || '#6366f1') + '20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <i className={icon} style={{ fontSize: 12, color: color || '#6366f1' }} />
             </span>
             {title}
+            {onClick && <i className="fas fa-external-link-alt" style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} />}
           </div>
           {children}
         </div>
@@ -12075,7 +12076,7 @@
 
             {/* Maps Rankings */}
             {maps.totalKeywords > 0 && (
-              <RptSection title="Google Maps Rankings" icon="fas fa-map-marker-alt" color="#22c55e">
+              <RptSection title="Google Maps Rankings" icon="fas fa-map-marker-alt" color="#22c55e" onClick={() => setPage('maps-rankings')}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
                   <RptStat label="Avg Rank" value={maps.avgArp ? `#${maps.avgArp.toFixed(1)}` : (maps.avgMapsPosition ? `#${maps.avgMapsPosition.toFixed(1)}` : '—')} color="#22c55e" />
                   <RptStat label="Avg Visibility" value={maps.avgVisibility != null ? `${maps.avgVisibility.toFixed(0)}%` : '—'} color={maps.avgVisibility >= 30 ? '#22c55e' : '#f59e0b'} />
@@ -12105,7 +12106,7 @@
             )}
 
             {/* GSC */}
-            <RptSection title="Google Search Console" icon="fas fa-chart-line" color="#3b82f6">
+            <RptSection title="Google Search Console" icon="fas fa-chart-line" color="#3b82f6" onClick={() => setPage('gsc-audit')}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
                 <RptStat label="Clicks" value={gsc.clicks?.toLocaleString() || 0} color="#3b82f6" icon="fas fa-mouse-pointer" />
                 <RptStat label="Impressions" value={gsc.impressions?.toLocaleString() || 0} icon="fas fa-eye" />
@@ -12146,12 +12147,13 @@
             {/* Website Health row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 24 }}>
               {/* On-Page */}
-              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+              <div onClick={() => setPage('onpage-audit')} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18, cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.borderColor = '#f59e0b'} onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 28, height: 28, borderRadius: 6, background: '#f59e0b20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-file-alt" style={{ fontSize: 12, color: '#f59e0b' }} />
                   </span>
                   On-Page SEO
+                  <i className="fas fa-external-link-alt" style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 'auto' }} />
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <div><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Pages</div><div style={{ fontSize: 22, fontWeight: 800 }}>{op.totalPages || 0}</div></div>
@@ -12162,7 +12164,7 @@
               </div>
 
               {/* PageSpeed */}
-              <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
+              <div onClick={() => setPage('pagespeed-scores')} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18, cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.borderColor = '#a855f7'} onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 28, height: 28, borderRadius: 6, background: '#a855f720', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-tachometer-alt" style={{ fontSize: 12, color: '#a855f7' }} />
@@ -12186,28 +12188,32 @@
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
               {/* Audit Findings */}
               <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div onClick={() => setPage('gbp-external')} style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.opacity = '0.8'} onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
                   <span style={{ width: 28, height: 28, borderRadius: 6, background: '#ef444420', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-clipboard-check" style={{ fontSize: 12, color: '#ef4444' }} />
                   </span>
                   Audit Findings
                 </div>
-                {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 ? Object.entries(report.findingsByPillar).map(([pillar, data]) => (
-                  <div key={pillar} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 ? Object.entries(report.findingsByPillar).map(([pillar, data]) => {
+                  const pillarNav = { gbp: 'gbp-external', gbp_external: 'gbp-external', gsc: 'gsc-audit', gsc_agent: 'gsc-audit', website: 'website-audit', technical: 'website-audit' };
+                  return (
+                  <div key={pillar} onClick={() => { const nav = pillarNav[pillar]; if (nav) setPage(nav); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer', borderRadius: 4 }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                     <PillarLabel name={pillar} />
-                    <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 12, alignItems: 'center' }}>
                       {data.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 600 }}>{data.critical} critical</span>}
                       <span>{data.total} total</span>
                       <span style={{ color: '#22c55e' }}>{data.approved} done</span>
                       {data.pending > 0 && <span style={{ color: '#f59e0b' }}>{data.pending} pending</span>}
+                      <i className="fas fa-chevron-right" style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 4 }} />
                     </div>
                   </div>
-                )) : <div style={{ fontSize: 12, color: 'var(--text3)', padding: '20px 0', textAlign: 'center' }}>No audits run yet</div>}
+                  );
+                }) : <div style={{ fontSize: 12, color: 'var(--text3)', padding: '20px 0', textAlign: 'center' }}>No audits run yet</div>}
               </div>
 
               {/* Action Items */}
               <div style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 18 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div onClick={() => setPage('action-plan')} style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.opacity = '0.8'} onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
                   <span style={{ width: 28, height: 28, borderRadius: 6, background: '#3b82f620', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-tasks" style={{ fontSize: 12, color: '#3b82f6' }} />
                   </span>
@@ -12243,13 +12249,17 @@
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginBottom: 8 }}>
                   <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />Critical Issues Requiring Attention
                 </div>
-                {report.criticalFindings.map((f, i) => (
-                  <div key={i} style={{ fontSize: 12, color: 'var(--text2)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {report.criticalFindings.map((f, i) => {
+                  const pillarNav = { gbp: 'gbp-external', gbp_external: 'gbp-external', gsc: 'gsc-audit', gsc_agent: 'gsc-audit', website: 'website-audit', technical: 'website-audit' };
+                  return (
+                  <div key={i} onClick={() => { const nav = pillarNav[f.pillar]; if (nav) setPage(nav); }} style={{ fontSize: 12, color: 'var(--text2)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', borderRadius: 4 }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(239,68,68,0.08)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                     <PillarLabel name={f.pillar} />
                     <span>{f.title}</span>
                     <span style={{ marginLeft: 'auto', fontSize: 10, color: f.status === 'approved' ? '#22c55e' : '#f59e0b', fontWeight: 600 }}>{f.status}</span>
+                    <i className="fas fa-chevron-right" style={{ fontSize: 9, color: 'var(--text3)' }} />
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
