@@ -6898,6 +6898,9 @@
       var [publishing, setPublishing] = React.useState(false);
       var [addKw, setAddKw] = React.useState('');
       var [targetKeywords, setTargetKeywords] = React.useState((page.keywords || []).map(function(k) { return k.keyword || k; }));
+      var [optimisePreview, setOptimisePreview] = React.useState(null);
+      var [applyingOptimise, setApplyingOptimise] = React.useState(false);
+      var [spScoreData, setSpScoreData] = React.useState(null);
 
       var content = editing ? editData.draft_content : (page.draft_content || '');
       var metaTitle = editing ? editData.meta_title : (page.meta_title || '');
@@ -6983,10 +6986,6 @@
         return { score: Math.min(score, 100), tips: tips };
       }, [stats, focusCount, focusKw, keywordAnalysis, targetKeywords]);
 
-      var scoreColor = scoreData.score >= 75 ? '#22c55e' : scoreData.score >= 50 ? '#f59e0b' : '#ef4444';
-      var tipIcon = function(type) { return type === 'success' ? 'fas fa-check-circle' : type === 'warn' ? 'fas fa-exclamation-circle' : 'fas fa-times-circle'; };
-      var tipColor = function(type) { return type === 'success' ? '#22c55e' : type === 'warn' ? '#f59e0b' : '#ef4444'; };
-
       var handleGenerate = async function() {
         setGenerating(true);
         try {
@@ -7008,22 +7007,65 @@
             body: { tips: scoreData.tips, stats: stats, content_score: scoreData.score, missing_keywords: missingKws, focus_keyword: focusKw }
           });
           if (data.content_html) {
-            var updated = Object.assign({}, page, {
-              draft_content: data.content_html,
-              meta_title: data.meta_title || page.meta_title,
-              meta_description: data.meta_description || page.meta_description,
-              stage: 'written'
+            // Open in preview modal instead of directly applying
+            var plain = data.content_html.replace(/<[^>]+>/g, '');
+            var proposedWords = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+            setOptimisePreview({
+              preview: true,
+              proposed: {
+                content_html: data.content_html,
+                meta_title: data.meta_title || metaTitle,
+                meta_description: data.meta_description || metaDesc,
+                ai_notes: data.ai_notes || null
+              },
+              stats: {
+                current: { words: stats.words },
+                proposed: { words: proposedWords, h2s: (data.content_html.match(/<h2/gi) || []).length, h3s: (data.content_html.match(/<h3/gi) || []).length, links: (data.content_html.match(/<a[\s>]/gi) || []).length }
+              },
+              item_id: page.id
             });
-            // Save to DB
-            await api('/projects/' + pid + '/site-pages/' + page.id, {
-              method: 'PUT',
-              body: { draft_content: data.content_html, meta_title: data.meta_title, meta_description: data.meta_description }
-            });
-            onUpdate(updated);
-            setEditData({ meta_title: updated.meta_title, meta_description: updated.meta_description, focus_keyword: updated.focus_keyword || focusKw, draft_content: data.content_html });
           }
         } catch (e) { alert('Error: ' + e.message); }
         setOptimising(false);
+      };
+
+      var handleApplyOptimise = async function() {
+        if (!optimisePreview) return;
+        setApplyingOptimise(true);
+        try {
+          var proposed = optimisePreview.proposed;
+          await api('/projects/' + pid + '/site-pages/' + page.id, {
+            method: 'PUT',
+            body: { draft_content: proposed.content_html, meta_title: proposed.meta_title, meta_description: proposed.meta_description }
+          });
+          var updated = Object.assign({}, page, {
+            draft_content: proposed.content_html,
+            meta_title: proposed.meta_title,
+            meta_description: proposed.meta_description,
+            stage: 'written'
+          });
+          onUpdate(updated);
+          setEditData({ meta_title: proposed.meta_title, meta_description: proposed.meta_description, focus_keyword: focusKw, draft_content: proposed.content_html });
+          setOptimisePreview(null);
+        } catch (e) { alert('Error: ' + e.message); }
+        setApplyingOptimise(false);
+      };
+
+      var handleOpenAiEditor = function() {
+        setOptimisePreview({
+          preview: true,
+          proposed: {
+            content_html: content,
+            meta_title: metaTitle,
+            meta_description: metaDesc,
+            ai_notes: null
+          },
+          stats: {
+            current: { words: stats.words },
+            proposed: { words: stats.words, h2s: stats.h2s, h3s: stats.h3s, links: stats.links }
+          },
+          item_id: page.id
+        });
       };
 
       var handleSaveEdit = async function() {
@@ -7095,6 +7137,10 @@
               onClick: handleOptimise, disabled: optimising,
               style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
             }, optimising ? 'Optimising...' : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'AI Optimise')),
+            content && React.createElement('button', {
+              onClick: handleOpenAiEditor,
+              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, React.createElement('i', { className: 'fa-solid fa-comments', style: { marginRight: 6 } }), 'AI Editor'),
             content && stageLabel !== 'published' && React.createElement('button', {
               onClick: handleApprove,
               style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #22c55e', background: 'transparent', color: '#22c55e', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
@@ -7161,80 +7207,18 @@
             })
           ),
 
-          // Right: Content Score Panel
-          React.createElement('div', { style: { position: 'sticky', top: 20 } },
-            // Score circle
-            React.createElement('div', { style: { textAlign: 'center', marginBottom: 20 } },
-              React.createElement('div', { style: { position: 'relative', display: 'inline-block' } },
-                React.createElement('svg', { width: 90, height: 90, viewBox: '0 0 90 90' },
-                  React.createElement('circle', { cx: 45, cy: 45, r: 38, fill: 'none', stroke: 'var(--border)', strokeWidth: 6 }),
-                  React.createElement('circle', { cx: 45, cy: 45, r: 38, fill: 'none', stroke: scoreColor, strokeWidth: 6, strokeDasharray: 2 * Math.PI * 38, strokeDashoffset: 2 * Math.PI * 38 * (1 - scoreData.score / 100), strokeLinecap: 'round', transform: 'rotate(-90 45 45)', style: { transition: 'stroke-dashoffset 0.5s' } })
-                ),
-                React.createElement('div', { style: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', fontSize: 28, fontWeight: 800, color: scoreColor } }, scoreData.score)
-              ),
-              React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } }, 'Content Score')
-            ),
-
-            // Tips to improve
-            React.createElement('div', { style: { marginBottom: 20 } },
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 8 } }, 'TIPS TO IMPROVE'),
-              scoreData.tips.map(function(tip, i) {
-                return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 } },
-                  React.createElement('i', { className: tipIcon(tip.type), style: { color: tipColor(tip.type), fontSize: 12, marginTop: 2, flexShrink: 0 } }),
-                  React.createElement('span', { style: { fontSize: 12, color: 'var(--text)' } }, tip.text)
-                );
-              })
-            ),
-
-            // Stats grid
-            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 20 } },
-              [
-                { label: 'Words', value: stats.words, target: '1500+', ok: stats.words >= 1500 },
-                { label: 'H2', value: stats.h2s, target: '3+', ok: stats.h2s >= 3 },
-                { label: 'H3', value: stats.h3s, target: '2+', ok: stats.h3s >= 2 },
-                { label: 'Links', value: stats.links, target: '3+', ok: stats.links >= 3 },
-                { label: 'Paragraphs', value: stats.paragraphs, target: '', ok: true },
-                { label: 'Images', value: stats.imgs, target: '1+', ok: stats.imgs >= 1 }
-              ].map(function(s) {
-                return React.createElement('div', { key: s.label, style: { textAlign: 'center', padding: '8px 4px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)' } },
-                  React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: s.ok ? '#22c55e' : '#f59e0b' } }, s.value),
-                  React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' } }, s.label),
-                  s.target && React.createElement('div', { style: { fontSize: 9, color: 'var(--text3)' } }, s.target)
-                );
-              })
-            ),
-
-            // Focus keyword box
-            focusKw && React.createElement('div', { style: { padding: 12, borderRadius: 8, border: '1px solid ' + (focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b') + '40', background: (focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b') + '08', marginBottom: 16, textAlign: 'center' } },
-              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Focus Keyword'),
-              React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: focusCount >= 3 && focusCount <= 8 ? '#22c55e' : '#f59e0b' } }, '"' + focusKw + '" — ' + focusCount + 'x used')
-            ),
-
-            // Add keyword
-            React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 } }, 'ADD KEYWORD'),
-              React.createElement('div', { style: { display: 'flex', gap: 4 } },
-                React.createElement('input', { type: 'text', value: addKw, placeholder: 'Type keyword...', onChange: function(e) { setAddKw(e.target.value); }, onKeyDown: function(e) { if (e.key === 'Enter') handleAddKeyword(); }, style: { flex: 1, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12 } }),
-                React.createElement('button', { onClick: handleAddKeyword, style: { padding: '5px 10px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 11, cursor: 'pointer' } }, '+')
-              )
-            ),
-
-            // Keywords used
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 } }, 'KEYWORDS USED (' + keywordAnalysis.filter(function(k) { return k.count > 0; }).length + ')'),
-              React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto' } },
-                keywordAnalysis.map(function(kw, i) {
-                  return React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid var(--border)' } },
-                    React.createElement('span', { style: { fontSize: 12, color: kw.count > 0 ? '#22c55e' : '#ef4444' } }, kw.keyword),
-                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                      React.createElement('span', { style: { fontSize: 11, color: kw.count > 0 ? '#22c55e' : '#ef4444', fontWeight: 600 } }, kw.count + 'x'),
-                      React.createElement('i', { className: 'fas fa-times', onClick: function() { setTargetKeywords(function(prev) { return prev.filter(function(k) { return k !== kw.keyword; }); }); }, style: { fontSize: 9, color: 'var(--text3)', cursor: 'pointer' } })
-                    )
-                  );
-                })
-              )
-            )
-          )
+          // Right: Shared Content Score Panel
+          React.createElement(ContentScorePanel, {
+            content: content,
+            focusKeyword: focusKw,
+            keywords: [],
+            targetKeywords: targetKeywords,
+            onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(function(prev) { return prev.concat([kw]); }); },
+            onRemoveKeyword: function(kw) { setTargetKeywords(function(prev) { return prev.filter(function(k) { return k !== kw; }); }); },
+            onScoreChange: function(data) { setSpScoreData(data); },
+            projectId: pid,
+            itemId: page.id
+          })
         )
         : !generating ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px', background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)' } },
             React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16 } }),
@@ -7246,7 +7230,20 @@
         : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
             React.createElement('div', { className: 'spinner-large' }),
             React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
-          )
+          ),
+
+        // OptimisePreviewModal (AI Content Editor)
+        optimisePreview && React.createElement(OptimisePreviewModal, {
+          preview: optimisePreview,
+          item: Object.assign({}, page, { target_keywords: targetKeywords }),
+          project: project,
+          scoreData: spScoreData || { score: scoreData.score, tips: scoreData.tips, stats: stats },
+          applyingOptimise: applyingOptimise,
+          onApply: handleApplyOptimise,
+          onReject: function() { setOptimisePreview(null); },
+          onUpdate: setOptimisePreview,
+          apiPrefix: 'site-pages'
+        })
       );
     }
 
@@ -9854,7 +9851,8 @@
     // ChatPanel removed — chat is now inside OptimisePreviewModal
 
     // ============ OPTIMISE PREVIEW MODAL — Split-panel chat editor ============
-    function OptimisePreviewModal({ preview, item, project, scoreData, applyingOptimise, onApply, onReject, onUpdate }) {
+    function OptimisePreviewModal({ preview, item, project, scoreData, applyingOptimise, onApply, onReject, onUpdate, apiPrefix }) {
+      const tablePrefix = apiPrefix || 'content-queue';
       const [messages, setMessages] = useState([]);
       const [input, setInput] = useState('');
       const [sending, setSending] = useState(false);
@@ -9917,7 +9915,7 @@
         setSending(true);
 
         try {
-          const r = await api('/projects/' + pid + '/content-queue/' + preview.item_id + '/re-optimise', {
+          const r = await api('/projects/' + pid + '/' + tablePrefix + '/' + preview.item_id + '/re-optimise', {
             method: 'POST',
             body: {
               feedback: finalMsg,

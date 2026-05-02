@@ -4896,7 +4896,187 @@ Respond with ONLY the JSON object.`, item) }]
   }
 });
 
-// Live preview — fetch live page, extract header/hero/footer, inject draft content
+// Re-optimise for site_pages — same as content-queue re-optimise but queries site_pages table
+app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
+  if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
+
+  try {
+    const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get published pages for internal linking context
+    const pagesRes = await pool.query(
+      `SELECT page_url, page_name as page_title FROM site_pages WHERE project_id=$1 AND stage='published' ORDER BY page_name LIMIT 20`,
+      [projectId]
+    );
+
+    console.log(`[re-optimise-sp] Feedback for site_page ${id}: "${feedback}"`);
+
+    const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
+    const isQuestion = feedbackLower.includes('?') ||
+      /^(what|how|why|where|when|which|who|is |are |do |does |can |could |will |would |should |did |has |have |tell me|explain|show me|list|count)/i.test(feedbackLower);
+
+    let response;
+    if (isQuestion) {
+      const html = current_proposed.content_html || '';
+      const plainText = html.replace(/<[^>]+>/g, '');
+      const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+      const h2Matches = html.match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
+      const h3Matches = html.match(/<h3[^>]*>(.*?)<\/h3>/gi) || [];
+      const linkMatches = html.match(/<a[\s>]/gi) || [];
+      const imgMatches = html.match(/<img[\s>]/gi) || [];
+      const headings = h2Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const subheadings = h3Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const fk = item.focus_keyword || '';
+      let fkCount = 0;
+      if (fk) { const lower = plainText.toLowerCase(); const fkLower = fk.toLowerCase(); let p = 0; while ((p = lower.indexOf(fkLower, p)) !== -1) { fkCount++; p += fkLower.length; } }
+
+      const tipsStr = (tips || []).join('\n');
+      const tkwStr = (target_keywords || []).join(', ');
+
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
+Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
+        messages: [{ role: 'user', content: `Question: ${feedback}
+
+ACTUAL CONTENT STATS (these are accurate — use these numbers):
+- Word count: ${wordCount}
+- H2 headings (${h2Matches.length}): ${headings}
+- H3 subheadings (${h3Matches.length}): ${subheadings}
+- Internal links: ${linkMatches.length}
+- Images: ${imgMatches.length}
+- Focus keyword "${fk}": appears ${fkCount} times
+- Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
+- Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
+- Current SEO score: ${content_score || 'unknown'}/100
+- Target keywords: ${tkwStr || 'none set'}
+
+SEO SCORE TIPS:
+${tipsStr || 'No tips available'}
+
+CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
+
+Respond with ONLY JSON.` }]
+      });
+    } else {
+      response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8000,
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Revise the content based on user feedback while keeping all SEO improvements.
+
+RULES:
+- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
+- Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
+- Keep all existing SEO improvements (keywords, headings, links)
+- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
+- Focus keyword must appear 3-8 times
+- Write like a human, not AI — no banned phrases
+
+YOU MUST RESPOND WITH ONLY A JSON OBJECT:
+{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
+        messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
+
+CURRENT SEO SCORE: ${content_score || 'unknown'}/100
+TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
+SEO TIPS:
+${(tips || []).join('\n')}
+
+CURRENT CONTENT (revise this):
+${current_proposed.content_html}
+
+CURRENT META TITLE: ${current_proposed.meta_title || ''}
+CURRENT META DESCRIPTION: ${current_proposed.meta_description || ''}
+
+PAGES FOR INTERNAL LINKING:
+${pagesRes.rows.map(p => `- ${p.page_url || p.page_title} (${p.page_title})`).join('\n')}
+
+Respond with ONLY the JSON object.` }]
+      });
+    }
+
+    const text = response.content[0]?.text || '';
+    let parsed;
+    try {
+      const trimmed = text.trim();
+      if (trimmed.startsWith('{')) {
+        let depth = 0, end = -1;
+        for (let i = 0; i < trimmed.length; i++) {
+          if (trimmed[i] === '{') depth++;
+          else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        parsed = JSON.parse(trimmed.slice(0, end + 1));
+      } else {
+        const codeMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeMatch) {
+          parsed = JSON.parse(codeMatch[1]);
+        } else {
+          const start = trimmed.indexOf('{');
+          if (start === -1) throw new Error('No JSON');
+          let depth2 = 0, end2 = -1;
+          for (let i = start; i < trimmed.length; i++) {
+            if (trimmed[i] === '{') depth2++;
+            else if (trimmed[i] === '}') { depth2--; if (depth2 === 0) { end2 = i; break; } }
+          }
+          parsed = JSON.parse(trimmed.slice(start, end2 + 1));
+        }
+      }
+    } catch (e) {
+      console.error('[re-optimise-sp] Parse failed:', e.message);
+      if (text.includes('<h2') || text.includes('<p>')) {
+        const htmlStart = text.indexOf('<');
+        parsed = { content_html: text.slice(htmlStart), ai_notes: 'Revised (raw extraction)', meta_title: current_proposed.meta_title, meta_description: current_proposed.meta_description };
+      } else {
+        return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
+      }
+    }
+
+    const noChange = parsed.changed === false;
+    let cleanHtml = (parsed.content_html || current_proposed.content_html || '');
+    cleanHtml = cleanHtml.replace(/\\n/g, '').replace(/\n(?!<)/g, '');
+
+    const proposed = {
+      content_html: noChange ? current_proposed.content_html : cleanHtml,
+      meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
+      meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
+    };
+
+    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
+    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
+    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
+
+    const currentText = (item.draft_content || '').replace(/<[^>]+>/g, '');
+    const currentWords = currentText.trim() ? currentText.trim().split(/\s+/).length : 0;
+
+    console.log(`[re-optimise-sp] ${noChange ? 'Question' : 'Revised'} site_page ${id}: ${currentWords} → ${proposedWords} words`);
+    res.json({
+      preview: true,
+      proposed,
+      changed: !noChange,
+      stats: {
+        current: { words: currentWords },
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+      },
+      item_id: id
+    });
+  } catch (e) {
+    console.error('[re-optimise-sp] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Live preview ��� fetch live page, extract header/hero/footer, inject draft content
 app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
