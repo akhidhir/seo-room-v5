@@ -6453,106 +6453,38 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // Depth-aware content swap: find container by class, count nested tags to find matching close
-    // Returns { start: tagEnd, end: closeStart, textLen } for a given class match starting at searchFrom
-    function findContainerByClass(fullHtml, className, searchFrom) {
-      const searchRegex = new RegExp(`class="[^"]*${className}`, 'gi');
-      searchRegex.lastIndex = searchFrom || 0;
-      const m = searchRegex.exec(fullHtml);
-      if (!m) return null;
-      const idx = m.index;
-      let tagStart = fullHtml.lastIndexOf('<', idx);
-      if (tagStart === -1) return null;
-      let tagEnd = fullHtml.indexOf('>', tagStart);
-      if (tagEnd === -1) return null;
-      tagEnd += 1;
-      const tagNameMatch = fullHtml.slice(tagStart).match(/^<(\w+)/);
-      if (!tagNameMatch) return null;
-      const tagName = tagNameMatch[1].toLowerCase();
-      let depth = 1;
-      let pos = tagEnd;
-      const openPattern = '<' + tagName;
-      const closePattern = '</' + tagName;
-      while (depth > 0 && pos < fullHtml.length) {
-        const nextOpen = fullHtml.toLowerCase().indexOf(openPattern, pos);
-        const nextClose = fullHtml.toLowerCase().indexOf(closePattern, pos);
-        if (nextClose === -1) break;
-        if (nextOpen !== -1 && nextOpen < nextClose) {
-          depth++;
-          pos = nextOpen + openPattern.length;
-        } else {
-          depth--;
-          if (depth === 0) {
-            const innerHTML = fullHtml.slice(tagEnd, nextClose);
-            const textLen = innerHTML.replace(/<[^>]+>/g, '').trim().length;
-            return { start: tagEnd, end: nextClose, textLen, searchEnd: searchRegex.lastIndex };
-          }
-          pos = nextClose + closePattern.length;
-        }
-      }
-      return null;
-    }
-
-    const contentClasses = [
-      'entry-content', 'post-content', 'page-content', 'the-content',
-      'content-area', 'article-content', 'elementor-widget-container',
-      'et_pb_text_inner', 'wp-block-post-content',
-    ];
-
+    // Nuclear swap: replace EVERYTHING between </header> and <footer> with draft content
+    // This works for any theme — page builders scatter content across multiple sections
+    const headerEndMatch = html.match(/<\/header>/i);
+    const footerStartMatch = html.match(/<footer/i);
     let swapped = false;
 
-    // Find ALL matches for each class, pick the one with the MOST text (= main content area)
-    let bestMatch = null;
-    let bestClass = '';
-    for (const cls of contentClasses) {
-      let searchFrom = 0;
-      while (true) {
-        const match = findContainerByClass(html, cls, searchFrom);
-        if (!match) break;
-        if (!bestMatch || match.textLen > bestMatch.textLen) {
-          bestMatch = match;
-          bestClass = cls;
-        }
-        searchFrom = match.searchEnd;
-      }
-    }
+    if (headerEndMatch && footerStartMatch) {
+      const headerEndPos = headerEndMatch.index + headerEndMatch[0].length;
+      const footerStartPos = footerStartMatch.index;
 
-    if (bestMatch && bestMatch.textLen > 100) {
-      html = html.slice(0, bestMatch.start) + draftContent + html.slice(bestMatch.end);
-      swapped = true;
-      console.log(`[preview] Content swapped using largest "${bestClass}" container (${bestMatch.textLen} chars text)`);
-    }
-
-    // Fallback: try <article> tag — pick the one with the most content
-    if (!swapped) {
-      const articleRegex = /<article[^>]*>/gi;
-      let artMatch;
-      let bestArt = null;
-      while ((artMatch = articleRegex.exec(html)) !== null) {
-        const artTagEnd = artMatch.index + artMatch[0].length;
-        const artClose = html.indexOf('</article>', artTagEnd);
-        if (artClose > artTagEnd) {
-          const textLen = html.slice(artTagEnd, artClose).replace(/<[^>]+>/g, '').trim().length;
-          if (!bestArt || textLen > bestArt.textLen) {
-            bestArt = { start: artTagEnd, end: artClose, textLen };
-          }
-        }
-      }
-      if (bestArt && bestArt.textLen > 100) {
-        html = html.slice(0, bestArt.start) + `<div style="padding:30px">${draftContent}</div>` + html.slice(bestArt.end);
+      if (footerStartPos > headerEndPos) {
+        const contentWrapper = `
+        <div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.8;color:#333">
+          ${draftContent}
+        </div>`;
+        html = html.slice(0, headerEndPos) + contentWrapper + html.slice(footerStartPos);
         swapped = true;
-        console.log(`[preview] Content swapped inside largest <article> (${bestArt.textLen} chars)`);
+        console.log(`[preview] Content replaced between </header> and <footer> (${footerStartPos - headerEndPos} chars removed)`);
       }
     }
 
-    // Last resort: inject after header
+    // Fallback if no header/footer structure
     if (!swapped) {
-      console.log('[preview] WARNING: No content area found, injecting after header');
-      const headerEnd = html.search(/<\/header>/i);
-      const insertAt = headerEnd > 0 ? headerEnd + 9 : html.indexOf('<body') + html.slice(html.indexOf('<body')).indexOf('>') + 1;
-      const injection = `<div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.9">${draftContent}</div>`;
-      html = html.slice(0, insertAt) + injection + html.slice(insertAt);
-      swapped = true;
+      const bodyMatch = html.match(/<body[^>]*>/i);
+      if (bodyMatch) {
+        const bodyEnd = bodyMatch.index + bodyMatch[0].length;
+        const bodyClose = html.indexOf('</body>');
+        if (bodyClose > bodyEnd) {
+          html = html.slice(0, bodyEnd) + `<div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.8">${draftContent}</div>` + html.slice(bodyClose);
+          swapped = true;
+        }
+      }
     }
 
     // Add preview pill (bottom-right corner, doesn't block page)
