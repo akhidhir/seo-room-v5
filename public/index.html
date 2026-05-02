@@ -9348,6 +9348,31 @@
                 React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Optimising...') :
                 React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Optimise')
               ),
+              // AI Editor — open chat with current draft (no optimise first)
+              !isPublished && hasDraft && React.createElement('button', {
+                onClick: () => {
+                  const html = editContent || '';
+                  const plain = html.replace(/<[^>]+>/g, '');
+                  const words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+                  setOptimisePreview({
+                    preview: true,
+                    proposed: {
+                      content_html: html,
+                      meta_title: editMeta.meta_title || '',
+                      meta_description: editMeta.meta_desc || '',
+                      ai_notes: null
+                    },
+                    stats: {
+                      current: { words },
+                      proposed: { words, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
+                    },
+                    item_id: selectedItem.id
+                  });
+                },
+                style: { background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
+                  border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer',
+                  boxShadow: '0 2px 12px rgba(99,102,241,0.3)' }
+              }, React.createElement('i', { className: 'fa-solid fa-comments', style: { marginRight: 6 } }), 'AI Editor'),
               // Save
               !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
                 React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
