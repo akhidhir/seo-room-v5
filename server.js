@@ -1380,10 +1380,10 @@ You have TWO inputs:
 2. AUDIT REPORTS (for context and recommendations — SECONDARY source)
 
 === STRUCTURED FACTS (PRIMARY — trust these over report text) ===
-${JSON.stringify(facts, null, 2)}
+${JSON.stringify(facts).slice(0, 12000)}
 
 === AUDIT REPORTS (SECONDARY — use for context only) ===
-${reportSection}
+${reportSection.slice(0, 10000)}
 
 YOUR JOB:
 1. Create action items ONLY for issues supported by the STRUCTURED FACTS above.
@@ -1408,26 +1408,23 @@ VALIDATION RULES — every action item MUST pass ALL of these:
 - The "description" must reference specific data from STRUCTURED FACTS
 - If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
 
-Return ONLY a JSON array:
+Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description under 120 chars. No markdown in values.
 [{
   "pillar": "<gbp_external|gsc_agent|website>",
   "category": "<section name>",
-  "title": "<short actionable title>",
-  "description": "<what's wrong — cite specific data from facts>",
-  "recommendation": "<specific fix with steps>",
+  "title": "<short title>",
+  "description": "<what to fix + why>",
   "severity": "<Critical|High|Medium|Low>",
   "execution_type": "<plugin|manual|api>",
   "assignee_label": "<WP Plugin|SEO Specialist|Manual|Automated>",
-  "current_value": "<actual value from facts>",
-  "new_value": "<target value>",
-  "page_url": "<real URL from facts or empty string>",
-  "fact_source": "<which fact category supports this: pages|gbp_profile|competitors|gsc_metrics|technical_issues|service_areas|directories|scores>"
+  "current_value": "<actual value>",
+  "new_value": "<target>"
 }]`;
 
         const resp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 8192,
-          messages: [{ role: 'user', content: orchestratorPrompt + '\n\nIMPORTANT: Limit to 25 most impactful action items max. Keep descriptions under 100 chars. Be concise.' }]
+          max_tokens: 16000,
+          messages: [{ role: 'user', content: orchestratorPrompt }]
         });
 
         let text = resp.content[0].text.trim();
