@@ -185,7 +185,7 @@
       align-items: center;
       gap: 12px;
       color: var(--text2);
-      font-size: 13px;
+      font-size: 15px;
     }
 
     .sidebar-item:hover {
@@ -199,8 +199,9 @@
     }
 
     .sidebar-item i {
-      width: 16px;
+      width: 18px;
       text-align: center;
+      font-size: 15px;
     }
 
     .sidebar-footer {
@@ -7070,6 +7071,7 @@
       var [generating, setGenerating] = React.useState(false);
       var [optimising, setOptimising] = React.useState(false);
       var [publishing, setPublishing] = React.useState(false);
+      var [savingMeta, setSavingMeta] = React.useState(false);
       var [targetKeywords, setTargetKeywords] = React.useState((page.keywords || []).map(function(k) { return k.keyword || k; }));
       var [optimisePreview, setOptimisePreview] = React.useState(null);
       var [applyingOptimise, setApplyingOptimise] = React.useState(false);
@@ -7168,8 +7170,9 @@
 
       var handleSaveEdit = async function() {
         if (!pid) return;
+        setSavingMeta(true);
         try {
-          await api('/projects/' + pid + '/site-pages/' + page.id, {
+          var result = await api('/projects/' + pid + '/site-pages/' + page.id, {
             method: 'PUT',
             body: {
               draft_content: editContent,
@@ -7179,10 +7182,13 @@
               target_keywords: targetKeywords
             }
           });
+          if (result && result.error) { alert('Save failed: ' + result.error); setSavingMeta(false); return; }
           onUpdate(Object.assign({}, page, {
             draft_content: editContent, meta_title: editMeta.meta_title, meta_description: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword
           }));
-        } catch (e) { alert('Error saving: ' + e.message); }
+          setSavingMeta('done');
+          setTimeout(function() { setSavingMeta(false); }, 2000);
+        } catch (e) { alert('Error saving: ' + e.message); setSavingMeta(false); }
       };
 
       var handleRewriteMeta = async function(field) {
@@ -7432,7 +7438,9 @@
             React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
           ),
           !isPublished && React.createElement('div', { style: { marginTop: 16, display: 'flex', justifyContent: 'flex-end' } },
-            React.createElement('button', { onClick: handleSaveEdit, style: { padding: '6px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, 'Save Meta')
+            React.createElement('button', { onClick: handleSaveEdit, disabled: savingMeta === true,
+              style: { padding: '6px 16px', background: savingMeta === 'done' ? '#22c55e' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: savingMeta === true ? 0.6 : 1 } },
+              savingMeta === true ? 'Saving...' : savingMeta === 'done' ? 'Saved!' : 'Save Meta')
           )
         ),
 
@@ -9412,7 +9420,7 @@
             ),
             React.createElement('button', {
               onClick: checkCompetitorWords, disabled: checkingCompetitors || (!focusKeyword && (!targetKeywords || !targetKeywords.length) && !pageTitle),
-              style: { padding: '4px 10px', fontSize: 11, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer' }
+              style: { padding: '4px 10px', fontSize: 11, background: 'var(--card)', border: '1px solid #ef4444', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontWeight: 700 }
             }, checkingCompetitors ?
               React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Checking...') :
               React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-trophy', style: { marginRight: 4 } }), 'Check Competitors')
@@ -9628,6 +9636,7 @@
 
       const handleSaveEdit = async () => {
         if (!selectedItem || !pid) return;
+        setSavingMeta(true);
         try {
           const updated = await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
             method: 'PUT',
@@ -9645,10 +9654,13 @@
             setSelectedItem(prev => ({ ...prev, ...updated, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword }));
           }
           await loadItems();
-        } catch (e) { alert('Error saving: ' + e.message); }
+          setSavingMeta('done');
+          setTimeout(() => setSavingMeta(false), 2000);
+        } catch (e) { alert('Error saving: ' + e.message); setSavingMeta(false); }
       };
 
       const [rewritingMeta, setRewritingMeta] = useState(null); // 'title' or 'description'
+      const [savingMeta, setSavingMeta] = useState(false);
       const handleRewriteMeta = async (field) => {
         if (!selectedItem || !pid) return;
         setRewritingMeta(field);
@@ -10205,7 +10217,9 @@
               React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12, marginTop: 4 } }, (editMeta.meta_desc || '').length + ' / 160 chars')
             ),
             !isPublished && React.createElement('div', { style: { marginTop: 16, display: 'flex', justifyContent: 'flex-end' } },
-              React.createElement('button', { onClick: handleSaveEdit, style: { padding: '6px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 } }, 'Save Meta')
+              React.createElement('button', { onClick: handleSaveEdit, disabled: savingMeta === true,
+                style: { padding: '6px 16px', background: savingMeta === 'done' ? '#22c55e' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: savingMeta === true ? 0.6 : 1 } },
+                savingMeta === true ? 'Saving...' : savingMeta === 'done' ? 'Saved!' : 'Save Meta')
             )
           ),
 
@@ -14226,7 +14240,7 @@ case 'action-plan':
             <div className="sidebar-content">
               {navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={{ fontSize: 14, fontWeight: 900, letterSpacing: 2, color: { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
+                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
                   {(() => { const sColor = { 'AUDIT': '#f97316', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
@@ -14275,7 +14289,7 @@ case 'action-plan':
                           return (
                             <div key={secId}
                               className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                              style={Object.assign({ paddingLeft: 40, fontSize: 12 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
+                              style={Object.assign({ paddingLeft: 40, fontSize: 13 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                               onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                             >
                               <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
@@ -14292,7 +14306,7 @@ case 'action-plan':
                             <React.Fragment key={child.id}>
                               <div
                                 className={`sidebar-item ${childActive ? 'active' : ''}`}
-                                style={Object.assign({ paddingLeft: 36, fontSize: 13 }, childActive ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
+                                style={Object.assign({ paddingLeft: 36, fontSize: 14 }, childActive ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                                 onClick={() => {
                                   if (child.expandable && extSections.length > 0) {
                                     setExpandedNav(prev => ({ ...prev, [child.id]: !prev[child.id] }));
@@ -14311,7 +14325,7 @@ case 'action-plan':
                                 return (
                                   <div key={secId}
                                     className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                                    style={Object.assign({ paddingLeft: 56, fontSize: 12 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
+                                    style={Object.assign({ paddingLeft: 56, fontSize: 13 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
                                     onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
                                   >
                                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
