@@ -7870,6 +7870,12 @@
         node.on('mouseenter', (e, d) => { labels.filter(l => l.id === d.id).attr('opacity', 1); })
             .on('mouseleave', (e, d) => { labels.filter(l => l.id === d.id).attr('opacity', 0); });
 
+        // "Poor Copy" tag below node
+        const isPoorCopy = d => d.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag');
+        const poorTag = node.filter(isPoorCopy).append('g').attr('class', 'poor-tag').attr('pointer-events', 'none');
+        poorTag.append('rect').attr('rx', 3).attr('fill', '#ef4444').attr('x', -18).attr('y', R + 3).attr('width', 36).attr('height', 12);
+        poorTag.append('text').text('POOR').attr('text-anchor', 'middle').attr('y', R + 12).attr('font-size', 7).attr('fill', '#fff').attr('font-weight', 700);
+
         // Issue count badge (smaller) — exclude orphan issues
         const hasNonOrphan = d => d.issues.filter(i => !i.startsWith('Orphan page')).length > 0;
         const nonOrphanCount = d => d.issues.filter(i => !i.startsWith('Orphan page')).length;
@@ -7998,8 +8004,8 @@
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>{graphData.stats.total} pages · {graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0)} issues</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Issues' }].map((x, i) => (
-                    <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
+                  {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Issues' }, { c: '#ef4444', l: 'Poor Copy', tag: true }].map((x, i) => (
+                    <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}>{x.tag ? <span style={{ fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>POOR</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />}{x.l}</span>
                   ))}
                   <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
                     style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}>+</button>
@@ -8047,8 +8053,8 @@
                 Drag nodes · Click to inspect
               </div>
               <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 12, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none' }}>
-                {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }].map((x, i) => (
-                  <span key={i}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />{x.l}</span>
+                {[{ c: '#22c55e', l: 'Healthy' }, { c: '#3b82f6', l: 'Has Issues' }, { c: '#ef4444', l: 'Poor Copy', tag: true }].map((x, i) => (
+                  <span key={i}>{x.tag ? <span style={{ display: 'inline-block', fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>POOR</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />}{x.l}</span>
                 ))}
               </div>
               <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', gap: 4, zIndex: 10 }}>
