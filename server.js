@@ -11692,14 +11692,14 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
 
     // 4. Action items with detail
     const actionsRes = await pool.query(
-      `SELECT status, pillar, title, priority FROM action_items WHERE project_id=$1 ORDER BY created_at DESC`,
+      `SELECT status, pillar, title, severity FROM action_items WHERE project_id=$1 ORDER BY created_at DESC`,
       [projectId]
     );
     const actionsByStatus = { done: 0, pending: 0, 'in-progress': 0 };
     const recentActions = [];
     for (const r of actionsRes.rows) {
       actionsByStatus[r.status] = (actionsByStatus[r.status] || 0) + 1;
-      if (recentActions.length < 10) recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, priority: r.priority });
+      if (recentActions.length < 10) recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, severity: r.severity });
     }
     const totalActions = Object.values(actionsByStatus).reduce((s, v) => s + v, 0);
     const completionRate = totalActions > 0 ? Math.round((actionsByStatus.done / totalActions) * 100) : 0;
