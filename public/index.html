@@ -5323,8 +5323,8 @@
                     const aiLabel = item.assignee_label;
                     const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item.pillar || pillar);
                     const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
-                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
-                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
+                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
+                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
                     const aColor = assigneeColorMap[assigneeLabel] || (execInfo && execInfo.color) || '#6b7280';
                     const aIcon = assigneeIconMap[assigneeLabel] || (execInfo && execInfo.icon) || 'fas fa-user';
                     return (
@@ -5610,8 +5610,8 @@
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
                     const assigneeLabel = item._assigneeLabel;
-                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
-                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
+                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
+                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
                     const aColor = assigneeColorMap[assigneeLabel] || '#6b7280';
                     const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-user';
                     const itemPillar = item._pillar || item.pillar;
@@ -5623,6 +5623,18 @@
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
                           <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.5, color: 'var(--text1)' }}>{item.title}</div>
                           <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginTop: 2 }}>{item.description}</div>
+                          {(() => {
+                            const aLabel = (item._assigneeLabel || item.assignee_label || '').toLowerCase();
+                            const isGBP = (item._pillar || item.pillar || '').includes('gbp');
+                            const isGSC = (item._pillar || item.pillar || '').includes('gsc');
+                            let navPage = null, navLabel = '', navIcon = '', navColor = '';
+                            if (aLabel.includes('on-page') || aLabel === 'wp plugin') { navPage = 'onpage-audit'; navLabel = 'Fix in On-Page Audit'; navIcon = 'fas fa-magic'; navColor = '#f59e0b'; }
+                            else if (aLabel.includes('copywriter')) { navPage = 'new-copywriter'; navLabel = 'Send to Copywriter'; navIcon = 'fas fa-pen-fancy'; navColor = '#8b5cf6'; }
+                            else if (isGBP) { navPage = 'gbp-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
+                            else if (isGSC) { navPage = 'gsc-audit'; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
+                            if (!navPage) return null;
+                            return <button onClick={() => setPage(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
+                          })()}
                         </td>
                         {activePillar === 'all' && (
                           <td style={{ padding: '14px', verticalAlign: 'top' }}>

@@ -1393,11 +1393,18 @@ YOUR JOB:
 5. For competitors: use actual competitor data from facts.competitors.
 6. DEDUPLICATE — same issue across audits = ONE item.
 
-ASSIGN execution_type:
-- "plugin" (WP Plugin) — WordPress content changes via REST API + Yoast: meta titles, descriptions, headings, schema, content, pages, internal links, canonical tags, redirects
-- "manual" with assignee_label "Manual" — business owner physical tasks: photos, review requests, directory registrations, claiming listings
-- "manual" with assignee_label "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses), strategy, server/theme configs, social media
-- "api" (Automated) — API tasks: URL indexing submission, sitemap submission
+ASSIGN execution_type AND assignee_label — choose the BEST match:
+- "plugin" + "On-Page Audit" — ONLY for quick meta fixes: missing/short meta titles, missing meta descriptions, missing H1s. These get auto-fixed via AI in the On-Page Audit tool.
+- "plugin" + "Copywriter" — content improvements: thin content, low word count, content optimization for rankings, improving page copy, adding location keywords to body text, rewriting content to target queries better. These go to the Copywriter tool for human-quality content.
+- "manual" + "Manual" — business owner physical tasks: take photos, request reviews, register in directories, claim listings, upload photos to GBP
+- "manual" + "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses, attributes, service menu), strategy decisions, server/hosting configs, theme changes, social media, technical SEO changes that can't be automated
+- "api" + "Automated" — API tasks: URL indexing submission, sitemap submission
+
+DECISION GUIDE for website pillar:
+- "Add title & description" → On-Page Audit (meta fix)
+- "Optimize for ranking" / "Improve ranking" → Copywriter (content work)
+- "Add schema" / "Fix canonical" / "Fix redirect" → SEO Specialist (technical)
+- "Improve content" / "Expand content" / "Add location keywords" → Copywriter
 
 SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
 PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
@@ -1505,7 +1512,8 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
             || validCats[0] || 'General';
           const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
           const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
-          const assigneeLabel = item.assignee_label || (execType === 'plugin' ? 'WP Plugin' : execType === 'api' ? 'Automated' : 'SEO Specialist');
+          const validAssignees = ['On-Page Audit', 'Copywriter', 'SEO Specialist', 'Manual', 'Automated', 'WP Plugin'];
+          const assigneeLabel = validAssignees.includes(item.assignee_label) ? item.assignee_label : (execType === 'plugin' ? 'On-Page Audit' : execType === 'api' ? 'Automated' : 'SEO Specialist');
 
           if (!item.title) { skippedCount++; continue; }
 
