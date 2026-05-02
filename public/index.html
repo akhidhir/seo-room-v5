@@ -8755,6 +8755,10 @@
       const [pendingSelection, setPendingSelection] = useState(null);
       const [comments, setComments] = useState(initialComments || []);
 
+      const settingProgrammatically = useRef(false);
+      const onChangeRef = useRef(onChange);
+      onChangeRef.current = onChange;
+
       useEffect(() => {
         if (!editorRef.current || quillRef.current) return;
         try {
@@ -8774,27 +8778,29 @@
           });
           quillRef.current = q;
           if (value) {
+            settingProgrammatically.current = true;
             q.root.innerHTML = value;
             updateWordCount(q);
+            settingProgrammatically.current = false;
           }
-          q.on('text-change', () => {
+          q.on('text-change', (delta, oldDelta, source) => {
             updateWordCount(q);
-            if (onChange) onChange(q.root.innerHTML);
+            if (!settingProgrammatically.current && onChangeRef.current) onChangeRef.current(q.root.innerHTML);
           });
           applyCommentHighlights(q, comments || []);
         } catch(e) { setError(e.message); }
       }, []);
 
-      const lastAppliedValue = useRef(null);
       useEffect(() => {
         function applyValue() {
-          if (quillRef.current && value != null && value !== lastAppliedValue.current) {
+          if (quillRef.current && value != null) {
             try {
+              settingProgrammatically.current = true;
               quillRef.current.root.innerHTML = value || '';
               updateWordCount(quillRef.current);
               applyCommentHighlights(quillRef.current, comments || []);
-              lastAppliedValue.current = value;
-            } catch(e) { console.error('Quill apply error:', e); }
+              settingProgrammatically.current = false;
+            } catch(e) { console.error('Quill apply error:', e); settingProgrammatically.current = false; }
           } else if (value && !quillRef.current) {
             setTimeout(applyValue, 300);
           }
