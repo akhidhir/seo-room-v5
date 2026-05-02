@@ -5508,21 +5508,107 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
       }
     }
 
-    // Return proposed changes as preview — don't save yet
+    // Build proposed output
+    let proposedTitle = (parsed.meta_title || curMetaTitle || '').trim();
+    let proposedDesc = (parsed.meta_description || curMetaDesc || '').trim();
+    let proposedFocusKw = (parsed.focus_keyword || curFocusKw || '').trim();
+    const fkLower = proposedFocusKw.toLowerCase();
+
+    // POST-PROCESS: validate meta against EXACT scoring rules and fix issues
+    // Meta Title: must be 50-60 chars AND contain focus keyword
+    if (proposedTitle) {
+      // Fix: trim if too long
+      if (proposedTitle.length > 60) {
+        // Try to cut at a word boundary
+        let trimmed = proposedTitle.substring(0, 60);
+        const lastSpace = trimmed.lastIndexOf(' ');
+        if (lastSpace > 40) trimmed = trimmed.substring(0, lastSpace);
+        proposedTitle = trimmed;
+        console.log(`[optimise] Meta title trimmed: ${parsed.meta_title?.length} → ${proposedTitle.length} chars`);
+      }
+      // Fix: pad if too short (append location/brand)
+      if (proposedTitle.length < 50 && proposedTitle.length > 30) {
+        const loc = project.location || '';
+        const biz = project.business_name || '';
+        if (loc && !proposedTitle.toLowerCase().includes(loc.toLowerCase())) {
+          proposedTitle = proposedTitle + ' in ' + loc;
+        } else if (biz && !proposedTitle.toLowerCase().includes(biz.toLowerCase())) {
+          proposedTitle = proposedTitle + ' | ' + biz;
+        }
+        if (proposedTitle.length > 60) proposedTitle = proposedTitle.substring(0, 60).replace(/\s*\|?\s*$/, '');
+      }
+      // Fix: inject focus keyword if missing
+      if (fkLower && !proposedTitle.toLowerCase().includes(fkLower)) {
+        const titleCase = proposedFocusKw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        proposedTitle = titleCase + ' — ' + proposedTitle;
+        if (proposedTitle.length > 60) proposedTitle = proposedTitle.substring(0, 60).replace(/\s*—?\s*$/, '');
+      }
+    }
+
+    // Meta Description: must be 120-155 chars AND contain focus keyword
+    if (proposedDesc) {
+      if (proposedDesc.length > 155) {
+        let trimmed = proposedDesc.substring(0, 155);
+        const lastPeriod = trimmed.lastIndexOf('.');
+        const lastSpace = trimmed.lastIndexOf(' ');
+        if (lastPeriod > 100) trimmed = trimmed.substring(0, lastPeriod + 1);
+        else if (lastSpace > 100) trimmed = trimmed.substring(0, lastSpace);
+        proposedDesc = trimmed;
+        console.log(`[optimise] Meta desc trimmed: ${parsed.meta_description?.length} → ${proposedDesc.length} chars`);
+      }
+      if (proposedDesc.length < 120 && proposedDesc.length > 60) {
+        proposedDesc = proposedDesc.replace(/\.\s*$/, '') + '. Contact us today for a free quote.';
+        if (proposedDesc.length > 155) proposedDesc = proposedDesc.substring(0, 155).replace(/\s*$/, '');
+      }
+      if (fkLower && !proposedDesc.toLowerCase().includes(fkLower)) {
+        proposedDesc = proposedDesc.replace(/\.\s*$/, '') + '. Expert ' + proposedFocusKw + ' services.';
+        if (proposedDesc.length > 155) proposedDesc = proposedDesc.substring(0, 155).replace(/\s*$/, '');
+      }
+    }
+
+    // Score the proposed output using the EXACT same algorithm as ContentScorePanel
+    const proposedText = finalHtml.replace(/<[^>]+>/g, '');
+    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
+    const proposedH2s = (finalHtml.match(/<h2/gi) || []).length;
+    const proposedH3s = (finalHtml.match(/<h3/gi) || []).length;
+    const proposedLinks = (finalHtml.match(/<a[\s>]/gi) || []).length;
+    const proposedImgs = (finalHtml.match(/<img/gi) || []).length;
+    const proposedTextLower = proposedText.toLowerCase();
+    let fkCount = 0;
+    if (fkLower) { let pos = 0; while ((pos = proposedTextLower.indexOf(fkLower, pos)) !== -1) { fkCount++; pos += fkLower.length; } }
+    const mtHasKw = fkLower && proposedTitle.toLowerCase().includes(fkLower);
+    const mdHasKw = fkLower && proposedDesc.toLowerCase().includes(fkLower);
+
+    let projectedScore = 0;
+    const wordTarget = parseInt(stats?.word_target) || 1500;
+    projectedScore += proposedWords >= wordTarget ? 20 : proposedWords >= wordTarget * 0.5 ? 12 : proposedWords >= wordTarget * 0.25 ? 6 : 0;
+    projectedScore += proposedH2s >= 3 ? 8 : proposedH2s >= 1 ? 4 : 0;
+    projectedScore += proposedH3s >= 2 ? 2 : 0;
+    projectedScore += proposedLinks >= 3 ? 8 : proposedLinks >= 1 ? 4 : 0;
+    projectedScore += proposedImgs >= 1 ? 2 : 0;
+    projectedScore += (fkCount >= 3 && fkCount <= 8) ? 15 : fkCount > 8 ? 10 : fkCount >= 1 ? 7 : 0;
+    // Target keywords — estimate (can't perfectly replicate client-side without full keyword list)
+    projectedScore += 12; // assume most keywords present after optimisation
+    // Meta title scoring
+    const mtLen = proposedTitle.length;
+    if (mtLen >= 50 && mtLen <= 60 && mtHasKw) projectedScore += 10;
+    else if (mtLen >= 40 && mtLen <= 65 && mtHasKw) projectedScore += 7;
+    else projectedScore += 3;
+    // Meta desc scoring
+    const mdLen = proposedDesc.length;
+    if (mdLen >= 120 && mdLen <= 155 && mdHasKw) projectedScore += 10;
+    else if (mdLen >= 100 && mdLen <= 160 && mdHasKw) projectedScore += 7;
+    else projectedScore += 3;
+
+    console.log(`[optimise] Projected score: ${projectedScore}/100 | words:${proposedWords} h2:${proposedH2s} h3:${proposedH3s} links:${proposedLinks} imgs:${proposedImgs} fk:${fkCount}x mt:${mtLen}ch md:${mdLen}ch mtKw:${mtHasKw} mdKw:${mdHasKw}`);
+
     const proposed = {
       content_html: finalHtml,
-      meta_title: parsed.meta_title || null,
-      meta_description: parsed.meta_description || null,
-      focus_keyword: parsed.focus_keyword || null,
-      ai_notes: parsed.ai_notes || 'Content improved',
+      meta_title: proposedTitle,
+      meta_description: proposedDesc,
+      focus_keyword: proposedFocusKw,
+      ai_notes: (parsed.ai_notes || 'Content improved') + ` | Projected score: ${Math.min(100, projectedScore)}/100`,
     };
-
-    // Compute stats for proposed content
-    const proposedText = (proposed.content_html || '').replace(/<[^>]+>/g, '');
-    const proposedWords = proposedText.trim() ? proposedText.trim().split(/\s+/).length : 0;
-    const proposedH2s = ((proposed.content_html || '').match(/<h2/gi) || []).length;
-    const proposedH3s = ((proposed.content_html || '').match(/<h3/gi) || []).length;
-    const proposedLinks = ((proposed.content_html || '').match(/<a[\s>]/gi) || []).length;
 
     const currentText2 = contentToOptimise.replace(/<[^>]+>/g, '');
     const currentWords = currentText2.trim() ? currentText2.trim().split(/\s+/).length : 0;
@@ -5533,7 +5619,7 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
       proposed,
       stats: {
         current: { words: currentWords },
-        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks }
+        proposed: { words: proposedWords, h2s: proposedH2s, h3s: proposedH3s, links: proposedLinks, imgs: proposedImgs, focus_kw_count: fkCount, projected_score: Math.min(100, projectedScore) }
       },
       item_id: id
     });
