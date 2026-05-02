@@ -5415,28 +5415,32 @@
           const data = await api(`/projects/${project.id}/orchestrator/run`, { method: 'POST' });
           if (data?.error) { setError('Orchestrator: ' + data.error); setSyncing(false); return; }
           if (data?.status === 'running') {
-            // Poll every 5s until items appear, up to 2 minutes
+            // Poll orchestrator/status every 3s until completed or failed, up to 3 minutes
             let attempts = 0;
-            const maxAttempts = 24;
+            const maxAttempts = 60;
             const pollInterval = setInterval(async () => {
               attempts++;
               try {
-                const d = await api(`/projects/${project.id}/orchestrator`);
-                const total = d.total_deduped || d.stats?.total || 0;
-                if (total > 0 || attempts >= maxAttempts) {
+                const s = await api(`/projects/${project.id}/orchestrator/status`);
+                if (s.status === 'completed') {
                   clearInterval(pollInterval);
                   loadData();
                   setSyncing(false);
-                  if (attempts >= maxAttempts && total === 0) {
-                    setError('Orchestrator timed out — check that you have completed audits, then try again.');
-                  }
+                } else if (s.status === 'failed') {
+                  clearInterval(pollInterval);
+                  setError('Orchestrator failed: ' + (s.error || 'Unknown error — check Railway logs'));
+                  setSyncing(false);
+                } else if (attempts >= maxAttempts) {
+                  clearInterval(pollInterval);
+                  setError('Orchestrator timed out after 3 minutes. Check Railway logs for errors.');
+                  setSyncing(false);
                 }
               } catch (e) {
                 clearInterval(pollInterval);
                 setSyncing(false);
                 setError('Polling error: ' + e.message);
               }
-            }, 5000);
+            }, 3000);
             return;
           }
           loadData();

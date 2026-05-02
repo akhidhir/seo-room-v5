@@ -1285,6 +1285,9 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
     }
 
     console.log(`[orchestrator] Running AI orchestrator for project ${projectId} with ${Object.keys(reports).length} audit reports`);
+    // Track orchestrator status in-memory
+    if (!global._orchestratorStatus) global._orchestratorStatus = {};
+    global._orchestratorStatus[projectId] = { status: 'running', startedAt: Date.now(), error: null, itemCount: 0 };
     res.json({ status: 'running', pillars: Object.keys(reports) });
 
     // Run async — TWO-STEP orchestrator for maximum accuracy
@@ -1491,13 +1494,22 @@ Return ONLY a JSON array:
         }
 
         console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
+        if (global._orchestratorStatus) global._orchestratorStatus[projectId] = { status: 'completed', itemCount: savedCount, error: null };
       } catch (e) {
         console.error('[orchestrator] Error:', e.message, e.stack);
+        if (global._orchestratorStatus) global._orchestratorStatus[projectId] = { status: 'failed', error: e.message, itemCount: 0 };
       }
     })();
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Orchestrator status endpoint
+app.get('/api/projects/:projectId/orchestrator/status', (req, res) => {
+  const status = (global._orchestratorStatus || {})[req.params.projectId];
+  if (!status) return res.json({ status: 'idle' });
+  res.json(status);
 });
 
 // Legacy sync-all removed — orchestrator is the sole source of truth for action items
