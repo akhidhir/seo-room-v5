@@ -4648,24 +4648,38 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
 
     let response;
     if (isQuestion) {
-      // FAST PATH: lightweight prompt, no content return, small max_tokens
-      const contentSummary = (current_proposed.content_html || '').replace(/<[^>]+>/g, '').slice(0, 2000);
-      const h2s = (current_proposed.content_html || '').match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
-      const headings = h2s.map(h => h.replace(/<[^>]+>/g, '')).join(', ');
-      const wordCount = contentSummary.trim().split(/\s+/).length;
+      // FAST PATH: lightweight prompt with accurate stats, no content return
+      const html = current_proposed.content_html || '';
+      const plainText = html.replace(/<[^>]+>/g, '');
+      const wordCount = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+      const h2Matches = html.match(/<h2[^>]*>(.*?)<\/h2>/gi) || [];
+      const h3Matches = html.match(/<h3[^>]*>(.*?)<\/h3>/gi) || [];
+      const linkMatches = html.match(/<a[\s>]/gi) || [];
+      const imgMatches = html.match(/<img[\s>]/gi) || [];
+      const headings = h2Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const subheadings = h3Matches.map(h => h.replace(/<[^>]+>/g, '')).join(' | ');
+      const fk = item.draft_focus_keyword || item.current_focus_keyword || '';
+      let fkCount = 0;
+      if (fk) { const lower = plainText.toLowerCase(); const fkLower = fk.toLowerCase(); let p = 0; while ((p = lower.indexOf(fkLower, p)) !== -1) { fkCount++; p += fkLower.length; } }
 
       response = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
-        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about the content concisely. Use Australian English.
+        max_tokens: 600,
+        system: `You are an SEO copywriter assistant for "${project.business_name || project.name}". Answer the user's question about their content accurately based on the REAL stats provided. Use Australian English. Be concise.
 Respond with ONLY a JSON object: {"ai_notes": "your answer", "changed": false}`,
         messages: [{ role: 'user', content: `Question: ${feedback}
 
-Content summary (${wordCount} words): ${contentSummary.slice(0, 1000)}...
-Headings: ${headings}
-Meta title: ${current_proposed.meta_title || ''}
-Meta description: ${current_proposed.meta_description || ''}
-Focus keyword: ${item.draft_focus_keyword || item.current_focus_keyword || 'not set'}
+ACTUAL CONTENT STATS (these are accurate — use these numbers):
+- Word count: ${wordCount}
+- H2 headings (${h2Matches.length}): ${headings}
+- H3 subheadings (${h3Matches.length}): ${subheadings}
+- Internal links: ${linkMatches.length}
+- Images: ${imgMatches.length}
+- Focus keyword "${fk}": appears ${fkCount} times
+- Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
+- Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
+
+CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
 
 Respond with ONLY JSON.` }]
       });
