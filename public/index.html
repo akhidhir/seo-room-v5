@@ -8162,7 +8162,15 @@
         (async () => {
           try {
             const data = await api(`/projects/${project.id}/site-graph`);
-            if (data && data.nodes) setGraphData(data);
+            if (data && data.nodes) {
+              setGraphData(data);
+              // Restore persisted fixed_nodes into fixing state
+              if (data.fixed_nodes && data.fixed_nodes.length > 0) {
+                const restored = {};
+                data.fixed_nodes.forEach(id => { restored['meta-' + id] = 'fixed'; });
+                setFixing(prev => ({ ...prev, ...restored }));
+              }
+            }
           } catch(e) { console.error(e); }
           setLoading(false);
         })();

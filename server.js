@@ -2846,8 +2846,14 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
                 graphData.stats.issues = issueCount;
                 graphData.stats.orphans = orphans;
               }
+              // Persist fixed node IDs so frontend can restore "Fixed" badges across navigations
+              if (!graphData.fixed_nodes) graphData.fixed_nodes = [];
+              for (const id of successIds) {
+                const sid = String(id);
+                if (!graphData.fixed_nodes.includes(sid)) graphData.fixed_nodes.push(sid);
+              }
               await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), auditId]);
-              console.log(`[onpage-fix] Updated site_graph audit data for ${successIds.length} nodes`);
+              console.log(`[onpage-fix] Updated site_graph audit data for ${successIds.length} nodes. fixed_nodes: ${graphData.fixed_nodes.length}`);
             }
           }
         }
@@ -6916,8 +6922,8 @@ async function crawlSiteGraph(project) {
           node.meta_title = titleMatch ? titleMatch[1].trim() : '';
           const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
           node.meta_description = descMatch ? descMatch[1].trim() : '';
-          const h1Match = html.match(/<h1[^>]*>([^<]*)<\/h1>/i);
-          node.h1 = h1Match ? h1Match[1].trim() : '';
+          const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+          node.h1 = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').trim() : '';
           const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
           if (bodyMatch) {
             const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
