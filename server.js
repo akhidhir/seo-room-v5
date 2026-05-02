@@ -4616,6 +4616,93 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, re
   }
 });
 
+// Competitor word count analysis — check top SERP results for a keyword
+app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
+  const { keyword, location } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'Missing keyword' });
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    const loc = location || project?.location || 'Perth, Western Australia, Australia';
+
+    console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
+    const serpData = await serpApiSearch({
+      engine: 'google', q: keyword, location: loc, num: 10, gl: 'au', hl: 'en'
+    });
+
+    const organicResults = (serpData.organic_results || []).slice(0, 10);
+    const competitors = [];
+    const ownDomain = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+
+    // Fetch each competitor page and count words (parallel, 10s timeout each)
+    const fetchPromises = organicResults.map(async (result, idx) => {
+      const url = result.link;
+      if (!url) return null;
+      const domain = url.replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+      const isOwn = ownDomain && domain.includes(ownDomain.replace('www.', ''));
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) return { position: idx + 1, url, domain, title: result.title, words: null, error: 'HTTP ' + resp.status, isOwn };
+
+        const html = await resp.text();
+        // Extract main content — strip scripts, styles, nav, header, footer
+        let body = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+          .replace(/<header[\s\S]*?<\/header>/gi, '')
+          .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+          .replace(/<aside[\s\S]*?<\/aside>/gi, '');
+        const text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const words = text.split(' ').filter(w => w.length > 0).length;
+        const h2s = (html.match(/<h2[\s>]/gi) || []).length;
+        const h3s = (html.match(/<h3[\s>]/gi) || []).length;
+
+        return { position: idx + 1, url, domain, title: result.title, words, h2s, h3s, isOwn };
+      } catch (e) {
+        return { position: idx + 1, url, domain, title: result.title, words: null, error: e.message?.includes('abort') ? 'Timeout' : e.message, isOwn };
+      }
+    });
+
+    const results = (await Promise.all(fetchPromises)).filter(Boolean);
+    const withWords = results.filter(r => r.words && !r.isOwn);
+    const wordCounts = withWords.map(r => r.words).sort((a, b) => a - b);
+
+    const avg = wordCounts.length ? Math.round(wordCounts.reduce((a, b) => a + b, 0) / wordCounts.length) : 0;
+    const median = wordCounts.length ? wordCounts[Math.floor(wordCounts.length / 2)] : 0;
+    const top3Avg = wordCounts.slice(0, 3).length ? Math.round(wordCounts.slice(0, 3).reduce((a, b) => a + b, 0) / Math.min(3, wordCounts.length)) : 0;
+    // Recommended: aim for 10-20% more than top 3 average
+    const recommended = top3Avg ? Math.round(top3Avg * 1.15 / 50) * 50 : 1500;
+
+    console.log(`[competitor-wordcount] "${keyword}": avg=${avg}, median=${median}, top3avg=${top3Avg}, recommended=${recommended}`);
+    res.json({
+      keyword,
+      location: loc,
+      results,
+      summary: {
+        avg,
+        median,
+        min: wordCounts.length ? wordCounts[0] : 0,
+        max: wordCounts.length ? wordCounts[wordCounts.length - 1] : 0,
+        top3_avg: top3Avg,
+        recommended,
+        competitors_checked: withWords.length
+      }
+    });
+  } catch (e) {
+    console.error('[competitor-wordcount] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Re-optimise — refine with user feedback after initial optimise
 app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, res) => {
   if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
