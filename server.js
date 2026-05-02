@@ -2622,6 +2622,113 @@ Rules:
 });
 
 // Apply on-page fixes to WordPress (with rollback snapshot)
+// Bulk fix — suggest + apply in one server-side call (doesn't stop on frontend navigation)
+app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
+  const { projectId } = req.params;
+  const { pages } = req.body; // array of { id, url, title, meta_title, meta_description, focusKeyword, h1, word_count, issues }
+  if (!pages || !pages.length) return res.status(400).json({ error: 'No pages provided' });
+
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpBase) return res.status(400).json({ error: 'WordPress URL not configured' });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress Application Password not configured' });
+
+    console.log(`[bulk-fix] Starting bulk fix for ${pages.length} pages`);
+
+    // Step 1: Get AI suggestions (reuse suggest logic)
+    const pagesData = pages.map(p => `Page ID: ${p.id}\nURL: ${p.url}\nTitle: ${p.title}\nCurrent Meta Title: ${p.metaTitle || '(none)'}\nCurrent Meta Desc: ${p.metaDesc || '(none)'}\nCurrent Focus Keyword: ${p.focusKeyword || '(none)'}\nH1: ${p.h1 || '(none)'}\nWord Count: ${p.wordCount || 0}\nIssues: ${(p.issues || []).map(i => typeof i === 'string' ? i : i.text).join(', ')}`);
+
+    const BATCH_SIZE = 5;
+    const allSuggestions = [];
+    for (let i = 0; i < pagesData.length; i += BATCH_SIZE) {
+      const batch = pagesData.slice(i, i + BATCH_SIZE);
+      console.log(`[bulk-fix] Suggesting batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(pagesData.length/BATCH_SIZE)}`);
+      const resp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.\n\nFor each page, suggest:\n- suggested_title (50-60 chars, include primary keyword)\n- suggested_desc (120-155 chars, compelling with CTA)\n- suggested_keyword (2-4 word focus keyword)\n\nReturn ONLY a JSON array: [{\"id\": ..., \"suggested_title\": \"...\", \"suggested_desc\": \"...\", \"suggested_keyword\": \"...\"}]\n\nPages:\n${batch.join('\n\n')}` }]
+      });
+      try {
+        const text = resp.content[0].text;
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (jsonMatch) allSuggestions.push(...JSON.parse(jsonMatch[0]));
+      } catch (e) { console.error('[bulk-fix] Parse error:', e.message); }
+    }
+
+    // Step 2: Apply each suggestion
+    const results = [];
+    for (const s of allSuggestions) {
+      const page = pages.find(p => String(p.id) === String(s.id));
+      if (!page) { results.push({ id: s.id, success: false, error: 'Page not found in request' }); continue; }
+
+      try {
+        const current = await readWpYoastMeta(wpBase, s.id, authHeaders);
+        if (!current) { results.push({ id: s.id, success: true, skipped: true, changes: 0 }); continue; }
+
+        const changes = [];
+        if (s.suggested_title && s.suggested_title !== current.yoast_wpseo_title) changes.push({ field: 'yoast_wpseo_title', old: current.yoast_wpseo_title, new: s.suggested_title });
+        if (s.suggested_desc && s.suggested_desc !== current.yoast_wpseo_metadesc) changes.push({ field: 'yoast_wpseo_metadesc', old: current.yoast_wpseo_metadesc, new: s.suggested_desc });
+        if (s.suggested_keyword && s.suggested_keyword !== current.yoast_wpseo_focuskw) changes.push({ field: 'yoast_wpseo_focuskw', old: current.yoast_wpseo_focuskw, new: s.suggested_keyword });
+
+        if (changes.length === 0) { results.push({ id: s.id, success: true, skipped: true, changes: 0 }); continue; }
+
+        const meta = {};
+        if (s.suggested_title) meta._yoast_wpseo_title = s.suggested_title;
+        if (s.suggested_desc) meta._yoast_wpseo_metadesc = s.suggested_desc;
+        if (s.suggested_keyword) meta._yoast_wpseo_focuskw = s.suggested_keyword;
+
+        let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, { method: 'POST', headers: authHeaders, body: JSON.stringify({ meta }), signal: AbortSignal.timeout(15000) });
+        if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+          const yoastPayload = {};
+          if (s.suggested_title) yoastPayload.yoast_wpseo_title = s.suggested_title;
+          if (s.suggested_desc) yoastPayload.yoast_wpseo_metadesc = s.suggested_desc;
+          if (s.suggested_keyword) yoastPayload.yoast_wpseo_focuskw = s.suggested_keyword;
+          writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, { method: 'POST', headers: authHeaders, body: JSON.stringify({ yoast_meta: yoastPayload }), signal: AbortSignal.timeout(15000) });
+        }
+        if (!writeResp.ok) { results.push({ id: s.id, success: false, error: `WP returned ${writeResp.status}` }); continue; }
+
+        const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+        const verified = verify && ((!s.suggested_title || verify.yoast_wpseo_title === s.suggested_title) || (!s.suggested_desc || verify.yoast_wpseo_metadesc === s.suggested_desc));
+        if (!verified) { results.push({ id: s.id, success: false, error: 'Verification failed' }); continue; }
+
+        for (const ch of changes) {
+          await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
+            [projectId, current.wpId, page.url || '', page.title || '', ch.field, ch.old, ch.new]);
+        }
+        results.push({ id: s.id, success: true, changes: changes.length });
+        console.log(`[bulk-fix] Fixed ${s.id} (${changes.length} fields)`);
+      } catch (e) { results.push({ id: s.id, success: false, error: e.message }); }
+    }
+
+    // Step 3: Update caches (same as /fix endpoint)
+    const successIds = results.filter(r => r.success).map(r => String(r.id));
+    if (successIds.length > 0) {
+      try {
+        const graphRes = await pool.query(`SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId]);
+        if (graphRes.rows.length > 0) {
+          const graphData = graphRes.rows[0].audit_data;
+          const auditId = graphRes.rows[0].id;
+          if (graphData && graphData.nodes) {
+            if (!graphData.fixed_nodes) graphData.fixed_nodes = [];
+            for (const id of successIds) { if (!graphData.fixed_nodes.includes(id)) graphData.fixed_nodes.push(id); }
+            await pool.query(`UPDATE audits SET audit_data = $1 WHERE id = $2`, [JSON.stringify(graphData), auditId]);
+          }
+        }
+      } catch (e) { console.log('[bulk-fix] Cache update error:', e.message); }
+    }
+
+    console.log(`[bulk-fix] Done: ${results.filter(r => r.success).length}/${results.length} succeeded`);
+    res.json({ results, suggestions: allSuggestions });
+  } catch (e) {
+    console.error('[bulk-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
   const { projectId } = req.params;
   const { fixes } = req.body; // array of { id, url, title, new_meta_title, new_meta_desc, new_focus_keyword }
@@ -2660,7 +2767,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
         }
 
         if (changes.length === 0) {
-          results.push({ id: fix.id, success: false, skipped: true, error: 'No changes needed — values already match' });
+          results.push({ id: fix.id, success: true, skipped: true, changes: 0 });
           continue;
         }
 

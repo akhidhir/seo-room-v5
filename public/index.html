@@ -8348,53 +8348,33 @@
         setApplying(prev => ({ ...prev, [pageNode.id]: false }));
       };
 
-      // Bulk AI fix for selected onpage pages
+      // Bulk AI fix — single server call (suggest + apply), won't stop on navigation
       const handleBulkAiFix = async (nodes) => {
-        const toFix = nodes.filter(n => !fixing['meta-' + n.id]);
+        const toFix = nodes.filter(n => !fixing['meta-' + n.id] || fixing['meta-' + n.id] === 'error');
         if (!toFix.length) return;
         setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = true); return n; });
         try {
-          const data = await api(`/projects/${project.id}/onpage-audit/suggest`, {
+          const data = await api(`/projects/${project.id}/onpage-audit/bulk-fix`, {
             method: 'POST',
             body: { pages: toFix.map(n => ({
               id: n.id, title: n.title, url: n.url,
               metaTitle: n.meta_title, metaDesc: n.meta_description, focusKeyword: '',
               h1: n.h1, wordCount: n.word_count,
-              issues: n.issues.map(i => ({ type: 'problem', text: i }))
+              issues: n.issues
             }))}
           });
+          if (data.results) {
+            data.results.forEach(r => {
+              if (r.success) setFixing(prev => ({ ...prev, ['meta-' + r.id]: 'fixed' }));
+              else setFixing(prev => ({ ...prev, ['meta-' + r.id]: 'error' }));
+            });
+          }
           if (data.suggestions) {
             const newSugg = {};
             data.suggestions.forEach(s => { newSugg[s.id] = s; });
             setAiSuggestions(prev => ({ ...prev, ...newSugg }));
-            // Auto-apply all
-            for (const s of data.suggestions) {
-              const node = toFix.find(n => n.id === s.id);
-              if (!node) continue;
-              try {
-                const fixData = await api(`/projects/${project.id}/onpage-audit/fix`, {
-                  method: 'POST',
-                  body: { fixes: [{
-                    id: node.id, url: node.url, title: node.title,
-                    new_meta_title: s.suggested_title,
-                    new_meta_desc: s.suggested_desc,
-                    new_focus_keyword: s.suggested_keyword
-                  }]}
-                });
-                const r = fixData.results && fixData.results[0];
-                if (r?.success) {
-                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'fixed' }));
-                } else {
-                  setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
-                  console.error(`[bulk-fix] Failed for ${node.id}: ${r?.error}`);
-                }
-              } catch(e) {
-                setFixing(prev => ({ ...prev, ['meta-' + node.id]: 'error' }));
-                console.error(e);
-              }
-            }
           }
-          // Re-fetch graph data so stats + graph reflect bulk fixes
+          // Re-fetch graph data so stats reflect fixes
           try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
         } catch(e) { console.error(e); }
         setAiLoading(prev => { const n = {...prev}; toFix.forEach(p => n[p.id] = false); return n; });
