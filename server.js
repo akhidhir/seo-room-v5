@@ -4761,7 +4761,7 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, word_target } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
@@ -4821,7 +4821,16 @@ ACTUAL CONTENT STATS (these are accurate — use these numbers):
 - Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
 - Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
 - Current SEO score: ${content_score || 'unknown'}/100
+- Word target: ${word_target || 1500}
 - Target keywords: ${tkwStr || 'none set'}
+${competitor_data ? `
+COMPETITOR ANALYSIS (from "${competitor_data.keyword}" SERP):
+- Competitors checked: ${competitor_data.competitors_checked || 0}
+- Top 3 average word count: ${competitor_data.top3_avg || 'N/A'}
+- All competitors average: ${competitor_data.avg || 'N/A'}
+- Recommended word target: ${competitor_data.recommended || 'N/A'}
+${(competitor_data.results || []).map((r, i) => `  #${r.position || i+1}: ${r.title} — ${r.words} words`).join('\n')}
+` : 'COMPETITOR ANALYSIS: Not yet checked — user should click "Check Competitors" in the score panel.'}
 
 SEO SCORE TIPS:
 ${tipsStr || 'No tips available'}
@@ -4954,7 +4963,7 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, word_target } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
@@ -5010,7 +5019,16 @@ ACTUAL CONTENT STATS (these are accurate — use these numbers):
 - Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
 - Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
 - Current SEO score: ${content_score || 'unknown'}/100
+- Word target: ${word_target || 1500}
 - Target keywords: ${tkwStr || 'none set'}
+${competitor_data ? `
+COMPETITOR ANALYSIS (from "${competitor_data.keyword}" SERP):
+- Competitors checked: ${competitor_data.competitors_checked || 0}
+- Top 3 average word count: ${competitor_data.top3_avg || 'N/A'}
+- All competitors average: ${competitor_data.avg || 'N/A'}
+- Recommended word target: ${competitor_data.recommended || 'N/A'}
+${(competitor_data.results || []).map((r, i) => `  #${r.position || i+1}: ${r.title} — ${r.words} words`).join('\n')}
+` : 'COMPETITOR ANALYSIS: Not yet checked — user should click "Check Competitors" in the score panel.'}
 
 SEO SCORE TIPS:
 ${tipsStr || 'No tips available'}

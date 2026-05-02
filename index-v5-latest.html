@@ -8988,8 +8988,8 @@
       }, [stats, focusCount, keywordAnalysis, focusKeyword, wt]);
 
       useEffect(() => {
-        if (onScoreChange) onScoreChange({ score, tips, stats, focusCount, keywordAnalysis });
-      }, [score, tips, stats, focusCount, keywordAnalysis]);
+        if (onScoreChange) onScoreChange({ score, tips, stats, focusCount, keywordAnalysis, competitorData, wordTarget });
+      }, [score, tips, stats, focusCount, keywordAnalysis, competitorData, wordTarget]);
 
       const scoreColor = score >= 75 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
       const usedKws = keywordAnalysis.filter(k => k.count > 0);
@@ -9961,7 +9961,9 @@
               stats: scoreData?.stats,
               content_score: scoreData?.score,
               tips: (scoreData?.tips || []).map(t => (t.type === 'warn' || t.type === 'error' ? '❌ ' : '✅ ') + (t.text || t.msg || '')),
-              target_keywords: (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword)
+              target_keywords: (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword),
+              competitor_data: scoreData?.competitorData ? { keyword: scoreData.competitorData.keyword, top3_avg: scoreData.competitorData.summary?.top3_avg, avg: scoreData.competitorData.summary?.avg, recommended: scoreData.competitorData.summary?.recommended, competitors_checked: scoreData.competitorData.summary?.competitors_checked, results: (scoreData.competitorData.results || []).filter(r => r.words && !r.isOwn).slice(0, 7).map(r => ({ title: r.title?.slice(0, 60), words: r.words, position: r.position })) } : null,
+              word_target: scoreData?.wordTarget || 1500
             }
           });
           if (r.error) {
