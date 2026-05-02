@@ -5047,12 +5047,25 @@ app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (r
     const { projectId, pageId } = req.params;
     // Try all projects to find one with WP credentials
     const allProjects = (await pool.query('SELECT * FROM projects ORDER BY id')).rows;
+    console.log('[restore] Projects found:', allProjects.map(p => ({ id: p.id, wp: p.wordpress_url, user: p.wp_username ? 'SET' : 'EMPTY', pass: p.wp_app_password ? 'SET' : 'EMPTY' })));
     let project = allProjects.find(p => p.id == projectId && p.wp_username && p.wp_app_password);
     if (!project) project = allProjects.find(p => p.wp_username && p.wp_app_password);
-    if (!project) return res.status(400).json({ error: 'No project with WordPress credentials found' });
+    if (!project) {
+      // Fallback: try project_integrations table
+      const integ = (await pool.query(`SELECT value FROM project_integrations WHERE project_id=$1 AND type='wordpress'`, [projectId])).rows[0];
+      if (integ) console.log('[restore] Found project_integrations wordpress entry');
+      // Last resort: use the project's wordpress_url with creds from request body
+      project = allProjects.find(p => p.id == projectId) || allProjects[0];
+      if (!project) return res.status(400).json({ error: 'No projects found at all' });
+    }
     const wpUrl = project.wordpress_url?.replace(/\/$/, '');
-    const authHeaders = getWpAuthHeaders(project);
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    let authHeaders = getWpAuthHeaders(project);
+    // Accept creds from request body as emergency fallback
+    if (!authHeaders && req.body && req.body.wp_username && req.body.wp_password) {
+      const token = Buffer.from(`${req.body.wp_username}:${req.body.wp_password}`).toString('base64');
+      authHeaders = { 'Authorization': `Basic ${token}`, 'Content-Type': 'application/json' };
+    }
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured', debug: { wpUrl: wpUrl || 'MISSING', hasAuth: !!authHeaders } });
 
     let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`, {
       method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
