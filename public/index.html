@@ -9484,7 +9484,20 @@
                   });
                 },
                 style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview')
+              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
+              // Import Current Copy — pull live WP content into the editor for scoring/optimising
+              !isPublished && selectedItem.current_content && React.createElement('button', {
+                onClick: () => {
+                  const cleaned = cleanWpHtml(selectedItem.current_content);
+                  setEditContent(cleaned);
+                  setEditMeta({
+                    meta_title: selectedItem.current_meta_title || editMeta.meta_title,
+                    meta_desc: selectedItem.current_meta_desc || editMeta.meta_desc,
+                    focus_keyword: selectedItem.current_focus_keyword || editMeta.focus_keyword
+                  });
+                },
+                style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fa-solid fa-download', style: { marginRight: 6 } }), 'Import Current Copy')
             )
           ),
 
