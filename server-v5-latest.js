@@ -4978,7 +4978,7 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
       [projectId]
     );
 
-    console.log(`[re-optimise-sp] Feedback for site_page ${id}: "${feedback}"`);
+    console.log(`[re-optimise-sp] Feedback for site_page ${id}: "${feedback}", competitor_data: ${competitor_data ? 'YES (' + competitor_data.competitors_checked + ' checked)' : 'NONE'}, word_target: ${word_target}`);
 
     const feedbackLower = feedback.replace(/\[HIGHLIGHTED TEXT:.*?\]\s*/is, '').trim().toLowerCase();
     const isQuestion = feedbackLower.includes('?') ||

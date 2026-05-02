@@ -9951,6 +9951,7 @@
         }]);
         setSelectedText('');
         setSending(true);
+        console.log('[OptimiseModal] scoreData.competitorData:', scoreData?.competitorData ? 'YES' : 'NONE', scoreData?.wordTarget);
 
         try {
           const r = await api('/projects/' + pid + '/' + tablePrefix + '/' + preview.item_id + '/re-optimise', {
