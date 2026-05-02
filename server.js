@@ -3362,6 +3362,148 @@ ${contentForAI.slice(0, 12000)}` }],
   }
 });
 
+// Add external links — AI suggests relevant authoritative external links for a page
+app.post('/api/projects/:projectId/onpage-audit/add-external-links', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, selected_links, apply } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Fetch page content
+    let pageData, pageType = 'pages';
+    let pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (pageResp.ok) {
+      pageData = await pageResp.json();
+    } else {
+      pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (pageResp.ok) { pageData = await pageResp.json(); pageType = 'posts'; }
+      else return res.status(404).json({ error: 'Page not found in WordPress' });
+    }
+
+    const content = pageData.content?.raw || pageData.content?.rendered || '';
+    const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const title = pageData.title?.rendered || pageData.title?.raw || '';
+    const industry = project.industry || '';
+    const location = project.location || '';
+
+    // STEP 1: Suggest external links (preview mode)
+    if (!apply) {
+      const suggestResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        system: `You are an SEO expert. Suggest 5-8 relevant, authoritative EXTERNAL links to add to this page.
+
+RULES:
+- Links must be to high-authority domains (government sites, industry bodies, Wikipedia, major publications, official tools)
+- Links must be RELEVANT to the page topic — they should add value for the reader
+- Suggest the exact anchor text (an existing phrase in the content to wrap)
+- Each link must open in a new tab (target="_blank")
+- Do NOT suggest links to competitors or the site's own domain (${project.domain || ''})
+- Prefer Australian sources when relevant (e.g. .gov.au, .com.au)
+- Only suggest links where the anchor text EXISTS in the current content
+
+Return JSON array:
+[{"url": "https://...", "anchor": "existing phrase in content", "site_name": "Source Name", "reason": "why this link adds value"}]`,
+        messages: [{ role: 'user', content: `Page: "${title}"
+Industry: ${industry}
+Location: ${location}
+Business: ${project.business_name || project.name}
+
+Content (first 4000 chars):
+${plainText.slice(0, 4000)}
+
+Suggest relevant external links. Return ONLY JSON array.` }]
+      });
+
+      const raw = suggestResp.content[0].text;
+      let suggestions;
+      try {
+        const jsonMatch = raw.match(/\[[\s\S]*\]/);
+        suggestions = JSON.parse(jsonMatch[0]);
+      } catch {
+        return res.status(500).json({ error: 'AI returned invalid suggestions' });
+      }
+
+      console.log(`[add-external-links] Suggested ${suggestions.length} external links for "${title}"`);
+      return res.json({ success: true, preview: true, suggestions, page_id });
+    }
+
+    // STEP 2: Apply selected links
+    if (!selected_links || !selected_links.length) {
+      return res.status(400).json({ error: 'No links selected' });
+    }
+
+    console.log(`[add-external-links] Applying ${selected_links.length} external links to "${title}"`);
+
+    const applyResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      system: `You are an SEO expert. Add the specified external links to the page content.
+
+RULES:
+- Wrap EXISTING phrases with <a href="URL" target="_blank" rel="noopener noreferrer">anchor text</a>
+- Do NOT modify any other HTML, text, structure, classes, or styles
+- Do NOT add links inside headings (h1-h6)
+- Do NOT add links where there's already an <a> tag nearby
+- Keep ALL existing links intact
+- Return the FULL modified HTML content
+
+Return JSON: {"modified_content": "<full HTML with links added>", "links_added": [{"anchor": "text", "url": "URL"}]}`,
+      messages: [{ role: 'user', content: `Add these external links to the content:
+
+${selected_links.map(l => `- Anchor: "${l.anchor}" → URL: ${l.url}`).join('\n')}
+
+Current content:
+${content.slice(0, 12000)}` }]
+    });
+
+    const applyRaw = applyResp.content[0].text;
+    let parsed;
+    try {
+      const jsonMatch = applyRaw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid response' });
+    }
+
+    if (!parsed.modified_content) {
+      return res.json({ success: false, message: 'No modifications returned' });
+    }
+
+    // Snapshot for rollback
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [projectId, page_id, pageData.link, title, 'external-links', 'content', content, parsed.modified_content]
+    );
+
+    // Write to WordPress
+    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageType}/${page_id}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: parsed.modified_content }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!writeResp.ok) {
+      const errText = await writeResp.text();
+      return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
+    }
+
+    console.log(`[add-external-links] Applied ${parsed.links_added?.length || 0} external links to page ${page_id}`);
+    res.json({ success: true, links_added: parsed.links_added || selected_links, count: selected_links.length });
+  } catch (e) {
+    console.error('[add-external-links] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Fix orphan page — add inbound links FROM other pages TO the orphan
 app.post('/api/projects/:projectId/fix-orphan', async (req, res) => {
   try {

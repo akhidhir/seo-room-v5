@@ -4436,6 +4436,10 @@
             data = await api('/projects/' + project.id + '/onpage-audit/add-inbound-links', {
               method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenIds },
             });
+          } else if (linkPreview.type === 'external') {
+            data = await api('/projects/' + project.id + '/onpage-audit/add-external-links', {
+              method: 'POST', body: { page_id: linkPreview.page.id, apply: true, selected_links: chosen },
+            });
           } else {
             var chosenUrls = chosen.map(function(l) { return l.url; });
             data = await api('/projects/' + project.id + '/onpage-audit/add-links', {
@@ -4452,6 +4456,14 @@
                 if (p.id === linkPreview.page.id) {
                   var newFrom = (p.inboundFrom || []).concat((data.links_added || []).map(function(l) { return { title: l.source_title || '', url: l.source_url || '' }; }));
                   return Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + addedCount, inboundFrom: newFrom });
+                }
+                return p;
+              }); });
+            } else if (linkPreview.type === 'external') {
+              var addedExt = data.links_added ? data.links_added.length : (data.count || 0);
+              setPages(function(prev) { return prev.map(function(p) {
+                if (p.id === linkPreview.page.id) {
+                  return Object.assign({}, p, { externalLinks: (p.externalLinks || 0) + addedExt });
                 }
                 return p;
               }); });
@@ -4481,6 +4493,20 @@
             setLinkPreview({ page: page, type: 'inbound', links: data.links_added, applying: false });
             setSelectedPreviewLinks(data.links_added.map(function(_, i) { return i; }));
           } else { alert(data.message || 'No suitable inbound link opportunities found'); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setAddingLinks(null);
+      };
+
+      const handleAddExternalLinks = async (page) => {
+        setAddingLinks('external-' + page.id);
+        try {
+          const data = await api('/projects/' + project.id + '/onpage-audit/add-external-links', {
+            method: 'POST', body: { page_id: page.id },
+          });
+          if (data.success && data.suggestions && data.suggestions.length > 0) {
+            setLinkPreview({ page: page, type: 'external', links: data.suggestions, applying: false });
+            setSelectedPreviewLinks(data.suggestions.map(function(_, i) { return i; }));
+          } else { alert(data.message || 'No suitable external link opportunities found'); }
         } catch (e) { alert('Error: ' + e.message); }
         setAddingLinks(null);
       };
@@ -4898,6 +4924,12 @@
                                     <i className={addingLinks === 'inbound-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-sign-in-alt'} style={{ marginRight: 4 }} />
                                     {addingLinks === 'inbound-' + page.id ? 'Adding...' : 'Add Inbound'}
                                   </button>
+                                  <button className="btn" onClick={() => handleAddExternalLinks(page)}
+                                    style={{ fontSize: 11, padding: '6px 12px', color: '#f59e0b', borderColor: '#f59e0b' }}
+                                    disabled={addingLinks === 'external-' + page.id}>
+                                    <i className={addingLinks === 'external-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-external-link-alt'} style={{ marginRight: 4 }} />
+                                    {addingLinks === 'external-' + page.id ? 'Finding...' : 'Add External'}
+                                  </button>
                                   <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
                                     disabled={sendingToCopywriter === page.id}>
@@ -4908,11 +4940,11 @@
 
                                 {/* Links Added Result Panel */}
                                 {linksResult && linksResult.pageId === page.id && (
-                                  <div style={{ marginTop: 14, background: linksResult.type === 'inbound' ? 'rgba(16,185,129,0.05)' : 'rgba(59,130,246,0.05)', border: `1px solid ${linksResult.type === 'inbound' ? 'rgba(16,185,129,0.2)' : 'rgba(59,130,246,0.2)'}`, borderRadius: 8, padding: 14 }}>
+                                  <div style={{ marginTop: 14, background: linksResult.type === 'inbound' ? 'rgba(16,185,129,0.05)' : linksResult.type === 'external' ? 'rgba(245,158,11,0.05)' : 'rgba(59,130,246,0.05)', border: `1px solid ${linksResult.type === 'inbound' ? 'rgba(16,185,129,0.2)' : linksResult.type === 'external' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.2)'}`, borderRadius: 8, padding: 14 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                      <div style={{ fontSize: 13, fontWeight: 700, color: linksResult.type === 'inbound' ? '#10b981' : '#3b82f6' }}>
-                                        <i className={linksResult.type === 'inbound' ? 'fas fa-sign-in-alt' : 'fas fa-sign-out-alt'} style={{ marginRight: 6 }} />
-                                        {linksResult.links.length} {linksResult.type === 'inbound' ? 'Inbound' : 'Outbound'} Links Added
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: linksResult.type === 'inbound' ? '#10b981' : linksResult.type === 'external' ? '#f59e0b' : '#3b82f6' }}>
+                                        <i className={linksResult.type === 'inbound' ? 'fas fa-sign-in-alt' : linksResult.type === 'external' ? 'fas fa-external-link-alt' : 'fas fa-sign-out-alt'} style={{ marginRight: 6 }} />
+                                        {linksResult.links.length} {linksResult.type === 'inbound' ? 'Inbound' : linksResult.type === 'external' ? 'External' : 'Outbound'} Links Added
                                       </div>
                                       <div style={{ display: 'flex', gap: 8 }}>
                                         <a href={page.url} target="_blank" rel="noopener noreferrer"
@@ -5074,8 +5106,8 @@
               <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 650, width: '90%', maxHeight: '80vh', overflow: 'auto', border: '1px solid var(--border)' }}
                 onClick={function(e) { e.stopPropagation(); }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 4 }}>
-                  <i className={linkPreview.type === 'inbound' ? 'fas fa-sign-in-alt' : 'fas fa-link'} style={{ marginRight: 8, color: linkPreview.type === 'inbound' ? '#a855f7' : '#3b82f6' }} />
-                  {linkPreview.type === 'inbound' ? 'Review Inbound Links' : 'Review Outbound Links'}
+                  <i className={linkPreview.type === 'inbound' ? 'fas fa-sign-in-alt' : linkPreview.type === 'external' ? 'fas fa-external-link-alt' : 'fas fa-link'} style={{ marginRight: 8, color: linkPreview.type === 'inbound' ? '#a855f7' : linkPreview.type === 'external' ? '#f59e0b' : '#3b82f6' }} />
+                  {linkPreview.type === 'inbound' ? 'Review Inbound Links' : linkPreview.type === 'external' ? 'Review External Links' : 'Review Outbound Links'}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -5118,10 +5150,24 @@
                               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{link.source_url}</div>
                             </div>
                           )}
+                          {linkPreview.type === 'external' && (
+                            <div style={{ marginBottom: 6 }}>
+                              {link.site_name && (
+                                <div style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', marginBottom: 3 }}>
+                                  <i className="fas fa-globe" style={{ marginRight: 4, fontSize: 10 }} />{link.site_name}
+                                </div>
+                              )}
+                              <a href={link.url} target="_blank" rel="noopener noreferrer"
+                                onClick={function(e) { e.stopPropagation(); }}
+                                style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
+                                {link.url}
+                              </a>
+                            </div>
+                          )}
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                             <div>
                               <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 3 }}>Anchor Text</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, color: '#3b82f6' }}>{link.anchor}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, color: linkPreview.type === 'external' ? '#f59e0b' : '#3b82f6' }}>{link.anchor}</div>
                             </div>
                             {link.target_keyword && (
                               <div style={{ textAlign: 'right' }}>
@@ -5130,7 +5176,7 @@
                               </div>
                             )}
                           </div>
-                          {linkPreview.type !== 'inbound' && (
+                          {linkPreview.type === 'outbound' && (
                           <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
                             <i className="fas fa-arrow-right" style={{ marginRight: 4, fontSize: 9 }} />
                             {link.url}
