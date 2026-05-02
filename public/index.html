@@ -5413,10 +5413,30 @@
         setSyncing(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/orchestrator/run`, { method: 'POST' });
+          if (data?.error) { setError('Orchestrator: ' + data.error); setSyncing(false); return; }
           if (data?.status === 'running') {
-            setTimeout(() => loadData(), 8000);
-            setTimeout(() => loadData(), 15000);
-            setTimeout(() => { loadData(); setSyncing(false); }, 25000);
+            // Poll every 5s until items appear, up to 2 minutes
+            let attempts = 0;
+            const maxAttempts = 24;
+            const pollInterval = setInterval(async () => {
+              attempts++;
+              try {
+                const d = await api(`/projects/${project.id}/orchestrator`);
+                const total = d.total_deduped || d.stats?.total || 0;
+                if (total > 0 || attempts >= maxAttempts) {
+                  clearInterval(pollInterval);
+                  loadData();
+                  setSyncing(false);
+                  if (attempts >= maxAttempts && total === 0) {
+                    setError('Orchestrator timed out — check that you have completed audits, then try again.');
+                  }
+                }
+              } catch (e) {
+                clearInterval(pollInterval);
+                setSyncing(false);
+                setError('Polling error: ' + e.message);
+              }
+            }, 5000);
             return;
           }
           loadData();

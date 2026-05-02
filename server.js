@@ -1492,7 +1492,7 @@ Return ONLY a JSON array:
 
         console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
       } catch (e) {
-        console.error('[orchestrator] Error:', e.message);
+        console.error('[orchestrator] Error:', e.message, e.stack);
       }
     })();
   } catch (e) {
