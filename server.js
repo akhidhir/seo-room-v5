@@ -1275,7 +1275,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         const data = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
         const reportText = data?.report || data?.final_report || '';
         if (reportText) {
-          reports[pillar] = { text: reportText.slice(0, 15000), auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
+          reports[pillar] = { text: reportText.slice(0, 8000), auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
         }
       }
     }
@@ -1426,18 +1426,59 @@ Return ONLY a JSON array:
 
         const resp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 16000,
-          messages: [{ role: 'user', content: orchestratorPrompt }]
+          max_tokens: 8192,
+          messages: [{ role: 'user', content: orchestratorPrompt + '\n\nIMPORTANT: Limit to 25 most impactful action items max. Keep descriptions under 100 chars. Be concise.' }]
         });
 
-        const text = resp.content[0].text.trim();
-        const jsonMatch = text.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) {
-          console.error('[orchestrator] No JSON array found in Step 2 response');
-          return;
+        let text = resp.content[0].text.trim();
+        let jsonMatch = text.match(/\[[\s\S]*\]/);
+
+        // If JSON is truncated (hit max_tokens), try to repair it
+        if (!jsonMatch && text.includes('[')) {
+          console.log('[orchestrator] Attempting to repair truncated JSON...');
+          let repaired = text.slice(text.indexOf('['));
+          // Close any open strings and objects
+          repaired = repaired.replace(/,\s*$/, ''); // trailing comma
+          // Count unclosed braces/brackets
+          const openBraces = (repaired.match(/{/g) || []).length - (repaired.match(/}/g) || []).length;
+          const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+          // Try to close them
+          if (openBraces > 0 || openBrackets > 0) {
+            // Find last complete object (ends with })
+            const lastCompleteObj = repaired.lastIndexOf('}');
+            if (lastCompleteObj > 0) {
+              repaired = repaired.slice(0, lastCompleteObj + 1);
+              // Remove any trailing comma
+              repaired = repaired.replace(/,\s*$/, '');
+              repaired += ']';
+            }
+          }
+          jsonMatch = repaired.match(/\[[\s\S]*\]/);
+          if (jsonMatch) console.log('[orchestrator] JSON repair successful');
         }
 
-        const items = JSON.parse(jsonMatch[0]);
+        if (!jsonMatch) {
+          console.error('[orchestrator] No JSON array found in Step 2 response. First 500 chars:', text.slice(0, 500));
+          throw new Error('AI returned invalid JSON — no array found in response');
+        }
+
+        let items;
+        try {
+          items = JSON.parse(jsonMatch[0]);
+        } catch (parseErr) {
+          console.error('[orchestrator] JSON parse error:', parseErr.message);
+          // Last resort: try to extract individual objects
+          const objMatches = jsonMatch[0].match(/\{[^{}]*\}/g);
+          if (objMatches && objMatches.length > 0) {
+            items = [];
+            for (const m of objMatches) {
+              try { items.push(JSON.parse(m)); } catch (e) { /* skip malformed */ }
+            }
+            console.log(`[orchestrator] Recovered ${items.length} items from malformed JSON`);
+          } else {
+            throw new Error('Failed to parse AI response as JSON');
+          }
+        }
         console.log(`[orchestrator] Step 2: AI returned ${items.length} action items`);
 
         // Filter out duplicates flagged by AI
