@@ -5383,19 +5383,19 @@ ${buildCopywriterContext(project, item)}`;
 
     const actualWords = contentToOptimise.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
 
-    const metaTitle = current_meta?.meta_title || item.draft_meta_title || item.current_meta_title || '';
-    const metaDesc = current_meta?.meta_desc || item.draft_meta_desc || item.current_meta_desc || '';
-    const focusKw = current_meta?.focus_keyword || item.draft_focus_keyword || item.current_focus_keyword || '';
+    const curMetaTitle = current_meta?.meta_title || item.draft_meta_title || item.current_meta_title || '';
+    const curMetaDesc = current_meta?.meta_desc || item.draft_meta_desc || item.current_meta_desc || '';
+    const curFocusKw = current_meta?.focus_keyword || item.draft_focus_keyword || item.current_focus_keyword || '';
 
     const userPrompt = `OPTIMISE this content. Current content score: ${content_score || 0}/100.
 
 PAGE: ${item.page_url}
-FOCUS KEYWORD: "${focusKw}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
+FOCUS KEYWORD: "${curFocusKw}" (currently used ${stats?.focus_keyword_count || 0}x — MUST be exactly 5 times, NOT more, NOT less)
 
-CURRENT META TITLE: "${metaTitle}" (${metaTitle.length} chars — ${metaTitle.length >= 50 && metaTitle.length <= 60 ? 'OK' : metaTitle.length < 50 ? 'TOO SHORT, need 50-60' : 'TOO LONG, need 50-60'})
-CURRENT META DESC: "${metaDesc}" (${metaDesc.length} chars — ${metaDesc.length >= 120 && metaDesc.length <= 155 ? 'OK' : metaDesc.length < 120 ? 'TOO SHORT, need 120-155' : 'TOO LONG, need 120-155'})
-META TITLE HAS FOCUS KW: ${focusKw && metaTitle.toLowerCase().includes(focusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
-META DESC HAS FOCUS KW: ${focusKw && metaDesc.toLowerCase().includes(focusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
+CURRENT META TITLE: "${curMetaTitle}" (${curMetaTitle.length} chars — ${curMetaTitle.length >= 50 && curMetaTitle.length <= 60 ? 'OK' : curMetaTitle.length < 50 ? 'TOO SHORT, need 50-60' : 'TOO LONG, need 50-60'})
+CURRENT META DESC: "${curMetaDesc}" (${curMetaDesc.length} chars — ${curMetaDesc.length >= 120 && curMetaDesc.length <= 155 ? 'OK' : curMetaDesc.length < 120 ? 'TOO SHORT, need 120-155' : 'TOO LONG, need 120-155'})
+META TITLE HAS FOCUS KW: ${curFocusKw && curMetaTitle.toLowerCase().includes(curFocusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
+META DESC HAS FOCUS KW: ${curFocusKw && curMetaDesc.toLowerCase().includes(curFocusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
 
 CURRENT STATS:
 - Words: ${actualWords} (target: 1500+)
