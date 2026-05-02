@@ -9834,7 +9834,9 @@
               feedback: finalMsg,
               current_proposed: preview.proposed,
               stats: scoreData?.stats,
-              content_score: scoreData?.score
+              content_score: scoreData?.score,
+              tips: (scoreData?.tips || []).map(t => (t.type === 'warn' || t.type === 'error' ? '❌ ' : '✅ ') + (t.text || t.msg || '')),
+              target_keywords: (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword)
             }
           });
           if (r.error) {

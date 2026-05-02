@@ -4622,7 +4622,7 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { feedback, current_proposed } = req.body;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
@@ -4662,6 +4662,9 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
       let fkCount = 0;
       if (fk) { const lower = plainText.toLowerCase(); const fkLower = fk.toLowerCase(); let p = 0; while ((p = lower.indexOf(fkLower, p)) !== -1) { fkCount++; p += fkLower.length; } }
 
+      const tipsStr = (tips || []).join('\n');
+      const tkwStr = (target_keywords || []).join(', ');
+
       response = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 600,
@@ -4678,6 +4681,11 @@ ACTUAL CONTENT STATS (these are accurate — use these numbers):
 - Focus keyword "${fk}": appears ${fkCount} times
 - Meta title (${(current_proposed.meta_title || '').length} chars): ${current_proposed.meta_title || ''}
 - Meta description (${(current_proposed.meta_description || '').length} chars): ${current_proposed.meta_description || ''}
+- Current SEO score: ${content_score || 'unknown'}/100
+- Target keywords: ${tkwStr || 'none set'}
+
+SEO SCORE TIPS:
+${tipsStr || 'No tips available'}
 
 CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
 
@@ -4701,6 +4709,11 @@ RULES:
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
 {"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "ai_notes": "What changed", "changed": true}${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
+
+CURRENT SEO SCORE: ${content_score || 'unknown'}/100
+TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
+SEO TIPS:
+${(tips || []).join('\n')}
 
 CURRENT CONTENT (revise this):
 ${current_proposed.content_html}
