@@ -7044,8 +7044,8 @@
                 border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer',
                 boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
             }, optimising
-              ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Optimising...')
-              : React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Optimise')
+              ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Writing...')
+              : React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Copywriter')
             ),
             // AI Editor
             !isPublished && hasDraft && React.createElement('button', {
@@ -9160,6 +9160,7 @@
       const [applyingTemplate, setApplyingTemplate] = useState(false);
       const [wpChangeHistory, setWpChangeHistory] = useState([]);
       const [rollingBack, setRollingBack] = useState(null);
+      const [importingCopy, setImportingCopy] = useState(false);
 
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', published: 'published' };
@@ -9486,18 +9487,26 @@
                 style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
               }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
               // Import Current Copy — pull live WP content into the editor for scoring/optimising
-              !isPublished && selectedItem.current_content && React.createElement('button', {
-                onClick: () => {
-                  const cleaned = cleanWpHtml(selectedItem.current_content);
-                  setEditContent(cleaned);
-                  setEditMeta({
-                    meta_title: selectedItem.current_meta_title || editMeta.meta_title,
-                    meta_desc: selectedItem.current_meta_desc || editMeta.meta_desc,
-                    focus_keyword: selectedItem.current_focus_keyword || editMeta.focus_keyword
-                  });
+              !isPublished && React.createElement('button', {
+                disabled: importingCopy,
+                onClick: async () => {
+                  setImportingCopy(true);
+                  try {
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST' });
+                    if (r.content) {
+                      const cleaned = cleanWpHtml(r.content);
+                      setEditContent(cleaned);
+                    }
+                    setEditMeta({
+                      meta_title: r.meta_title || editMeta.meta_title,
+                      meta_desc: r.meta_desc || editMeta.meta_desc,
+                      focus_keyword: r.focus_keyword || editMeta.focus_keyword
+                    });
+                  } catch(e) { alert('Failed to import: ' + e.message); }
+                  setImportingCopy(false);
                 },
-                style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fa-solid fa-download', style: { marginRight: 6 } }), 'Import Current Copy')
+                style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: importingCopy ? 0.6 : 1 }
+              }, React.createElement('i', { className: importingCopy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-download', style: { marginRight: 6 } }), importingCopy ? 'Importing...' : 'Import Current Copy')
             )
           ),
 
