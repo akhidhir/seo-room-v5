@@ -13015,7 +13015,7 @@
             event_start: post.event_start ? post.event_start.split('T')[0] : '',
             event_end: post.event_end ? post.event_end.split('T')[0] : '',
             image_url: post.image_url || '',
-            scheduled_date: post.scheduled_date,
+            scheduled_date: (post.scheduled_date || '').substring(0,10),
             scheduled_time: post.scheduled_time || '09:00',
             status: post.status || 'draft'
           });
@@ -13318,7 +13318,7 @@
                 React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Scheduled Date'),
                 React.createElement('div', { style: { padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 6, background: 'rgba(255,255,255,0.03)', color: 'var(--accent)', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 } },
                   React.createElement('i', { className: 'fas fa-calendar-day', style: { fontSize: 13 } }),
-                  formData.scheduled_date ? new Date(formData.scheduled_date + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'Click a day on the calendar'
+                  formData.scheduled_date ? (function() { var parts = formData.scheduled_date.substring(0,10).split('-'); return new Date(parts[0], parts[1]-1, parts[2]).toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); })() : 'Click a day on the calendar'
                 )
               ),
               React.createElement('div', null,
