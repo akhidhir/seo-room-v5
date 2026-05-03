@@ -1661,7 +1661,9 @@ async function runPageSpeedAudit(url, strategy = 'mobile') {
   const resp = await fetch(apiUrl);
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`PageSpeed API error ${resp.status}: ${text.substring(0, 200)}`);
+    let msg = `HTTP ${resp.status}`;
+    try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
+    throw new Error(`PageSpeed error: ${msg}`);
   }
   return resp.json();
 }
