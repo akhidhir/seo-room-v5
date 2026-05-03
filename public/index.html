@@ -1371,9 +1371,9 @@
     const AGENT_SKIP_PATTERNS = [/^summary$/i, /^audit conclusion$/i, /^overview$/i, /^deliverables$/i, /^next steps$/i, /^files included$/i, /^Q:/i, /^today/i, /^this week/i, /^next \d/i, /GSC_Audit/i, /EXECUTIVE_SUMMARY/i, /TACTICAL_PLAYBOOK/i, /Quick_Reference/i, /\.md$/i, /report package/i, /^assumptions/i, /^data quality/i, /^methodology/i, /^appendix/i, /^notes$/i, /^conclusion$/i, /^introduction$/i, /^executive/i, /^recommendations$/i];
 
     // Allowed sections per audit type (whitelist)
-    const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages', 'Summary'];
-    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data', 'Summary'];
-    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Summary'];
+    const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'];
+    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
+    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'];
 
     // Detect execution type / assignee from action text + pillar context
     const detectExecType = (text, pillar) => {
@@ -1595,24 +1595,34 @@
         const needsAction = rowNeedsAction(row);
         const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
 
-        // Pass rows — no action needed
-        if (!needsAction) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td>;
-        // Skipped
-        if (isIgnored) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo skip">Skipped</span></td>;
-        // Added — green label, click to untick
-        if (isAdded) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to remove from Action Plan">Added</span></td>;
+        // Pass rows — empty
+        if (!needsAction) return <td></td>;
+        // Skipped — gray label + reset
+        if (isIgnored) return <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text3)', fontSize: 13, fontWeight: 700 }}>Skipped</span>
+            <button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset"><i className="fas fa-undo" style={{ marginRight: 3 }} />Reset</button>
+          </div>
+        </td>;
+        // Added — green label + reset
+        if (isAdded) return <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center' }}>
+            <span style={{ color: '#22c55e', fontSize: 13, fontWeight: 700 }}>Added</span>
+            <button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{ fontSize: 11, padding: '3px 8px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Remove from Action Plan"><i className="fas fa-undo" style={{ marginRight: 3 }} />Reset</button>
+          </div>
+        </td>;
 
-        // Not yet added — show Add + Skip buttons, or checkbox for bulk
+        // Not yet added — checkbox + Add + Skip
         const actionBrief = brief || ('Review and fix: ' + itemName);
         const isChecked = actionMode.checkedKeys && actionMode.checkedKeys[actionKey];
         return (
           <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
             <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
-              <input type="checkbox" checked={!!isChecked} onChange={() => actionMode.onToggleCheck && actionMode.onToggleCheck(actionKey, { title: itemName, description: actionBrief, severity })} style={{ cursor: 'pointer', accentColor: '#22c55e', width: 14, height: 14 }} />
-              <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 8px' }}>
+              <input type="checkbox" checked={!!isChecked} onChange={() => actionMode.onToggleCheck && actionMode.onToggleCheck(actionKey, { title: itemName, description: actionBrief, severity })} style={{ cursor: 'pointer', accentColor: '#22c55e', width: 15, height: 15 }} />
+              <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 11, padding: '4px 10px' }}>
                 {isAdding ? <i className="fas fa-spinner fa-spin" /> : 'Add'}
               </button>
-              <button onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)} style={{ fontSize: 10, padding: '3px 6px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}>
+              <button onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)', cursor: 'pointer' }}>
                 Skip
               </button>
             </div>
@@ -2371,6 +2381,13 @@
             setBulkAdding(false);
           };
 
+          const handleBulkSkip = () => {
+            const keys = Object.keys(checkedKeys);
+            if (keys.length === 0) return;
+            keys.forEach(key => handleIgnore(key));
+            setCheckedKeys({});
+          };
+
           const checkedCount = Object.keys(checkedKeys).length;
 
           const actionMode = {
@@ -2431,7 +2448,10 @@
                   <div style={{ padding: '10px 24px', background: 'rgba(34,197,94,0.08)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: '#22c55e' }}>{checkedCount} selected</span>
                     <button onClick={handleBulkAdd} disabled={bulkAdding} style={{ fontSize: 12, fontWeight: 700, padding: '5px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer' }}>
-                      {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : 'Add Selected to Action Plan'}
+                      {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : 'Add Selected'}
+                    </button>
+                    <button onClick={handleBulkSkip} style={{ fontSize: 12, fontWeight: 600, padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text3)', cursor: 'pointer' }}>
+                      Skip Selected
                     </button>
                     <button onClick={() => setCheckedKeys({})} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}>Clear</button>
                   </div>
