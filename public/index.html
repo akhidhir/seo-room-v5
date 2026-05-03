@@ -5749,6 +5749,14 @@
       const [execProgress, setExecProgress] = useState(null);
       const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } };
 
+      const canAutoExecute = (item) => {
+        const cat = (item._category || item.category || '').toLowerCase();
+        const type = (item.type || '').toLowerCase();
+        if (cat === 'core web vitals' || type === 'core web vitals') return 'cwv';
+        if (cat === 'on-page issues' || cat === 'content quality') return 'onpage';
+        return null;
+      };
+
       const pendingSeoRoomCount = useMemo(() => {
         return items.filter(i => {
           const status = (i.status || 'pending').toLowerCase();
@@ -5805,16 +5813,6 @@
       };
 
       const [executingItem, setExecutingItem] = useState(null);
-
-      const canAutoExecute = (item) => {
-        const cat = (item._category || item.category || '').toLowerCase();
-        const type = (item.type || '').toLowerCase();
-        // CWV items — auto-fix via seoroom-helper plugin
-        if (cat === 'core web vitals' || type === 'core web vitals') return 'cwv';
-        // On-Page SEO items — auto-fix via WordPress Yoast API
-        if (cat === 'on-page issues' || cat === 'content quality') return 'onpage';
-        return null;
-      };
 
       const handleExecuteOne = async (item) => {
         const execType = canAutoExecute(item);
