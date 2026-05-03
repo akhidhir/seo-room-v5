@@ -3069,6 +3069,7 @@
       const [speedResults, setSpeedResults] = useState([]);
       const [speedLoading, setSpeedLoading] = useState(false);
       const [speedError, setSpeedError] = useState('');
+      const [speedProgress, setSpeedProgress] = useState(null);
       const [optimizingPages, setOptimizingPages] = useState(new Set());
       const [expandedSpeedPage, setExpandedSpeedPage] = useState(null);
       const [pageSpeedData, setPageSpeedData] = useState({});
@@ -3098,20 +3099,22 @@
           const speedData = await api(`/speed-audit/${project.id}/status`);
           if (speedData.status === 'running') {
             setSpeedLoading(true);
+            if (speedData.progress != null && speedData.total) setSpeedProgress({ current: speedData.progress, total: speedData.total });
             const poll = setInterval(async () => {
               try {
                 const s = await api(`/speed-audit/${project.id}/status`);
+                if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
                 if (s.status === 'completed') {
                   clearInterval(poll);
                   setSpeedResults(s.results || []);
                   const cwvMap = {};
                   (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
                   setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
-                  setSpeedLoading(false);
+                  setSpeedLoading(false); setSpeedProgress(null);
                 } else if (s.status === 'failed') {
-                  clearInterval(poll); setSpeedError(s.error || 'Failed'); setSpeedLoading(false);
+                  clearInterval(poll); setSpeedError(s.error || 'Failed'); setSpeedLoading(false); setSpeedProgress(null);
                 }
-              } catch (e) { clearInterval(poll); setSpeedLoading(false); }
+              } catch (e) { clearInterval(poll); setSpeedLoading(false); setSpeedProgress(null); }
             }, 5000);
           } else if (speedData.results) {
             setSpeedResults(speedData.results);
@@ -3133,31 +3136,30 @@
       };
 
       const runSpeedAudit = async () => {
-        setSpeedLoading(true); setSpeedError('');
+        setSpeedLoading(true); setSpeedError(''); setSpeedProgress(null);
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           if (data.status === 'running') {
-            // Poll for results
             const poll = setInterval(async () => {
               try {
                 const s = await api(`/speed-audit/${project.id}/status`);
+                if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
                 if (s.status === 'completed') {
                   clearInterval(poll);
                   setSpeedResults(s.results || []);
                   const cwvMap = {};
                   (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
                   setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
-                  setSpeedLoading(false);
+                  setSpeedLoading(false); setSpeedProgress(null);
                 } else if (s.status === 'failed') {
                   clearInterval(poll);
                   setSpeedError(s.error || 'Speed audit failed');
-                  setSpeedLoading(false);
+                  setSpeedLoading(false); setSpeedProgress(null);
                 }
-              } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); }
+              } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); setSpeedProgress(null); }
             }, 5000);
             return;
           }
-          // Fallback: synchronous response (shouldn't happen with new endpoint)
           setSpeedResults(data.results || []);
           const cwvMap = {};
           (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
@@ -3370,7 +3372,9 @@
               <div className="audit-loading-overlay">
                 <span className="spinner-large"></span>
                 <div className="audit-loading-text">Running Speed Audit</div>
-                <div className="audit-loading-sub">Scanning pages for image issues, WebP, lazy loading, Core Web Vitals...</div>
+                <div className="audit-loading-sub">
+                  {speedProgress ? `${speedProgress.current} / ${speedProgress.total} pages tested` : 'Discovering pages...'}
+                </div>
               </div>
             )}
 
@@ -3513,9 +3517,12 @@
       const [speedError, setSpeedError] = useState('');
       const [sortCol, setSortCol] = useState('score');
       const [sortDir, setSortDir] = useState('asc');
+      const [speedProgress, setSpeedProgress] = useState(null);
+      const speedPollRef = React.useRef(null);
 
       useEffect(() => {
         if (project?.id) loadExisting();
+        return () => { if (speedPollRef.current) { clearInterval(speedPollRef.current); speedPollRef.current = null; } };
       }, [project?.id]);
 
       const loadExisting = async () => {
@@ -3523,6 +3530,7 @@
           const data = await api(`/speed-audit/${project.id}/status`);
           if (data.status === 'running') {
             setSpeedLoading(true);
+            if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
             pollForResults();
           } else if (data.results) {
             setSpeedResults(data.results);
@@ -3531,24 +3539,26 @@
       };
 
       const pollForResults = () => {
-        const poll = setInterval(async () => {
+        if (speedPollRef.current) clearInterval(speedPollRef.current);
+        speedPollRef.current = setInterval(async () => {
           try {
             const s = await api(`/speed-audit/${project.id}/status`);
+            if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
             if (s.status === 'completed') {
-              clearInterval(poll);
+              clearInterval(speedPollRef.current); speedPollRef.current = null;
               setSpeedResults(s.results || []);
-              setSpeedLoading(false);
+              setSpeedLoading(false); setSpeedProgress(null);
             } else if (s.status === 'failed') {
-              clearInterval(poll);
+              clearInterval(speedPollRef.current); speedPollRef.current = null;
               setSpeedError(s.error || 'Speed audit failed');
-              setSpeedLoading(false);
+              setSpeedLoading(false); setSpeedProgress(null);
             }
-          } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); }
+          } catch (e) { clearInterval(speedPollRef.current); speedPollRef.current = null; setSpeedError(e.message); setSpeedLoading(false); setSpeedProgress(null); }
         }, 5000);
       };
 
       const runSpeedAudit = async () => {
-        setSpeedLoading(true); setSpeedError('');
+        setSpeedLoading(true); setSpeedError(''); setSpeedProgress(null);
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           if (data.status === 'running') { pollForResults(); return; }
@@ -3624,7 +3634,9 @@
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
               <div className="audit-loading-text">Running Core Web Vitals Audit</div>
-              <div className="audit-loading-sub">Testing each page with Google PageSpeed Insights (mobile). This takes 1-3 minutes depending on page count...</div>
+              <div className="audit-loading-sub">
+                {speedProgress ? `${speedProgress.current} / ${speedProgress.total} pages tested` : 'Discovering pages...'}
+              </div>
             </div>
           )}
 
@@ -3736,35 +3748,69 @@
       const [stats, setStats] = useState({ total: 0, indexed: 0, notIndexed: 0, errors: 0 });
       const [filter, setFilter] = useState('all');
       const [lastChecked, setLastChecked] = useState(null);
+      const [progress, setProgress] = useState(null); // { current, total }
+      const pollRef = React.useRef(null);
+
+      const handleCompleted = (data) => {
+        setResults(data.results || []);
+        setStats({ total: data.total || (data.results || []).length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 });
+        setLastChecked(data.completed_at ? new Date(data.completed_at) : new Date());
+        setLoading(false);
+        setProgress(null);
+      };
+
+      const startPolling = () => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+            if (data.progress != null && data.total) setProgress({ current: data.progress, total: data.total });
+            if (data.status === 'completed' && data.results) {
+              clearInterval(pollRef.current); pollRef.current = null;
+              handleCompleted(data);
+            } else if (data.status === 'failed') {
+              clearInterval(pollRef.current); pollRef.current = null;
+              setError(data.error || 'Indexing check failed');
+              setLoading(false); setProgress(null);
+            }
+          } catch (e) { clearInterval(pollRef.current); pollRef.current = null; setLoading(false); setProgress(null); }
+        }, 5000);
+      };
+
+      // Cleanup polling on unmount
+      useEffect(() => {
+        return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+      }, []);
 
       // Load previous results on mount
       useEffect(() => {
         if (!project?.id) { setInitialLoading(false); return; }
         (async () => {
           try {
-            console.log('[indexing] Loading previous results for project', project.id);
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
-            console.log('[indexing] Got data:', data?.total, 'pages,', data?.results?.length, 'results');
-            if (data.results && data.results.length > 0) {
-              setResults(data.results);
-              setStats({ total: data.total || data.results.length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 });
-              if (data.completed_at) setLastChecked(new Date(data.completed_at));
-              else if (data.ran_at) setLastChecked(new Date(data.ran_at));
+            if (data.status === 'running') {
+              setLoading(true);
+              if (data.progress != null && data.total) setProgress({ current: data.progress, total: data.total });
+              startPolling();
+            } else if (data.results && data.results.length > 0) {
+              handleCompleted(data);
             }
-          } catch (err) { console.error('[indexing] Failed to load previous results:', err.message); }
+          } catch (err) { console.error('[indexing] Failed to load:', err.message); }
           finally { setInitialLoading(false); }
         })();
       }, [project?.id]);
 
       const runCheck = async () => {
-        setLoading(true); setError('');
+        setLoading(true); setError(''); setProgress(null);
         try {
           const data = await api(`/projects/${project.id}/indexing/check`, { method: 'POST' });
-          setResults(data.results || []);
-          setStats({ total: data.total, indexed: data.indexed, notIndexed: data.notIndexed, errors: data.errors });
-          setLastChecked(new Date());
-        } catch (err) { setError(err.message); }
-        finally { setLoading(false); }
+          if (data.status === 'running') {
+            if (data.total) setProgress({ current: 0, total: data.total });
+            startPolling();
+          } else if (data.results) {
+            handleCompleted(data);
+          }
+        } catch (err) { setError(err.message); setLoading(false); }
       };
 
       const [expandedRow, setExpandedRow] = useState(null);
@@ -3874,7 +3920,9 @@
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
               <div className="audit-loading-text">Checking Indexing Status</div>
-              <div className="audit-loading-sub">Inspecting each page via Google Search Console API... this may take a minute</div>
+              <div className="audit-loading-sub">
+                {progress ? `${progress.current} / ${progress.total} pages checked` : 'Discovering pages...'}
+              </div>
             </div>
           )}
 

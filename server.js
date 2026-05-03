@@ -1863,6 +1863,9 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           const batchResults = await Promise.all(batch.map(processPage));
           results.push(...batchResults);
           console.log(`[speed-audit] Progress: ${results.length}/${pages.length} pages`);
+          // Save progress so frontend can show counter
+          await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
+            [JSON.stringify({ progress: results.length, total: pages.length }), auditId]);
         }
 
         await pool.query(
@@ -1904,6 +1907,8 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
       auditId: audit.id,
       results: data.results || null,
       total_pages: (data.results || []).length,
+      progress: data.progress || null,
+      total: data.total || null,
       error: data.error || null,
       startedAt: audit.started_at,
       completedAt: audit.completed_at,
@@ -1986,102 +1991,118 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     if (!allPages.some(u => u.replace(/\/$/, '') === baseUrl)) allPages.unshift(baseUrl + '/');
     console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId}`);
 
-    // Check each page via URL Inspection API
-    const results = [];
-    for (const pageUrl of allPages) {
+    // Cancel any running indexing audits
+    await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='indexing' AND status='running'`, [projectId]);
+
+    // Create audit record
+    const auditRes2 = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at) VALUES ($1::int, 'indexing', 'running', $2::jsonb, NOW()) RETURNING id`,
+      [parseInt(projectId), JSON.stringify({ progress: 0, total: allPages.length })]
+    );
+    const auditId = auditRes2.rows[0].id;
+
+    // Return immediately
+    res.json({ auditId, status: 'running', total: allPages.length });
+
+    // Run in background
+    (async () => {
       try {
-        const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite })
-        });
-        if (inspRes.ok) {
-          const inspData = await inspRes.json();
-          const idx = inspData.inspectionResult?.indexStatusResult || {};
-          const mobile = inspData.inspectionResult?.mobileUsabilityResult || {};
-          const rich = inspData.inspectionResult?.richResultsResult || {};
-          let path;
-          try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+        const results = [];
+        for (const pageUrl of allPages) {
+          try {
+            const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite })
+            });
+            if (inspRes.ok) {
+              const inspData = await inspRes.json();
+              const idx = inspData.inspectionResult?.indexStatusResult || {};
+              const mobile = inspData.inspectionResult?.mobileUsabilityResult || {};
+              const rich = inspData.inspectionResult?.richResultsResult || {};
+              let path;
+              try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
 
-          results.push({
-            url: pageUrl,
-            path,
-            verdict: idx.verdict || 'UNKNOWN',
-            coverageState: idx.coverageState || 'Unknown',
-            robotsTxtState: idx.robotsTxtState || null,
-            indexingState: idx.indexingState || null,
-            pageFetchState: idx.pageFetchState || null,
-            lastCrawlTime: idx.lastCrawlTime || null,
-            crawledAs: idx.crawledAs || null,
-            googleCanonical: idx.googleCanonical || null,
-            userCanonical: idx.userCanonical || null,
-            referringUrls: idx.referringUrls || [],
-            mobileVerdict: mobile.verdict || null,
-            mobileIssues: (mobile.issues || []).map(i => i.issueType),
-            richVerdict: rich.verdict || null,
-          });
-        } else {
-          let path;
-          try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
-          const errText = await inspRes.text();
-          results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: `API error: ${inspRes.status}`, error: errText.substring(0, 100) });
+              results.push({
+                url: pageUrl, path,
+                verdict: idx.verdict || 'UNKNOWN',
+                coverageState: idx.coverageState || 'Unknown',
+                robotsTxtState: idx.robotsTxtState || null,
+                indexingState: idx.indexingState || null,
+                pageFetchState: idx.pageFetchState || null,
+                lastCrawlTime: idx.lastCrawlTime || null,
+                crawledAs: idx.crawledAs || null,
+                googleCanonical: idx.googleCanonical || null,
+                userCanonical: idx.userCanonical || null,
+                referringUrls: idx.referringUrls || [],
+                mobileVerdict: mobile.verdict || null,
+                mobileIssues: (mobile.issues || []).map(i => i.issueType),
+                richVerdict: rich.verdict || null,
+              });
+            } else {
+              let path;
+              try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+              const errText = await inspRes.text();
+              results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: `API error: ${inspRes.status}`, error: errText.substring(0, 100) });
+            }
+          } catch (e) {
+            let path;
+            try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
+            results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: e.message });
+          }
+
+          // Update progress every 5 pages
+          if (results.length % 5 === 0 || results.length === allPages.length) {
+            await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
+              [JSON.stringify({ progress: results.length, total: allPages.length }), auditId]);
+            console.log(`[indexing] Progress: ${results.length}/${allPages.length} pages`);
+          }
         }
-      } catch (e) {
-        let path;
-        try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
-        results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: e.message });
+
+        const indexed = results.filter(r => r.verdict === 'PASS').length;
+        const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length;
+        const errors = results.filter(r => r.verdict === 'ERROR').length;
+
+        const sortedResults = results.sort((a, b) => {
+          const order = { FAIL: 0, NEUTRAL: 1, ERROR: 2, UNKNOWN: 3, PASS: 4 };
+          return (order[a.verdict] || 3) - (order[b.verdict] || 3);
+        });
+
+        const auditData = { total: sortedResults.length, indexed, notIndexed, errors, results: sortedResults, ran_at: new Date().toISOString() };
+        await pool.query(`UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify(auditData), auditId]);
+        console.log(`[indexing] Done: ${indexed} indexed, ${notIndexed} not indexed, ${errors} errors out of ${results.length}`);
+      } catch (bgErr) {
+        console.error('[indexing] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
       }
-    }
-
-    // Summary stats
-    const indexed = results.filter(r => r.verdict === 'PASS').length;
-    const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length;
-    const errors = results.filter(r => r.verdict === 'ERROR').length;
-
-    console.log(`[indexing] Done: ${indexed} indexed, ${notIndexed} not indexed, ${errors} errors out of ${results.length}`);
-
-    const sortedResults = results.sort((a, b) => {
-      const order = { FAIL: 0, NEUTRAL: 1, ERROR: 2, UNKNOWN: 3, PASS: 4 };
-      return (order[a.verdict] || 3) - (order[b.verdict] || 3);
-    });
-
-    // Save to audits table for persistence
-    const auditData = {
-      total: sortedResults.length,
-      indexed,
-      notIndexed,
-      errors,
-      results: sortedResults,
-      ran_at: new Date().toISOString(),
-    };
-    try {
-      const saveResult = await pool.query(
-        `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
-         VALUES ($1::int, 'indexing', 'completed', $2::jsonb, NOW(), NOW()) RETURNING id`,
-        [parseInt(projectId), JSON.stringify(auditData)]
-      );
-      console.log(`[indexing] Saved audit id=${saveResult.rows[0].id} for project ${projectId} (${sortedResults.length} pages)`);
-    } catch (saveErr) {
-      console.error('[indexing] Failed to save audit:', saveErr.message, saveErr.stack);
-    }
-
-    res.json({ ...auditData, saved: true });
+    })();
   } catch (e) {
     console.error('[indexing] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Get latest indexing results (persistence across navigation)
+// Get latest indexing results (persistence across navigation + polling)
 app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar='indexing' ORDER BY completed_at DESC LIMIT 1`,
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='indexing' ORDER BY started_at DESC LIMIT 1`,
       [req.params.projectId]
     );
-    if (result.rows.length === 0) return res.json({ results: [] });
-    const data = typeof result.rows[0].audit_data === 'string' ? JSON.parse(result.rows[0].audit_data) : result.rows[0].audit_data;
-    res.json({ ...data, completed_at: result.rows[0].completed_at });
+    if (result.rows.length === 0) return res.json({ status: 'none', results: [] });
+    const audit = result.rows[0];
+    // Auto-fail stuck running audits
+    if (audit.status === 'running' && audit.started_at) {
+      const elapsed = Date.now() - new Date(audit.started_at).getTime();
+      if (elapsed > 10 * 60 * 1000) {
+        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
+        return res.json({ status: 'failed', error: 'Indexing timed out. Please run again.' });
+      }
+    }
+    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+    res.json({ status: audit.status, ...data, completed_at: audit.completed_at });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
