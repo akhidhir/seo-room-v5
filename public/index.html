@@ -5953,9 +5953,13 @@
         return 'Website Audit';
       };
 
-      // Derive unique filter options from data
+      // Reset category filter when pillar changes
+      useEffect(() => { setFilterCategory('all'); }, [activePillar]);
+
+      // Derive unique filter options — categories scoped to active pillar
       const filterOptions = useMemo(() => {
-        const categories = [...new Set(itemsWithAssignee.map(i => getAuditPageLabel(i)))].sort();
+        const pillarItems = activePillar === 'all' ? itemsWithAssignee : itemsWithAssignee.filter(i => (i._pillar || i.pillar) === activePillar);
+        const categories = [...new Set(pillarItems.map(i => i._category || i.category).filter(Boolean))].sort();
         const severities = [...new Set(itemsWithAssignee.map(i => (i.severity || 'medium').toLowerCase()).filter(Boolean))].sort((a, b) => {
           const order = { critical: 0, high: 1, medium: 2, low: 3 };
           return (order[a] ?? 9) - (order[b] ?? 9);
@@ -5970,7 +5974,7 @@
         const result = itemsWithAssignee.filter(i => {
           if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
           if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
-          if (filterCategory !== 'all' && getAuditPageLabel(i) !== filterCategory) return false;
+          if (filterCategory !== 'all' && (i._category || i.category) !== filterCategory) return false;
           if (filterAssignee !== 'all' && i._assigneeLabel !== filterAssignee) return false;
           if (filterStatus !== 'all' && (i.status || 'pending') !== filterStatus) return false;
           return true;
