@@ -1612,8 +1612,9 @@
           </div>
         </td>;
 
-        // Not yet added — checkbox + Add + Skip
+        // Not yet added — register as actionable + show checkbox + Add + Skip
         const actionBrief = brief || ('Review and fix: ' + itemName);
+        if (actionMode.allActionableRef) actionMode.allActionableRef.current[actionKey] = { title: itemName, description: actionBrief, severity };
         const isChecked = actionMode.checkedKeys && actionMode.checkedKeys[actionKey];
         return (
           <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
@@ -1673,6 +1674,7 @@
       const [savedActionItems, setSavedActionItems] = useState([]);
       const [checkedKeys, setCheckedKeys] = useState({});
       const [bulkAdding, setBulkAdding] = useState(false);
+      const allActionableRef = React.useRef({});
       const removedKeysRef = React.useRef(new Set());
       const pollRef = React.useRef(null);
 
@@ -2388,7 +2390,26 @@
             setCheckedKeys({});
           };
 
+          const handleAddAll = async () => {
+            const rows = Object.entries(allActionableRef.current);
+            const toAdd = rows.filter(([key]) => {
+              const isAdded = addedActions[key] && typeof addedActions[key] === 'object';
+              const isIgnored = addedActions['ign_' + key];
+              return !isAdded && !isIgnored;
+            });
+            if (toAdd.length === 0) return;
+            setBulkAdding(true);
+            for (const [key, data] of toAdd) {
+              await handleAddAction(key, data);
+            }
+            setCheckedKeys({});
+            setBulkAdding(false);
+          };
+
           const checkedCount = Object.keys(checkedKeys).length;
+
+          // Clear actionable ref before render so table can repopulate
+          allActionableRef.current = {};
 
           const actionMode = {
             onAdd: handleAddAction,
@@ -2398,6 +2419,7 @@
             onUndo: handleUndo,
             onToggleCheck: handleToggleCheck,
             checkedKeys: checkedKeys,
+            allActionableRef: allActionableRef,
             ignoredKeys: Object.fromEntries(Object.entries(addedActions).filter(([k]) => k.startsWith('ign_')).map(([k, v]) => [k.replace('ign_', ''), v]))
           };
 
@@ -2443,15 +2465,15 @@
                   </div>
                   {secHasCritical && <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>Critical</span>}
                   {secRowCount > 0 && <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{secRowCount} items</span>}
+                  <button onClick={handleAddAll} disabled={bulkAdding} style={{ fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', marginLeft: 4 }}>
+                    {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : 'Add All'}
+                  </button>
                 </div>
                 {checkedCount > 0 && (
                   <div style={{ padding: '10px 24px', background: 'rgba(34,197,94,0.08)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: '#22c55e' }}>{checkedCount} selected</span>
                     <button onClick={handleBulkAdd} disabled={bulkAdding} style={{ fontSize: 12, fontWeight: 700, padding: '5px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer' }}>
                       {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : 'Add Selected'}
-                    </button>
-                    <button onClick={handleBulkSkip} style={{ fontSize: 12, fontWeight: 600, padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text3)', cursor: 'pointer' }}>
-                      Skip Selected
                     </button>
                     <button onClick={() => setCheckedKeys({})} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}>Clear</button>
                   </div>
