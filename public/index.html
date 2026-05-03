@@ -13225,8 +13225,8 @@
                 return React.createElement('div', { key: key, onClick: function() { handleOpenModal(date); }, style: { padding: 12, minHeight: 120, borderRight: di < 6 ? '1px solid var(--border)' : 'none', borderBottom: wi < weeks.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', background: isToday ? 'rgba(99,102,241,0.05)' : 'transparent', transition: 'background 0.2s', position: 'relative' } },
                   React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: isToday ? 'var(--accent)' : 'var(--text)', marginBottom: 8 } }, date.getDate()),
                   dayPosts.map(p =>
-                    React.createElement('div', { key: p.id, onClick: function(e) { e.stopPropagation(); handleOpenModal(null, p); }, style: { marginBottom: 4, padding: 6, background: statusColors[p.status] || 'var(--border)', borderRadius: 4, fontSize: 10, color: '#fff', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 } },
-                      React.createElement('i', { className: postTypeIcons[p.post_type] || postTypeIcons.update, style: { fontSize: 8, flexShrink: 0 } }),
+                    React.createElement('div', { key: p.id, onClick: function(e) { e.stopPropagation(); handleOpenModal(null, p); }, style: { marginBottom: 4, padding: 6, background: statusColors[p.status] || 'var(--border)', borderRadius: 4, fontSize: 10, color: '#000', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 } },
+                      React.createElement('i', { className: postTypeIcons[p.post_type] || postTypeIcons.update, style: { fontSize: 8, flexShrink: 0, color: '#000' } }),
                       React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.title || '(no title)')
                     )
                   )
