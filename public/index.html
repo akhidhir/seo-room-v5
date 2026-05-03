@@ -3523,8 +3523,6 @@
       const [addedActions, setAddedActions] = useState({});
       const [ignoredActions, setIgnoredActions] = useState({});
       const [addingAction, setAddingAction] = useState(null);
-      const [checkedRows, setCheckedRows] = useState({});
-      const [bulkAdding, setBulkAdding] = useState(false);
 
       useEffect(() => {
         if (project?.id) loadExisting();
@@ -3666,15 +3664,16 @@
 
       const handleIgnore = (pageKey) => setIgnoredActions(prev => ({ ...prev, [pageKey]: true }));
       const handleUndo = (pageKey) => { setAddedActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); setIgnoredActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); };
+      const [checkedRows, setCheckedRows] = useState({});
+      const [bulkAdding, setBulkAdding] = useState(false);
       const handleToggleCheck = (pageKey) => setCheckedRows(prev => { const n = {...prev}; if (n[pageKey]) delete n[pageKey]; else n[pageKey] = true; return n; });
 
       const handleBulkAdd = async () => {
         setBulkAdding(true);
-        const keys = Object.keys(checkedRows);
-        for (const key of keys) {
-          const page = sortedResults.find((_, i) => `speed_${i}` === key);
-          if (page && !addedActions[key] && !ignoredActions[key]) {
-            await handleAddAction(key, page);
+        for (let i = 0; i < sortedResults.length; i++) {
+          const pageKey = `speed_${i}`;
+          if (checkedRows[pageKey] && !addedActions[pageKey] && !ignoredActions[pageKey]) {
+            await handleAddAction(pageKey, sortedResults[i]);
           }
         }
         setCheckedRows({});
@@ -3682,7 +3681,6 @@
       };
 
       const checkedCount = Object.keys(checkedRows).length;
-      const actionableCount = sortedResults.filter((r, i) => { const s = (r.cwv?.score || 0); return s < 90 && !addedActions[`speed_${i}`] && !ignoredActions[`speed_${i}`]; }).length;
 
       return (
         <div>
