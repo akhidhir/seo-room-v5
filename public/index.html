@@ -3519,6 +3519,12 @@
       const [sortDir, setSortDir] = useState('asc');
       const [speedProgress, setSpeedProgress] = useState(null);
       const speedPollRef = React.useRef(null);
+      const [expandedRow, setExpandedRow] = useState(null);
+      const [addedActions, setAddedActions] = useState({});
+      const [ignoredActions, setIgnoredActions] = useState({});
+      const [addingAction, setAddingAction] = useState(null);
+      const [checkedRows, setCheckedRows] = useState({});
+      const [bulkAdding, setBulkAdding] = useState(false);
 
       useEffect(() => {
         if (project?.id) loadExisting();
@@ -3618,6 +3624,66 @@
 
       const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
+      const getFailingMetrics = (cwv) => {
+        const issues = [];
+        const lcp = parseFloat(cwv.lcp);
+        const cls = parseFloat(cwv.cls);
+        const tbt = parseFloat(cwv.tbt);
+        const fcp = parseFloat(cwv.fcp);
+        const si = parseFloat(cwv.si);
+        if (!isNaN(lcp) && lcp > 2.5) issues.push({ metric: 'LCP', value: cwv.lcp + 's', threshold: lcp > 4 ? 'Poor (>4s)' : 'Needs Work (>2.5s)', severity: lcp > 4 ? 'critical' : 'high', fix: 'Optimize largest content element — compress hero images, use next-gen formats (WebP/AVIF), preload key resources, reduce server response time.' });
+        if (!isNaN(fcp) && fcp > 1.8) issues.push({ metric: 'FCP', value: cwv.fcp + 's', threshold: fcp > 3 ? 'Poor (>3s)' : 'Needs Work (>1.8s)', severity: fcp > 3 ? 'critical' : 'high', fix: 'Reduce time to first paint — eliminate render-blocking CSS/JS, inline critical CSS, use font-display:swap, optimize server response.' });
+        if (!isNaN(cls) && cls > 0.1) issues.push({ metric: 'CLS', value: cwv.cls, threshold: cls > 0.25 ? 'Poor (>0.25)' : 'Needs Work (>0.1)', severity: cls > 0.25 ? 'critical' : 'high', fix: 'Prevent layout shifts — set explicit width/height on images and iframes, avoid inserting content above existing content, use CSS containment.' });
+        if (!isNaN(tbt) && tbt > 200) issues.push({ metric: 'TBT', value: cwv.tbt + 'ms', threshold: tbt > 600 ? 'Poor (>600ms)' : 'Needs Work (>200ms)', severity: tbt > 600 ? 'critical' : 'high', fix: 'Reduce main thread blocking — break up long tasks, defer non-critical JavaScript, remove unused code, use web workers for heavy computation.' });
+        if (!isNaN(si) && si > 3.4) issues.push({ metric: 'Speed Index', value: cwv.si + 's', threshold: si > 5.8 ? 'Poor (>5.8s)' : 'Needs Work (>3.4s)', severity: si > 5.8 ? 'critical' : 'high', fix: 'Improve visual loading speed — optimize critical rendering path, reduce DOM size, minimize style recalculations, lazy-load below-fold content.' });
+        return issues;
+      };
+
+      const handleAddAction = async (pageKey, page) => {
+        setAddingAction(pageKey);
+        try {
+          const cwv = page.cwv || {};
+          const score = cwv.score || 0;
+          const issues = getFailingMetrics(cwv);
+          const severity = score < 50 ? 'critical' : 'high';
+          const issueList = issues.map(i => `${i.metric}: ${i.value} (${i.threshold})`).join(', ');
+          await api(`/projects/${project.id}/action-items`, {
+            method: 'POST',
+            body: JSON.stringify({
+              pillar: 'website',
+              type: 'Core Web Vitals',
+              title: `Fix CWV issues on: ${page.title || page.slug}`,
+              description: `Performance score: ${score}/100. Failing metrics: ${issueList}. ${issues.map(i => i.fix).join(' ')}`,
+              severity,
+              execution_type: 'manual',
+              assignee_label: 'Developer'
+            })
+          });
+          setAddedActions(prev => ({ ...prev, [pageKey]: true }));
+        } catch (e) { console.error('Failed to add action', e); }
+        setAddingAction(null);
+      };
+
+      const handleIgnore = (pageKey) => setIgnoredActions(prev => ({ ...prev, [pageKey]: true }));
+      const handleUndo = (pageKey) => { setAddedActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); setIgnoredActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); };
+      const handleToggleCheck = (pageKey) => setCheckedRows(prev => { const n = {...prev}; if (n[pageKey]) delete n[pageKey]; else n[pageKey] = true; return n; });
+
+      const handleBulkAdd = async () => {
+        setBulkAdding(true);
+        const keys = Object.keys(checkedRows);
+        for (const key of keys) {
+          const page = sortedResults.find((_, i) => `speed_${i}` === key);
+          if (page && !addedActions[key] && !ignoredActions[key]) {
+            await handleAddAction(key, page);
+          }
+        }
+        setCheckedRows({});
+        setBulkAdding(false);
+      };
+
+      const checkedCount = Object.keys(checkedRows).length;
+      const actionableCount = sortedResults.filter((r, i) => { const s = (r.cwv?.score || 0); return s < 90 && !addedActions[`speed_${i}`] && !ignoredActions[`speed_${i}`]; }).length;
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -3669,49 +3735,117 @@
             </div>
           )}
 
+          {sortedResults.length > 0 && checkedCount > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '10px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{checkedCount} selected</span>
+              <button className="btn btn-primary" onClick={handleBulkAdd} disabled={bulkAdding} style={{ fontSize: 12, padding: '5px 14px' }}>
+                {bulkAdding ? <><span className="spinner"></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add All to Action Plan</>}
+              </button>
+              <button onClick={() => setCheckedRows({})} style={{ fontSize: 12, padding: '5px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)', cursor: 'pointer' }}>Clear</button>
+            </div>
+          )}
+
           {sortedResults.length > 0 && (
             <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ maxHeight: 700, overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                  <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>
                     {[
-                      { col: 'page', label: 'PAGE', width: '30%' },
-                      { col: 'score', label: 'SCORE', width: '10%' },
-                      { col: 'lcp', label: 'LCP', width: '12%' },
-                      { col: 'fcp', label: 'FCP', width: '12%' },
-                      { col: 'cls', label: 'CLS', width: '12%' },
-                      { col: 'tbt', label: 'TBT', width: '12%' },
-                      { col: 'si', label: 'SI', width: '12%' },
+                      { col: 'page', label: 'PAGE', width: '28%' },
+                      { col: 'score', label: 'SCORE', width: '8%' },
+                      { col: 'lcp', label: 'LCP', width: '9%' },
+                      { col: 'fcp', label: 'FCP', width: '9%' },
+                      { col: 'cls', label: 'CLS', width: '9%' },
+                      { col: 'tbt', label: 'TBT', width: '9%' },
+                      { col: 'si', label: 'SI', width: '9%' },
                     ].map(h => (
-                      <th key={h.col} onClick={() => handleSort(h.col)} style={{ padding: '12px 10px', textAlign: h.col === 'page' ? 'left' : 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', cursor: 'pointer', userSelect: 'none', width: h.width, whiteSpace: 'nowrap' }}>
+                      <th key={h.col} onClick={() => handleSort(h.col)} style={{ padding: '12px 10px', textAlign: h.col === 'page' ? 'left' : 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', cursor: 'pointer', userSelect: 'none', width: h.width, whiteSpace: 'nowrap', background: 'var(--bg)' }}>
                         {h.label}{sortIcon(h.col)}
                       </th>
                     ))}
+                    <th style={{ padding: '12px 10px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: '19%', background: 'var(--bg)' }}>ACTION PLAN</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedResults.map((page, idx) => {
                     const cwv = page.cwv || {};
                     const score = cwv.score || 0;
+                    const pageKey = `speed_${idx}`;
+                    const isExpanded = expandedRow === pageKey;
+                    const needsAction = score < 90;
+                    const issues = needsAction ? getFailingMetrics(cwv) : [];
                     return (
-                      <tr key={page.page_id} style={{ borderBottom: '1px solid var(--border)', background: idx % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
-                        <td style={{ padding: '10px 10px' }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{page.title || page.slug}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>/{page.slug}</div>
-                        </td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px' }}>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: '50%', border: `3px solid ${scoreColor(score)}`, fontWeight: 800, fontSize: 15, color: scoreColor(score) }}>{score}</div>
-                        </td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: lcpColor(cwv.lcp) }}>{cwv.lcp || 'N/A'}</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: fcpColor(cwv.fcp) }}>{cwv.fcp || 'N/A'}</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: clsColor(cwv.cls) }}>{cwv.cls || 'N/A'}</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: tbtColor(cwv.tbt) }}>{cwv.tbt || 'N/A'}</td>
-                        <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: siColor(cwv.si) }}>{cwv.si || 'N/A'}</td>
-                      </tr>
+                      <React.Fragment key={page.page_id || idx}>
+                        <tr style={{ borderBottom: isExpanded ? 'none' : '1px solid var(--border)', background: idx % 2 === 0 ? 'transparent' : 'var(--bg)', cursor: needsAction ? 'pointer' : 'default' }} onClick={() => needsAction && setExpandedRow(isExpanded ? null : pageKey)}>
+                          <td style={{ padding: '10px 10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {needsAction && <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ fontSize: 10, color: 'var(--text3)', width: 12 }} />}
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: 13 }}>{page.title || page.slug}</div>
+                                <div style={{ fontSize: 11, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>/{page.slug}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: '50%', border: `3px solid ${scoreColor(score)}`, fontWeight: 800, fontSize: 14, color: scoreColor(score) }}>{score}</div>
+                          </td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: lcpColor(cwv.lcp) }}>{cwv.lcp || 'N/A'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: fcpColor(cwv.fcp) }}>{cwv.fcp || 'N/A'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: clsColor(cwv.cls) }}>{cwv.cls || 'N/A'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: tbtColor(cwv.tbt) }}>{cwv.tbt || 'N/A'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: siColor(cwv.si) }}>{cwv.si || 'N/A'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                            {!needsAction ? <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Pass</span> :
+                             addedActions[pageKey] ? (
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
+                                <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700 }}>Added</span>
+                                <button onClick={() => handleUndo(pageKey)} style={{ fontSize: 11, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-undo" /></button>
+                              </div>
+                            ) : ignoredActions[pageKey] ? (
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
+                                <span style={{ color: 'var(--text3)', fontSize: 12, fontWeight: 700 }}>Skipped</span>
+                                <button onClick={() => handleUndo(pageKey)} style={{ fontSize: 11, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-undo" /></button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 5, justifyContent: 'center', alignItems: 'center' }}>
+                                <input type="checkbox" checked={!!checkedRows[pageKey]} onChange={() => handleToggleCheck(pageKey)} style={{ cursor: 'pointer', accentColor: '#22c55e', width: 14, height: 14 }} />
+                                <button className="btn btn-primary" onClick={() => handleAddAction(pageKey, page)} disabled={addingAction === pageKey} style={{ fontSize: 11, padding: '4px 9px' }}>
+                                  {addingAction === pageKey ? <i className="fas fa-spinner fa-spin" /> : 'Add'}
+                                </button>
+                                <button onClick={() => handleIgnore(pageKey)} style={{ fontSize: 11, padding: '4px 9px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)', cursor: 'pointer' }}>Skip</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr style={{ background: 'rgba(239,68,68,0.03)', borderBottom: '1px solid var(--border)' }}>
+                            <td colSpan={8} style={{ padding: '12px 20px 16px 38px' }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>
+                                <i className="fas fa-exclamation-triangle" style={{ marginRight: 6, color: '#ef4444' }} />Failing Metrics ({issues.length})
+                              </div>
+                              {issues.map((issue, ii) => (
+                                <div key={ii} style={{ marginBottom: 10, padding: '10px 14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                                    <span style={{ fontWeight: 700, fontSize: 13 }}>{issue.metric}</span>
+                                    <span style={{ fontSize: 12, color: issue.severity === 'critical' ? '#ef4444' : '#f59e0b', fontWeight: 600 }}>{issue.value}</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text3)', padding: '1px 8px', background: issue.severity === 'critical' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)', borderRadius: 4 }}>{issue.threshold}</span>
+                                  </div>
+                                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, padding: '6px 10px', background: 'rgba(34,197,94,0.05)', borderRadius: 6, borderLeft: '3px solid #22c55e' }}>
+                                    <i className="fas fa-lightbulb" style={{ marginRight: 6, color: '#22c55e' }} />{issue.fix}
+                                  </div>
+                                </div>
+                              ))}
+                              {issues.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>All metrics within acceptable thresholds.</div>}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
 
