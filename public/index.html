@@ -13101,9 +13101,11 @@
       const now = new Date();
       const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+      const msStr = monthStart.getFullYear() + '-' + String(monthStart.getMonth()+1).padStart(2,'0') + '-01';
+      const meStr = monthEnd.getFullYear() + '-' + String(monthEnd.getMonth()+1).padStart(2,'0') + '-' + String(monthEnd.getDate()).padStart(2,'0');
       const monthPosts = posts.filter(p => {
-        const d = new Date(p.scheduled_date);
-        return d >= monthStart && d <= monthEnd;
+        const ds = (p.scheduled_date || '').substring(0,10);
+        return ds >= msStr && ds <= meStr;
       });
       const stats = {
         draft: monthPosts.filter(p => p.status === 'draft').length,
@@ -13119,7 +13121,8 @@
       let week = Array(firstDay).fill(null);
       for (let d = 1; d <= daysInMonth; d++) {
         const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), d);
-        const dayPosts = posts.filter(p => p.scheduled_date === date.toISOString().split('T')[0]);
+        const dateStr = date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
+        const dayPosts = posts.filter(p => (p.scheduled_date || '').substring(0,10) === dateStr);
         week.push({ date, dayPosts });
         if (week.length === 7) {
           weeks.push(week);
