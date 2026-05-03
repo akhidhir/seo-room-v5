@@ -516,6 +516,9 @@ async function initDb() {
       WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'extension'
     `).catch(() => {});
 
+    // Clean up stale "running" audits from previous server instance
+    await client.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Server restarted during audit"}'::jsonb WHERE status='running'`).catch(() => {});
+
     console.log('[boot] Database schema initialized');
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
@@ -1887,6 +1890,14 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
     );
     if (result.rows.length === 0) return res.json({ status: 'none' });
     const audit = result.rows[0];
+    // Auto-fail audits stuck running for more than 10 minutes (e.g. server restarted)
+    if (audit.status === 'running' && audit.started_at) {
+      const elapsed = Date.now() - new Date(audit.started_at).getTime();
+      if (elapsed > 10 * 60 * 1000) {
+        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
+        return res.json({ status: 'failed', error: 'Audit timed out (server may have restarted). Please run again.' });
+      }
+    }
     const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
     res.json({
       status: audit.status,
