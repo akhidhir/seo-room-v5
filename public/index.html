@@ -13361,6 +13361,555 @@
       );
     }
 
+    // ============ BLOG PAGE ============
+
+    function BlogPage({ project, setPage }) {
+      const [posts, setPosts] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [view, setView] = useState('pipeline'); // 'pipeline' or 'calendar'
+      const [modalOpen, setModalOpen] = useState(false);
+      const [editingPost, setEditingPost] = useState(null);
+      const [generating, setGenerating] = useState(false);
+      const [publishingId, setPublishingId] = useState(null);
+
+      const [formData, setFormData] = useState({
+        title: '',
+        focus_keyword: '',
+        target_keywords: [],
+        target_publish_date: '',
+        blog_category: '',
+        blog_tags: [],
+        word_count: 1500,
+        notes: ''
+      });
+
+      useEffect(() => {
+        if (project?.id) loadPosts();
+      }, [project?.id]);
+
+      const loadPosts = async () => {
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/blog-posts`);
+          setPosts(data || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleOpenModal = (post = null) => {
+        if (post) {
+          setEditingPost(post);
+          setFormData({
+            title: post.title || '',
+            focus_keyword: post.current_focus_keyword || '',
+            target_keywords: post.target_keywords ? JSON.parse(post.target_keywords) : [],
+            target_publish_date: post.target_publish_date || '',
+            blog_category: post.blog_category || '',
+            blog_tags: post.blog_tags || [],
+            word_count: post.current_word_count || 1500,
+            notes: post.notes || ''
+          });
+        } else {
+          setEditingPost(null);
+          setFormData({
+            title: '',
+            focus_keyword: '',
+            target_keywords: [],
+            target_publish_date: '',
+            blog_category: '',
+            blog_tags: [],
+            word_count: 1500,
+            notes: ''
+          });
+        }
+        setModalOpen(true);
+      };
+
+      const handleGenerateDraft = async () => {
+        if (!editingPost) return;
+        setGenerating(true);
+        try {
+          const data = await api(`/projects/${project.id}/blog-posts/${editingPost.id}/generate-draft`, {
+            method: 'POST',
+            body: {}
+          });
+          setEditingPost(data);
+          setPosts(prev => prev.map(p => p.id === data.id ? data : p));
+          alert('Draft generated successfully!');
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setGenerating(false);
+        }
+      };
+
+      const handleSendToClient = async (post) => {
+        const name = prompt('Client name:');
+        if (!name) return;
+        const email = prompt('Client email:');
+        if (!email) return;
+
+        try {
+          const data = await api(`/projects/${project.id}/blog-posts/${post.id}/send-to-client`, {
+            method: 'POST',
+            body: { client_name: name, client_email: email }
+          });
+          const shareUrl = data.shareUrl;
+          alert(`Share link copied! URL: ${shareUrl}`);
+          navigator.clipboard.writeText(shareUrl);
+          setPosts(prev => prev.map(p => p.id === post.id ? data : p));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handlePublish = async (post) => {
+        if (post.client_status !== 'approved') {
+          setError('Blog must be client-approved before publishing');
+          return;
+        }
+        if (!window.confirm('Publish this blog post to WordPress?')) return;
+
+        setPublishingId(post.id);
+        try {
+          const data = await api(`/projects/${project.id}/blog-posts/${post.id}/publish`, {
+            method: 'POST',
+            body: {}
+          });
+          setPosts(prev => prev.map(p => p.id === post.id ? data : p));
+          alert('Published to WordPress!');
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setPublishingId(null);
+        }
+      };
+
+      const getPostsByStatus = (status) => posts.filter(p => {
+        if (status === 'ideas') return p.status === 'draft' && !p.draft_content;
+        if (status === 'drafting') return p.status === 'draft' && p.draft_content;
+        if (status === 'review') return p.client_status === 'pending_review';
+        if (status === 'changes') return p.client_status === 'changes_requested';
+        if (status === 'approved') return p.client_status === 'approved';
+        if (status === 'published') return p.status === 'published';
+        return false;
+      });
+
+      const stats = {
+        total: posts.length,
+        drafts: posts.filter(p => p.status === 'draft').length,
+        pending: posts.filter(p => p.client_status === 'pending_review').length,
+        approved: posts.filter(p => p.client_status === 'approved').length,
+        published: posts.filter(p => p.status === 'published').length
+      };
+
+      return React.createElement('div', { style: { padding: '24px', background: 'var(--bg)', minHeight: '100vh' } },
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+            React.createElement('div', null,
+              React.createElement('h1', { style: { fontSize: 32, fontWeight: 700, marginBottom: 8, color: 'var(--text)' } }, 'Blog Manager'),
+              React.createElement('p', { style: { color: 'var(--text2)', fontSize: 14 } }, 'Create, review, and publish blog posts')
+            ),
+            React.createElement('button', {
+              onClick: () => handleOpenModal(),
+              style: { padding: '10px 16px', background: '#ec4899', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }
+            },
+              React.createElement('i', { className: 'fas fa-plus' }),
+              'New Blog Post'
+            )
+          ),
+
+          // Stats
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 } },
+            [
+              { label: 'Total Posts', value: stats.total, color: '#3b82f6' },
+              { label: 'Drafts', value: stats.drafts, color: '#f59e0b' },
+              { label: 'Pending Review', value: stats.pending, color: '#ec4899' },
+              { label: 'Approved', value: stats.approved, color: '#22c55e' },
+              { label: 'Published', value: stats.published, color: '#10b981' }
+            ].map(stat =>
+              React.createElement('div', {
+                key: stat.label,
+                style: { background: 'var(--card)', padding: 16, borderRadius: 8, border: `2px solid ${stat.color}40` }
+              },
+                React.createElement('p', { style: { color: 'var(--text3)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' } }, stat.label),
+                React.createElement('p', { style: { fontSize: 36, fontWeight: 700, color: stat.color, marginTop: 8 } }, stat.value)
+              )
+            )
+          )
+        ),
+
+        // View toggle
+        React.createElement('div', { style: { marginBottom: 24, display: 'flex', gap: 12 } },
+          React.createElement('button', {
+            onClick: () => setView('pipeline'),
+            style: { padding: '8px 16px', background: view === 'pipeline' ? '#ec4899' : 'var(--card)', color: 'var(--text)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+          }, 'Pipeline'),
+          React.createElement('button', {
+            onClick: () => setView('calendar'),
+            style: { padding: '8px 16px', background: view === 'calendar' ? '#ec4899' : 'var(--card)', color: 'var(--text)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+          }, 'Calendar')
+        ),
+
+        // Pipeline View (Kanban)
+        view === 'pipeline' && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 } },
+          [
+            { status: 'ideas', label: 'Ideas', color: '#64748b' },
+            { status: 'drafting', label: 'Drafting', color: '#f59e0b' },
+            { status: 'review', label: 'Client Review', color: '#ec4899' },
+            { status: 'changes', label: 'Changes Requested', color: '#f97316' },
+            { status: 'approved', label: 'Approved', color: '#22c55e' },
+            { status: 'published', label: 'Published', color: '#3b82f6' }
+          ].map(col =>
+            React.createElement('div', { key: col.status },
+              React.createElement('h3', { style: { fontSize: 14, fontWeight: 700, marginBottom: 12, color: col.color, textTransform: 'uppercase' } }, `${col.label} (${getPostsByStatus(col.status).length})`),
+              React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+                getPostsByStatus(col.status).map(post =>
+                  React.createElement('div', {
+                    key: post.id,
+                    onClick: () => handleOpenModal(post),
+                    style: { background: 'var(--card)', padding: 12, borderRadius: 8, border: `1px solid ${col.color}30`, cursor: 'pointer', transition: 'all 0.2s' }
+                  },
+                    React.createElement('p', { style: { fontWeight: 700, fontSize: 13, color: 'var(--text)' } }, post.title || post.current_focus_keyword),
+                    React.createElement('p', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 4 } }, post.current_focus_keyword && `Focus: ${post.current_focus_keyword}`),
+                    post.target_publish_date && React.createElement('p', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } }, new Date(post.target_publish_date).toLocaleDateString()),
+                    React.createElement('p', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } }, `${post.current_word_count || 1500} words`)
+                  )
+                )
+              )
+            )
+          )
+        ),
+
+        // Modal
+        modalOpen && React.createElement('div', {
+          style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
+        },
+          React.createElement('div', {
+            style: { background: 'var(--card)', borderRadius: 8, padding: 24, maxWidth: 600, width: '90%', maxHeight: '90vh', overflowY: 'auto' }
+          },
+            React.createElement('h2', { style: { fontSize: 24, fontWeight: 700, marginBottom: 16 } }, editingPost ? 'Edit Blog Post' : 'New Blog Post'),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Title'),
+              React.createElement('input', {
+                type: 'text',
+                value: formData.title,
+                onChange: (e) => setFormData({ ...formData, title: e.target.value }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Focus Keyword'),
+              React.createElement('input', {
+                type: 'text',
+                value: formData.focus_keyword,
+                onChange: (e) => setFormData({ ...formData, focus_keyword: e.target.value }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Target Keywords (comma-separated)'),
+              React.createElement('input', {
+                type: 'text',
+                value: Array.isArray(formData.target_keywords) ? formData.target_keywords.join(', ') : '',
+                onChange: (e) => setFormData({ ...formData, target_keywords: e.target.value.split(',').map(k => k.trim()).filter(Boolean) }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Target Publish Date'),
+              React.createElement('input', {
+                type: 'date',
+                value: formData.target_publish_date || '',
+                onChange: (e) => setFormData({ ...formData, target_publish_date: e.target.value }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Blog Category'),
+              React.createElement('input', {
+                type: 'text',
+                value: formData.blog_category,
+                onChange: (e) => setFormData({ ...formData, blog_category: e.target.value }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Target Word Count'),
+              React.createElement('input', {
+                type: 'number',
+                value: formData.word_count,
+                onChange: (e) => setFormData({ ...formData, word_count: parseInt(e.target.value) || 1500 }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text2)' } }, 'Notes'),
+              React.createElement('textarea', {
+                value: formData.notes,
+                onChange: (e) => setFormData({ ...formData, notes: e.target.value }),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, minHeight: 80, fontFamily: 'inherit' }
+              })
+            ),
+
+            editingPost && editingPost.draft_content && React.createElement('div', { style: { marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' } },
+              React.createElement('p', { style: { fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text2)' } }, 'Draft Status'),
+              React.createElement('p', { style: { fontSize: 13, color: 'var(--text)', marginBottom: 8 } }, `${editingPost.draft_word_count || 0} words generated`),
+              React.createElement('button', {
+                onClick: handleGenerateDraft,
+                disabled: generating,
+                style: { padding: '8px 12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, marginRight: 8 }
+              }, generating ? 'Generating...' : 'Regenerate Draft')
+            ),
+
+            editingPost && !editingPost.draft_content && React.createElement('button', {
+              onClick: handleGenerateDraft,
+              disabled: generating,
+              style: { width: '100%', padding: '10px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, marginBottom: 16 }
+            }, generating ? 'Generating...' : 'Generate AI Draft'),
+
+            editingPost && editingPost.draft_content && React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('p', { style: { fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--success)' } }, `Client Status: ${editingPost.client_status}`),
+              editingPost.client_status === 'not_sent' && React.createElement('button', {
+                onClick: () => handleSendToClient(editingPost),
+                style: { padding: '8px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              }, 'Send to Client'),
+              editingPost.client_status === 'approved' && React.createElement('button', {
+                onClick: () => handlePublish(editingPost),
+                disabled: publishingId === editingPost.id,
+                style: { padding: '8px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              }, publishingId === editingPost.id ? 'Publishing...' : 'Publish to WordPress')
+            ),
+
+            React.createElement('div', { style: { display: 'flex', gap: 12 } },
+              React.createElement('button', {
+                onClick: () => setModalOpen(false),
+                style: { flex: 1, padding: '10px', background: 'var(--border)', color: 'var(--text)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+              }, 'Close'),
+              React.createElement('button', {
+                onClick: () => setModalOpen(false),
+                style: { flex: 1, padding: '10px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+              }, 'Save')
+            )
+          )
+        )
+      );
+    }
+
+    // ============ BLOG REVIEW PAGE (PUBLIC) ============
+
+    function BlogReviewPage({ token }) {
+      const [post, setPost] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+      const [newComment, setNewComment] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+      const [clientName, setClientName] = useState('');
+
+      useEffect(() => {
+        loadPost();
+      }, [token]);
+
+      const loadPost = async () => {
+        try {
+          const data = await fetch(`/api/blog-review/${token}`).then(r => r.json());
+          if (data.error) {
+            setError(data.error);
+          } else {
+            setPost(data);
+          }
+        } catch (err) {
+          setError('Failed to load blog post');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleAddComment = async () => {
+        if (!newComment.trim() || !clientName.trim()) {
+          alert('Please enter your name and comment');
+          return;
+        }
+
+        setSubmitting(true);
+        try {
+          const data = await fetch(`/api/blog-review/${token}/comment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: clientName, comment: newComment })
+          }).then(r => r.json());
+
+          setPost(data);
+          setNewComment('');
+        } catch (err) {
+          setError('Failed to submit comment');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const handleApprove = async () => {
+        if (!clientName.trim()) {
+          alert('Please enter your name');
+          return;
+        }
+
+        setSubmitting(true);
+        try {
+          const data = await fetch(`/api/blog-review/${token}/approve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: clientName })
+          }).then(r => r.json());
+
+          setPost(data);
+        } catch (err) {
+          setError('Failed to approve blog post');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const handleRequestChanges = async () => {
+        if (!newComment.trim() || !clientName.trim()) {
+          alert('Please enter your name and your requested changes');
+          return;
+        }
+
+        setSubmitting(true);
+        try {
+          const data = await fetch(`/api/blog-review/${token}/request-changes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: clientName, comment: newComment })
+          }).then(r => r.json());
+
+          setPost(data);
+          setNewComment('');
+        } catch (err) {
+          setError('Failed to request changes');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      if (loading) {
+        return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#fff' } },
+          React.createElement('div', null,
+            React.createElement('span', { className: 'spinner' }),
+            React.createElement('p', { style: { marginTop: 16, color: '#666' } }, 'Loading blog post...')
+          )
+        );
+      }
+
+      if (error || !post) {
+        return React.createElement('div', { style: { padding: '40px 20px', background: '#fff', minHeight: '100vh', textAlign: 'center' } },
+          React.createElement('h1', { style: { fontSize: 28, fontWeight: 700, marginBottom: 8, color: '#333' } }, 'Blog Post Not Found'),
+          React.createElement('p', { style: { color: '#666', marginBottom: 16 } }, error || 'This blog post is no longer available'),
+          React.createElement('a', { href: '/', style: { color: '#0066cc', textDecoration: 'none', fontSize: 14, fontWeight: 600 } }, 'Return to Dashboard')
+        );
+      }
+
+      const comments = post.client_comments ? JSON.parse(post.client_comments) : [];
+
+      return React.createElement('div', { style: { background: '#fff', minHeight: '100vh', padding: '40px 20px' } },
+        React.createElement('div', { style: { maxWidth: 800, margin: '0 auto' } },
+          React.createElement('div', { style: { marginBottom: 32 } },
+            React.createElement('h1', { style: { fontSize: 36, fontWeight: 700, marginBottom: 24, color: '#1a1a1a' } }, post.title),
+
+            // Meta preview
+            React.createElement('div', { style: { background: '#f5f5f5', padding: 16, borderRadius: 8, marginBottom: 32 } },
+              React.createElement('p', { style: { fontSize: 12, color: '#666', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase' } }, 'Search Result Preview'),
+              React.createElement('p', { style: { fontSize: 14, color: '#1a1a1a', fontWeight: 600, marginBottom: 4 } }, post.draft_meta_title || post.title),
+              React.createElement('p', { style: { fontSize: 13, color: '#006621', marginBottom: 8 } }, 'https://yoursite.com/blog/post'),
+              React.createElement('p', { style: { fontSize: 13, color: '#545454', lineHeight: 1.5 } }, post.draft_meta_desc || 'Blog post content...')
+            ),
+
+            // Content
+            React.createElement('div', {
+              className: 'content-preview',
+              dangerouslySetInnerHTML: { __html: post.draft_content || '<p>No content yet</p>' },
+              style: { fontSize: 16, lineHeight: 1.8, color: '#333', marginBottom: 32 }
+            })
+          ),
+
+          // Status badge
+          React.createElement('div', { style: { marginBottom: 32, padding: 16, background: '#f0f4ff', borderRadius: 8, border: '1px solid #e0e7ff' } },
+            React.createElement('p', { style: { fontSize: 13, fontWeight: 700, color: '#4338ca', textTransform: 'uppercase', marginBottom: 8 } },
+              post.client_status === 'approved' ? 'Approved' : post.client_status === 'changes_requested' ? 'Changes Requested' : 'Pending Review'
+            ),
+            post.client_status === 'approved' && post.client_reviewed_at && React.createElement('p', { style: { fontSize: 13, color: '#666' } },
+              `Approved on ${new Date(post.client_reviewed_at).toLocaleDateString()}`
+            )
+          ),
+
+          // Comments section
+          React.createElement('div', { style: { marginBottom: 32 } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, marginBottom: 16, color: '#1a1a1a' } }, `Comments (${comments.length})`),
+            comments.map((c, i) =>
+              React.createElement('div', {
+                key: i,
+                style: { background: '#f9f9f9', padding: 12, borderRadius: 6, marginBottom: 12, borderLeft: '4px solid #3b82f6' }
+              },
+                React.createElement('p', { style: { fontSize: 13, fontWeight: 700, color: '#1a1a1a' } }, c.name),
+                React.createElement('p', { style: { fontSize: 12, color: '#666', marginBottom: 8 } }, new Date(c.timestamp).toLocaleString()),
+                React.createElement('p', { style: { fontSize: 14, color: '#333', lineHeight: 1.5 } }, c.comment)
+              )
+            ),
+
+            !comments.length && React.createElement('p', { style: { color: '#999', fontSize: 14 } }, 'No comments yet'),
+
+            post.client_status !== 'approved' && React.createElement('div', { style: { marginTop: 20 } },
+              React.createElement('p', { style: { fontSize: 12, fontWeight: 700, marginBottom: 12, color: '#666', textTransform: 'uppercase' } }, 'Add Your Comment'),
+              React.createElement('input', {
+                type: 'text',
+                placeholder: 'Your name',
+                value: clientName,
+                onChange: (e) => setClientName(e.target.value),
+                style: { width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: 6, marginBottom: 12, fontFamily: 'inherit', fontSize: 14 }
+              }),
+              React.createElement('textarea', {
+                placeholder: 'Your comment or requested changes...',
+                value: newComment,
+                onChange: (e) => setNewComment(e.target.value),
+                style: { width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: 6, marginBottom: 12, minHeight: 100, fontFamily: 'inherit', fontSize: 14 }
+              }),
+              React.createElement('button', {
+                onClick: handleAddComment,
+                disabled: submitting,
+                style: { padding: '10px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, marginRight: 8, fontSize: 14 }
+              }, submitting ? 'Submitting...' : 'Add Comment')
+            )
+          ),
+
+          // Action buttons
+          post.client_status !== 'approved' && React.createElement('div', { style: { display: 'flex', gap: 12, paddingTop: 20, borderTop: '1px solid #ddd' } },
+            React.createElement('button', {
+              onClick: handleApprove,
+              disabled: submitting || !clientName.trim(),
+              style: { flex: 1, padding: '12px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 15 }
+            }, 'Approve Post'),
+            React.createElement('button', {
+              onClick: handleRequestChanges,
+              disabled: submitting || !clientName.trim() || !newComment.trim(),
+              style: { flex: 1, padding: '12px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 15 }
+            }, 'Request Changes')
+          )
+        )
+      );
+    }
+
     // ============ PROJECT SETTINGS PAGE ============
     function ProjectSettingsPage({ project: currentProject }) {
       const [project, setProject] = useState(null);
@@ -14753,6 +15302,12 @@
         return <LoginPage onLogin={handleLogin} />;
       }
 
+      // Check for public blog review page
+      const pathMatch = window.location.pathname.match(/^\/blog-review\/([a-f0-9-]+)$/i);
+      if (pathMatch) {
+        return <BlogReviewPage token={pathMatch[1]} />;
+      }
+
       const renderPage = () => {
         switch (activeTab) {
           case 'gbp-audit':
@@ -14813,6 +15368,8 @@ case 'action-plan':
             return <MonthlyReportsPage project={project} />;
           case 'gbp-posts':
             return <GBPPostsPage project={project} />;
+          case 'blog':
+            return <BlogPage project={project} setPage={setActiveTab} />;
           case 'project-settings':
             return <ProjectSettingsPage project={project} />;
           case 'integrations':
@@ -14852,6 +15409,9 @@ case 'action-plan':
         ]},
         { section: 'GBP', items: [
           { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },
+        ]},
+        { section: 'BLOG', items: [
+          { id: 'blog', label: 'Blog Manager', icon: 'fas fa-blog' },
         ]},
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
@@ -14923,8 +15483,8 @@ case 'action-plan':
             <div className="sidebar-content">
               {navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
-                  {(() => { const sColor = { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
+                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'BLOG': '#ec4899', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
+                  {(() => { const sColor = { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'BLOG': '#ec4899', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
                     const isActive = activeTab === item.id

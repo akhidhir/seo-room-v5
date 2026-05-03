@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 
 // ==================== 1. CONFIG ====================
@@ -496,6 +497,18 @@ async function initDb() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
+
+    // Blog content system columns
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS content_type TEXT DEFAULT 'page'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS share_token TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_status TEXT DEFAULT 'not_sent'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_name TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_email TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_comments JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_reviewed_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS target_publish_date DATE`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_category TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_tags TEXT[]`).catch(() => {});
 
     // GBP tasks are manual (SEO Specialist) — no extension automation
     await client.query(`
@@ -12493,7 +12506,334 @@ Respond with a valid JSON array (no markdown, just raw JSON) with this structure
   }
 });
 
-// ==================== 14. SERVE ====================
+// ==================== 14. BLOG CONTENT SYSTEM ====================
+
+// GET blog posts for a project
+app.get('/api/projects/:id/blog-posts', async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+    const r = await pool.query(
+      `SELECT * FROM content_queue
+       WHERE project_id=$1 AND content_type='blog'
+       ORDER BY target_publish_date ASC NULLS LAST, created_at DESC`,
+      [projectId]
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST create new blog post
+app.post('/api/projects/:id/blog-posts', async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+    const { title, focus_keyword, target_keywords, target_publish_date, blog_category, blog_tags, word_count, notes } = req.body;
+
+    const shareToken = crypto.randomUUID();
+    const r = await pool.query(
+      `INSERT INTO content_queue
+       (project_id, content_type, title, current_focus_keyword, target_keywords, target_publish_date, blog_category, blog_tags,
+        current_word_count, notes, share_token, status, client_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [projectId, 'blog', title, focus_keyword, JSON.stringify(target_keywords || []), target_publish_date,
+       blog_category, blog_tags || [], word_count || 1500, notes, shareToken, 'draft', 'not_sent']
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST generate AI draft for blog post
+app.post('/api/projects/:id/blog-posts/:postId/generate-draft', async (req, res) => {
+  try {
+    const { id: projectId, postId } = req.params;
+
+    if (!anthropic) return res.status(500).json({ error: 'Claude API not configured' });
+
+    // Get blog post
+    const post = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [postId, projectId])).rows[0];
+    if (!post) return res.status(404).json({ error: 'Blog post not found' });
+
+    // Get project info
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Build prompt
+    const targetKeywords = post.target_keywords ? JSON.parse(post.target_keywords) : [];
+    const keywordList = targetKeywords.length > 0 ? targetKeywords.join(', ') : 'target keywords';
+
+    const prompt = `You are an SEO copywriter. Write a comprehensive, SEO-optimized blog post.
+
+Title: "${post.current_focus_keyword || post.title}"
+Focus Keyword: "${post.current_focus_keyword || ''}"
+Target Keywords: ${keywordList}
+Target Word Count: ${post.current_word_count || 1500} words
+Business: ${project.business_name || project.name}
+Industry: ${project.industry || 'general'}
+
+Requirements:
+- Start with a compelling intro paragraph that includes the focus keyword naturally
+- Use H2 and H3 headings to structure the content
+- Include the focus keyword in the first H2 heading
+- Incorporate target keywords naturally throughout
+- Write for both humans and search engines
+- Use clear, engaging language appropriate for ${project.industry || 'the industry'}
+- Include practical tips and actionable insights
+- End with a strong conclusion and call-to-action
+- Format as HTML with proper semantic tags
+
+Output ONLY the HTML content (starting with a P tag for the intro), no meta tags.`;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const draftContent = message.content[0].type === 'text' ? message.content[0].text : '';
+
+    // Generate meta title and description
+    const metaPrompt = `Given this blog post content and focus keyword "${post.current_focus_keyword}", generate:
+1. A concise meta title (50-60 characters)
+2. A compelling meta description (150-160 characters)
+
+Format your response as JSON: { "meta_title": "...", "meta_description": "..." }`;
+
+    const metaMessage = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{ role: 'user', content: metaPrompt }]
+    });
+
+    let metaTitle = '', metaDesc = '';
+    try {
+      const metaText = metaMessage.content[0].type === 'text' ? metaMessage.content[0].text : '{}';
+      const metaJson = JSON.parse(metaText);
+      metaTitle = metaJson.meta_title || '';
+      metaDesc = metaJson.meta_description || '';
+    } catch (e) {
+      console.log('[blog-gen] Meta parse error:', e.message);
+    }
+
+    // Update post
+    const wordCount = draftContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+    const updated = await pool.query(
+      `UPDATE content_queue SET draft_content=$1, draft_meta_title=$2, draft_meta_desc=$3, draft_word_count=$4, updated_at=NOW()
+       WHERE id=$5 RETURNING *`,
+      [draftContent, metaTitle, metaDesc, wordCount, postId]
+    );
+
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[blog-gen]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST send blog to client
+app.post('/api/projects/:id/blog-posts/:postId/send-to-client', async (req, res) => {
+  try {
+    const { id: projectId, postId } = req.params;
+    const { client_name, client_email } = req.body;
+
+    const r = await pool.query(
+      `UPDATE content_queue SET client_status=$1, client_name=$2, client_email=$3, updated_at=NOW()
+       WHERE id=$4 AND project_id=$5 RETURNING *`,
+      ['pending_review', client_name, client_email, postId, projectId]
+    );
+
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Blog post not found' });
+    const post = r.rows[0];
+    const shareUrl = `${process.env.APP_URL || 'https://seo-room-v5-production.up.railway.app'}/blog-review/${post.share_token}`;
+
+    res.json({ ...post, shareUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET public blog review page (no auth required)
+app.get('/api/blog-review/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const r = await pool.query(
+      `SELECT id, title, draft_content, draft_meta_title, draft_meta_desc, current_focus_keyword, client_status, client_comments
+       FROM content_queue WHERE share_token=$1`,
+      [token]
+    );
+
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Blog post not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST comment on blog review (public)
+app.post('/api/blog-review/:token/comment', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { name, comment } = req.body;
+
+    const post = (await pool.query('SELECT client_comments FROM content_queue WHERE share_token=$1', [token])).rows[0];
+    if (!post) return res.status(404).json({ error: 'Blog post not found' });
+
+    const comments = post.client_comments || [];
+    comments.push({ name, comment, timestamp: new Date().toISOString() });
+
+    const r = await pool.query(
+      `UPDATE content_queue SET client_comments=$1, updated_at=NOW() WHERE share_token=$2 RETURNING *`,
+      [JSON.stringify(comments), token]
+    );
+
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST approve blog (public)
+app.post('/api/blog-review/:token/approve', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { name } = req.body;
+
+    const r = await pool.query(
+      `UPDATE content_queue SET client_status=$1, client_reviewed_at=NOW(), updated_at=NOW()
+       WHERE share_token=$2 RETURNING *`,
+      ['approved', token]
+    );
+
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Blog post not found' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST request changes (public)
+app.post('/api/blog-review/:token/request-changes', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { name, comment } = req.body;
+
+    const post = (await pool.query('SELECT client_comments FROM content_queue WHERE share_token=$1', [token])).rows[0];
+    if (!post) return res.status(404).json({ error: 'Blog post not found' });
+
+    const comments = post.client_comments || [];
+    comments.push({ name, comment, timestamp: new Date().toISOString(), type: 'change_request' });
+
+    const r = await pool.query(
+      `UPDATE content_queue SET client_status=$1, client_comments=$2, updated_at=NOW()
+       WHERE share_token=$3 RETURNING *`,
+      ['changes_requested', JSON.stringify(comments), token]
+    );
+
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST publish blog to WordPress
+app.post('/api/projects/:id/blog-posts/:postId/publish', async (req, res) => {
+  try {
+    const { id: projectId, postId } = req.params;
+
+    const post = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [postId, projectId])).rows[0];
+    if (!post) return res.status(404).json({ error: 'Blog post not found' });
+    if (post.client_status !== 'approved') return res.status(400).json({ error: 'Blog post must be approved before publishing' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpBase) return res.status(400).json({ error: 'WordPress URL not configured' });
+
+    const authHeaders = getWpAuthHeaders(project);
+
+    // Create WordPress post
+    const wpPayload = {
+      title: post.title || post.current_focus_keyword,
+      content: post.draft_content || '',
+      status: 'publish'
+    };
+
+    // Add Yoast meta if available
+    if (post.draft_meta_title || post.draft_meta_desc) {
+      wpPayload.yoast_head_json = {
+        title: post.draft_meta_title,
+        description: post.draft_meta_desc
+      };
+    }
+
+    const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/posts`, {
+      method: 'POST',
+      headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+      body: JSON.stringify(wpPayload)
+    });
+
+    if (!wpRes.ok) {
+      const wpErr = await wpRes.text();
+      throw new Error(`WordPress API error: ${wpRes.status} - ${wpErr}`);
+    }
+
+    const wpPost = await wpRes.json();
+
+    // Save to wp_change_history
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, new_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [projectId, wpPost.id, wpPost.link, post.title, 'publish', 'blog_post_created', JSON.stringify(wpPost)]
+    );
+
+    // Update blog post status
+    const updated = await pool.query(
+      `UPDATE content_queue SET status=$1, published_at=NOW(), page_id=$2, page_url=$3, updated_at=NOW()
+       WHERE id=$4 RETURNING *`,
+      ['published', wpPost.id, wpPost.link, postId]
+    );
+
+    res.json(updated.rows[0]);
+  } catch (e) {
+    console.error('[blog-publish]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST import keywords for blog posts
+app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+    const { keywords, target_post_id } = req.body; // keywords: [{keyword, volume, competition}]
+
+    if (!keywords || !Array.isArray(keywords)) {
+      return res.status(400).json({ error: 'Keywords array required' });
+    }
+
+    // If target_post_id specified, add to that post's target_keywords
+    if (target_post_id) {
+      const post = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [target_post_id, projectId])).rows[0];
+      if (!post) return res.status(404).json({ error: 'Blog post not found' });
+
+      const existing = post.target_keywords ? JSON.parse(post.target_keywords) : [];
+      const newKeywords = keywords.map(k => k.keyword);
+      const combined = [...new Set([...existing, ...newKeywords])];
+
+      const r = await pool.query(
+        `UPDATE content_queue SET target_keywords=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+        [JSON.stringify(combined), target_post_id]
+      );
+      return res.json(r.rows[0]);
+    }
+
+    // Otherwise create new blog posts from keywords
+    const posts = [];
+    for (const kw of keywords) {
+      const shareToken = crypto.randomUUID();
+      const r = await pool.query(
+        `INSERT INTO content_queue
+         (project_id, content_type, title, current_focus_keyword, target_keywords, current_word_count,
+          share_token, status, client_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [projectId, 'blog', kw.keyword, kw.keyword, JSON.stringify([kw.keyword]), 1500, shareToken, 'draft', 'not_sent']
+      );
+      posts.push(r.rows[0]);
+    }
+
+    res.json({ created: posts.length, posts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== 15. SERVE ====================
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
@@ -12507,7 +12847,7 @@ app.get('*', (req, res) => {
   res.type('html').send(INDEX_HTML);
 });
 
-// ==================== 15. STARTUP ====================
+// ==================== 16. STARTUP ====================
 
 async function start() {
   try {
