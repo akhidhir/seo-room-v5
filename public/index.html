@@ -1574,8 +1574,8 @@
       };
 
       // Assignee auto-mapping from exec type
-      const execAssignee = { extension: 'Chrome Extension', api: 'SEO Room (Auto)', plugin: 'WordPress Plugin', manual: 'SEO Specialist' };
-      const execAssigneeIcon = { extension: 'fas fa-puzzle-piece', api: 'fas fa-robot', plugin: 'fas fa-wrench', manual: 'fas fa-user' };
+      const execAssignee = { extension: 'SEO Room', api: 'SEO Room', plugin: 'SEO Room', manual: 'Admin' };
+      const execAssigneeIcon = { extension: 'fas fa-robot', api: 'fas fa-robot', plugin: 'fas fa-robot', manual: 'fas fa-user' };
 
       const renderActionCells = (row, ri) => {
         if (!hasActions) return null;
@@ -3654,7 +3654,7 @@
               description: `Performance score: ${score}/100. Failing metrics: ${issueList}. ${issues.map(i => i.fix).join(' ')}`,
               severity,
               execution_type: 'plugin',
-              assignee_label: 'SEO Room AI'
+              assignee_label: 'SEO Room'
             }
           });
           setAddedActions(prev => ({ ...prev, [pageKey]: true }));
@@ -5652,11 +5652,13 @@
                     // Use AI-assigned label from DB if available, fall back to detectExecType
                     const aiLabel = item.assignee_label;
                     const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item.pillar || pillar);
-                    const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
-                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
-                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
-                    const aColor = assigneeColorMap[assigneeLabel] || (execInfo && execInfo.color) || '#6b7280';
-                    const aIcon = assigneeIconMap[assigneeLabel] || (execInfo && execInfo.icon) || 'fas fa-user';
+                    const rawLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Room';
+                    // Normalize old assignee labels to new system
+                    const assigneeLabel = ['Admin', 'Manual'].includes(rawLabel) ? 'Admin'  : 'SEO Room';
+                    const assigneeColorMap = { 'SEO Room': '#3b82f6', 'Admin': '#f59e0b' };
+                    const assigneeIconMap = { 'SEO Room': 'fas fa-robot', 'Admin': 'fas fa-user' };
+                    const aColor = assigneeColorMap[assigneeLabel] || '#3b82f6';
+                    const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-robot';
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -5791,8 +5793,8 @@
       };
 
       const handleBulkSendToCopywriter = async () => {
-        const copywriterItems = itemsWithAssignee.filter(i => i._assigneeLabel === 'Copywriter' && (i.status || 'pending') === 'pending');
-        if (!copywriterItems.length) { setBulkResult({ error: 'No pending Copywriter items to send' }); return; }
+        const copywriterItems = itemsWithAssignee.filter(i => /content|copy|meta|title|description/i.test(i.type || i.title || '') && (i.status || 'pending') === 'pending');
+        if (!copywriterItems.length) { setBulkResult({ error: 'No pending content items to send' }); return; }
         setBulkSending(true); setBulkResult(null);
         try {
           const data = await api(`/projects/${project.id}/content-queue/bulk-from-actions`, {
@@ -5815,7 +5817,8 @@
       const itemsWithAssignee = useMemo(() => items.map(item => {
         const aiLabel = item.assignee_label;
         const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item._pillar || item.pillar);
-        const assigneeLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Specialist';
+        const rawLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Room';
+        const assigneeLabel = ['Admin', 'Manual'].includes(rawLabel) ? 'Admin' : 'SEO Room';
         return { ...item, _assigneeLabel: assigneeLabel };
       }), [items]);
 

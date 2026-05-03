@@ -1439,23 +1439,17 @@ YOUR JOB:
 5. For competitors: use actual competitor data from facts.competitors.
 6. DEDUPLICATE — same issue across audits = ONE item.
 
-ASSIGN execution_type AND assignee_label — choose the BEST match:
-- "plugin" + "On-Page Audit" — ONLY for quick meta fixes: missing/short meta titles, missing meta descriptions, missing H1s. These get auto-fixed via AI in the On-Page Audit tool.
-- "plugin" + "Copywriter" — content improvements: thin content, low word count, content optimization for rankings, improving page copy, adding location keywords to body text, rewriting content to target queries better. These go to the Copywriter tool for human-quality content.
-- "manual" + "Manual" — business owner physical tasks: take photos, request reviews, register in directories, claim listings, upload photos to GBP
-- "manual" + "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses, attributes, service menu), strategy decisions, social media, technical SEO changes that can't be automated
-- "manual" + "Developer" — server/hosting configs, theme changes, Core Web Vitals fixes (LCP, CLS, TBT, FCP), performance optimization, image compression, code minification, caching setup
-- "api" + "Automated" — API tasks: URL indexing submission, sitemap submission
+ASSIGN execution_type AND assignee_label — there are ONLY 2 assignees:
+- "SEO Room" — the system handles it automatically. This covers ALL automated fixes: meta title/desc fixes, content optimization, H1 fixes, schema, CWV/performance fixes, GBP edits, indexing, API tasks. Use for ANY task the dashboard or plugin can execute.
+- "Admin" — tasks that require a human (business owner/admin). ONLY use for physical tasks: take photos, request reviews from customers, register in directories in person, claim GBP listing, upload photos manually.
 
-DECISION GUIDE for website pillar:
-- "Add/fix meta title" or "Add/fix meta description" → Copywriter (writing copy)
-- "Optimize for ranking" / "Improve ranking" → Copywriter (content work)
-- "Improve content" / "Expand content" / "Add location keywords" / "Rewrite" → Copywriter
-- "Add schema" / "Fix canonical" / "Fix redirect" / "Fix robots" → SEO Specialist (technical)
-- "Fix heading" / "Fix H1" → On-Page Audit (structural fix)
-- "Improve LCP" / "Fix CLS" / "Reduce TBT" / "Optimize images" / "Performance" / "Page speed" → Developer (performance)
+DECISION GUIDE:
+- ANY meta/content/SEO fix → SEO Room (automated)
+- ANY performance/CWV fix → SEO Room (automated via plugin)
+- ANY GBP edit → SEO Room (automated via extension)
+- "Take photos" / "Request reviews" / "Register in directory" / "Upload photos" → Admin (human required)
 
-IMPORTANT: Most website content tasks go to Copywriter. On-Page Audit is ONLY for structural HTML fixes (H1 tags, heading hierarchy). Developer handles performance/CWV issues. SEO Specialist is for non-code technical changes.
+execution_type: "plugin" for fixes applied via WordPress, "api" for API tasks, "manual" for Admin tasks.
 
 SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
 PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
@@ -1474,7 +1468,7 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
   "description": "<what to fix + why>",
   "severity": "<Critical|High|Medium|Low>",
   "execution_type": "<plugin|manual|api>",
-  "assignee_label": "<On-Page Audit|Copywriter|SEO Specialist|Developer|Manual|Automated>",
+  "assignee_label": "<SEO Room|Admin>",
   "current_value": "<actual value>",
   "new_value": "<target>"
 }]`;
@@ -1561,8 +1555,8 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
             || validCats[0] || 'General';
           const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
           const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
-          const validAssignees = ['On-Page Audit', 'Copywriter', 'SEO Specialist', 'Developer', 'SEO Room AI', 'Manual', 'Automated', 'WP Plugin'];
-          const assigneeLabel = validAssignees.includes(item.assignee_label) ? item.assignee_label : (execType === 'plugin' ? 'On-Page Audit' : execType === 'api' ? 'Automated' : 'SEO Specialist');
+          const validAssignees = ['SEO Room', 'Admin'];
+          const assigneeLabel = validAssignees.includes(item.assignee_label) ? item.assignee_label : 'SEO Room';
 
           if (!item.title) { skippedCount++; continue; }
 
@@ -1951,7 +1945,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             );
             await pool.query(
               `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
-               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'plugin', 'SEO Room AI')`,
+               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'plugin', 'SEO Room')`,
               [req.params.projectId, fRes.rows[0].id, title, description, `Score: ${score}`, 'Score: 90+', severity]
             );
             findingsCount++;
