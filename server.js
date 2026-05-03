@@ -1443,7 +1443,8 @@ ASSIGN execution_type AND assignee_label — choose the BEST match:
 - "plugin" + "On-Page Audit" — ONLY for quick meta fixes: missing/short meta titles, missing meta descriptions, missing H1s. These get auto-fixed via AI in the On-Page Audit tool.
 - "plugin" + "Copywriter" — content improvements: thin content, low word count, content optimization for rankings, improving page copy, adding location keywords to body text, rewriting content to target queries better. These go to the Copywriter tool for human-quality content.
 - "manual" + "Manual" — business owner physical tasks: take photos, request reviews, register in directories, claim listings, upload photos to GBP
-- "manual" + "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses, attributes, service menu), strategy decisions, server/hosting configs, theme changes, social media, technical SEO changes that can't be automated
+- "manual" + "SEO Specialist" — GBP edits (description, categories, hours, posts, review responses, attributes, service menu), strategy decisions, social media, technical SEO changes that can't be automated
+- "manual" + "Developer" — server/hosting configs, theme changes, Core Web Vitals fixes (LCP, CLS, TBT, FCP), performance optimization, image compression, code minification, caching setup
 - "api" + "Automated" — API tasks: URL indexing submission, sitemap submission
 
 DECISION GUIDE for website pillar:
@@ -1452,8 +1453,9 @@ DECISION GUIDE for website pillar:
 - "Improve content" / "Expand content" / "Add location keywords" / "Rewrite" → Copywriter
 - "Add schema" / "Fix canonical" / "Fix redirect" / "Fix robots" → SEO Specialist (technical)
 - "Fix heading" / "Fix H1" → On-Page Audit (structural fix)
+- "Improve LCP" / "Fix CLS" / "Reduce TBT" / "Optimize images" / "Performance" / "Page speed" → Developer (performance)
 
-IMPORTANT: Most website content tasks go to Copywriter. On-Page Audit is ONLY for structural HTML fixes (H1 tags, heading hierarchy). SEO Specialist is for server/technical changes.
+IMPORTANT: Most website content tasks go to Copywriter. On-Page Audit is ONLY for structural HTML fixes (H1 tags, heading hierarchy). Developer handles performance/CWV issues. SEO Specialist is for non-code technical changes.
 
 SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
 PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
@@ -1472,7 +1474,7 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
   "description": "<what to fix + why>",
   "severity": "<Critical|High|Medium|Low>",
   "execution_type": "<plugin|manual|api>",
-  "assignee_label": "<WP Plugin|SEO Specialist|Manual|Automated>",
+  "assignee_label": "<On-Page Audit|Copywriter|SEO Specialist|Developer|Manual|Automated>",
   "current_value": "<actual value>",
   "new_value": "<target>"
 }]`;
@@ -1559,7 +1561,7 @@ Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description u
             || validCats[0] || 'General';
           const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
           const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
-          const validAssignees = ['On-Page Audit', 'Copywriter', 'SEO Specialist', 'Manual', 'Automated', 'WP Plugin'];
+          const validAssignees = ['On-Page Audit', 'Copywriter', 'SEO Specialist', 'Developer', 'SEO Room AI', 'Manual', 'Automated', 'WP Plugin'];
           const assigneeLabel = validAssignees.includes(item.assignee_label) ? item.assignee_label : (execType === 'plugin' ? 'On-Page Audit' : execType === 'api' ? 'Automated' : 'SEO Specialist');
 
           if (!item.title) { skippedCount++; continue; }
@@ -1845,6 +1847,38 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             const psData = await runPageSpeedAudit(page.url, 'mobile');
             const metrics = psData.lighthouseResult?.audits || {};
             const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+
+            // Extract actionable Lighthouse opportunities & diagnostics
+            const opportunities = [];
+            const fixableAudits = [
+              'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
+              'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
+              'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
+              'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
+              'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
+              'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
+            ];
+            for (const key of fixableAudits) {
+              const audit = metrics[key];
+              if (audit && audit.score !== null && audit.score < 1) {
+                const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
+                // Include items (e.g. which images are unsized, which scripts are render-blocking)
+                if (audit.details?.items?.length) {
+                  opp.items = audit.details.items.slice(0, 10).map(item => {
+                    const cleaned = {};
+                    if (item.url) cleaned.url = item.url;
+                    if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
+                    if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
+                    if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
+                    if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
+                    if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
+                    return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
+                  });
+                }
+                opportunities.push(opp);
+              }
+            }
+
             return {
               page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
               performance_score: score,
@@ -1857,6 +1891,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
                 tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
                 score,
               },
+              opportunities,
             };
           } catch (err) {
             console.warn(`[speed-audit] Failed for ${page.url}: ${err.message}`);
@@ -1916,7 +1951,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             );
             await pool.query(
               `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
-               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'manual', 'SEO Specialist')`,
+               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'plugin', 'SEO Room AI')`,
               [req.params.projectId, fRes.rows[0].id, title, description, `Score: ${score}`, 'Score: 90+', severity]
             );
             findingsCount++;
@@ -2003,6 +2038,160 @@ app.get('/api/projects/:projectId/audits/speed/latest', async (req, res) => {
     if (result.rows.length === 0) return res.json({ results: [] });
     const data = typeof result.rows[0].audit_data === 'string' ? JSON.parse(result.rows[0].audit_data) : result.rows[0].audit_data;
     res.json({ results: data.results || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============ CWV AUTO-FIX: AI analyzes opportunities → generates fix → sends to seoroom-helper plugin ============
+app.post('/api/projects/:projectId/cwv-fix', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url;
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders.Authorization) return res.status(400).json({ error: 'WordPress URL and Application Password required in Project Settings' });
+
+    const { page_url, opportunities } = req.body;
+    if (!page_url || !opportunities?.length) return res.status(400).json({ error: 'page_url and opportunities required' });
+
+    // Use Haiku to analyze opportunities and generate fix instructions
+    const fixPrompt = `You are a WordPress Core Web Vitals expert. Analyze these Lighthouse audit failures for the page "${page_url}" and generate fix instructions that can be applied via a WordPress helper plugin (no theme file changes).
+
+AVAILABLE FIX TYPES (choose from these ONLY):
+- preconnect: {domain, crossorigin?} — add <link rel="preconnect"> for third-party domains
+- dns_prefetch: {domain} — add <link rel="dns-prefetch">
+- preload_resource: {url, as, type?, crossorigin?} — preload critical font/image/CSS. "as" must be: font, image, style, script
+- fetchpriority: {image_src?} — add fetchpriority="high" to LCP image. If no image_src, applies to first image
+- font_display_swap: {} — add font-display:swap globally
+- defer_script: {handle?, url_pattern?} — defer a render-blocking script. Use url_pattern to match by partial URL
+- delay_script: {handle?, url_pattern?} — delay script until user interaction (for analytics, chat, etc.)
+- image_dimensions: {image_src, width, height} — add missing width/height to a specific image
+- lazy_load: {} — add loading="lazy" to below-fold images (skips first 2)
+
+IMPORTANT RULES:
+- Only suggest fixes that the plugin can safely apply via WordPress hooks
+- Do NOT suggest fixes that BerqWP already handles (general image compression, WebP conversion, CSS/JS minification, page caching, CDN)
+- Focus on: preconnect hints, LCP preloading, fetchpriority, font-display, deferring specific third-party scripts, image dimensions
+- Each fix must be specific — include actual URLs, domains, or patterns from the opportunity data
+- MAX 5 fixes per page
+
+LIGHTHOUSE OPPORTUNITIES:
+${JSON.stringify(opportunities, null, 2)}
+
+Return ONLY a JSON array of fixes:
+[{"fix_type": "...", "params": {...}, "reason": "short explanation"}]`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: fixPrompt }],
+    });
+
+    let fixes = [];
+    try {
+      const text = aiResp.content[0].text;
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) fixes = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      return res.status(500).json({ error: 'AI failed to generate valid fix instructions' });
+    }
+
+    if (!fixes.length) return res.json({ success: true, fixes_applied: 0, message: 'No applicable fixes found — BerqWP likely handles the remaining issues' });
+
+    // Apply each fix via seoroom-helper plugin API
+    const applied = [];
+    const failed = [];
+
+    for (const fix of fixes) {
+      try {
+        const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fix_type: fix.fix_type,
+            params: fix.params,
+            page_url: page_url,
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!wpResp.ok) {
+          const errText = await wpResp.text();
+          failed.push({ fix_type: fix.fix_type, error: `WP returned ${wpResp.status}: ${errText.slice(0, 100)}` });
+          continue;
+        }
+
+        const wpResult = await wpResp.json();
+        applied.push({ fix_type: fix.fix_type, fix_id: wpResult.fix_id, reason: fix.reason });
+
+        // Log to wp_change_history for dashboard rollback tracking
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, 0, $2, $3, 'cwv_fix', $4, 'none', $5)`,
+          [req.params.projectId, page_url, page_url, fix.fix_type, JSON.stringify({ fix_id: wpResult.fix_id, params: fix.params, reason: fix.reason })]
+        );
+      } catch (fixErr) {
+        failed.push({ fix_type: fix.fix_type, error: fixErr.message });
+      }
+    }
+
+    console.log(`[cwv-fix] Applied ${applied.length} fixes, ${failed.length} failed for ${page_url}`);
+    res.json({ success: true, fixes_applied: applied.length, applied, failed });
+  } catch (e) {
+    console.error('[cwv-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Rollback a CWV fix via seoroom-helper plugin
+app.post('/api/projects/:projectId/cwv-fix/rollback', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url;
+    const authHeaders = getWpAuthHeaders(project);
+    const { fix_id } = req.body;
+
+    const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix/rollback`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fix_id }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!wpResp.ok) return res.status(wpResp.status).json({ error: 'Rollback failed' });
+
+    // Mark in history
+    await pool.query(
+      `UPDATE wp_change_history SET rolled_back_at=NOW() WHERE project_id=$1 AND field_name='cwv_fix' AND new_value LIKE $2`,
+      [req.params.projectId, `%${fix_id}%`]
+    );
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// List active CWV fixes from seoroom-helper plugin
+app.get('/api/projects/:projectId/cwv-fixes', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = project.wordpress_url;
+    const authHeaders = getWpAuthHeaders(project);
+
+    const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fixes`, {
+      headers: authHeaders,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!wpResp.ok) return res.status(wpResp.status).json({ error: 'Failed to fetch fixes' });
+    const fixes = await wpResp.json();
+    res.json({ fixes });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

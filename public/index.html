@@ -3653,8 +3653,8 @@
               title: `Fix CWV issues on: ${page.title || page.slug}`,
               description: `Performance score: ${score}/100. Failing metrics: ${issueList}. ${issues.map(i => i.fix).join(' ')}`,
               severity,
-              execution_type: 'manual',
-              assignee_label: 'Developer'
+              execution_type: 'plugin',
+              assignee_label: 'SEO Room AI'
             }
           });
           setAddedActions(prev => ({ ...prev, [pageKey]: true }));
@@ -3665,6 +3665,22 @@
       const handleIgnore = (pageKey) => setIgnoredActions(prev => ({ ...prev, [pageKey]: true }));
       const handleUndo = (pageKey) => { setAddedActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); setIgnoredActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); };
       const [bulkAdding, setBulkAdding] = useState(false);
+      const [fixingPage, setFixingPage] = useState(null);
+      const [fixResults, setFixResults] = useState({});
+
+      const handleAutoFix = async (pageKey, page) => {
+        setFixingPage(pageKey);
+        try {
+          const result = await api(`/projects/${project.id}/cwv-fix`, {
+            method: 'POST',
+            body: { page_url: page.url, opportunities: page.opportunities || [] }
+          });
+          setFixResults(prev => ({ ...prev, [pageKey]: result }));
+        } catch (e) {
+          setFixResults(prev => ({ ...prev, [pageKey]: { error: e.message } }));
+        }
+        setFixingPage(null);
+      };
 
       const failingPages = useMemo(() => {
         return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !addedActions[pageKey] && !ignoredActions[pageKey]);
@@ -3814,6 +3830,7 @@
                         {isExpanded && (
                           <tr style={{ background: 'rgba(239,68,68,0.03)', borderBottom: '1px solid var(--border)' }}>
                             <td colSpan={8} style={{ padding: '12px 20px 16px 38px' }}>
+                              {/* Failing Metrics */}
                               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>
                                 <i className="fas fa-exclamation-triangle" style={{ marginRight: 6, color: '#ef4444' }} />Failing Metrics ({issues.length})
                               </div>
@@ -3829,7 +3846,52 @@
                                   </div>
                                 </div>
                               ))}
-                              {issues.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>All metrics within acceptable thresholds.</div>}
+
+                              {/* Lighthouse Opportunities */}
+                              {page.opportunities?.length > 0 && (
+                                <div style={{ marginTop: 14 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>
+                                    <i className="fas fa-wrench" style={{ marginRight: 6, color: '#3b82f6' }} />Lighthouse Opportunities ({page.opportunities.length})
+                                  </div>
+                                  {page.opportunities.map((opp, oi) => (
+                                    <div key={oi} style={{ marginBottom: 6, padding: '6px 12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                      <div>
+                                        <span style={{ fontWeight: 600 }}>{opp.title}</span>
+                                        {opp.displayValue && <span style={{ color: 'var(--text3)', marginLeft: 8 }}>{opp.displayValue}</span>}
+                                        {opp.items?.length > 0 && <span style={{ color: 'var(--text3)', marginLeft: 8, fontSize: 11 }}>({opp.items.length} items)</span>}
+                                      </div>
+                                      <div style={{ width: 50, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                                        <div style={{ width: `${Math.round((opp.score || 0) * 100)}%`, height: '100%', background: opp.score > 0.5 ? '#f59e0b' : '#ef4444', borderRadius: 2 }} />
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Auto-Fix Button */}
+                              {page.opportunities?.length > 0 && (
+                                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                                  {fixResults[pageKey]?.error ? (
+                                    <div style={{ fontSize: 12, color: '#ef4444' }}><i className="fas fa-times-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].error}</div>
+                                  ) : fixResults[pageKey]?.fixes_applied > 0 ? (
+                                    <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>
+                                      <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
+                                      {fixResults[pageKey].fixes_applied} fixes applied
+                                      {fixResults[pageKey].applied?.map((a, ai) => (
+                                        <span key={ai} style={{ display: 'inline-block', marginLeft: 8, padding: '2px 6px', background: 'rgba(34,197,94,0.1)', borderRadius: 4, fontSize: 11 }}>{a.fix_type}</span>
+                                      ))}
+                                    </div>
+                                  ) : fixResults[pageKey]?.fixes_applied === 0 ? (
+                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].message || 'No additional fixes needed — BerqWP handles the rest'}</div>
+                                  ) : (
+                                    <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); handleAutoFix(pageKey, page); }} disabled={fixingPage === pageKey} style={{ fontSize: 12, padding: '6px 16px' }}>
+                                      {fixingPage === pageKey ? <><span className="spinner"></span>Analyzing & Fixing...</> : <><i className="fas fa-magic" style={{ marginRight: 6 }} />Auto-Fix via Plugin</>}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {issues.length === 0 && !page.opportunities?.length && <div style={{ fontSize: 12, color: 'var(--text3)' }}>All metrics within acceptable thresholds.</div>}
                             </td>
                           </tr>
                         )}
