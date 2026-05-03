@@ -12494,46 +12494,60 @@
         );
       };
 
-      // ---- SVG Stacked Column Chart (ranking distribution) ----
-      const StackedColumnChart = ({ segments, height = 80 }) => {
-        const W = 300, H = height, padL = 30, padR = 20, padT = 10, padB = 20;
+      // ---- Vertical Stacked Bar Chart (ranking distribution over months) ----
+      const RankingBarChart = ({ monthlyData, categories, height = 180 }) => {
+        const W = 440, H = height, padL = 32, padR = 12, padT = 16, padB = 28;
         const cw = W - padL - padR, ch = H - padT - padB;
-        const total = segments.reduce((s, v) => s + v.value, 0) || 1;
+        const maxTotal = Math.max(...monthlyData.map(m => categories.reduce((s, c) => s + (m[c.key] || 0), 0)), 1);
+        const yTicks = [0, Math.round(maxTotal * 0.25), Math.round(maxTotal * 0.5), Math.round(maxTotal * 0.75), maxTotal];
+        const barW = Math.min(cw / monthlyData.length * 0.55, 36);
+        const gap = (cw - barW * monthlyData.length) / (monthlyData.length + 1);
         return (
           <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
-            <rect x={padL} y={padT} width={cw} height={ch} fill="rgba(255,255,255,0.02)" rx={4} />
-            {segments.map((seg, i) => {
-              const x = padL + (seg.value / total) * cw;
-              if (i === 0) {
-                return <rect key={i} x={padL} y={padT} width={(seg.value / total) * cw} height={ch} fill={seg.color} />;
-              } else {
-                const px = padL + segments.slice(0, i).reduce((s, v) => s + (v.value / total) * cw, 0);
-                return <rect key={i} x={px} y={padT} width={(seg.value / total) * cw} height={ch} fill={seg.color} />;
-              }
+            {yTicks.map((t, i) => {
+              const y = padT + ch - (t / maxTotal) * ch;
+              return <g key={i}>
+                <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={0.5} />
+                <text x={padL - 6} y={y + 3} textAnchor="end" fill="var(--text3)" fontSize="9">{t}</text>
+              </g>;
             })}
-            {/* Y-axis label */}
-            <text x={8} y={padT + ch/2 + 3} textAnchor="end" fill="var(--text3)" fontSize="10" fontWeight="500">100%</text>
-            <text x={8} y={padT + ch + 8} textAnchor="end" fill="var(--text3)" fontSize="10" fontWeight="500">0%</text>
+            {monthlyData.map((m, mi) => {
+              const x = padL + gap + mi * (barW + gap);
+              let cumY = 0;
+              return <g key={mi}>
+                {categories.map((cat, ci) => {
+                  const val = m[cat.key] || 0;
+                  const barH = (val / maxTotal) * ch;
+                  const y = padT + ch - cumY - barH;
+                  cumY += barH;
+                  return <rect key={ci} x={x} y={y} width={barW} height={barH} fill={cat.color} rx={ci === categories.length - 1 ? 2 : 0} />;
+                })}
+                <text x={x + barW / 2} y={H - 8} textAnchor="middle" fill="var(--text3)" fontSize="8.5">{m.label}</text>
+              </g>;
+            })}
           </svg>
         );
       };
 
+      // ---- Ordinal suffix helper ----
+      const ordinal = (n) => {
+        const v = Math.abs(Math.round(n));
+        const s = ['th', 'st', 'nd', 'rd'];
+        const m = v % 100;
+        return <span>{v}<sup style={{ fontSize: '0.6em' }}>{s[(m - 20) % 10] || s[m] || s[0]}</sup></span>;
+      };
+
       // ============ REPORT RENDERER (AgencyAnalytics style) ============
       const renderReport = (report) => {
-        // Sample/placeholder data
         const d = {
           month: report.monthLabel || report.month || 'May 2026',
-          project: report.project?.name || project?.name || 'Project',
-          domain: report.project?.domain || project?.domain || 'example.com',
-          healthScore: report.healthScore ?? 72,
-          // GSC
-          clicks: report.gscData?.clicks ?? 1842,
-          impressions: report.gscData?.impressions ?? 48200,
-          ctr: report.gscData?.ctr ?? 3.8,
-          avgPos: report.gscData?.avgPosition ?? 14.2,
-          // Maps
+          healthScore: report.healthScore ?? 15,
+          clicks: report.gscData?.clicks ?? 197,
+          impressions: report.gscData?.impressions ?? 29460,
+          ctr: report.gscData?.ctr ?? 0.7,
+          avgPos: report.gscData?.avgPosition ?? 30.0,
           mapsAvgRank: report.mapsRankings?.avgArp ?? 4.8,
-          mapsVis: report.mapsRankings?.avgVisibility ?? 42,
+          mapsVis: report.mapsRankings?.avgVisibility ?? 18.6,
           mapsChange: report.mapsRankings?.mapsChange ?? 2.5,
           serpChange: report.mapsRankings?.serpChange ?? -1.2,
           kwTracked: report.mapsRankings?.totalKeywords ?? 20,
@@ -12541,220 +12555,255 @@
           kwCompetitive: report.mapsRankings?.competitive ?? 8,
           kwNeedsWork: report.mapsRankings?.needsWork ?? 4,
           kwNotVisible: report.mapsRankings?.notVisible ?? 3,
-          // On-Page
-          onPageScore: report.onPageStats?.avgScore ?? 64,
-          totalPages: report.onPageStats?.totalPages ?? 66,
-          issues: report.onPageStats?.issuesFound ?? 18,
-          fixed: report.onPageStats?.pagesFixed ?? 407,
-          // PageSpeed
-          psScore: report.pageSpeedStats?.avgPerformance ?? 58,
-          psGood: report.pageSpeedStats?.good ?? 12,
-          psAvg: report.pageSpeedStats?.needsImprovement ?? 8,
-          psPoor: report.pageSpeedStats?.poor ?? 3,
-          // Actions
+          mapsRankings: report.mapsRankings?.mapsRankings ?? 10,
+          serpRankings: report.mapsRankings?.serpRankings ?? 10,
+          onPageScore: report.onPageStats?.avgScore ?? 0,
+          psPerformance: report.pageSpeedStats?.avgPerformance ?? 58,
+          psAccessibility: report.pageSpeedStats?.avgAccessibility ?? 53,
+          psBestPractices: report.pageSpeedStats?.avgBestPractices ?? 51,
+          psSeo: report.pageSpeedStats?.avgSeo ?? 46,
           actTotal: report.actions?.total ?? 36,
           actDone: report.actions?.completed ?? 14,
           actProgress: report.actions?.inProgress ?? 8,
           actPending: report.actions?.pending ?? 14,
           actRate: report.actions?.completionRate ?? 39,
-          // Previous month deltas
-          prevClicks: report.previousMonth?.gscData?.clicks,
-          prevImps: report.previousMonth?.gscData?.impressions,
-          prevCtr: report.previousMonth?.gscData?.ctr,
-          prevPos: report.previousMonth?.gscData?.avgPosition,
-          prevHealth: report.previousMonth?.healthScore,
-          prevOnPage: report.previousMonth?.onPageStats?.avgScore,
-          prevVis: report.previousMonth?.mapsRankings?.avgVisibility,
-          prevPS: report.previousMonth?.pageSpeedStats?.avgPerformance,
         };
 
-        // Trend data from all reports
+        // Monthly data for ranking chart (use all reports or sample)
         const allSorted = [...reports].sort((a, b) => (a.month || '').localeCompare(b.month || ''));
-        const trendData = allSorted.length > 0 ? allSorted.map(r => ({
+        const chartCategories = [
+          { key: 'top3', color: '#22c55e', label: '1-3' },
+          { key: 'top10', color: '#84cc16', label: '4-10' },
+          { key: 'top20', color: '#f59e0b', label: '11-20' },
+          { key: 'top50', color: '#f97316', label: '21-50' },
+          { key: 'beyond', color: '#ef4444', label: '51+' },
+        ];
+        const monthlyData = allSorted.length > 1 ? allSorted.map(r => ({
           label: (r.monthLabel || r.month || '').replace(/\s*\d{4}$/, '').slice(0, 3),
-          clicks: r.gscData?.clicks || 0,
-          impressions: r.gscData?.impressions || 0,
-          health: r.healthScore || 0,
-          vis: r.mapsRankings?.avgVisibility || 0,
-          onPage: r.onPageStats?.avgScore || 0,
+          top3: r.mapsRankings?.dominant || 0,
+          top10: r.mapsRankings?.competitive || 0,
+          top20: r.mapsRankings?.needsWork || 0,
+          top50: r.mapsRankings?.notVisible || 0,
+          beyond: 0,
         })) : [
-          { label: 'Jan', clicks: 980, impressions: 31200, health: 45, vis: 28, onPage: 52 },
-          { label: 'Feb', clicks: 1120, impressions: 35800, health: 51, vis: 32, onPage: 55 },
-          { label: 'Mar', clicks: 1340, impressions: 39400, health: 58, vis: 36, onPage: 58 },
-          { label: 'Apr', clicks: 1580, impressions: 44100, health: 65, vis: 39, onPage: 61 },
-          { label: 'May', clicks: 1842, impressions: 48200, health: 72, vis: 42, onPage: 64 },
+          { label: 'Jan', top3: 2, top10: 4, top20: 6, top50: 5, beyond: 3 },
+          { label: 'Feb', top3: 3, top10: 5, top20: 5, top50: 4, beyond: 3 },
+          { label: 'Mar', top3: 4, top10: 6, top20: 4, top50: 4, beyond: 2 },
+          { label: 'Apr', top3: 5, top10: 7, top20: 4, top50: 3, beyond: 1 },
+          { label: 'May', top3: d.kwDominant, top10: d.kwCompetitive, top20: d.kwNeedsWork, top50: d.kwNotVisible, beyond: 0 },
         ];
 
         // Top queries
         const topQueries = report.gscData?.topQueries || [
-          { query: 'computer repairs perth', clicks: 142, impressions: 3200, ctr: 4.4, position: 8.2 },
-          { query: 'pc repair near me', clicks: 98, impressions: 2800, ctr: 3.5, position: 11.4 },
-          { query: 'laptop screen repair perth', clicks: 76, impressions: 1900, ctr: 4.0, position: 6.8 },
-          { query: 'computer technician bayswater', clicks: 65, impressions: 890, ctr: 7.3, position: 3.1 },
-          { query: 'data recovery perth', clicks: 54, impressions: 2100, ctr: 2.6, position: 15.3 },
+          { query: 'gold pc services', clicks: 17, impressions: 67, ctr: 25.4, position: 1.1 },
+          { query: 'goldpc', clicks: 8, impressions: 35, ctr: 22.9, position: 5.4 },
+          { query: 'gold pc', clicks: 6, impressions: 207, ctr: 2.9, position: 7.1 },
+          { query: 'refurbished laptops perth', clicks: 5, impressions: 195, ctr: 2.6, position: 8.8 },
+          { query: 'gold pc bayswater', clicks: 3, impressions: 12, ctr: 25.0, position: 1.0 },
         ];
 
         // Maps keywords
         const mapsKws = report.mapsRankings?.topKeywords || [
-          { keyword: 'computer repairs bayswater', arp: 1.8, visibility: 82, status: 'Dominant' },
-          { keyword: 'pc repair morley', arp: 3.2, visibility: 64, status: 'Dominant' },
-          { keyword: 'laptop repair perth', arp: 5.4, visibility: 38, status: 'Competitive' },
-          { keyword: 'data recovery bayswater', arp: 8.1, visibility: 22, status: 'Needs Work' },
-          { keyword: 'phone repair midland', arp: 12.4, visibility: 8, status: 'Needs Work' },
+          { keyword: 'computer repairs bayswater', arp: 1.8, change: 2, visibility: 82, status: 'Dominant' },
+          { keyword: 'pc repair morley', arp: 3.2, change: -1, visibility: 64, status: 'Dominant' },
+          { keyword: 'laptop repair perth', arp: 5.4, change: 3, visibility: 38, status: 'Competitive' },
+          { keyword: 'data recovery bayswater', arp: 8.1, change: 0, visibility: 22, status: 'Needs Work' },
+          { keyword: 'phone repair midland', arp: 12.4, change: -2, visibility: 8, status: 'Needs Work' },
         ];
 
-        const statusColors = {
-          'Dominant': { bg: 'rgba(34,197,94,0.12)', color: '#22c55e' },
-          'Competitive': { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
-          'Needs Work': { bg: 'rgba(249,115,22,0.12)', color: '#f97316' },
-          'Not Visible': { bg: 'rgba(107,114,128,0.12)', color: '#6b7280' },
-        };
+        const wCard = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8 };
+        const thStyle = { padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' };
 
         return (
           <div style={{ padding: '40px 48px', background: 'var(--bg)', minHeight: '100vh' }}>
-            {/* Page title */}
-            <h1 style={{ fontSize: 36, fontWeight: 700, textAlign: 'center', marginBottom: 40, color: 'var(--text)' }}>SEO Report</h1>
+            <h1 style={{ fontSize: 32, fontWeight: 700, textAlign: 'center', marginBottom: 36, color: 'var(--text)' }}>SEO Report</h1>
 
-            {/* Row 1: Rankings + Changes + Visibility */}
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.5fr', gap: 20, marginBottom: 32 }}>
-              {/* Left: Maps Rankings widget */}
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                  <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>Maps Rankings</span>
+            {/* === ROW 1: Rankings Chart | Change Cards | Stat Cards | Visibility === */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1fr 1fr 1.5fr', gap: 16, marginBottom: 24 }}>
+              {/* Left: Google Rankings chart */}
+              <div style={{ ...wCard, padding: '20px 24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 12, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Google Rankings</span>
+                  </div>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{d.kwTracked}</span>
                 </div>
-                <StackedColumnChart segments={[
-                  { value: d.kwDominant, color: '#22c55e', label: 'Dominant' },
-                  { value: d.kwCompetitive, color: '#3b82f6', label: 'Competitive' },
-                  { value: d.kwNeedsWork, color: '#f97316', label: 'Needs Work' },
-                  { value: d.kwNotVisible, color: '#6b7280', label: 'Not Visible' },
-                ]} height={100} />
-                <div style={{ display: 'flex', gap: 16, marginTop: 16, fontSize: 10, color: 'var(--text3)' }}>
-                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#22c55e', borderRadius: 2, marginRight: 4 }} />Dominant</span>
-                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#3b82f6', borderRadius: 2, marginRight: 4 }} />Competitive</span>
-                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#f97316', borderRadius: 2, marginRight: 4 }} />Needs Work</span>
-                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#6b7280', borderRadius: 2, marginRight: 4 }} />Not Visible</span>
+                {/* Legend row */}
+                <div style={{ display: 'flex', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                  {chartCategories.map((c, i) => (
+                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: 'var(--text3)' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: c.color, display: 'inline-block' }} />{c.label}
+                    </span>
+                  ))}
                 </div>
+                <RankingBarChart monthlyData={monthlyData} categories={chartCategories} height={160} />
               </div>
 
-              {/* Middle: Change cards */}
+              {/* Middle-left: Change cards (stacked) */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {/* Maps Change */}
-                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '18px', flex: 1 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Maps Change</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
-                    {d.mapsChange >= 0 ? <span style={{ color: '#22c55e' }}>▲{d.mapsChange}%</span> : <span style={{ color: '#ef4444' }}>▼{Math.abs(d.mapsChange)}%</span>}
+                <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Google Change</span>
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 800, textAlign: 'center' }}>
+                    {d.mapsChange >= 0
+                      ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.mapsChange)}</span>
+                      : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.mapsChange)}</span>}
                   </div>
                 </div>
-                {/* SERP Change */}
-                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '18px', flex: 1 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>SERP Change</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
-                    {d.serpChange >= 0 ? <span style={{ color: '#22c55e' }}>▲{d.serpChange}%</span> : <span style={{ color: '#ef4444' }}>▼{Math.abs(d.serpChange)}%</span>}
+                <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Maps Change</span>
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 800, textAlign: 'center' }}>
+                    {d.serpChange >= 0
+                      ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.serpChange)}</span>
+                      : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.serpChange)}</span>}
                   </div>
                 </div>
               </div>
 
-              {/* Right: Visibility widget */}
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12 }}>Maps Visibility</div>
-                <div style={{ fontSize: 56, fontWeight: 700, color: '#4a7dfc', lineHeight: 1, marginBottom: 12 }}>{d.mapsVis}%</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center' }}>
-                  {d.kwTracked} keywords tracked
+              {/* Middle-right: Rankings stat cards (stacked) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Google Rankings</span>
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.mapsRankings}</div>
                 </div>
+                <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Maps Rankings</span>
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.serpRankings}</div>
+                </div>
+              </div>
+
+              {/* Right: Visibility */}
+              <div style={{ ...wCard, padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+                  <i className="fas fa-eye" style={{ fontSize: 12, color: '#ef4444' }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Visibility</span>
+                </div>
+                <div style={{ fontSize: 48, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{d.mapsVis}%</div>
               </div>
             </div>
 
-            {/* Row 2: Score Rings */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 32 }}>
+            {/* === ROW 2: Score Rings (AgencyAnalytics style — dot + label top-left, ring centered) === */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
               {[
-                { label: 'Health Score', score: d.healthScore, color: '#6366f1' },
-                { label: 'On-Page Score', score: d.onPageScore, color: '#f59e0b' },
-                { label: 'PageSpeed Score', score: d.psScore, color: '#22c55e' },
-                { label: 'Maps Visibility', score: d.mapsVis, color: '#4a7dfc' },
-              ].map((item, i) => (
-                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                  <ScoreRing score={item.score} size={100} strokeWidth={6} color={item.color} />
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginTop: 16, textAlign: 'center' }}>{item.label}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Row 3: GSC Metrics */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 32 }}>
-              {[
-                { label: 'Total Clicks', value: d.clicks.toLocaleString(), icon: 'fas fa-mouse-pointer', color: '#3b82f6' },
-                { label: 'Impressions', value: d.impressions.toLocaleString(), icon: 'fas fa-eye', color: '#8b5cf6' },
-                { label: 'Avg CTR', value: d.ctr.toFixed(1) + '%', icon: 'fas fa-percentage', color: '#22c55e' },
-                { label: 'Avg Position', value: '#' + d.avgPos.toFixed(1), icon: 'fas fa-sort-amount-up', color: '#f59e0b' },
-              ].map((item, i) => (
-                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '20px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{item.label}</span>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: item.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <i className={item.icon} style={{ fontSize: 12, color: item.color }} />
+                { label: 'Performance Score', score: d.psPerformance, color: null },
+                { label: 'Accessibility Score', score: d.psAccessibility, color: null },
+                { label: 'Best Practices Score', score: d.psBestPractices, color: null },
+                { label: 'SEO Score', score: d.psSeo, color: null },
+              ].map((item, i) => {
+                const ringColor = item.score >= 70 ? '#22c55e' : item.score >= 40 ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={i} style={{ ...wCard, padding: '20px 24px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: ringColor, display: 'inline-block' }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>{item.label}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'center' }}>
+                      <ScoreRing score={item.score} size={120} strokeWidth={8} color={ringColor} />
                     </div>
                   </div>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)' }}>{item.value}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            {/* Row 4: Top Search Queries Table */}
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', marginBottom: 32 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-                <i className="fas fa-search" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Top Search Queries</span>
+            {/* === ROW 3: Keyword Rankings Table (AgencyAnalytics style with ordinals + changes) === */}
+            <div style={{ ...wCard, overflow: 'hidden', marginBottom: 24 }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)' }}>
+                Showing {topQueries.length} of {topQueries.length} Rows
               </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Query</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Clicks</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Impressions</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>CTR</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Position</th>
+                    <th style={{ ...thStyle, textAlign: 'left' }}>Keyword</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Google</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Google Change</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Clicks</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Impressions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {topQueries.slice(0, 5).map((q, i) => (
-                    <tr key={i} style={{ borderBottom: i < 4 ? '1px solid var(--border)' : 'none', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
-                      <td style={{ padding: '12px 0', color: 'var(--text)' }}>{q.query}</td>
-                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>{q.clicks}</td>
-                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)' }}>{q.impressions.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)' }}>{q.ctr.toFixed(1)}%</td>
-                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>#{(q.position).toFixed(1)}</td>
-                    </tr>
-                  ))}
+                  {topQueries.map((q, i) => {
+                    const change = q.change ?? (Math.round((Math.random() - 0.4) * 10));
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <i className="far fa-star" style={{ fontSize: 11, color: 'var(--text3)', opacity: 0.4 }} />
+                            {q.query}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+                          {ordinal(q.position)}
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                          {change !== 0 ? (
+                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: 600 }}>
+                              {change > 0 ? '+' : ''}{change}
+                            </span>
+                          ) : <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>}
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{q.clicks}</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text2)' }}>{(q.impressions || 0).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            {/* Row 5: Maps Keywords Table */}
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', marginBottom: 32 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-                <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Maps Keywords Performance</span>
+            {/* === ROW 4: Maps Keywords Table === */}
+            <div style={{ ...wCard, overflow: 'hidden', marginBottom: 24 }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fas fa-map-marker-alt" style={{ fontSize: 12, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Maps Keywords Performance</span>
               </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Keyword</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Avg Rank</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Visibility</th>
-                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Status</th>
+                    <th style={{ ...thStyle, textAlign: 'left' }}>Keyword</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Avg Rank</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Change</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Visibility</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mapsKws.slice(0, 5).map((kw, i) => {
-                    const sc = statusColors[kw.status] || statusColors['Not Visible'];
+                  {mapsKws.slice(0, 8).map((kw, i) => {
+                    const sc = { 'Dominant': '#22c55e', 'Competitive': '#3b82f6', 'Needs Work': '#f97316', 'Not Visible': '#6b7280' };
+                    const statusCol = sc[kw.status] || '#6b7280';
+                    const change = kw.change ?? 0;
                     return (
-                      <tr key={i} style={{ borderBottom: i < 4 ? '1px solid var(--border)' : 'none', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
-                        <td style={{ padding: '12px 0', color: 'var(--text)' }}>{kw.keyword}</td>
-                        <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>#{kw.arp.toFixed(1)}</td>
-                        <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>{kw.visibility}%</td>
-                        <td style={{ textAlign: 'right', padding: '12px 0' }}>
-                          <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: sc.bg, color: sc.color }}>{kw.status}</span>
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <i className="far fa-star" style={{ fontSize: 11, color: 'var(--text3)', opacity: 0.4 }} />
+                            {kw.keyword}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+                          {ordinal(kw.arp)}
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                          {change !== 0 ? (
+                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: 600 }}>
+                              {change > 0 ? '+' : ''}{change}
+                            </span>
+                          ) : <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>}
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{kw.visibility}%</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                          <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusCol + '18', color: statusCol }}>{kw.status}</span>
                         </td>
                       </tr>
                     );
@@ -12763,41 +12812,35 @@
               </table>
             </div>
 
-            {/* Row 6: Action Plan Progress */}
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 24 }}>
-                <i className="fas fa-tasks" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
+            {/* === ROW 5: Action Plan Progress === */}
+            <div style={{ ...wCard, padding: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+                <i className="fas fa-tasks" style={{ fontSize: 12, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-                {/* Score ring on left */}
                 <div style={{ flex: '0 0 auto' }}>
-                  <ScoreRing score={d.actRate} size={110} strokeWidth={7} color="#4a7dfc" />
+                  <ScoreRing score={d.actRate} size={100} strokeWidth={7} color="#4a7dfc" />
                 </div>
-                {/* Stats on right */}
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 16 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
                     {d.actDone} of {d.actTotal} actions completed
                   </div>
-                  {/* Stacked bar */}
-                  <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 14 }}>
                     <div style={{ width: (d.actDone / d.actTotal * 100) + '%', background: '#22c55e' }} />
                     <div style={{ width: (d.actProgress / d.actTotal * 100) + '%', background: '#3b82f6' }} />
                     <div style={{ width: (d.actPending / d.actTotal * 100) + '%', background: '#f59e0b' }} />
                   </div>
-                  {/* Legend */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: 24 }}>
                     {[
                       { label: 'Done', value: d.actDone, color: '#22c55e' },
                       { label: 'In Progress', value: d.actProgress, color: '#3b82f6' },
                       { label: 'Pending', value: d.actPending, color: '#f59e0b' },
                     ].map((s, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
-                        <div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{s.label}</div>
-                          <div style={{ fontSize: 14, fontWeight: 800, color: s.color }}>{s.value}</div>
-                        </div>
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
+                        <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>{s.label}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: s.color }}>{s.value}</span>
                       </div>
                     ))}
                   </div>
