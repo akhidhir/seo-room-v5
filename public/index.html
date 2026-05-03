@@ -5811,6 +5811,30 @@
         setExecuting(false); setExecProgress(null);
       };
 
+      const [executingItem, setExecutingItem] = useState(null);
+
+      const handleExecuteOne = async (item) => {
+        setExecutingItem(item.id);
+        try {
+          const isCWV = item.category === 'Core Web Vitals' || item.type === 'Core Web Vitals';
+          if (isCWV) {
+            const speedData = await api(`/speed-audit/${project.id}/status`);
+            const speedResults = speedData.results || [];
+            const pageTitle = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '').toLowerCase();
+            const page = speedResults.find(r => (r.title || r.slug || '').toLowerCase() === pageTitle);
+            if (page && page.opportunities?.length > 0) {
+              await api(`/projects/${project.id}/cwv-fix`, {
+                method: 'POST',
+                body: { page_url: page.url, opportunities: page.opportunities }
+              });
+            }
+          }
+          await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
+          setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
+        } catch (e) { setError('Execute failed: ' + e.message); }
+        setExecutingItem(null);
+      };
+
       useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
 
       const loadData = async () => {
@@ -6105,9 +6129,10 @@
                       { key: 'category', label: 'CATEGORY', w: 140, align: 'left' },
                       { key: 'assignee', label: 'ASSIGNEE', w: 140, align: 'left' },
                       { key: 'status', label: 'STATUS', w: 90, align: 'center' },
+                      { key: 'action', label: '', w: 80, align: 'center' },
                     ].map(col => (
-                      <th key={col.key} onClick={() => toggleSort(col.key)}
-                        style={{ padding: '10px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: 'pointer', userSelect: 'none' }}>
+                      <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
+                        style={{ padding: '10px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
                         {col.label}
                         {sortCol === col.key && <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10 }} />}
                       </th>
@@ -6119,8 +6144,8 @@
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
                     const assigneeLabel = item._assigneeLabel;
-                    const assigneeColorMap = { 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
-                    const assigneeIconMap = { 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
+                    const assigneeColorMap = { 'SEO Room': '#3b82f6', 'Admin': '#f59e0b', 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
+                    const assigneeIconMap = { 'SEO Room': 'fas fa-robot', 'Admin': 'fas fa-user', 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
                     const aColor = assigneeColorMap[assigneeLabel] || '#6b7280';
                     const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-user';
                     const itemPillar = item._pillar || item.pillar;
@@ -6163,6 +6188,21 @@
                             <option value="in-progress">In Progress</option>
                             <option value="done">Done</option>
                           </select>
+                        </td>
+                        <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
+                          {(() => {
+                            const status = (item.status || 'pending').toLowerCase();
+                            const assignee = item._assigneeLabel || item.assignee_label || '';
+                            const isExecutable = status === 'pending' && !['Admin', 'Manual'].includes(assignee);
+                            if (status === 'done') return <i className="fas fa-check-circle" style={{ color: '#22c55e', fontSize: 14 }} />;
+                            if (!isExecutable) return null;
+                            return (
+                              <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
+                                {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run</>}
+                              </button>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
