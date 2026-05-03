@@ -1761,7 +1761,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
               extractPagesFromSitemap(subXml);
             }
           } catch (e) { /* skip failed sub-sitemap */ }
-          if (pages.length >= 50) break;
+          if (pages.length >= 100) break;
         }
       } else {
         // It's a regular sitemap — extract pages directly
@@ -1769,7 +1769,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
       }
 
       // Cap at 50
-      if (pages.length > 50) pages.length = 50;
+      if (pages.length > 100) pages.length = 100;
     }
   } catch (e) { /* sitemap not available */ }
 
