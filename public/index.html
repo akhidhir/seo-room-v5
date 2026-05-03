@@ -6047,20 +6047,31 @@
             </div>
           )}
 
-          {/* Stats cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-            {[
-              { label: 'TOTAL', value: stats.total, color: 'var(--text1)' },
-              { label: 'CRITICAL', value: stats.critical + stats.high, color: '#ef4444' },
-              { label: 'PENDING', value: stats.pending, color: '#f59e0b' },
-              { label: 'DONE', value: stats.done, color: '#22c55e' },
-            ].map(s => (
-              <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: '16px 20px', textAlign: 'center' }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 4 }}>{s.label}</div>
+          {/* Stats cards — match audit pages */}
+          {(() => {
+            const auditStats = [
+              { label: 'EXTERNAL AUDIT', icon: 'fas fa-globe', color: '#ef4444', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'External Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'External Audit' && (i.status || 'pending') === 'pending').length },
+              { label: 'GSC AUDIT', icon: 'fas fa-chart-line', color: '#3b82f6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit' && (i.status || 'pending') === 'pending').length },
+              { label: 'WEBSITE AUDIT', icon: 'fas fa-spider', color: '#8b5cf6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit' && (i.status || 'pending') === 'pending').length },
+              { label: 'PENDING', icon: 'fas fa-clock', color: '#f59e0b', count: stats.pending, pending: stats.pending },
+              { label: 'DONE', icon: 'fas fa-check-circle', color: '#22c55e', count: stats.done, pending: 0 },
+            ];
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${auditStats.length}, 1fr)`, gap: 12, marginBottom: 20 }}>
+                {auditStats.map(s => (
+                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: '16px 20px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.count}</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 4 }}>
+                      <i className={s.icon} style={{ marginRight: 4, fontSize: 9 }} />{s.label}
+                    </div>
+                    {s.pending > 0 && s.label !== 'PENDING' && s.label !== 'DONE' && (
+                      <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>{s.pending} pending</div>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
 
           {/* Pillar tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
