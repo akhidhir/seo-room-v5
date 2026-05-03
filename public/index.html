@@ -3664,21 +3664,20 @@
 
       const handleIgnore = (pageKey) => setIgnoredActions(prev => ({ ...prev, [pageKey]: true }));
       const handleUndo = (pageKey) => { setAddedActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); setIgnoredActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); };
-      const [checkedRows, setCheckedRows] = useState({});
       const [bulkAdding, setBulkAdding] = useState(false);
-      const handleToggleCheck = (pageKey) => setCheckedRows(prev => { const n = {...prev}; if (n[pageKey]) delete n[pageKey]; else n[pageKey] = true; return n; });
 
-      const handleBulkAdd = async () => {
+      const failingPages = useMemo(() => {
+        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !addedActions[pageKey] && !ignoredActions[pageKey]);
+      }, [sortedResults, addedActions, ignoredActions]);
+
+      const handleAddAll = async () => {
         setBulkAdding(true);
-        const toAdd = sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey }) => checkedRows[pageKey] && !addedActions[pageKey] && !ignoredActions[pageKey]);
+        const toAdd = [...failingPages];
         for (const { pageKey, page } of toAdd) {
           await handleAddAction(pageKey, page);
         }
-        setCheckedRows({});
         setBulkAdding(false);
       };
-
-      const checkedCount = Object.keys(checkedRows).length;
 
       return (
         <div>
@@ -3731,13 +3730,12 @@
             </div>
           )}
 
-          {sortedResults.length > 0 && checkedCount > 0 && (
+          {failingPages.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '10px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{checkedCount} selected</span>
-              <button className="btn btn-primary" onClick={handleBulkAdd} disabled={bulkAdding} style={{ fontSize: 12, padding: '5px 14px' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{failingPages.length} pages need attention</span>
+              <button className="btn btn-primary" onClick={handleAddAll} disabled={bulkAdding} style={{ fontSize: 12, padding: '5px 14px' }}>
                 {bulkAdding ? <><span className="spinner"></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add All to Action Plan</>}
               </button>
-              <button onClick={() => setCheckedRows({})} style={{ fontSize: 12, padding: '5px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)', cursor: 'pointer' }}>Clear</button>
             </div>
           )}
 
@@ -3805,7 +3803,6 @@
                               </div>
                             ) : (
                               <div style={{ display: 'flex', gap: 5, justifyContent: 'center', alignItems: 'center' }}>
-                                <input type="checkbox" checked={!!checkedRows[pageKey]} onChange={() => handleToggleCheck(pageKey)} style={{ cursor: 'pointer', accentColor: '#22c55e', width: 14, height: 14 }} />
                                 <button className="btn btn-primary" onClick={() => handleAddAction(pageKey, page)} disabled={addingAction === pageKey} style={{ fontSize: 11, padding: '4px 9px' }}>
                                   {addingAction === pageKey ? <i className="fas fa-spinner fa-spin" /> : 'Add'}
                                 </button>
