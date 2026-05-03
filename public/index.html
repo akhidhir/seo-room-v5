@@ -12612,11 +12612,11 @@
         ];
 
         const wCard = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8 };
-        const thStyle = { padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' };
+        const thStyle = { padding: '12px 16px', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' };
 
         return (
           <div style={{ padding: '40px 48px', background: 'var(--bg)', minHeight: '100vh' }}>
-            <h1 style={{ fontSize: 32, fontWeight: 700, textAlign: 'center', marginBottom: 36, color: 'var(--text)' }}>SEO Report</h1>
+            <h1 style={{ fontSize: 38, fontWeight: 700, textAlign: 'center', marginBottom: 40, color: 'var(--text)' }}>SEO Report</h1>
 
             {/* === ROW 1: Rankings Chart | Change Cards | Stat Cards | Visibility === */}
             <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1fr 1fr 1.5fr', gap: 16, marginBottom: 24 }}>
@@ -12624,16 +12624,16 @@
               <div style={{ ...wCard, padding: '20px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 12, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Google Rankings</span>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 14, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Google Rankings</span>
                   </div>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{d.kwTracked}</span>
+                  <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{d.kwTracked}</span>
                 </div>
                 {/* Legend row */}
                 <div style={{ display: 'flex', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                   {chartCategories.map((c, i) => (
-                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: 'var(--text3)' }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: c.color, display: 'inline-block' }} />{c.label}
+                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text3)' }}>
+                      <span style={{ width: 9, height: 9, borderRadius: '50%', background: c.color, display: 'inline-block' }} />{c.label}
                     </span>
                   ))}
                 </div>
@@ -12644,10 +12644,10 @@
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Google Change</span>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Google Change</span>
                   </div>
-                  <div style={{ fontSize: 28, fontWeight: 800, textAlign: 'center' }}>
+                  <div style={{ fontSize: 36, fontWeight: 800, textAlign: 'center' }}>
                     {d.mapsChange >= 0
                       ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.mapsChange)}</span>
                       : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.mapsChange)}</span>}
@@ -12655,10 +12655,10 @@
                 </div>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Maps Change</span>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Maps Change</span>
                   </div>
-                  <div style={{ fontSize: 28, fontWeight: 800, textAlign: 'center' }}>
+                  <div style={{ fontSize: 36, fontWeight: 800, textAlign: 'center' }}>
                     {d.serpChange >= 0
                       ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.serpChange)}</span>
                       : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.serpChange)}</span>}
@@ -12670,27 +12670,27 @@
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Google Rankings</span>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Google Rankings</span>
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.mapsRankings}</div>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.mapsRankings}</div>
                 </div>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 11, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>Maps Rankings</span>
+                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Maps Rankings</span>
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.serpRankings}</div>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.serpRankings}</div>
                 </div>
               </div>
 
               {/* Right: Visibility */}
               <div style={{ ...wCard, padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
-                  <i className="fas fa-eye" style={{ fontSize: 12, color: '#ef4444' }} />
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Visibility</span>
+                  <i className="fas fa-eye" style={{ fontSize: 14, color: '#ef4444' }} />
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Visibility</span>
                 </div>
-                <div style={{ fontSize: 48, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{d.mapsVis}%</div>
+                <div style={{ fontSize: 56, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{d.mapsVis}%</div>
               </div>
             </div>
 
@@ -12706,11 +12706,11 @@
                 return (
                   <div key={i} style={{ ...wCard, padding: '20px 24px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: ringColor, display: 'inline-block' }} />
-                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)' }}>{item.label}</span>
+                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: ringColor, display: 'inline-block' }} />
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>{item.label}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'center' }}>
-                      <ScoreRing score={item.score} size={120} strokeWidth={8} color={ringColor} />
+                      <ScoreRing score={item.score} size={140} strokeWidth={9} color={ringColor} />
                     </div>
                   </div>
                 );
@@ -12719,7 +12719,7 @@
 
             {/* === ROW 3: Keyword Rankings Table (AgencyAnalytics style with ordinals + changes) === */}
             <div style={{ ...wCard, overflow: 'hidden', marginBottom: 24 }}>
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)' }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text3)' }}>
                 Showing {topQueries.length} of {topQueries.length} Rows
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -12737,24 +12737,24 @@
                     const change = q.change ?? (Math.round((Math.random() - 0.4) * 10));
                     return (
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>
+                        <td style={{ padding: '14px 16px', fontSize: 15, color: 'var(--text)', fontWeight: 500 }}>
                           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <i className="far fa-star" style={{ fontSize: 11, color: 'var(--text3)', opacity: 0.4 }} />
+                            <i className="far fa-star" style={{ fontSize: 12, color: 'var(--text3)', opacity: 0.4 }} />
                             {q.query}
                           </span>
                         </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>
                           {ordinal(q.position)}
                         </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                           {change !== 0 ? (
-                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: 600 }}>
+                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 15, fontWeight: 600 }}>
                               {change > 0 ? '+' : ''}{change}
                             </span>
-                          ) : <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>}
+                          ) : <span style={{ color: 'var(--text3)', fontSize: 15 }}>—</span>}
                         </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{q.clicks}</td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text2)' }}>{(q.impressions || 0).toLocaleString()}</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{q.clicks}</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 15, color: 'var(--text2)' }}>{(q.impressions || 0).toLocaleString()}</td>
                       </tr>
                     );
                   })}
@@ -12765,8 +12765,8 @@
             {/* === ROW 4: Maps Keywords Table === */}
             <div style={{ ...wCard, overflow: 'hidden', marginBottom: 24 }}>
               <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <i className="fas fa-map-marker-alt" style={{ fontSize: 12, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Maps Keywords Performance</span>
+                <i className="fas fa-map-marker-alt" style={{ fontSize: 14, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Maps Keywords Performance</span>
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -12785,25 +12785,25 @@
                     const change = kw.change ?? 0;
                     return (
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>
+                        <td style={{ padding: '14px 16px', fontSize: 15, color: 'var(--text)', fontWeight: 500 }}>
                           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <i className="far fa-star" style={{ fontSize: 11, color: 'var(--text3)', opacity: 0.4 }} />
+                            <i className="far fa-star" style={{ fontSize: 12, color: 'var(--text3)', opacity: 0.4 }} />
                             {kw.keyword}
                           </span>
                         </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>
                           {ordinal(kw.arp)}
                         </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                           {change !== 0 ? (
-                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 13, fontWeight: 600 }}>
+                            <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 15, fontWeight: 600 }}>
                               {change > 0 ? '+' : ''}{change}
                             </span>
-                          ) : <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>}
+                          ) : <span style={{ color: 'var(--text3)', fontSize: 15 }}>—</span>}
                         </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{kw.visibility}%</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.visibility}%</td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: statusCol + '18', color: statusCol }}>{kw.status}</span>
+                          <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, background: statusCol + '18', color: statusCol }}>{kw.status}</span>
                         </td>
                       </tr>
                     );
@@ -12815,15 +12815,15 @@
             {/* === ROW 5: Action Plan Progress === */}
             <div style={{ ...wCard, padding: '24px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-                <i className="fas fa-tasks" style={{ fontSize: 12, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
+                <i className="fas fa-tasks" style={{ fontSize: 14, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
                 <div style={{ flex: '0 0 auto' }}>
                   <ScoreRing score={d.actRate} size={100} strokeWidth={7} color="#4a7dfc" />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
                     {d.actDone} of {d.actTotal} actions completed
                   </div>
                   <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 14 }}>
@@ -12839,8 +12839,8 @@
                     ].map((s, i) => (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
-                        <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>{s.label}</span>
-                        <span style={{ fontSize: 13, fontWeight: 800, color: s.color }}>{s.value}</span>
+                        <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{s.label}</span>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: s.color }}>{s.value}</span>
                       </div>
                     ))}
                   </div>
