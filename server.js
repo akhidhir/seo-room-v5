@@ -7840,12 +7840,18 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
       final = final.filter(kw => (kw.volume || 0) >= min_volume);
     }
 
-    // Add local volume estimate
+    // Add local volume estimate — but skip ratio for keywords that already contain the city/state name
     if (is_local && localRatio < 1) {
-      final = final.map(kw => ({
-        ...kw,
-        local_volume: Math.round((kw.volume || 0) * localRatio),
-      }));
+      const cityLower = (locationCity || '').toLowerCase();
+      const stateLower = (locationState || '').toLowerCase();
+      final = final.map(kw => {
+        const kwLower = (kw.keyword || '').toLowerCase();
+        const hasLocation = (cityLower && kwLower.includes(cityLower)) || (stateLower && kwLower.includes(stateLower));
+        return {
+          ...kw,
+          local_volume: hasLocation ? (kw.volume || 0) : Math.round((kw.volume || 0) * localRatio),
+        };
+      });
     }
 
     // Sort by volume descending
