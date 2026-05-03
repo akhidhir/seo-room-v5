@@ -1933,66 +1933,13 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     const baseUrl = `https://${domain}`;
 
-    // Discover pages: ONLY home, services, and suburb pages
-    const pageSet = new Set();
-    // Only match top-level service pages, not every URL containing these words
-    const servicePagePattern = /^\/(services?\/?|gas-fitt|drain-clean|hot-water|water-filter|emergency-plumb|blocked-drain|burst-pipe|leak-detect|tap-repair|toilet-repair|bathroom-renov|kitchen-plumb)([^\/]*)\/?$/i;
-
-    // 1. Homepage
-    pageSet.add(baseUrl + '/');
-
-    // 2. From sitemap — filter to only services and suburb pages
-    let allSitemapUrls = [];
-    try {
-      let sitemapResp = await fetch(`${baseUrl}/sitemap_index.xml`, { signal: AbortSignal.timeout(10000) });
-      if (!sitemapResp.ok) sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { signal: AbortSignal.timeout(10000) });
-      if (sitemapResp.ok) {
-        const xml = await sitemapResp.text();
-        if (xml.includes('<sitemapindex')) {
-          const subUrls = (xml.match(/<loc>([^<]+)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
-          for (const subUrl of subUrls.slice(0, 3)) {
-            try {
-              const subResp = await fetch(subUrl, { signal: AbortSignal.timeout(10000) });
-              if (subResp.ok) {
-                const subXml = await subResp.text();
-                (subXml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
-                  allSitemapUrls.push(m.replace(/<\/?loc>/g, ''));
-                });
-              }
-            } catch (e) {}
-          }
-        } else {
-          (xml.match(/<loc>([^<]+)<\/loc>/g) || []).forEach(m => {
-            allSitemapUrls.push(m.replace(/<\/?loc>/g, ''));
-          });
-        }
-      }
-    } catch (e) { console.log('[indexing] Sitemap fetch failed:', e.message); }
-
-    // Filter sitemap URLs to ONLY service and suburb pages (strict)
-    const serviceAreas = project.service_areas || [];
-    const suburbSlugs = serviceAreas.map(a => (a.name || '').toLowerCase().replace(/\s+/g, '-')).filter(Boolean);
-
-    for (const url of allSitemapUrls) {
-      if (url.endsWith('.xml') || url.match(/\.(jpg|png|gif|pdf)$/i)) continue;
-      const path = url.replace(baseUrl, '');
-      // Include if it's a service page (top-level only)
-      if (servicePagePattern.test(path)) { pageSet.add(url); continue; }
-      // Include if the path IS a suburb slug (e.g. /plumber-leeming/ or /leeming/)
-      const cleanPath = path.replace(/^\/|\/$/g, '').toLowerCase();
-      if (suburbSlugs.some(slug => cleanPath === slug || cleanPath === `plumber-${slug}` || cleanPath === `plumbing-${slug}` || cleanPath === `plumber-in-${slug}`)) { pageSet.add(url); continue; }
-      // Include only specific important pages
-      if (['contact', 'about', 'services', 'about-us', 'contact-us'].includes(cleanPath)) { pageSet.add(url); }
-    }
-
-    // 3. Add suburb pages from service areas (in case not in sitemap)
-    for (const slug of suburbSlugs) {
-      const match = allSitemapUrls.find(u => u.toLowerCase().includes(slug));
-      if (match) pageSet.add(match);
-    }
-
-    const allPages = [...pageSet];
-    console.log(`[indexing] Checking ${allPages.length} pages (filtered from ${allSitemapUrls.length} sitemap URLs) for project ${projectId}`);
+    // Discover all pages via sitemap + WP REST API (same as PageSpeed/On-Page)
+    const authHeaders = getWpAuthHeaders(project);
+    const discovered = await discoverPages(baseUrl, project.wordpress_url, authHeaders);
+    const allPages = discovered.map(p => p.url).filter(Boolean);
+    // Ensure homepage is included
+    if (!allPages.some(u => u.replace(/\/$/, '') === baseUrl)) allPages.unshift(baseUrl + '/');
+    console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId}`);
 
     // Check each page via URL Inspection API
     const results = [];
