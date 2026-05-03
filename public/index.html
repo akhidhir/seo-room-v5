@@ -12408,6 +12408,7 @@
       const [generating, setGenerating] = useState(false);
       const [expandedId, setExpandedId] = useState(null);
       const [activeSection, setActiveSection] = useState(null);
+      const [reportTab, setReportTab] = useState('overview');
 
       useEffect(() => {
         if (project) loadReports();
@@ -12595,52 +12596,118 @@
         const pm = report.previousMonth;
         const pillarNav = { gbp: 'gbp-external', gbp_external: 'gbp-external', gsc: 'gsc-audit', gsc_agent: 'gsc-audit', website: 'website-audit', technical: 'website-audit' };
 
-        return (
-          <div style={{ padding: '28px' }}>
-            <CoverPage report={report} />
+        const tabs = [
+          { id: 'overview', label: 'Overview', icon: 'fas fa-th-large', color: '#6366f1' },
+          { id: 'maps', label: 'Maps', icon: 'fas fa-map-marker-alt', color: '#22c55e' },
+          { id: 'gsc', label: 'Search Console', icon: 'fas fa-chart-line', color: '#3b82f6' },
+          { id: 'health', label: 'Website Health', icon: 'fas fa-heartbeat', color: '#a855f7' },
+          { id: 'actions', label: 'Actions', icon: 'fas fa-tasks', color: '#3b82f6' },
+          { id: 'findings', label: 'Findings', icon: 'fas fa-clipboard-check', color: '#f97316' },
+        ];
 
-            {/* Executive Summary */}
-            {report.executiveSummary && (
-              <Section id="exec" title="Executive Summary" icon="fas fa-lightbulb" color="#f59e0b">
-                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '4px solid #f59e0b', borderRadius: '4px 12px 12px 4px', padding: '20px 24px' }}>
-                  <p style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, margin: 0, fontStyle: 'italic' }}>{report.executiveSummary}</p>
+        const tabContent = {
+          // ── OVERVIEW TAB ──
+          overview: (
+            <div>
+              <CoverPage report={report} />
+              {report.executiveSummary && (
+                <div style={{ marginBottom: 28 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg, #f59e0b25, #f59e0b10)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f59e0b30' }}>
+                      <i className="fas fa-lightbulb" style={{ fontSize: 16, color: '#f59e0b' }} />
+                    </div>
+                    <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Executive Summary</h2>
+                  </div>
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '4px solid #f59e0b', borderRadius: '4px 12px 12px 4px', padding: '20px 24px' }}>
+                    <p style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, margin: 0, fontStyle: 'italic' }}>{report.executiveSummary}</p>
+                  </div>
+                </div>
+              )}
+              <Section id="overview" title="Key Metrics" icon="fas fa-chart-pie" color="#6366f1">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                  <MetricCard label="Maps Avg Rank" value={maps.avgArp ? '#' + maps.avgArp.toFixed(1) : '—'} prev={pm?.mapsRankings?.avgArp} invert icon="fas fa-map-marker-alt" color="#22c55e" sub={maps.totalKeywords ? maps.totalKeywords + ' keywords tracked' : ''} onClick={() => setReportTab('maps')} />
+                  <MetricCard label="Maps Visibility" value={maps.avgVisibility != null ? maps.avgVisibility.toFixed(0) + '%' : '—'} prev={pm?.mapsRankings?.avgVisibility} icon="fas fa-eye" color={maps.avgVisibility >= 30 ? '#22c55e' : '#f59e0b'} sub={(maps.dominant || 0) + ' dominant · ' + (maps.notVisible || 0) + ' not visible'} onClick={() => setReportTab('maps')} />
+                  <MetricCard label="GSC Clicks" value={(gsc.clicks || 0).toLocaleString()} prev={pm?.gscData?.clicks} icon="fas fa-mouse-pointer" color="#3b82f6" sub={'CTR: ' + (gsc.ctr || 0) + '%'} onClick={() => setReportTab('gsc')} />
+                  <MetricCard label="Impressions" value={(gsc.impressions || 0).toLocaleString()} prev={pm?.gscData?.impressions} icon="fas fa-binoculars" color="#3b82f6" sub={(gsc.topQueries?.length || 0) + ' queries tracked'} onClick={() => setReportTab('gsc')} />
+                  <MetricCard label="Avg Position" value={gsc.avgPosition ? '#' + gsc.avgPosition : '—'} prev={pm?.gscData?.avgPosition} invert icon="fas fa-sort-amount-up" color={gsc.avgPosition && gsc.avgPosition <= 10 ? '#22c55e' : '#f59e0b'} onClick={() => setReportTab('gsc')} />
+                  <MetricCard label="On-Page Score" value={(op.avgScore || 0) + '%'} prev={pm?.onPageStats?.avgScore} icon="fas fa-file-alt" color={(op.avgScore || 0) >= 70 ? '#22c55e' : '#f59e0b'} sub={(op.totalPages || 0) + ' pages · ' + (op.issuesFound || 0) + ' issues'} onClick={() => setReportTab('health')} />
                 </div>
               </Section>
-            )}
-
-            {/* Key Metrics Overview */}
-            <Section id="overview" title="Key Metrics" icon="fas fa-chart-pie" color="#6366f1">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
-                <MetricCard label="Maps Avg Rank" value={maps.avgArp ? '#' + maps.avgArp.toFixed(1) : '—'} prev={pm?.mapsRankings?.avgArp} invert icon="fas fa-map-marker-alt" color="#22c55e" sub={maps.totalKeywords ? maps.totalKeywords + ' keywords tracked' : ''} />
-                <MetricCard label="Maps Visibility" value={maps.avgVisibility != null ? maps.avgVisibility.toFixed(0) + '%' : '—'} prev={pm?.mapsRankings?.avgVisibility} icon="fas fa-eye" color={maps.avgVisibility >= 30 ? '#22c55e' : '#f59e0b'} sub={maps.dominant + ' dominant · ' + (maps.notVisible || 0) + ' not visible'} />
-                <MetricCard label="GSC Clicks" value={(gsc.clicks || 0).toLocaleString()} prev={pm?.gscData?.clicks} icon="fas fa-mouse-pointer" color="#3b82f6" sub={'CTR: ' + (gsc.ctr || 0) + '%'} />
-                <MetricCard label="Impressions" value={(gsc.impressions || 0).toLocaleString()} prev={pm?.gscData?.impressions} icon="fas fa-binoculars" color="#3b82f6" sub={(gsc.topQueries?.length || 0) + ' queries tracked'} />
-                <MetricCard label="Avg Position" value={gsc.avgPosition ? '#' + gsc.avgPosition : '—'} prev={pm?.gscData?.avgPosition} invert icon="fas fa-sort-amount-up" color={gsc.avgPosition && gsc.avgPosition <= 10 ? '#22c55e' : '#f59e0b'} />
-                <MetricCard label="On-Page Score" value={(op.avgScore || 0) + '%'} prev={pm?.onPageStats?.avgScore} icon="fas fa-file-alt" color={(op.avgScore || 0) >= 70 ? '#22c55e' : '#f59e0b'} sub={op.totalPages + ' pages · ' + (op.issuesFound || 0) + ' issues'} />
-              </div>
-            </Section>
-
-            {/* Google Maps Rankings */}
-            {maps.totalKeywords > 0 && (
-              <Section id="maps" title="Google Maps Rankings" icon="fas fa-map-marker-alt" color="#22c55e" onAction={() => setPage('maps-rankings')} actionLabel="Full Rankings">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-                  {[
-                    { label: 'Dominant', value: maps.dominant || 0, icon: 'fas fa-crown', color: '#22c55e', sub: 'Top 3 visibility 60%+' },
-                    { label: 'Competitive', value: maps.competitive || 0, icon: 'fas fa-bolt', color: '#3b82f6', sub: 'Visibility 30-60%' },
-                    { label: 'Needs Work', value: maps.needsWork || 0, icon: 'fas fa-wrench', color: '#f59e0b', sub: 'Visibility under 30%' },
-                    { label: 'Not Visible', value: maps.notVisible || 0, icon: 'fas fa-eye-slash', color: '#ef4444', sub: 'Not found in grid' },
-                  ].map((s, i) => (
-                    <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '16px', textAlign: 'center' }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: s.color + '15', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
-                        <i className={s.icon} style={{ fontSize: 14, color: s.color }} />
+              {/* Critical Issues on overview */}
+              {report.criticalFindings && report.criticalFindings.length > 0 && (
+                <Section id="critical" title="Critical Issues" icon="fas fa-exclamation-triangle" color="#ef4444">
+                  <div style={{ background: 'linear-gradient(135deg, rgba(239,68,68,0.06), rgba(239,68,68,0.02))', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 14, padding: '8px 20px', overflow: 'hidden' }}>
+                    {report.criticalFindings.slice(0, 5).map((f, i) => (
+                      <div key={i} onClick={() => { const nav = pillarNav[f.pillar]; if (nav) setPage(nav); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 0', borderBottom: i < Math.min(report.criticalFindings.length, 5) - 1 ? '1px solid rgba(239,68,68,0.1)' : 'none', cursor: 'pointer', transition: 'padding-left 0.2s' }}
+                        onMouseEnter={e => e.currentTarget.style.paddingLeft = '8px'}
+                        onMouseLeave={e => e.currentTarget.style.paddingLeft = '0'}>
+                        <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239,68,68,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <i className="fas fa-exclamation" style={{ fontSize: 10, color: '#ef4444' }} />
+                        </div>
+                        <PillarBadge name={f.pillar} />
+                        <span style={{ flex: 1, fontSize: 13, color: 'var(--text2)' }}>{f.title}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: f.status === 'approved' ? '#22c55e' : '#f59e0b', textTransform: 'uppercase' }}>{f.status}</span>
                       </div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: s.value > 0 ? s.color : 'var(--text3)' }}>{s.value}</div>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 2 }}>{s.label}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>{s.sub}</div>
-                    </div>
-                  ))}
+                    ))}
+                    {report.criticalFindings.length > 5 && (
+                      <div onClick={() => setReportTab('findings')} style={{ padding: '12px 0', textAlign: 'center', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#ef4444' }}>
+                        View all {report.criticalFindings.length} critical issues →
+                      </div>
+                    )}
+                  </div>
+                </Section>
+              )}
+            </div>
+          ),
+
+          // ── MAPS TAB ──
+          maps: (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(135deg, #22c55e25, #22c55e10)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #22c55e30' }}>
+                    <i className="fas fa-map-marker-alt" style={{ fontSize: 20, color: '#22c55e' }} />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Google Maps Rankings</h2>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{maps.totalKeywords || 0} keywords tracked via grid scan</div>
+                  </div>
                 </div>
-                {maps.topKeywords && maps.topKeywords.length > 0 && (
+                <button onClick={() => setPage('maps-rankings')} style={{ fontSize: 12, fontWeight: 600, color: '#22c55e', background: '#22c55e12', border: '1px solid #22c55e30', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  Full Rankings <i className="fas fa-arrow-right" style={{ fontSize: 9 }} />
+                </button>
+              </div>
+              {/* Summary stats */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 24 }}>
+                <MetricCard label="Avg Rank Position" value={maps.avgArp ? '#' + maps.avgArp.toFixed(1) : '—'} prev={pm?.mapsRankings?.avgArp} invert icon="fas fa-trophy" color="#22c55e" />
+                <MetricCard label="Avg Visibility" value={maps.avgVisibility != null ? maps.avgVisibility.toFixed(0) + '%' : '—'} prev={pm?.mapsRankings?.avgVisibility} icon="fas fa-eye" color="#3b82f6" />
+                <MetricCard label="Keywords Found" value={(maps.totalKeywords || 0) - (maps.notVisible || 0)} icon="fas fa-check-circle" color="#6366f1" sub={'of ' + (maps.totalKeywords || 0) + ' total'} />
+              </div>
+              {/* Status breakdown */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+                {[
+                  { label: 'Dominant', value: maps.dominant || 0, icon: 'fas fa-crown', color: '#22c55e', sub: 'Top 3 visibility 60%+' },
+                  { label: 'Competitive', value: maps.competitive || 0, icon: 'fas fa-bolt', color: '#3b82f6', sub: 'Visibility 30-60%' },
+                  { label: 'Needs Work', value: maps.needsWork || 0, icon: 'fas fa-wrench', color: '#f59e0b', sub: 'Visibility under 30%' },
+                  { label: 'Not Visible', value: maps.notVisible || 0, icon: 'fas fa-eye-slash', color: '#ef4444', sub: 'Not found in grid' },
+                ].map((s, i) => (
+                  <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '18px', textAlign: 'center' }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: s.color + '15', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
+                      <i className={s.icon} style={{ fontSize: 15, color: s.color }} />
+                    </div>
+                    <div style={{ fontSize: 32, fontWeight: 800, color: s.value > 0 ? s.color : 'var(--text3)' }}>{s.value}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4 }}>{s.label}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Keywords table */}
+              {maps.topKeywords && maps.topKeywords.length > 0 && (
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 12 }}>
+                    <i className="fas fa-list" style={{ marginRight: 8, color: '#22c55e', fontSize: 13 }} />Keyword Performance
+                  </h3>
                   <DataTable
                     columns={[
                       { label: 'Keyword', width: '2.5fr', key: 'keyword', style: { fontWeight: 600, color: 'var(--text1)' } },
@@ -12652,18 +12719,48 @@
                       }},
                     ]}
                     rows={maps.topKeywords}
+                    maxRows={20}
                   />
-                )}
-              </Section>
-            )}
+                </div>
+              )}
+              {(!maps.topKeywords || maps.topKeywords.length === 0) && (
+                <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '40px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                  <i className="fas fa-map" style={{ fontSize: 28, marginBottom: 10, display: 'block', opacity: 0.2 }} />
+                  No maps ranking data — run a grid scan in Maps Rankings first
+                </div>
+              )}
+            </div>
+          ),
 
-            {/* Google Search Console */}
-            <Section id="gsc" title="Google Search Console" icon="fas fa-chart-line" color="#3b82f6" onAction={() => setPage('gsc-audit')} actionLabel="GSC Audit">
+          // ── GSC TAB ──
+          gsc: (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(135deg, #3b82f625, #3b82f610)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #3b82f630' }}>
+                    <i className="fas fa-chart-line" style={{ fontSize: 20, color: '#3b82f6' }} />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Google Search Console</h2>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Last 28 days performance data</div>
+                  </div>
+                </div>
+                <button onClick={() => setPage('gsc-audit')} style={{ fontSize: 12, fontWeight: 600, color: '#3b82f6', background: '#3b82f612', border: '1px solid #3b82f630', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  GSC Audit <i className="fas fa-arrow-right" style={{ fontSize: 9 }} />
+                </button>
+              </div>
+              {/* KPI cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 28 }}>
+                <MetricCard label="Total Clicks" value={(gsc.clicks || 0).toLocaleString()} prev={pm?.gscData?.clicks} icon="fas fa-mouse-pointer" color="#3b82f6" />
+                <MetricCard label="Impressions" value={(gsc.impressions || 0).toLocaleString()} prev={pm?.gscData?.impressions} icon="fas fa-binoculars" color="#6366f1" />
+                <MetricCard label="Avg CTR" value={(gsc.ctr || 0) + '%'} prev={pm?.gscData?.ctr} icon="fas fa-percentage" color="#22c55e" />
+                <MetricCard label="Avg Position" value={gsc.avgPosition ? '#' + gsc.avgPosition : '—'} prev={pm?.gscData?.avgPosition} invert icon="fas fa-sort-amount-up" color="#f59e0b" />
+              </div>
               {gsc.topQueries && gsc.topQueries.length > 0 ? (
                 <>
-                  <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 12 }}>
-                    <i className="fas fa-search" style={{ marginRight: 8, color: '#3b82f6', fontSize: 12 }} />Top Search Queries
-                  </h4>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 12 }}>
+                    <i className="fas fa-search" style={{ marginRight: 8, color: '#3b82f6', fontSize: 13 }} />Top Search Queries
+                  </h3>
                   <DataTable
                     columns={[
                       { label: 'Query', width: '2.5fr', key: 'query', style: { fontWeight: 600, color: 'var(--text1)' } },
@@ -12673,13 +12770,13 @@
                       { label: 'Position', width: '0.8fr', render: q => <span style={{ fontWeight: 600, color: q.position <= 10 ? '#22c55e' : '#f59e0b' }}>#{q.position}</span> },
                     ]}
                     rows={gsc.topQueries}
-                    maxRows={10}
+                    maxRows={15}
                   />
                   {gsc.topPages && gsc.topPages.length > 0 && (
-                    <div style={{ marginTop: 20 }}>
-                      <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 12 }}>
-                        <i className="fas fa-file" style={{ marginRight: 8, color: '#3b82f6', fontSize: 12 }} />Top Pages
-                      </h4>
+                    <div style={{ marginTop: 28 }}>
+                      <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 12 }}>
+                        <i className="fas fa-file" style={{ marginRight: 8, color: '#3b82f6', fontSize: 13 }} />Top Pages
+                      </h3>
                       <DataTable
                         columns={[
                           { label: 'Page', width: '3fr', render: p => <span style={{ fontWeight: 500, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{p.page || '/'}</span> },
@@ -12688,154 +12785,200 @@
                           { label: 'CTR', width: '0.7fr', render: p => p.ctr + '%' },
                         ]}
                         rows={gsc.topPages}
-                        maxRows={6}
+                        maxRows={10}
                       />
                     </div>
                   )}
                 </>
               ) : (
-                <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '32px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-                  <i className="fas fa-plug" style={{ fontSize: 24, marginBottom: 8, display: 'block', opacity: 0.3 }} />
+                <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '40px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                  <i className="fas fa-plug" style={{ fontSize: 28, marginBottom: 10, display: 'block', opacity: 0.2 }} />
                   Connect Google Search Console in Settings to see search data
                 </div>
               )}
-            </Section>
+            </div>
+          ),
 
-            {/* Website Health — side by side */}
-            <Section id="health" title="Website Health" icon="fas fa-heartbeat" color="#a855f7">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {/* On-Page */}
-                <div onClick={() => setPage('onpage-audit')} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 22, cursor: 'pointer', transition: 'all 0.2s' }}
+          // ── WEBSITE HEALTH TAB ──
+          health: (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
+                <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(135deg, #a855f725, #a855f710)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #a855f730' }}>
+                  <i className="fas fa-heartbeat" style={{ fontSize: 20, color: '#a855f7' }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Website Health</h2>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>On-Page SEO & PageSpeed performance</div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                {/* On-Page card */}
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 16, padding: 28, cursor: 'pointer', transition: 'all 0.2s' }}
+                  onClick={() => setPage('onpage-audit')}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = '#f59e0b'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'none'; }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: '#f59e0b15', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <i className="fas fa-file-alt" style={{ fontSize: 14, color: '#f59e0b' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: '#f59e0b15', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <i className="fas fa-file-alt" style={{ fontSize: 16, color: '#f59e0b' }} />
                       </div>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>On-Page SEO</span>
+                      <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)' }}>On-Page SEO</span>
                     </div>
-                    <i className="fas fa-arrow-right" style={{ fontSize: 11, color: 'var(--text3)' }} />
+                    <i className="fas fa-arrow-right" style={{ fontSize: 12, color: 'var(--text3)' }} />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 16 }}>
-                    <ScoreRing score={op.avgScore || 0} size={80} strokeWidth={6} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 22 }}>
+                    <ScoreRing score={op.avgScore || 0} size={100} strokeWidth={7} />
                     <div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Avg SEO Score</div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: (op.avgScore || 0) >= 70 ? '#22c55e' : '#f59e0b' }}>{op.avgScore || 0}%</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>Avg SEO Score</div>
+                      <div style={{ fontSize: 36, fontWeight: 800, color: (op.avgScore || 0) >= 70 ? '#22c55e' : '#f59e0b' }}>{op.avgScore || 0}%</div>
+                      {pm?.onPageStats?.avgScore != null && (() => {
+                        const t = trendCalc(op.avgScore, pm.onPageStats.avgScore, false);
+                        return t ? <div style={{ fontSize: 12, fontWeight: 600, color: t.isGood ? '#22c55e' : '#ef4444', marginTop: 4 }}>{t.isUp ? '↑' : '↓'} {t.pct}% vs last month</div> : null;
+                      })()}
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                     {[
                       { n: op.totalPages || 0, l: 'Pages', c: 'var(--text1)' },
                       { n: op.issuesFound || 0, l: 'Issues', c: '#ef4444' },
                       { n: op.pagesFixed || 0, l: 'Fixed', c: '#22c55e' },
                     ].map((s, i) => (
-                      <div key={i} style={{ textAlign: 'center', padding: '10px 0', background: 'var(--bg)', borderRadius: 8 }}>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: s.c }}>{s.n}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginTop: 2 }}>{s.l}</div>
+                      <div key={i} style={{ textAlign: 'center', padding: '14px 0', background: 'var(--bg)', borderRadius: 10 }}>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: s.c }}>{s.n}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginTop: 3 }}>{s.l}</div>
                       </div>
                     ))}
                   </div>
                 </div>
-
-                {/* PageSpeed */}
-                <div onClick={() => setPage('pagespeed-scores')} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 22, cursor: 'pointer', transition: 'all 0.2s' }}
+                {/* PageSpeed card */}
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 16, padding: 28, cursor: 'pointer', transition: 'all 0.2s' }}
+                  onClick={() => setPage('pagespeed-scores')}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = '#a855f7'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'none'; }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: '#a855f715', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <i className="fas fa-tachometer-alt" style={{ fontSize: 14, color: '#a855f7' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: '#a855f715', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <i className="fas fa-tachometer-alt" style={{ fontSize: 16, color: '#a855f7' }} />
                       </div>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>PageSpeed</span>
+                      <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)' }}>PageSpeed</span>
                     </div>
-                    <i className="fas fa-arrow-right" style={{ fontSize: 11, color: 'var(--text3)' }} />
+                    <i className="fas fa-arrow-right" style={{ fontSize: 12, color: 'var(--text3)' }} />
                   </div>
                   {ps ? (
                     <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 16 }}>
-                        <ScoreRing score={ps.avgPerformance || 0} size={80} strokeWidth={6} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 22 }}>
+                        <ScoreRing score={ps.avgPerformance || 0} size={100} strokeWidth={7} />
                         <div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>Avg Performance</div>
-                          <div style={{ fontSize: 28, fontWeight: 800, color: ps.avgPerformance >= 90 ? '#22c55e' : ps.avgPerformance >= 50 ? '#f59e0b' : '#ef4444' }}>{ps.avgPerformance}%</div>
+                          <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>Avg Performance</div>
+                          <div style={{ fontSize: 36, fontWeight: 800, color: ps.avgPerformance >= 90 ? '#22c55e' : ps.avgPerformance >= 50 ? '#f59e0b' : '#ef4444' }}>{ps.avgPerformance}%</div>
+                          {pm?.pageSpeedStats?.avgPerformance != null && (() => {
+                            const t = trendCalc(ps.avgPerformance, pm.pageSpeedStats.avgPerformance, false);
+                            return t ? <div style={{ fontSize: 12, fontWeight: 600, color: t.isGood ? '#22c55e' : '#ef4444', marginTop: 4 }}>{t.isUp ? '↑' : '↓'} {t.pct}% vs last month</div> : null;
+                          })()}
                         </div>
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
                         {[
                           { n: ps.good || 0, l: 'Good 90+', c: '#22c55e' },
                           { n: ps.needsImprovement || 0, l: 'Average', c: '#f59e0b' },
                           { n: ps.poor || 0, l: 'Poor <50', c: '#ef4444' },
                         ].map((s, i) => (
-                          <div key={i} style={{ textAlign: 'center', padding: '10px 0', background: 'var(--bg)', borderRadius: 8 }}>
-                            <div style={{ fontSize: 20, fontWeight: 800, color: s.c }}>{s.n}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginTop: 2 }}>{s.l}</div>
+                          <div key={i} style={{ textAlign: 'center', padding: '14px 0', background: 'var(--bg)', borderRadius: 10 }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: s.c }}>{s.n}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginTop: 3 }}>{s.l}</div>
                           </div>
                         ))}
                       </div>
                     </>
                   ) : (
-                    <div style={{ padding: '28px 0', textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>
-                      <i className="fas fa-tachometer-alt" style={{ fontSize: 20, marginBottom: 6, display: 'block', opacity: 0.2 }} />
+                    <div style={{ padding: '44px 0', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                      <i className="fas fa-tachometer-alt" style={{ fontSize: 28, marginBottom: 8, display: 'block', opacity: 0.2 }} />
                       Run Website Audit to scan PageSpeed
                     </div>
                   )}
                 </div>
               </div>
-            </Section>
+            </div>
+          ),
 
-            {/* Action Plan Progress */}
-            <Section id="actions" title="Action Plan Progress" icon="fas fa-tasks" color="#3b82f6" onAction={() => setPage('action-plan')} actionLabel="View Actions">
+          // ── ACTIONS TAB ──
+          actions: (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(135deg, #3b82f625, #3b82f610)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #3b82f630' }}>
+                    <i className="fas fa-tasks" style={{ fontSize: 20, color: '#3b82f6' }} />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Action Plan Progress</h2>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{acts.total || 0} total action items from audits</div>
+                  </div>
+                </div>
+                <button onClick={() => setPage('action-plan')} style={{ fontSize: 12, fontWeight: 600, color: '#3b82f6', background: '#3b82f612', border: '1px solid #3b82f630', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  View Actions <i className="fas fa-arrow-right" style={{ fontSize: 9 }} />
+                </button>
+              </div>
               {acts.total > 0 ? (
-                <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 20 }}>
-                    <div style={{ position: 'relative', width: 90, height: 90 }}>
-                      <ScoreRing score={acts.completionRate || 0} size={90} strokeWidth={6} />
-                    </div>
+                <div style={{ background: 'var(--card)', borderRadius: 16, border: '1px solid var(--border)', padding: 32 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 32, marginBottom: 28 }}>
+                    <ScoreRing score={acts.completionRate || 0} size={130} strokeWidth={9} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', marginBottom: 12 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text2)', marginBottom: 16 }}>
                         {acts.completed || 0} of {acts.total} actions completed
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
                         {[
                           { n: acts.completed || 0, l: 'Done', c: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
                           { n: acts.inProgress || 0, l: 'In Progress', c: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
                           { n: acts.pending || 0, l: 'Pending', c: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
                         ].map((s, i) => (
-                          <div key={i} style={{ textAlign: 'center', padding: '12px 0', background: s.bg, borderRadius: 10 }}>
-                            <div style={{ fontSize: 22, fontWeight: 800, color: s.c }}>{s.n}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginTop: 2 }}>{s.l}</div>
+                          <div key={i} style={{ textAlign: 'center', padding: '16px 0', background: s.bg, borderRadius: 12 }}>
+                            <div style={{ fontSize: 28, fontWeight: 800, color: s.c }}>{s.n}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, marginTop: 3 }}>{s.l}</div>
                           </div>
                         ))}
                       </div>
                     </div>
                   </div>
-                  {/* Progress bar */}
-                  <div style={{ height: 10, borderRadius: 5, background: 'var(--bg)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', borderRadius: 5, background: 'linear-gradient(90deg, #22c55e, #3b82f6, #a855f7)', width: (acts.completionRate || 0) + '%', transition: 'width 1s ease' }} />
+                  <div style={{ height: 12, borderRadius: 6, background: 'var(--bg)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', borderRadius: 6, background: 'linear-gradient(90deg, #22c55e, #3b82f6, #a855f7)', width: (acts.completionRate || 0) + '%', transition: 'width 1s ease' }} />
                   </div>
                 </div>
               ) : (
-                <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '32px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                <div style={{ background: 'var(--card)', borderRadius: 16, border: '1px solid var(--border)', padding: '48px', textAlign: 'center', color: 'var(--text3)', fontSize: 14 }}>
+                  <i className="fas fa-tasks" style={{ fontSize: 32, marginBottom: 12, display: 'block', opacity: 0.2 }} />
                   No action items yet — run an audit to generate actions
                 </div>
               )}
-            </Section>
+            </div>
+          ),
 
-            {/* Audit Findings by Pillar */}
-            {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 && (
-              <Section id="findings" title="Audit Findings" icon="fas fa-clipboard-check" color="#f97316">
-                <div style={{ display: 'grid', gap: 10 }}>
+          // ── FINDINGS TAB ──
+          findings: (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
+                <div style={{ width: 48, height: 48, borderRadius: 14, background: 'linear-gradient(135deg, #f9731625, #f9731610)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f9731630' }}>
+                  <i className="fas fa-clipboard-check" style={{ fontSize: 20, color: '#f97316' }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Audit Findings</h2>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Issues discovered across all audit pillars</div>
+                </div>
+              </div>
+              {/* Findings by pillar */}
+              {report.findingsByPillar && Object.keys(report.findingsByPillar).length > 0 ? (
+                <div style={{ display: 'grid', gap: 12, marginBottom: 28 }}>
                   {Object.entries(report.findingsByPillar).map(([pillar, data]) => (
                     <div key={pillar} onClick={() => { const nav = pillarNav[pillar]; if (nav) setPage(nav); }}
-                      style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'all 0.2s' }}
+                      style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '20px 24px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'all 0.2s' }}
                       onMouseEnter={e => e.currentTarget.style.transform = 'translateX(4px)'}
                       onMouseLeave={e => e.currentTarget.style.transform = 'none'}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                         <PillarBadge name={pillar} />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text1)' }}>{data.total} findings</span>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{data.total} findings</span>
                       </div>
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12 }}>
-                        {data.critical > 0 && <span style={{ fontWeight: 700, color: '#ef4444', padding: '2px 8px', background: 'rgba(239,68,68,0.1)', borderRadius: 6 }}>{data.critical} critical</span>}
+                      <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12 }}>
+                        {data.critical > 0 && <span style={{ fontWeight: 700, color: '#ef4444', padding: '3px 10px', background: 'rgba(239,68,68,0.1)', borderRadius: 8 }}>{data.critical} critical</span>}
                         <span style={{ color: '#22c55e', fontWeight: 600 }}>{data.approved} done</span>
                         {data.pending > 0 && <span style={{ color: '#f59e0b' }}>{data.pending} pending</span>}
                         <i className="fas fa-chevron-right" style={{ fontSize: 10, color: 'var(--text3)' }} />
@@ -12843,30 +12986,60 @@
                     </div>
                   ))}
                 </div>
-              </Section>
-            )}
-
-            {/* Critical Issues */}
-            {report.criticalFindings && report.criticalFindings.length > 0 && (
-              <Section id="critical" title="Critical Issues" icon="fas fa-exclamation-triangle" color="#ef4444">
-                <div style={{ background: 'linear-gradient(135deg, rgba(239,68,68,0.06), rgba(239,68,68,0.02))', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 14, padding: '8px 20px', overflow: 'hidden' }}>
-                  {report.criticalFindings.map((f, i) => (
-                    <div key={i} onClick={() => { const nav = pillarNav[f.pillar]; if (nav) setPage(nav); }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 0', borderBottom: i < report.criticalFindings.length - 1 ? '1px solid rgba(239,68,68,0.1)' : 'none', cursor: 'pointer', transition: 'padding-left 0.2s' }}
-                      onMouseEnter={e => e.currentTarget.style.paddingLeft = '8px'}
-                      onMouseLeave={e => e.currentTarget.style.paddingLeft = '0'}>
-                      <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239,68,68,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <i className="fas fa-exclamation" style={{ fontSize: 10, color: '#ef4444' }} />
-                      </div>
-                      <PillarBadge name={f.pillar} />
-                      <span style={{ flex: 1, fontSize: 13, color: 'var(--text2)' }}>{f.title}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: f.status === 'approved' ? '#22c55e' : '#f59e0b', textTransform: 'uppercase' }}>{f.status}</span>
-                      <i className="fas fa-chevron-right" style={{ fontSize: 10, color: 'var(--text3)' }} />
-                    </div>
-                  ))}
+              ) : (
+                <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '28px', textAlign: 'center', color: 'var(--text3)', fontSize: 13, marginBottom: 28 }}>
+                  No pillar findings data available
                 </div>
-              </Section>
-            )}
+              )}
+              {/* Critical issues */}
+              {report.criticalFindings && report.criticalFindings.length > 0 && (
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: '#ef4444', marginBottom: 14 }}>
+                    <i className="fas fa-exclamation-triangle" style={{ marginRight: 8, fontSize: 13 }} />Critical Issues ({report.criticalFindings.length})
+                  </h3>
+                  <div style={{ background: 'linear-gradient(135deg, rgba(239,68,68,0.06), rgba(239,68,68,0.02))', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 14, padding: '8px 20px', overflow: 'hidden' }}>
+                    {report.criticalFindings.map((f, i) => (
+                      <div key={i} onClick={() => { const nav = pillarNav[f.pillar]; if (nav) setPage(nav); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 0', borderBottom: i < report.criticalFindings.length - 1 ? '1px solid rgba(239,68,68,0.1)' : 'none', cursor: 'pointer', transition: 'padding-left 0.2s' }}
+                        onMouseEnter={e => e.currentTarget.style.paddingLeft = '8px'}
+                        onMouseLeave={e => e.currentTarget.style.paddingLeft = '0'}>
+                        <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(239,68,68,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <i className="fas fa-exclamation" style={{ fontSize: 10, color: '#ef4444' }} />
+                        </div>
+                        <PillarBadge name={f.pillar} />
+                        <span style={{ flex: 1, fontSize: 13, color: 'var(--text2)' }}>{f.title}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: f.status === 'approved' ? '#22c55e' : '#f59e0b', textTransform: 'uppercase' }}>{f.status}</span>
+                        <i className="fas fa-chevron-right" style={{ fontSize: 10, color: 'var(--text3)' }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ),
+        };
+
+        return (
+          <div style={{ padding: '0' }}>
+            {/* Tab bar */}
+            <div style={{ display: 'flex', gap: 2, padding: '8px 28px 0', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 10 }}>
+              {tabs.map(tab => {
+                const isActive = reportTab === tab.id;
+                return (
+                  <button key={tab.id} onClick={() => setReportTab(tab.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '12px 18px', fontSize: 12, fontWeight: isActive ? 700 : 500, color: isActive ? tab.color : 'var(--text3)', background: isActive ? tab.color + '10' : 'transparent', border: 'none', borderBottom: isActive ? `2px solid ${tab.color}` : '2px solid transparent', borderRadius: '10px 10px 0 0', cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap' }}
+                    onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = tab.color; e.currentTarget.style.background = tab.color + '08'; } }}
+                    onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = 'var(--text3)'; e.currentTarget.style.background = 'transparent'; } }}>
+                    <i className={tab.icon} style={{ fontSize: 11 }} />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Tab content — full width */}
+            <div style={{ padding: '28px' }}>
+              {tabContent[reportTab] || tabContent.overview}
+            </div>
           </div>
         );
       };
