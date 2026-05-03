@@ -12494,65 +12494,33 @@
         );
       };
 
-      // ---- SVG Line Chart ----
-      const LineChart = ({ data, lines, height = 200, yMax: forceMax, yLabel, xKey = 'label' }) => {
-        const W = 600, H = height, padL = 48, padR = 16, padT = 12, padB = 32;
+      // ---- SVG Stacked Column Chart (ranking distribution) ----
+      const StackedColumnChart = ({ segments, height = 80 }) => {
+        const W = 300, H = height, padL = 30, padR = 20, padT = 10, padB = 20;
         const cw = W - padL - padR, ch = H - padT - padB;
-        const n = data.length;
-        if (n === 0) return null;
-        const allVals = lines.flatMap(l => data.map(d => d[l.key] || 0));
-        const yMax = forceMax || Math.max(...allVals, 1);
-        const xStep = n > 1 ? cw / (n - 1) : cw;
-        const gridCount = 4;
-        return (
-          <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
-            {Array.from({ length: gridCount + 1 }, (_, i) => {
-              const v = (yMax / gridCount) * i;
-              const y = padT + ch - (v / yMax) * ch;
-              return <g key={i}>
-                <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-                <text x={padL - 8} y={y + 3} textAnchor="end" fill="var(--text3)" fontSize="9" fontWeight="500">
-                  {v >= 1000 ? (v / 1000).toFixed(0) + 'k' : Math.round(v)}
-                </text>
-              </g>;
-            })}
-            {data.map((d, i) => {
-              const x = padL + (n > 1 ? i * xStep : cw / 2);
-              return <text key={i} x={x} y={H - 4} textAnchor="middle" fill="var(--text3)" fontSize="9" fontWeight="500">{d[xKey]}</text>;
-            })}
-            {lines.map(l => {
-              const pts = data.map((d, i) => ({
-                x: padL + (n > 1 ? i * xStep : cw / 2),
-                y: padT + ch - (Math.min(d[l.key] || 0, yMax) / yMax) * ch,
-              }));
-              const path = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
-              // area fill
-              const areaPath = path + ` L${pts[pts.length - 1].x.toFixed(1)},${padT + ch} L${pts[0].x.toFixed(1)},${padT + ch} Z`;
-              return <g key={l.key}>
-                <path d={areaPath} fill={l.color} opacity="0.06" />
-                <path d={path} fill="none" stroke={l.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                {pts.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="3.5" fill={l.color} stroke="var(--card)" strokeWidth="2" />)}
-              </g>;
-            })}
-          </svg>
-        );
-      };
-
-      // ---- Horizontal bar (for ranking distribution) ----
-      const HBar = ({ segments, height = 10 }) => {
         const total = segments.reduce((s, v) => s + v.value, 0) || 1;
         return (
-          <div style={{ display: 'flex', height, borderRadius: height / 2, overflow: 'hidden', background: 'rgba(255,255,255,0.04)' }}>
-            {segments.map((s, i) => s.value > 0 ? (
-              <div key={i} style={{ width: (s.value / total * 100) + '%', background: s.color, transition: 'width 0.6s ease' }} title={s.label + ': ' + s.value} />
-            ) : null)}
-          </div>
+          <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+            <rect x={padL} y={padT} width={cw} height={ch} fill="rgba(255,255,255,0.02)" rx={4} />
+            {segments.map((seg, i) => {
+              const x = padL + (seg.value / total) * cw;
+              if (i === 0) {
+                return <rect key={i} x={padL} y={padT} width={(seg.value / total) * cw} height={ch} fill={seg.color} />;
+              } else {
+                const px = padL + segments.slice(0, i).reduce((s, v) => s + (v.value / total) * cw, 0);
+                return <rect key={i} x={px} y={padT} width={(seg.value / total) * cw} height={ch} fill={seg.color} />;
+              }
+            })}
+            {/* Y-axis label */}
+            <text x={8} y={padT + ch/2 + 3} textAnchor="end" fill="var(--text3)" fontSize="10" fontWeight="500">100%</text>
+            <text x={8} y={padT + ch + 8} textAnchor="end" fill="var(--text3)" fontSize="10" fontWeight="500">0%</text>
+          </svg>
         );
       };
 
       // ============ REPORT RENDERER (AgencyAnalytics style) ============
       const renderReport = (report) => {
-        // Sample/placeholder data — will be replaced with real data later
+        // Sample/placeholder data
         const d = {
           month: report.monthLabel || report.month || 'May 2026',
           project: report.project?.name || project?.name || 'Project',
@@ -12566,6 +12534,8 @@
           // Maps
           mapsAvgRank: report.mapsRankings?.avgArp ?? 4.8,
           mapsVis: report.mapsRankings?.avgVisibility ?? 42,
+          mapsChange: report.mapsRankings?.mapsChange ?? 2.5,
+          serpChange: report.mapsRankings?.serpChange ?? -1.2,
           kwTracked: report.mapsRankings?.totalKeywords ?? 20,
           kwDominant: report.mapsRankings?.dominant ?? 5,
           kwCompetitive: report.mapsRankings?.competitive ?? 8,
@@ -12633,40 +12603,210 @@
           { keyword: 'phone repair midland', arp: 12.4, visibility: 8, status: 'Needs Work' },
         ];
 
-        // Section navigation
-        const sections = [
-          { id: 'overview', label: 'Overview', icon: 'fas fa-th-large' },
-          { id: 'gsc', label: 'Search Console', icon: 'fas fa-chart-line' },
-          { id: 'maps', label: 'Maps Rankings', icon: 'fas fa-map-marker-alt' },
-          { id: 'website', label: 'Website Health', icon: 'fas fa-heartbeat' },
-          { id: 'actions', label: 'Action Plan', icon: 'fas fa-tasks' },
-        ];
+        const statusColors = {
+          'Dominant': { bg: 'rgba(34,197,94,0.12)', color: '#22c55e' },
+          'Competitive': { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
+          'Needs Work': { bg: 'rgba(249,115,22,0.12)', color: '#f97316' },
+          'Not Visible': { bg: 'rgba(107,114,128,0.12)', color: '#6b7280' },
+        };
 
-        // ---- Section content renderers ----
-        const renderOverview = () => (
-          <div>
-            {/* KPI Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
-              {[
-                { label: 'Total Clicks', value: d.clicks.toLocaleString(), change: trendCalc(d.clicks, d.prevClicks, false), icon: 'fas fa-mouse-pointer', color: '#3b82f6' },
-                { label: 'Impressions', value: d.impressions.toLocaleString(), change: trendCalc(d.impressions, d.prevImps, false), icon: 'fas fa-eye', color: '#8b5cf6' },
-                { label: 'Avg CTR', value: d.ctr + '%', change: trendCalc(d.ctr, d.prevCtr, false), icon: 'fas fa-percentage', color: '#22c55e' },
-                { label: 'Avg Position', value: '#' + d.avgPos, change: trendCalc(d.avgPos, d.prevPos, true), icon: 'fas fa-sort-amount-up', color: '#f59e0b' },
-              ].map((kpi, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 22px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{kpi.label}</span>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: kpi.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <i className={kpi.icon} style={{ fontSize: 13, color: kpi.color }} />
-                    </div>
+        return (
+          <div style={{ padding: '40px 48px', background: 'var(--bg)', minHeight: '100vh' }}>
+            {/* Page title */}
+            <h1 style={{ fontSize: 36, fontWeight: 700, textAlign: 'center', marginBottom: 40, color: 'var(--text)' }}>SEO Report</h1>
+
+            {/* Row 1: Rankings + Changes + Visibility */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.5fr', gap: 20, marginBottom: 32 }}>
+              {/* Left: Maps Rankings widget */}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                  <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>Maps Rankings</span>
+                </div>
+                <StackedColumnChart segments={[
+                  { value: d.kwDominant, color: '#22c55e', label: 'Dominant' },
+                  { value: d.kwCompetitive, color: '#3b82f6', label: 'Competitive' },
+                  { value: d.kwNeedsWork, color: '#f97316', label: 'Needs Work' },
+                  { value: d.kwNotVisible, color: '#6b7280', label: 'Not Visible' },
+                ]} height={100} />
+                <div style={{ display: 'flex', gap: 16, marginTop: 16, fontSize: 10, color: 'var(--text3)' }}>
+                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#22c55e', borderRadius: 2, marginRight: 4 }} />Dominant</span>
+                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#3b82f6', borderRadius: 2, marginRight: 4 }} />Competitive</span>
+                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#f97316', borderRadius: 2, marginRight: 4 }} />Needs Work</span>
+                  <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#6b7280', borderRadius: 2, marginRight: 4 }} />Not Visible</span>
+                </div>
+              </div>
+
+              {/* Middle: Change cards */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {/* Maps Change */}
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '18px', flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Maps Change</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
+                    {d.mapsChange >= 0 ? <span style={{ color: '#22c55e' }}>▲{d.mapsChange}%</span> : <span style={{ color: '#ef4444' }}>▼{Math.abs(d.mapsChange)}%</span>}
                   </div>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)', lineHeight: 1, marginBottom: 8 }}>{kpi.value}</div>
-                  <ChangeBadge value={kpi.change?.diff} suffix={kpi.label.includes('CTR') || kpi.label.includes('Position') ? '' : '%'} invert={kpi.label.includes('Position')} />
+                </div>
+                {/* SERP Change */}
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '18px', flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>SERP Change</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
+                    {d.serpChange >= 0 ? <span style={{ color: '#22c55e' }}>▲{d.serpChange}%</span> : <span style={{ color: '#ef4444' }}>▼{Math.abs(d.serpChange)}%</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Visibility widget */}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12 }}>Maps Visibility</div>
+                <div style={{ fontSize: 56, fontWeight: 700, color: '#4a7dfc', lineHeight: 1, marginBottom: 12 }}>{d.mapsVis}%</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center' }}>
+                  {d.kwTracked} keywords tracked
+                </div>
+              </div>
+            </div>
+
+            {/* Row 2: Score Rings */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 32 }}>
+              {[
+                { label: 'Health Score', score: d.healthScore, color: '#6366f1' },
+                { label: 'On-Page Score', score: d.onPageScore, color: '#f59e0b' },
+                { label: 'PageSpeed Score', score: d.psScore, color: '#22c55e' },
+                { label: 'Maps Visibility', score: d.mapsVis, color: '#4a7dfc' },
+              ].map((item, i) => (
+                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <ScoreRing score={item.score} size={100} strokeWidth={6} color={item.color} />
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginTop: 16, textAlign: 'center' }}>{item.label}</div>
                 </div>
               ))}
             </div>
 
-            {/* Two charts side by side */}
+            {/* Row 3: GSC Metrics */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 32 }}>
+              {[
+                { label: 'Total Clicks', value: d.clicks.toLocaleString(), icon: 'fas fa-mouse-pointer', color: '#3b82f6' },
+                { label: 'Impressions', value: d.impressions.toLocaleString(), icon: 'fas fa-eye', color: '#8b5cf6' },
+                { label: 'Avg CTR', value: d.ctr.toFixed(1) + '%', icon: 'fas fa-percentage', color: '#22c55e' },
+                { label: 'Avg Position', value: '#' + d.avgPos.toFixed(1), icon: 'fas fa-sort-amount-up', color: '#f59e0b' },
+              ].map((item, i) => (
+                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{item.label}</span>
+                    <div style={{ width: 28, height: 28, borderRadius: 6, background: item.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <i className={item.icon} style={{ fontSize: 12, color: item.color }} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)' }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Row 4: Top Search Queries Table */}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', marginBottom: 32 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+                <i className="fas fa-search" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Top Search Queries</span>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Query</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Clicks</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Impressions</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>CTR</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Position</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topQueries.slice(0, 5).map((q, i) => (
+                    <tr key={i} style={{ borderBottom: i < 4 ? '1px solid var(--border)' : 'none', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                      <td style={{ padding: '12px 0', color: 'var(--text)' }}>{q.query}</td>
+                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>{q.clicks}</td>
+                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)' }}>{q.impressions.toLocaleString()}</td>
+                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)' }}>{q.ctr.toFixed(1)}%</td>
+                      <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>#{(q.position).toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Row 5: Maps Keywords Table */}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '24px', marginBottom: 32 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+                <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Maps Keywords Performance</span>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Keyword</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Avg Rank</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Visibility</th>
+                    <th style={{ textAlign: 'right', padding: '12px 0', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mapsKws.slice(0, 5).map((kw, i) => {
+                    const sc = statusColors[kw.status] || statusColors['Not Visible'];
+                    return (
+                      <tr key={i} style={{ borderBottom: i < 4 ? '1px solid var(--border)' : 'none', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                        <td style={{ padding: '12px 0', color: 'var(--text)' }}>{kw.keyword}</td>
+                        <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>#{kw.arp.toFixed(1)}</td>
+                        <td style={{ textAlign: 'right', padding: '12px 0', color: 'var(--text)', fontWeight: 600 }}>{kw.visibility}%</td>
+                        <td style={{ textAlign: 'right', padding: '12px 0' }}>
+                          <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: sc.bg, color: sc.color }}>{kw.status}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Row 6: Action Plan Progress */}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 24 }}>
+                <i className="fas fa-tasks" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+                {/* Score ring on left */}
+                <div style={{ flex: '0 0 auto' }}>
+                  <ScoreRing score={d.actRate} size={110} strokeWidth={7} color="#4a7dfc" />
+                </div>
+                {/* Stats on right */}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 16 }}>
+                    {d.actDone} of {d.actTotal} actions completed
+                  </div>
+                  {/* Stacked bar */}
+                  <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 16 }}>
+                    <div style={{ width: (d.actDone / d.actTotal * 100) + '%', background: '#22c55e' }} />
+                    <div style={{ width: (d.actProgress / d.actTotal * 100) + '%', background: '#3b82f6' }} />
+                    <div style={{ width: (d.actPending / d.actTotal * 100) + '%', background: '#f59e0b' }} />
+                  </div>
+                  {/* Legend */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                    {[
+                      { label: 'Done', value: d.actDone, color: '#22c55e' },
+                      { label: 'In Progress', value: d.actProgress, color: '#3b82f6' },
+                      { label: 'Pending', value: d.actPending, color: '#f59e0b' },
+                    ].map((s, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
+                        <div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{s.label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: s.color }}>{s.value}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
               <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -12750,299 +12890,6 @@
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-        );
-
-        const renderGSC = () => (
-          <div>
-            {/* KPI cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
-              {[
-                { label: 'Total Clicks', value: d.clicks.toLocaleString(), prev: d.prevClicks, color: '#3b82f6', icon: 'fas fa-mouse-pointer' },
-                { label: 'Impressions', value: d.impressions.toLocaleString(), prev: d.prevImps, color: '#8b5cf6', icon: 'fas fa-eye' },
-                { label: 'Avg CTR', value: d.ctr + '%', prev: d.prevCtr, color: '#22c55e', icon: 'fas fa-percentage' },
-                { label: 'Avg Position', value: '#' + d.avgPos, prev: d.prevPos, color: '#f59e0b', icon: 'fas fa-sort-amount-up', invert: true },
-              ].map((kpi, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 22px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 8, background: kpi.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <i className={kpi.icon} style={{ fontSize: 12, color: kpi.color }} />
-                    </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{kpi.label}</span>
-                  </div>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)', marginBottom: 6 }}>{kpi.value}</div>
-                  {(() => { const t = trendCalc(kpi.value, kpi.prev, kpi.invert); return t ? <ChangeBadge value={t.diff} invert={kpi.invert} /> : null; })()}
-                </div>
-              ))}
-            </div>
-
-            {/* Traffic chart */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 24px', marginBottom: 28 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', display: 'block', marginBottom: 16 }}>Traffic Over Time</span>
-              <LineChart data={trendData} lines={[{ key: 'impressions', color: '#8b5cf6' }, { key: 'clicks', color: '#3b82f6' }]} height={220} />
-            </div>
-
-            {/* Full queries table */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>All Search Queries</span>
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    {['#', 'Query', 'Clicks', 'Impressions', 'CTR', 'Position'].map((h, i) => (
-                      <th key={i} style={{ padding: '10px 22px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', textAlign: i <= 1 ? 'left' : 'right', width: i === 0 ? 40 : 'auto' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {topQueries.map((q, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <td style={{ padding: '12px 22px', fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{i + 1}</td>
-                      <td style={{ padding: '12px 22px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{q.query}</td>
-                      <td style={{ padding: '12px 22px', fontSize: 13, fontWeight: 700, color: '#3b82f6', textAlign: 'right' }}>{q.clicks}</td>
-                      <td style={{ padding: '12px 22px', fontSize: 13, color: 'var(--text2)', textAlign: 'right' }}>{(q.impressions || 0).toLocaleString()}</td>
-                      <td style={{ padding: '12px 22px', fontSize: 13, color: 'var(--text2)', textAlign: 'right' }}>{q.ctr}%</td>
-                      <td style={{ padding: '12px 22px', textAlign: 'right' }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: q.position <= 10 ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)', color: q.position <= 10 ? '#22c55e' : '#f59e0b' }}>#{q.position}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-
-        const renderMaps = () => (
-          <div>
-            {/* KPI row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 28 }}>
-              {[
-                { label: 'Avg Rank', value: '#' + d.mapsAvgRank, icon: 'fas fa-trophy', color: '#22c55e' },
-                { label: 'Avg Visibility', value: d.mapsVis + '%', icon: 'fas fa-eye', color: '#3b82f6', prev: d.prevVis },
-                { label: 'Keywords Tracked', value: d.kwTracked, icon: 'fas fa-key', color: '#8b5cf6' },
-              ].map((kpi, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 22px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 8, background: kpi.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <i className={kpi.icon} style={{ fontSize: 12, color: kpi.color }} />
-                    </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{kpi.label}</span>
-                  </div>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)', marginBottom: 6 }}>{kpi.value}</div>
-                  {kpi.prev != null && <ChangeBadge value={trendCalc(d.mapsVis, kpi.prev, false)?.diff} />}
-                </div>
-              ))}
-            </div>
-
-            {/* Ranking distribution */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 24px', marginBottom: 28 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', display: 'block', marginBottom: 16 }}>Ranking Distribution</span>
-              <HBar segments={[
-                { value: d.kwDominant, color: '#22c55e', label: 'Dominant' },
-                { value: d.kwCompetitive, color: '#3b82f6', label: 'Competitive' },
-                { value: d.kwNeedsWork, color: '#f59e0b', label: 'Needs Work' },
-                { value: d.kwNotVisible, color: '#ef4444', label: 'Not Visible' },
-              ]} height={14} />
-              <div style={{ display: 'flex', gap: 24, marginTop: 14 }}>
-                {[
-                  { label: 'Dominant', value: d.kwDominant, color: '#22c55e' },
-                  { label: 'Competitive', value: d.kwCompetitive, color: '#3b82f6' },
-                  { label: 'Needs Work', value: d.kwNeedsWork, color: '#f59e0b' },
-                  { label: 'Not Visible', value: d.kwNotVisible, color: '#ef4444' },
-                ].map((s, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
-                    <span style={{ fontSize: 12, color: 'var(--text2)' }}>{s.label}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: s.color }}>{s.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Keywords table */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Keyword Performance</span>
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    {['Keyword', 'Avg Rank', 'Visibility', 'Status'].map((h, i) => (
-                      <th key={i} style={{ padding: '10px 22px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {mapsKws.map((kw, i) => {
-                    const sc = { Dominant: '#22c55e', Competitive: '#3b82f6', 'Needs Work': '#f59e0b', 'Not Visible': '#ef4444' };
-                    return (
-                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '12px 22px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</td>
-                        <td style={{ padding: '12px 22px', fontSize: 13, fontWeight: 700, color: kw.arp <= 3 ? '#22c55e' : kw.arp <= 10 ? '#f59e0b' : '#ef4444', textAlign: 'right' }}>#{kw.arp}</td>
-                        <td style={{ padding: '12px 22px', textAlign: 'right' }}>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                            <div style={{ width: 60, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                              <div style={{ height: '100%', width: kw.visibility + '%', background: kw.visibility >= 50 ? '#22c55e' : kw.visibility >= 20 ? '#f59e0b' : '#ef4444', borderRadius: 3 }} />
-                            </div>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>{kw.visibility}%</span>
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px 22px', textAlign: 'right' }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: (sc[kw.status] || '#6b7280') + '15', color: sc[kw.status] || '#6b7280' }}>{kw.status}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-
-        const renderWebsite = () => (
-          <div>
-            {/* Two score cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
-              {[
-                { label: 'On-Page SEO Score', score: d.onPageScore, prev: d.prevOnPage, stats: [{ n: d.totalPages, l: 'Pages' }, { n: d.issues, l: 'Issues', c: '#ef4444' }, { n: d.fixed, l: 'Fixed', c: '#22c55e' }] },
-                { label: 'PageSpeed Performance', score: d.psScore, prev: d.prevPS, stats: [{ n: d.psGood, l: 'Good', c: '#22c55e' }, { n: d.psAvg, l: 'Average', c: '#f59e0b' }, { n: d.psPoor, l: 'Poor', c: '#ef4444' }] },
-              ].map((card, ci) => {
-                const t = trendCalc(card.score, card.prev, false);
-                return (
-                  <div key={ci} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '28px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 22 }}>
-                      <ScoreRing score={card.score} size={90} strokeWidth={7} />
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>{card.label}</div>
-                        <div style={{ fontSize: 32, fontWeight: 800, color: card.score >= 70 ? '#22c55e' : card.score >= 40 ? '#f59e0b' : '#ef4444', lineHeight: 1 }}>{card.score}%</div>
-                        {t && <div style={{ marginTop: 6 }}><ChangeBadge value={t.diff} /></div>}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${card.stats.length}, 1fr)`, gap: 10 }}>
-                      {card.stats.map((s, i) => (
-                        <div key={i} style={{ textAlign: 'center', padding: '12px 0', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                          <div style={{ fontSize: 22, fontWeight: 800, color: s.c || 'var(--text)' }}>{s.n}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginTop: 3 }}>{s.l}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Score trend */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '20px 24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Score History</span>
-                <div style={{ display: 'flex', gap: 14 }}>
-                  {[{ l: 'Health', c: '#6366f1' }, { l: 'On-Page', c: '#f59e0b' }, { l: 'Visibility', c: '#22c55e' }].map((s, i) => (
-                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--text3)' }}>
-                      <span style={{ width: 8, height: 3, borderRadius: 2, background: s.c, display: 'inline-block' }} />{s.l}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <LineChart data={trendData} lines={[
-                { key: 'health', color: '#6366f1' },
-                { key: 'onPage', color: '#f59e0b' },
-                { key: 'vis', color: '#22c55e' },
-              ]} yMax={100} height={200} />
-            </div>
-          </div>
-        );
-
-        const renderActions = () => (
-          <div>
-            {/* Progress header */}
-            <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '28px', marginBottom: 28 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-                <ScoreRing score={d.actRate} size={100} strokeWidth={8} label="Complete" />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>{d.actDone} of {d.actTotal} actions completed</div>
-                  {/* Stacked bar */}
-                  <HBar segments={[
-                    { value: d.actDone, color: '#22c55e', label: 'Done' },
-                    { value: d.actProgress, color: '#3b82f6', label: 'In Progress' },
-                    { value: d.actPending, color: '#f59e0b', label: 'Pending' },
-                  ]} height={12} />
-                  <div style={{ display: 'flex', gap: 24, marginTop: 14 }}>
-                    {[
-                      { label: 'Done', value: d.actDone, color: '#22c55e' },
-                      { label: 'In Progress', value: d.actProgress, color: '#3b82f6' },
-                      { label: 'Pending', value: d.actPending, color: '#f59e0b' },
-                    ].map((s, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
-                        <span style={{ fontSize: 12, color: 'var(--text2)' }}>{s.label}</span>
-                        <span style={{ fontSize: 13, fontWeight: 800, color: s.color }}>{s.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Action breakdown by pillar */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-              {[
-                { pillar: 'GBP', color: '#f97316', icon: 'fas fa-map-marker-alt', done: 4, total: 12 },
-                { pillar: 'Search Console', color: '#3b82f6', icon: 'fas fa-chart-line', done: 6, total: 14 },
-                { pillar: 'Website', color: '#a855f7', icon: 'fas fa-globe', done: 4, total: 10 },
-              ].map((p, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: '22px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: p.color + '12', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <i className={p.icon} style={{ fontSize: 13, color: p.color }} />
-                    </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{p.pillar}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>{p.done} of {p.total} completed</div>
-                  <HBar segments={[
-                    { value: p.done, color: p.color, label: 'Done' },
-                    { value: p.total - p.done, color: 'rgba(255,255,255,0.06)', label: 'Remaining' },
-                  ]} height={8} />
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-
-        const sectionRenderers = { overview: renderOverview, gsc: renderGSC, maps: renderMaps, website: renderWebsite, actions: renderActions };
-
-        return (
-          <div style={{ display: 'flex', minHeight: 600 }}>
-            {/* Left sidebar nav */}
-            <div style={{ width: 200, flexShrink: 0, borderRight: '1px solid var(--border)', padding: '20px 0' }}>
-              {/* Report header */}
-              <div style={{ padding: '0 20px 20px', borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
-                  <ScoreRing score={d.healthScore} size={64} strokeWidth={5} />
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', textAlign: 'center' }}>{d.month}</div>
-                <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 2 }}>{d.domain}</div>
-              </div>
-              {sections.map(s => {
-                const isActive = activeSection === s.id;
-                return (
-                  <button key={s.id} onClick={() => setActiveSection(s.id)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 20px', fontSize: 12, fontWeight: isActive ? 700 : 500, color: isActive ? '#6366f1' : 'var(--text3)', background: isActive ? '#6366f110' : 'transparent', border: 'none', borderLeft: isActive ? '3px solid #6366f1' : '3px solid transparent', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}
-                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
-                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}>
-                    <i className={s.icon} style={{ fontSize: 12, width: 16, textAlign: 'center' }} />
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-            {/* Main content */}
-            <div style={{ flex: 1, padding: '24px 28px', overflow: 'auto' }}>
-              {(sectionRenderers[activeSection] || renderOverview)()}
             </div>
           </div>
         );
