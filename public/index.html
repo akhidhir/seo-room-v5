@@ -1595,71 +1595,28 @@
         const needsAction = rowNeedsAction(row);
         const isIgnored = actionMode.ignoredKeys && actionMode.ignoredKeys[actionKey];
 
-        if (!needsAction) return <React.Fragment><td></td><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td><td></td></React.Fragment>;
-        if (isIgnored) return <React.Fragment><td></td><td></td><td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo">Ignored</span></td><td><button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{ fontSize: 10, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }} title="Reset"><i className="fas fa-undo" /></button></td></React.Fragment>;
+        // Pass rows — no action needed
+        if (!needsAction) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check" /></span></td>;
+        // Skipped
+        if (isIgnored) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: 'var(--text3)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to undo skip">Skipped</span></td>;
+        // Added — green label, click to untick
+        if (isAdded) return <td style={{ padding: '8px 10px', textAlign: 'center' }}><span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} title="Click to remove from Action Plan">Added</span></td>;
 
-        // After adding — show Assignee + Status dropdown + Reset
-        if (isAdded) {
-          const item = addedItem;
-          const st = item.status || 'pending';
-          const statusOptions = item.execType === 'manual'
-            ? [{ value: 'pending', label: 'Not Started' }, { value: 'in_progress', label: 'In Progress' }, { value: 'done', label: 'Done' }]
-            : [{ value: 'pending', label: 'Ready' }, { value: 'in_progress', label: 'Running' }, { value: 'done', label: 'Done' }];
-          const statusColors = { pending: '#6b7280', in_progress: '#f59e0b', done: '#22c55e' };
-
-          return (
-            <React.Fragment>
-              <td style={{ padding: '8px 12px', fontSize: 12, color: item.execColor || '#6b7280', whiteSpace: 'nowrap' }}>
-                <i className={item.execIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{item.execLabel || 'SEO Specialist'}
-              </td>
-              <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                <select value={st} onChange={e => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, e.target.value)} style={{
-                  fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
-                  border: '1px solid ' + statusColors[st] + '50',
-                  background: statusColors[st] + '15', color: statusColors[st],
-                  cursor: 'pointer', outline: 'none', appearance: 'auto'
-                }}>
-                  {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </td>
-              {(item.execType !== 'manual' && st === 'pending') ? (
-                <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                  <button onClick={() => actionMode.onStatusChange && actionMode.onStatusChange(actionKey, 'in_progress')} style={{
-                    fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 5, border: 'none',
-                    background: item.execColor || '#8b5cf6', color: '#fff', cursor: 'pointer'
-                  }}>
-                    <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Start
-                  </button>
-                </td>
-              ) : <td></td>}
-              <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                <button onClick={() => actionMode.onUndo && actionMode.onUndo(actionKey)} style={{
-                  fontSize: 10, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)',
-                  borderRadius: 4, color: 'var(--text3)', cursor: 'pointer', opacity: 0.6
-                }} title="Reset">
-                  <i className="fas fa-undo" />
-                </button>
-              </td>
-            </React.Fragment>
-          );
-        }
-
+        // Not yet added — show Add + Skip buttons, or checkbox for bulk
         const actionBrief = brief || ('Review and fix: ' + itemName);
+        const isChecked = actionMode.checkedKeys && actionMode.checkedKeys[actionKey];
         return (
-          <React.Fragment>
-            <td></td>
-            <td colSpan="2" style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-              <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 7px' }}>
-                  {isAdding ? <i className="fas fa-spinner fa-spin" /> : <><i className="fas fa-plus" style={{ marginRight: 2 }} />Add</>}
-                </button>
-                <button className="btn btn-secondary" onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)} style={{ fontSize: 10, padding: '3px 7px', opacity: 0.7 }}>
-                  <i className="fas fa-times" />
-                </button>
-              </div>
-            </td>
-            <td></td>
-          </React.Fragment>
+          <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
+              <input type="checkbox" checked={!!isChecked} onChange={() => actionMode.onToggleCheck && actionMode.onToggleCheck(actionKey, { title: itemName, description: actionBrief, severity })} style={{ cursor: 'pointer', accentColor: '#22c55e', width: 14, height: 14 }} />
+              <button className="btn btn-primary" onClick={() => actionMode.onAdd(actionKey, { title: itemName, description: actionBrief, severity })} disabled={isAdding} style={{ fontSize: 10, padding: '3px 8px' }}>
+                {isAdding ? <i className="fas fa-spinner fa-spin" /> : 'Add'}
+              </button>
+              <button onClick={() => actionMode.onIgnore && actionMode.onIgnore(actionKey)} style={{ fontSize: 10, padding: '3px 6px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}>
+                Skip
+              </button>
+            </div>
+          </td>
         );
       };
 
@@ -1675,12 +1632,7 @@
                     </th>
                   ))}
                   {hasActions && (
-                    <React.Fragment>
-                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 140, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>ASSIGNEE</th>
-                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 110, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>STATUS</th>
-                      <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', width: 70, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
-                      <th style={{ padding: '12px 8px', textAlign: 'center', borderBottom: '2px solid var(--border)', width: 40, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}></th>
-                    </React.Fragment>
+                    <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid var(--border)', width: 160, background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>ACTION PLAN</th>
                   )}
                 </tr>
               </thead>
@@ -1709,12 +1661,15 @@
       const [addingAction, setAddingAction] = useState(null);
       const [expandedCats, setExpandedCats] = useState({0: true});
       const [savedActionItems, setSavedActionItems] = useState([]);
+      const [checkedKeys, setCheckedKeys] = useState({});
+      const [bulkAdding, setBulkAdding] = useState(false);
       const removedKeysRef = React.useRef(new Set());
       const pollRef = React.useRef(null);
 
-      // Reset addedActions when section changes (different section = different table keys)
+      // Reset addedActions and checkedKeys when section changes
       useEffect(() => {
         setAddedActions({});
+        setCheckedKeys({});
         removedKeysRef.current.clear();
       }, [section]);
 
@@ -1780,18 +1735,8 @@
               const itemName = (row[0] || '').replace(/\*\*/g, '').trim();
               const match = titleMap[itemName.toLowerCase()];
               if (match) {
-                const execInfo = detectExecType(match.description || match.title, match.pillar || pillar);
                 const key = `t${tableCounter}_r${ri}`;
-                restored[key] = {
-                  id: match.id,
-                  execType: execInfo.type,
-                  execLabel: execInfo.label,
-                  execIcon: execInfo.icon,
-                  execColor: execInfo.color,
-                  status: match.status || 'pending',
-                  actionTitle: match.title,
-                  actionDesc: match.description
-                };
+                restored[key] = { id: match.id, added: true };
               }
             });
             tableCounter++;
@@ -2356,7 +2301,7 @@
                 }
               });
               const item = resp.action_item || {};
-              setAddedActions(prev => ({ ...prev, [key]: { id: item.id, execType: execInfo.type, execLabel: execInfo.label, execIcon: execInfo.icon, execColor: execInfo.color, status: 'pending', actionTitle: action.title, actionDesc: action.description } }));
+              setAddedActions(prev => ({ ...prev, [key]: { id: item.id, added: true } }));
             } catch (e) {
               console.error('Failed to add action:', e);
             }
@@ -2406,13 +2351,36 @@
             });
           };
 
+          const handleToggleCheck = (key, data) => {
+            setCheckedKeys(prev => {
+              const next = { ...prev };
+              if (next[key]) delete next[key];
+              else next[key] = data;
+              return next;
+            });
+          };
+
+          const handleBulkAdd = async () => {
+            const entries = Object.entries(checkedKeys);
+            if (entries.length === 0) return;
+            setBulkAdding(true);
+            for (const [key, data] of entries) {
+              await handleAddAction(key, data);
+            }
+            setCheckedKeys({});
+            setBulkAdding(false);
+          };
+
+          const checkedCount = Object.keys(checkedKeys).length;
+
           const actionMode = {
             onAdd: handleAddAction,
             addedKeys: addedActions,
             addingKey: addingAction,
             onIgnore: handleIgnore,
             onUndo: handleUndo,
-            onStatusChange: handleStatusChange,
+            onToggleCheck: handleToggleCheck,
+            checkedKeys: checkedKeys,
             ignoredKeys: Object.fromEntries(Object.entries(addedActions).filter(([k]) => k.startsWith('ign_')).map(([k, v]) => [k.replace('ign_', ''), v]))
           };
 
@@ -2459,6 +2427,15 @@
                   {secHasCritical && <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>Critical</span>}
                   {secRowCount > 0 && <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{secRowCount} items</span>}
                 </div>
+                {checkedCount > 0 && (
+                  <div style={{ padding: '10px 24px', background: 'rgba(34,197,94,0.08)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#22c55e' }}>{checkedCount} selected</span>
+                    <button onClick={handleBulkAdd} disabled={bulkAdding} style={{ fontSize: 12, fontWeight: 700, padding: '5px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer' }}>
+                      {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : 'Add Selected to Action Plan'}
+                    </button>
+                    <button onClick={() => setCheckedKeys({})} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}>Clear</button>
+                  </div>
+                )}
                 <div style={{ padding: '20px 24px' }}>
                   {renderSectionContent(sec.content, actionMode)}
                 </div>
