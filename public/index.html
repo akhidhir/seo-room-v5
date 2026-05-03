@@ -12956,6 +12956,406 @@
       );
     }
 
+    // ============ GBP POSTS PAGE ============
+    function GBPPostsPage({ project }) {
+      const [posts, setPosts] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [currentMonth, setCurrentMonth] = useState(new Date());
+      const [modalOpen, setModalOpen] = useState(false);
+      const [editingPost, setEditingPost] = useState(null);
+      const [generating, setGenerating] = useState(false);
+      const [publishingId, setPublishingId] = useState(null);
+
+      // Form state
+      const [formData, setFormData] = useState({
+        title: '',
+        body: '',
+        post_type: 'update',
+        cta_type: '',
+        cta_url: '',
+        offer_code: '',
+        event_title: '',
+        event_start: '',
+        event_end: '',
+        image_url: '',
+        scheduled_date: new Date().toISOString().split('T')[0],
+        scheduled_time: '09:00',
+        status: 'draft'
+      });
+
+      useEffect(() => {
+        if (project?.id) loadPosts();
+      }, [project?.id]);
+
+      const loadPosts = async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await api(`/projects/${project.id}/gbp-posts`);
+          setPosts(data.posts || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleOpenModal = (date = null, post = null) => {
+        if (post) {
+          setEditingPost(post);
+          setFormData({
+            title: post.title || '',
+            body: post.body || '',
+            post_type: post.post_type || 'update',
+            cta_type: post.cta_type || '',
+            cta_url: post.cta_url || '',
+            offer_code: post.offer_code || '',
+            event_title: post.event_title || '',
+            event_start: post.event_start ? post.event_start.split('T')[0] : '',
+            event_end: post.event_end ? post.event_end.split('T')[0] : '',
+            image_url: post.image_url || '',
+            scheduled_date: post.scheduled_date,
+            scheduled_time: post.scheduled_time || '09:00',
+            status: post.status || 'draft'
+          });
+        } else {
+          setEditingPost(null);
+          setFormData({
+            title: '',
+            body: '',
+            post_type: 'update',
+            cta_type: '',
+            cta_url: '',
+            offer_code: '',
+            event_title: '',
+            event_start: '',
+            event_end: '',
+            image_url: '',
+            scheduled_date: date ? date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            scheduled_time: '09:00',
+            status: 'draft'
+          });
+        }
+        setModalOpen(true);
+      };
+
+      const handleSavePost = async () => {
+        if (!formData.body || !formData.scheduled_date) {
+          setError('Body and scheduled date are required');
+          return;
+        }
+        try {
+          if (editingPost) {
+            const data = await api(`/gbp-posts/${editingPost.id}`, { method: 'PUT', body: formData });
+            setPosts(prev => prev.map(p => p.id === editingPost.id ? data.post : p));
+          } else {
+            const data = await api(`/projects/${project.id}/gbp-posts`, { method: 'POST', body: formData });
+            setPosts(prev => [...prev, data.post]);
+          }
+          setModalOpen(false);
+          setEditingPost(null);
+          setError('');
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handleDeletePost = async (postId) => {
+        if (!window.confirm('Delete this post?')) return;
+        try {
+          await api(`/gbp-posts/${postId}`, { method: 'DELETE' });
+          setPosts(prev => prev.filter(p => p.id !== postId));
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const handlePublishPost = async (postId) => {
+        setPublishingId(postId);
+        setError('');
+        try {
+          const data = await api(`/gbp-posts/${postId}/publish`, { method: 'POST' });
+          setPosts(prev => prev.map(p => p.id === postId ? data.post : p));
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setPublishingId(null);
+        }
+      };
+
+      const handleGeneratePosts = async () => {
+        setGenerating(true);
+        setError('');
+        try {
+          const data = await api(`/projects/${project.id}/gbp-posts/generate`, { method: 'POST' });
+          setPosts(prev => [...prev, ...data.posts]);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setGenerating(false);
+        }
+      };
+
+      // Calculate stats
+      const now = new Date();
+      const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+      const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+      const monthPosts = posts.filter(p => {
+        const d = new Date(p.scheduled_date);
+        return d >= monthStart && d <= monthEnd;
+      });
+      const stats = {
+        draft: monthPosts.filter(p => p.status === 'draft').length,
+        scheduled: monthPosts.filter(p => p.status === 'scheduled').length,
+        published: monthPosts.filter(p => p.status === 'published').length
+      };
+
+      // Generate calendar grid
+      const monthName = currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const firstDay = monthStart.getDay();
+      const daysInMonth = monthEnd.getDate();
+      const weeks = [];
+      let week = Array(firstDay).fill(null);
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), d);
+        const dayPosts = posts.filter(p => p.scheduled_date === date.toISOString().split('T')[0]);
+        week.push({ date, dayPosts });
+        if (week.length === 7) {
+          weeks.push(week);
+          week = [];
+        }
+      }
+      if (week.length > 0) {
+        while (week.length < 7) week.push(null);
+        weeks.push(week);
+      }
+
+      const postTypeIcons = {
+        update: 'fas fa-edit',
+        offer: 'fas fa-tag',
+        event: 'fas fa-calendar-day'
+      };
+
+      const statusColors = {
+        draft: '#a1a1aa',
+        scheduled: '#3b82f6',
+        published: '#22c55e',
+        failed: '#ef4444'
+      };
+
+      return React.createElement('div', { style: { padding: '24px', maxWidth: 1200, margin: '0 auto' } },
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0, marginBottom: 8 } },
+            React.createElement('i', { className: 'fas fa-calendar-alt', style: { marginRight: 10, color: 'var(--accent)' } }),
+            'GBP Posts Calendar'
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } },
+            'Schedule and manage your Google Business Profile posts'
+          )
+        ),
+
+        // Error message
+        error && React.createElement('div', { style: { padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: 8, color: '#ef4444', marginBottom: 16, fontSize: 13 } },
+          React.createElement('i', { className: 'fas fa-exclamation-circle', style: { marginRight: 8 } }),
+          error
+        ),
+
+        // Top bar with stats and controls
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16, flexWrap: 'wrap' } },
+          React.createElement('div', { style: { display: 'flex', gap: 12 } },
+            React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#a1a1aa' } }, stats.draft),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Drafts')
+            ),
+            React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#3b82f6' } }, stats.scheduled),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Scheduled')
+            ),
+            React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#22c55e' } }, stats.published),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Published')
+            )
+          ),
+          React.createElement('button', { className: 'btn btn-primary', onClick: handleGeneratePosts, disabled: generating, style: { fontSize: 13 } },
+            generating ? React.createElement(React.Fragment, null,
+              React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }),
+              'Generating...'
+            ) : React.createElement(React.Fragment, null,
+              React.createElement('i', { className: 'fas fa-sparkles', style: { marginRight: 6 } }),
+              'AI Generate Month'
+            )
+          )
+        ),
+
+        // Month navigation
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
+          React.createElement('button', { className: 'btn', onClick: function() { setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1)); }, style: { fontSize: 13 } },
+            React.createElement('i', { className: 'fas fa-chevron-left', style: { marginRight: 6 } }),
+            'Previous'
+          ),
+          React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, margin: 0 } }, monthName),
+          React.createElement('button', { className: 'btn', onClick: function() { setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1)); }, style: { fontSize: 13 } },
+            'Next',
+            React.createElement('i', { className: 'fas fa-chevron-right', style: { marginLeft: 6 } })
+          )
+        ),
+
+        // Calendar grid
+        React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderBottom: '1px solid var(--border)' } },
+            ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day =>
+              React.createElement('div', { key: day, style: { padding: 12, textAlign: 'center', fontWeight: 700, fontSize: 12, color: 'var(--text3)', background: 'rgba(255,255,255,0.02)' } }, day)
+            )
+          ),
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' } },
+            weeks.map((week, wi) =>
+              week.map((day, di) => {
+                const key = wi + '-' + di;
+                if (!day) {
+                  return React.createElement('div', { key, style: { padding: 12, minHeight: 120, background: 'rgba(255,255,255,0.01)', borderRight: di < 6 ? '1px solid var(--border)' : 'none', borderBottom: wi < weeks.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'default' } });
+                }
+                const { date, dayPosts } = day;
+                const isToday = date.toDateString() === new Date().toDateString();
+                return React.createElement('div', { key: key, onClick: function() { handleOpenModal(date); }, style: { padding: 12, minHeight: 120, borderRight: di < 6 ? '1px solid var(--border)' : 'none', borderBottom: wi < weeks.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', background: isToday ? 'rgba(99,102,241,0.05)' : 'transparent', transition: 'background 0.2s', position: 'relative' } },
+                  React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: isToday ? 'var(--accent)' : 'var(--text)', marginBottom: 8 } }, date.getDate()),
+                  dayPosts.map(p =>
+                    React.createElement('div', { key: p.id, onClick: function(e) { e.stopPropagation(); handleOpenModal(null, p); }, style: { marginBottom: 4, padding: 6, background: statusColors[p.status] || 'var(--border)', borderRadius: 4, fontSize: 10, color: '#fff', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 } },
+                      React.createElement('i', { className: postTypeIcons[p.post_type] || postTypeIcons.update, style: { fontSize: 8, flexShrink: 0 } }),
+                      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.title || '(no title)')
+                    )
+                  )
+                );
+              })
+            )
+          )
+        ),
+
+        // Modal
+        modalOpen && React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 } },
+          React.createElement('div', { onClick: function(e) { e.stopPropagation(); }, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, width: '90%', maxWidth: 600, maxHeight: '90vh', overflowY: 'auto' } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
+              React.createElement('h3', { style: { fontSize: 18, fontWeight: 700, margin: 0 } }, editingPost ? 'Edit Post' : 'New Post'),
+              React.createElement('button', { onClick: function() { setModalOpen(false); }, style: { background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 20 } },
+                React.createElement('i', { className: 'fas fa-times' })
+              )
+            ),
+
+            // Title
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Title (optional)'),
+              React.createElement('input', { type: 'text', value: formData.title, onChange: function(e) { setFormData({ ...formData, title: e.target.value }); }, placeholder: 'Post title', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            ),
+
+            // Body
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, `Body (${formData.body.length}/1500 characters)`),
+              React.createElement('textarea', { value: formData.body, onChange: function(e) { if (e.target.value.length <= 1500) setFormData({ ...formData, body: e.target.value }); }, placeholder: 'Post content...', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit', minHeight: 120, resize: 'vertical' } })
+            ),
+
+            // Post type
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Post Type'),
+              React.createElement('select', { value: formData.post_type, onChange: function(e) { setFormData({ ...formData, post_type: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
+                React.createElement('option', { value: 'update' }, 'Update'),
+                React.createElement('option', { value: 'offer' }, 'Offer'),
+                React.createElement('option', { value: 'event' }, 'Event')
+              )
+            ),
+
+            // Conditional fields based on post type
+            formData.post_type === 'offer' && React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Offer Code'),
+              React.createElement('input', { type: 'text', value: formData.offer_code, onChange: function(e) { setFormData({ ...formData, offer_code: e.target.value }); }, placeholder: 'e.g. SUMMER20', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            ),
+
+            formData.post_type === 'event' && React.createElement(React.Fragment, null,
+              React.createElement('div', { style: { marginBottom: 16 } },
+                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Event Title'),
+                React.createElement('input', { type: 'text', value: formData.event_title, onChange: function(e) { setFormData({ ...formData, event_title: e.target.value }); }, placeholder: 'Event name', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+              ),
+              React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 } },
+                React.createElement('div', null,
+                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Start Date'),
+                  React.createElement('input', { type: 'date', value: formData.event_start, onChange: function(e) { setFormData({ ...formData, event_start: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+                ),
+                React.createElement('div', null,
+                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'End Date'),
+                  React.createElement('input', { type: 'date', value: formData.event_end, onChange: function(e) { setFormData({ ...formData, event_end: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+                )
+              )
+            ),
+
+            // CTA type
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Call to Action'),
+              React.createElement('select', { value: formData.cta_type, onChange: function(e) { setFormData({ ...formData, cta_type: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
+                React.createElement('option', { value: '' }, 'None'),
+                React.createElement('option', { value: 'LEARN_MORE' }, 'Learn More'),
+                React.createElement('option', { value: 'BOOK' }, 'Book'),
+                React.createElement('option', { value: 'ORDER' }, 'Order'),
+                React.createElement('option', { value: 'CALL' }, 'Call')
+              )
+            ),
+
+            formData.cta_type && React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'CTA URL'),
+              React.createElement('input', { type: 'url', value: formData.cta_url, onChange: function(e) { setFormData({ ...formData, cta_url: e.target.value }); }, placeholder: 'https://example.com', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            ),
+
+            // Image URL
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Image URL (optional)'),
+              React.createElement('input', { type: 'url', value: formData.image_url, onChange: function(e) { setFormData({ ...formData, image_url: e.target.value }); }, placeholder: 'https://example.com/image.jpg', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            ),
+
+            // Scheduled date & time
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 } },
+              React.createElement('div', null,
+                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Scheduled Date'),
+                React.createElement('input', { type: 'date', value: formData.scheduled_date, onChange: function(e) { setFormData({ ...formData, scheduled_date: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+              ),
+              React.createElement('div', null,
+                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Time'),
+                React.createElement('input', { type: 'time', value: formData.scheduled_time, onChange: function(e) { setFormData({ ...formData, scheduled_time: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+              )
+            ),
+
+            // Status
+            React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Status'),
+              React.createElement('select', { value: formData.status, onChange: function(e) { setFormData({ ...formData, status: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
+                React.createElement('option', { value: 'draft' }, 'Draft'),
+                React.createElement('option', { value: 'scheduled' }, 'Scheduled')
+              )
+            ),
+
+            // Buttons
+            React.createElement('div', { style: { display: 'flex', gap: 12, justifyContent: 'flex-end' } },
+              editingPost && React.createElement('button', { className: 'btn', onClick: function() { handleDeletePost(editingPost.id); setModalOpen(false); }, style: { fontSize: 13, color: '#ef4444', borderColor: '#ef4444' } },
+                React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 6 } }),
+                'Delete'
+              ),
+              React.createElement('button', { className: 'btn', onClick: function() { setModalOpen(false); }, style: { fontSize: 13 } }, 'Cancel'),
+              editingPost && editingPost.status !== 'published' && React.createElement('button', { className: 'btn btn-primary', onClick: function() { handlePublishPost(editingPost.id); }, disabled: publishingId === editingPost.id, style: { fontSize: 13 } },
+                publishingId === editingPost.id ? React.createElement(React.Fragment, null,
+                  React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }),
+                  'Publishing...'
+                ) : React.createElement(React.Fragment, null,
+                  React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }),
+                  'Publish Now'
+                )
+              ),
+              React.createElement('button', { className: 'btn btn-primary', onClick: handleSavePost, style: { fontSize: 13 } },
+                React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }),
+                editingPost ? 'Update' : 'Save Draft'
+              )
+            )
+          )
+        )
+      );
+    }
+
     // ============ PROJECT SETTINGS PAGE ============
     function ProjectSettingsPage({ project: currentProject }) {
       const [project, setProject] = useState(null);
@@ -14406,6 +14806,8 @@ case 'action-plan':
             return <SERPRankingsPage project={project} />;
           case 'monthly-reports':
             return <MonthlyReportsPage project={project} />;
+          case 'gbp-posts':
+            return <GBPPostsPage project={project} />;
           case 'project-settings':
             return <ProjectSettingsPage project={project} />;
           case 'integrations':
@@ -14442,6 +14844,9 @@ case 'action-plan':
           { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
+        ]},
+        { section: 'GBP', items: [
+          { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },
         ]},
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },

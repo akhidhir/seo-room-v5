@@ -31,6 +31,7 @@ const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
 const DATAFORSEO_AUTH = DATAFORSEO_LOGIN && DATAFORSEO_PASSWORD ? 'Basic ' + Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64') : null;
 const LOCAL_FALCON_KEY = process.env.LOCAL_FALCON_KEY;
 const SERPAPI_KEY = process.env.SERPAPI_KEY;
+const LATE_API_KEY = process.env.LATE_API_KEY;
 
 // Managed Agents (Claude API)
 const AGENT_IDS = {
@@ -468,6 +469,31 @@ async function initDb() {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(project_id, page_type)
+      )
+    `).catch(() => {});
+
+    // GBP Posts — calendar system for managing GBP posts
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS gbp_posts (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT,
+        body TEXT NOT NULL,
+        post_type TEXT DEFAULT 'update',
+        cta_type TEXT,
+        cta_url TEXT,
+        offer_code TEXT,
+        event_title TEXT,
+        event_start TIMESTAMPTZ,
+        event_end TIMESTAMPTZ,
+        image_url TEXT,
+        scheduled_date DATE NOT NULL,
+        scheduled_time TIME DEFAULT '09:00',
+        status TEXT DEFAULT 'draft',
+        published_at TIMESTAMPTZ,
+        late_post_id TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
 
@@ -12281,7 +12307,193 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
   }
 });
 
-// ==================== 13. SERVE ====================
+// ==================== 13. GBP POSTS ====================
+
+// List all GBP posts for a project
+app.get('/api/projects/:id/gbp-posts', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM gbp_posts WHERE project_id=$1 ORDER BY scheduled_date ASC',
+      [req.params.id]
+    );
+    res.json({ posts: result.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create a new GBP post
+app.post('/api/projects/:id/gbp-posts', async (req, res) => {
+  const { title, body, post_type, cta_type, cta_url, offer_code, event_title, event_start, event_end, image_url, scheduled_date, scheduled_time, status } = req.body;
+  if (!body || !scheduled_date) return res.status(400).json({ error: 'body and scheduled_date required' });
+  try {
+    const result = await pool.query(
+      `INSERT INTO gbp_posts (project_id, title, body, post_type, cta_type, cta_url, offer_code, event_title, event_start, event_end, image_url, scheduled_date, scheduled_time, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+      [req.params.id, title || null, body, post_type || 'update', cta_type || null, cta_url || null, offer_code || null, event_title || null, event_start || null, event_end || null, image_url || null, scheduled_date, scheduled_time || '09:00', status || 'draft']
+    );
+    res.status(201).json({ post: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update a GBP post
+app.put('/api/gbp-posts/:id', async (req, res) => {
+  const { title, body, post_type, cta_type, cta_url, offer_code, event_title, event_start, event_end, image_url, scheduled_date, scheduled_time, status } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE gbp_posts
+       SET title=COALESCE($2, title), body=COALESCE($3, body), post_type=COALESCE($4, post_type),
+           cta_type=$5, cta_url=$6, offer_code=$7, event_title=$8, event_start=$9, event_end=$10,
+           image_url=$11, scheduled_date=COALESCE($12, scheduled_date), scheduled_time=COALESCE($13, scheduled_time),
+           status=COALESCE($14, status), updated_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [req.params.id, title, body, post_type, cta_type || null, cta_url || null, offer_code || null, event_title || null, event_start || null, event_end || null, image_url || null, scheduled_date, scheduled_time, status]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Post not found' });
+    res.json({ post: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a GBP post
+app.delete('/api/gbp-posts/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM gbp_posts WHERE id=$1 RETURNING id',
+      [req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Post not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Publish a GBP post via Late.dev API
+app.post('/api/gbp-posts/:id/publish', async (req, res) => {
+  if (!LATE_API_KEY) return res.status(400).json({ error: 'LATE_API_KEY not configured' });
+  try {
+    const postResult = await pool.query('SELECT * FROM gbp_posts WHERE id=$1', [req.params.id]);
+    if (postResult.rows.length === 0) return res.status(404).json({ error: 'Post not found' });
+    const post = postResult.rows[0];
+
+    // Call Late.dev API to publish
+    const mediaUrls = post.image_url ? [post.image_url] : [];
+    const lateResponse = await fetch('https://api.getlate.dev/v1/post/create', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${LATE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        text: post.body,
+        platforms: ['gbp'],
+        mediaUrls: mediaUrls
+      })
+    });
+
+    if (!lateResponse.ok) {
+      const error = await lateResponse.text();
+      console.error(`[gbp-posts] Late.dev API error: ${lateResponse.status} ${error}`);
+      // Update status to failed
+      await pool.query('UPDATE gbp_posts SET status=$1 WHERE id=$2', ['failed', req.params.id]);
+      return res.status(400).json({ error: `Late.dev API failed: ${error.substring(0, 200)}` });
+    }
+
+    const lateData = await lateResponse.json();
+    const latePostId = lateData.id || lateData.post_id;
+
+    // Update post status and save Late post ID
+    const updateResult = await pool.query(
+      'UPDATE gbp_posts SET status=$1, late_post_id=$2, published_at=NOW(), updated_at=NOW() WHERE id=$3 RETURNING *',
+      ['published', latePostId, req.params.id]
+    );
+
+    res.json({ post: updateResult.rows[0] });
+  } catch (e) {
+    console.error(`[gbp-posts] Publish error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate a month of GBP posts via AI
+app.post('/api/projects/:id/gbp-posts/generate', async (req, res) => {
+  if (!anthropic) return res.status(400).json({ error: 'Anthropic API not configured' });
+  try {
+    const projectResult = await pool.query(
+      'SELECT business_name, industry, location, service_areas FROM projects WHERE id=$1',
+      [req.params.id]
+    );
+    if (projectResult.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projectResult.rows[0];
+
+    const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas.map(a => a.name).join(', ') : 'N/A';
+
+    // Call Haiku to generate posts
+    const prompt = `Generate 4 weeks of Google Business Profile (GBP) posts for this business. Each post should be different and engaging.
+
+Business Info:
+- Name: ${project.business_name || 'N/A'}
+- Industry: ${project.industry || 'N/A'}
+- Location: ${project.location || 'N/A'}
+- Service Areas: ${serviceAreas}
+
+Create exactly 4 posts, one for each of the next 4 weeks. Mix the post types: 2 updates, 1 offer, 1 event. Keep each post under 1500 characters.
+
+Respond with a valid JSON array (no markdown, just raw JSON) with this structure:
+[{
+  "title": "Post title",
+  "body": "Post content",
+  "post_type": "update|offer|event",
+  "cta_type": "LEARN_MORE|BOOK|ORDER|CALL|null",
+  "week_number": 1
+}]`;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    let jsonText = message.content[0].type === 'text' ? message.content[0].text : '';
+    // Extract JSON from markdown code blocks if present
+    const jsonMatch = jsonText.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+    if (jsonMatch) jsonText = jsonMatch[1];
+    const posts = JSON.parse(jsonText);
+
+    if (!Array.isArray(posts) || posts.length === 0) {
+      return res.status(400).json({ error: 'AI response was not a valid post array' });
+    }
+
+    // Spread posts across next 4 weeks
+    const now = new Date();
+    const insertedPosts = [];
+    for (let i = 0; i < posts.length; i++) {
+      const post = posts[i];
+      const weekOffset = (post.week_number || i + 1) - 1;
+      const postDate = new Date(now);
+      postDate.setDate(postDate.getDate() + weekOffset * 7);
+      const dateStr = postDate.toISOString().split('T')[0];
+
+      const insertResult = await pool.query(
+        `INSERT INTO gbp_posts (project_id, title, body, post_type, cta_type, scheduled_date, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft') RETURNING *`,
+        [req.params.id, post.title || null, post.body, post.post_type || 'update', post.cta_type || null, dateStr]
+      );
+      insertedPosts.push(insertResult.rows[0]);
+    }
+
+    res.status(201).json({ posts: insertedPosts, message: `Generated ${insertedPosts.length} posts` });
+  } catch (e) {
+    console.error(`[gbp-posts] Generate error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== 14. SERVE ====================
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
@@ -12295,7 +12507,7 @@ app.get('*', (req, res) => {
   res.type('html').send(INDEX_HTML);
 });
 
-// ==================== 13. STARTUP ====================
+// ==================== 15. STARTUP ====================
 
 async function start() {
   try {
