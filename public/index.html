@@ -7379,7 +7379,7 @@
             // Apply Template dropdown
             React.createElement('select', {
               className: 'form-input',
-              style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: selectedTemplateId ? '#dcfce7' : 'var(--card)', border: '1px solid ' + (selectedTemplateId ? '#22c55e' : 'var(--border)'), cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400 },
+              style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: selectedTemplateId ? 'var(--card)' : 'var(--card)', border: '1px solid ' + (selectedTemplateId ? '#a855f7' : 'var(--border)'), cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400, color: selectedTemplateId ? '#a855f7' : 'var(--text)' },
               value: selectedTemplateId,
               disabled: applyingTemplate || pageTemplates.length === 0,
               onChange: async function(e) {
@@ -10181,7 +10181,7 @@
               // Apply Template dropdown — always show
               React.createElement('select', {
                 className: 'form-input',
-                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: selectedTemplateId ? '#dcfce7' : 'var(--card)', border: `1px solid ${selectedTemplateId ? '#22c55e' : 'var(--border)'}`, cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400 },
+                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: `1px solid ${selectedTemplateId ? '#a855f7' : 'var(--border)'}`, cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400, color: selectedTemplateId ? '#a855f7' : 'var(--text)' },
                 value: selectedTemplateId,
                 disabled: applyingTemplate || pageTemplates.length === 0,
                 onChange: async (e) => {
