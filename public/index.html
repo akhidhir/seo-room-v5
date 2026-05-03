@@ -7078,6 +7078,7 @@
       var [scoreData, setScoreData] = React.useState(null);
       var [pageTemplates, setPageTemplates] = React.useState([]);
       var [applyingTemplate, setApplyingTemplate] = React.useState(false);
+      var [selectedTemplateId, setSelectedTemplateId] = React.useState('');
       var [comments, setComments] = React.useState([]);
       var [rewritingMeta, setRewritingMeta] = React.useState(null);
       var [importingTemplate, setImportingTemplate] = React.useState(false);
@@ -7378,13 +7379,14 @@
             // Apply Template dropdown
             React.createElement('select', {
               className: 'form-input',
-              style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' },
-              value: '',
+              style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: selectedTemplateId ? '#dcfce7' : 'var(--card)', border: '1px solid ' + (selectedTemplateId ? '#22c55e' : 'var(--border)'), cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400 },
+              value: selectedTemplateId,
               disabled: applyingTemplate || pageTemplates.length === 0,
               onChange: async function(e) {
                 var templateId = e.target.value;
-                if (!templateId) return;
+                if (!templateId) { setSelectedTemplateId(''); return; }
                 setApplyingTemplate(true);
+                setSelectedTemplateId(templateId);
                 try {
                   var result = await api('/projects/' + pid + '/site-pages/' + page.id + '/apply-template', {
                     method: 'POST', body: { template_id: parseInt(templateId) }
@@ -7396,9 +7398,8 @@
                     setEditContent(result.page.draft_content || '');
                     onUpdate(result.page);
                   }
-                } catch (err) { alert('Error applying template: ' + err.message); }
+                } catch (err) { alert('Error applying template: ' + err.message); setSelectedTemplateId(''); }
                 setApplyingTemplate(false);
-                e.target.value = '';
               }
             },
               React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : pageTemplates.length === 0 ? 'No templates' : 'Apply Template...'),
@@ -9602,6 +9603,7 @@
       const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
       const [pageTemplates, setPageTemplates] = useState([]);
       const [applyingTemplate, setApplyingTemplate] = useState(false);
+      const [selectedTemplateId, setSelectedTemplateId] = useState('');
       const [wpChangeHistory, setWpChangeHistory] = useState([]);
       const [rollingBack, setRollingBack] = useState(null);
       const [importingCopy, setImportingCopy] = useState(false);
@@ -10179,25 +10181,25 @@
               // Apply Template dropdown — always show
               React.createElement('select', {
                 className: 'form-input',
-                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' },
-                value: '',
+                style: { width: 'auto', fontSize: 12, padding: '4px 8px', height: 30, background: selectedTemplateId ? '#dcfce7' : 'var(--card)', border: `1px solid ${selectedTemplateId ? '#22c55e' : 'var(--border)'}`, cursor: 'pointer', fontWeight: selectedTemplateId ? 600 : 400 },
+                value: selectedTemplateId,
                 disabled: applyingTemplate || pageTemplates.length === 0,
                 onChange: async (e) => {
                   const templateId = e.target.value;
-                  if (!templateId) return;
+                  if (!templateId) { setSelectedTemplateId(''); return; }
                   setApplyingTemplate(true);
+                  setSelectedTemplateId(templateId);
                   try {
                     const result = await api(`/projects/${project.id}/content-queue/${selectedItem.id}/apply-template`, {
                       method: 'POST', body: { template_id: parseInt(templateId) }
                     });
-                    // Use the skeleton from the response directly
                     if (result && result.skeleton) {
                       setEditContent(result.skeleton);
                       setSelectedItem(prev => ({ ...prev, draft_content: result.skeleton, page_wireframe: `Template: ${result.sections || '?'} sections` }));
                     }
                   } catch (err) {
                     console.warn('Apply template call:', err.message);
-                    // Fallback — try to reload the item from DB
+                    setSelectedTemplateId('');
                     try {
                       const fresh = await api(`/projects/${project.id}/content-queue/${selectedItem.id}`);
                       if (fresh && fresh.id) {
@@ -10208,7 +10210,6 @@
                     } catch (_) {}
                   }
                   setApplyingTemplate(false);
-                  e.target.value = '';
                 }
               },
                 React.createElement('option', { value: '' }, applyingTemplate ? 'Applying...' : pageTemplates.length === 0 ? 'No templates' : 'Apply Template...'),
