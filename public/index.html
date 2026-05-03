@@ -3647,7 +3647,7 @@
           const issueList = issues.map(i => `${i.metric}: ${i.value} (${i.threshold})`).join(', ');
           await api(`/projects/${project.id}/action-items`, {
             method: 'POST',
-            body: JSON.stringify({
+            body: {
               pillar: 'website',
               type: 'Core Web Vitals',
               title: `Fix CWV issues on: ${page.title || page.slug}`,
@@ -3655,7 +3655,7 @@
               severity,
               execution_type: 'manual',
               assignee_label: 'Developer'
-            })
+            }
           });
           setAddedActions(prev => ({ ...prev, [pageKey]: true }));
         } catch (e) { console.error('Failed to add action', e); }
