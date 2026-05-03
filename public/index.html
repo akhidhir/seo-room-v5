@@ -3162,8 +3162,8 @@
           const cwvMap = {};
           (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
           setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
-        } catch (err) { setSpeedError(err.message); }
-        finally { setSpeedLoading(false); }
+          setSpeedLoading(false);
+        } catch (err) { setSpeedError(err.message); setSpeedLoading(false); }
       };
 
       const optimizePage = async (pageId) => {
@@ -3553,8 +3553,8 @@
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           if (data.status === 'running') { pollForResults(); return; }
           setSpeedResults(data.results || []);
-        } catch (err) { setSpeedError(err.message); }
-        finally { if (!speedLoading) setSpeedLoading(false); }
+          setSpeedLoading(false);
+        } catch (err) { setSpeedError(err.message); setSpeedLoading(false); }
       };
 
       const scoreColor = (s) => s >= 90 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
