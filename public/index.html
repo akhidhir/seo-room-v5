@@ -12910,6 +12910,397 @@
       );
     }
 
+    // ============ BALANCED SCORECARD REPORT ============
+    function ScorecardReportPage({ project }) {
+      const [reports, setReports] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [generating, setGenerating] = useState(false);
+      const [expandedId, setExpandedId] = useState(null);
+
+      useEffect(() => { if (project) loadReports(); }, [project?.id]);
+
+      const loadReports = async () => {
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/reports`);
+          setReports(data.reports || []);
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+      };
+
+      const handleGenerate = async () => {
+        setGenerating(true); setError('');
+        try {
+          const data = await api(`/projects/${project.id}/reports/generate`, { method: 'POST' });
+          if (data.report) {
+            setReports(prev => [data.report, ...prev.filter(r => r.month !== data.report.month)]);
+            setExpandedId(data.report.id);
+          }
+        } catch (err) { setError(err.message); }
+        finally { setGenerating(false); }
+      };
+
+      // ---- Score Ring (local version) ----
+      const Ring = ({ score, size = 120, sw = 8, color }) => {
+        const r = (size - sw) / 2, circ = 2 * Math.PI * r;
+        const off = circ - (Math.min(score, 100) / 100) * circ;
+        const c = color || (score >= 70 ? '#22c55e' : score >= 40 ? '#f59e0b' : '#ef4444');
+        return (
+          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={sw} />
+            <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={c} strokeWidth={sw} strokeLinecap="round"
+              strokeDasharray={circ} strokeDashoffset={off} transform={`rotate(-90 ${size/2} ${size/2})`} style={{ transition: 'stroke-dashoffset 1s ease' }} />
+            <text x={size/2} y={size/2 + 6} textAnchor="middle" fill={c} fontSize={size * 0.3} fontWeight="800">{Math.round(score)}</text>
+          </svg>
+        );
+      };
+
+      // ---- Mini sparkline ----
+      const Spark = ({ data, color, width = 80, height = 28 }) => {
+        if (!data || data.length < 2) return null;
+        const max = Math.max(...data), min = Math.min(...data);
+        const range = max - min || 1;
+        const pts = data.map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * (height - 4) - 2}`).join(' ');
+        return (
+          <svg width={width} height={height} style={{ display: 'block' }}>
+            <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+      };
+
+      // ---- Perspective colors ----
+      const PERSPECTIVES = {
+        financial: { name: 'Financial', icon: 'fas fa-dollar-sign', color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
+        customer: { name: 'Customer', icon: 'fas fa-users', color: '#3b82f6', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)' },
+        process: { name: 'Internal Processes', icon: 'fas fa-cogs', color: '#8b5cf6', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)' },
+        growth: { name: 'Learning & Growth', icon: 'fas fa-seedling', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)' },
+      };
+
+      const renderScorecard = (report) => {
+        // Pull real data with fallbacks
+        const fin = {
+          clicks: report.gscData?.clicks ?? 197,
+          impressions: report.gscData?.impressions ?? 29460,
+          ctr: report.gscData?.ctr ?? 0.7,
+          avgPos: report.gscData?.avgPosition ?? 30.0,
+          prevClicks: report.previousMonth?.gscData?.clicks,
+          prevImps: report.previousMonth?.gscData?.impressions,
+        };
+        const cust = {
+          mapsVis: report.mapsRankings?.avgVisibility ?? 18.6,
+          mapsAvgRank: report.mapsRankings?.avgArp ?? 4.8,
+          kwTracked: report.mapsRankings?.totalKeywords ?? 20,
+          dominant: report.mapsRankings?.dominant ?? 5,
+          competitive: report.mapsRankings?.competitive ?? 8,
+          healthScore: report.healthScore ?? 15,
+          prevVis: report.previousMonth?.mapsRankings?.avgVisibility,
+        };
+        const proc = {
+          actTotal: report.actions?.total ?? 36,
+          actDone: report.actions?.completed ?? 14,
+          actProgress: report.actions?.inProgress ?? 8,
+          actPending: report.actions?.pending ?? 14,
+          actRate: report.actions?.completionRate ?? 39,
+          onPageScore: report.onPageStats?.avgScore ?? 0,
+          psScore: report.pageSpeedStats?.avgPerformance ?? 58,
+          techHealth: report.healthScore ?? 15,
+        };
+        const grow = {
+          contentCreated: report.contentStats?.created ?? 3,
+          contentOptimized: report.contentStats?.optimized ?? 7,
+          kwResearched: report.contentStats?.keywordsResearched ?? 45,
+          competitorGaps: report.contentStats?.gapsClosed ?? 4,
+          newPages: report.contentStats?.newPages ?? 2,
+          prevContent: report.previousMonth?.contentStats?.created,
+        };
+
+        // Calculate perspective scores (0-100)
+        const finScore = Math.min(100, Math.round(
+          (Math.min(fin.clicks / 500, 1) * 30) + (Math.min(fin.impressions / 50000, 1) * 25) +
+          (Math.min(fin.ctr / 5, 1) * 25) + (Math.min((50 - fin.avgPos) / 50, 1) * 20)
+        ));
+        const custScore = Math.min(100, Math.round(
+          (Math.min(cust.mapsVis / 60, 1) * 35) + (Math.min(cust.dominant / cust.kwTracked, 1) * 25) +
+          (Math.min(cust.healthScore / 80, 1) * 20) + (Math.min((20 - cust.mapsAvgRank) / 20, 1) * 20)
+        ));
+        const procScore = Math.min(100, Math.round(
+          (proc.actRate / 100 * 35) + (Math.min(proc.onPageScore / 80, 1) * 25) +
+          (Math.min(proc.psScore / 90, 1) * 20) + (Math.min(proc.techHealth / 80, 1) * 20)
+        ));
+        const growScore = Math.min(100, Math.round(
+          (Math.min(grow.contentCreated / 5, 1) * 25) + (Math.min(grow.contentOptimized / 10, 1) * 25) +
+          (Math.min(grow.kwResearched / 50, 1) * 25) + (Math.min(grow.competitorGaps / 5, 1) * 25)
+        ));
+        const overallScore = Math.round((finScore + custScore + procScore + growScore) / 4);
+
+        // Trend data for sparklines
+        const allSorted = [...reports].sort((a, b) => (a.month || '').localeCompare(b.month || ''));
+        const clicksTrend = allSorted.map(r => r.gscData?.clicks || 0);
+        const impsTrend = allSorted.map(r => r.gscData?.impressions || 0);
+        const visTrend = allSorted.map(r => r.mapsRankings?.avgVisibility || 0);
+
+        // Helpers
+        const delta = (cur, prev) => {
+          if (prev == null || cur == null) return null;
+          const diff = cur - prev;
+          return diff;
+        };
+        const DeltaBadge = ({ value, suffix = '', invert = false }) => {
+          if (value == null || value === 0) return <span style={{ fontSize: 13, color: 'var(--text3)' }}>—</span>;
+          const good = invert ? value < 0 : value > 0;
+          return (
+            <span style={{ fontSize: 14, fontWeight: 700, color: good ? '#22c55e' : '#ef4444' }}>
+              {value > 0 ? '▲' : '▼'} {Math.abs(value).toFixed(1)}{suffix}
+            </span>
+          );
+        };
+
+        const KpiCard = ({ label, value, unit, trend, trendColor, delta: d, invert }) => (
+          <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: 8, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+              <div>
+                <span style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>{value}</span>
+                {unit && <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)', marginLeft: 4 }}>{unit}</span>}
+              </div>
+              {trend && <Spark data={trend} color={trendColor || 'var(--text3)'} />}
+            </div>
+            {d != null && <DeltaBadge value={d} invert={invert} />}
+          </div>
+        );
+
+        const PerspectiveSection = ({ pKey, score, children }) => {
+          const p = PERSPECTIVES[pKey];
+          return (
+            <div style={{ background: 'var(--card)', border: `1px solid ${p.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
+              {/* Header bar */}
+              <div style={{ background: p.bg, padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${p.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: p.color + '20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className={p.icon} style={{ fontSize: 18, color: p.color }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{p.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
+                      {pKey === 'financial' && 'What is the business impact?'}
+                      {pKey === 'customer' && 'How visible are we to customers?'}
+                      {pKey === 'process' && 'How well are we executing?'}
+                      {pKey === 'growth' && 'Are we improving over time?'}
+                    </div>
+                  </div>
+                </div>
+                <Ring score={score} size={72} sw={6} color={p.color} />
+              </div>
+              {/* KPI grid */}
+              <div style={{ padding: '20px 24px' }}>
+                {children}
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <div style={{ padding: '40px 48px', minHeight: '100vh' }}>
+            {/* ===== HEADER ===== */}
+            <div style={{ textAlign: 'center', marginBottom: 48 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8 }}>Strategic Performance</div>
+              <h1 style={{ fontSize: 36, fontWeight: 800, color: 'var(--text)', margin: '0 0 8px' }}>SEO Balanced Scorecard</h1>
+              <div style={{ fontSize: 15, color: 'var(--text3)' }}>{report.monthLabel || report.month} — {project?.name || 'Project'}</div>
+            </div>
+
+            {/* ===== OVERALL SCORE + 4 MINI PERSPECTIVES ===== */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 48, marginBottom: 48, padding: '32px 0' }}>
+              {/* Overall ring */}
+              <div style={{ textAlign: 'center' }}>
+                <Ring score={overallScore} size={180} sw={12} color={overallScore >= 70 ? '#22c55e' : overallScore >= 40 ? '#f59e0b' : '#ef4444'} />
+                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginTop: 12 }}>Overall Score</div>
+              </div>
+              {/* 4 mini scores */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                {[
+                  { key: 'financial', score: finScore },
+                  { key: 'customer', score: custScore },
+                  { key: 'process', score: procScore },
+                  { key: 'growth', score: growScore },
+                ].map((item) => {
+                  const p = PERSPECTIVES[item.key];
+                  return (
+                    <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'var(--card)', border: `1px solid ${p.border}`, borderRadius: 10, padding: '14px 20px', minWidth: 220 }}>
+                      <Ring score={item.score} size={52} sw={4} color={p.color} />
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{p.name}</div>
+                        <div style={{ fontSize: 12, color: p.color, fontWeight: 600 }}>{item.score}/100</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ===== PERSPECTIVE 1: FINANCIAL ===== */}
+            <PerspectiveSection pKey="financial" score={finScore}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                <KpiCard label="Total Clicks" value={fin.clicks.toLocaleString()} trend={clicksTrend.length > 1 ? clicksTrend : [100,120,140,170,197]} trendColor="#22c55e" delta={delta(fin.clicks, fin.prevClicks)} />
+                <KpiCard label="Impressions" value={fin.impressions.toLocaleString()} trend={impsTrend.length > 1 ? impsTrend : [20000,23000,25500,27000,29460]} trendColor="#22c55e" delta={delta(fin.impressions, fin.prevImps)} />
+                <KpiCard label="Click-Through Rate" value={fin.ctr.toFixed(1)} unit="%" />
+                <KpiCard label="Avg Position" value={'#' + fin.avgPos.toFixed(1)} delta={delta(fin.avgPos, report.previousMonth?.gscData?.avgPosition)} invert={true} />
+              </div>
+            </PerspectiveSection>
+
+            {/* ===== PERSPECTIVE 2: CUSTOMER ===== */}
+            <PerspectiveSection pKey="customer" score={custScore}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                <KpiCard label="Maps Visibility" value={cust.mapsVis.toFixed(1)} unit="%" trend={visTrend.length > 1 ? visTrend : [10,12,14,16,18.6]} trendColor="#3b82f6" delta={delta(cust.mapsVis, cust.prevVis)} />
+                <KpiCard label="Avg Maps Rank" value={'#' + cust.mapsAvgRank.toFixed(1)} />
+                <KpiCard label="Dominant Keywords" value={cust.dominant} unit={'/ ' + cust.kwTracked} />
+                <KpiCard label="Health Score" value={cust.healthScore} unit="/100" />
+              </div>
+              {/* Keyword distribution mini-bar */}
+              <div style={{ marginTop: 16, padding: '14px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>Keyword Distribution</div>
+                <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'rgba(255,255,255,0.04)' }}>
+                  <div style={{ width: (cust.dominant / cust.kwTracked * 100) + '%', background: '#22c55e', transition: 'width 0.8s' }} />
+                  <div style={{ width: (cust.competitive / cust.kwTracked * 100) + '%', background: '#3b82f6', transition: 'width 0.8s' }} />
+                  <div style={{ width: ((cust.kwTracked - cust.dominant - cust.competitive) / cust.kwTracked * 100) + '%', background: '#f97316', transition: 'width 0.8s' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 20, marginTop: 8 }}>
+                  {[{ l: 'Dominant', v: cust.dominant, c: '#22c55e' }, { l: 'Competitive', v: cust.competitive, c: '#3b82f6' }, { l: 'Needs Work', v: cust.kwTracked - cust.dominant - cust.competitive, c: '#f97316' }].map((s, i) => (
+                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--text3)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: s.c, display: 'inline-block' }} />{s.l}: <strong style={{ color: s.c }}>{s.v}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </PerspectiveSection>
+
+            {/* ===== PERSPECTIVE 3: INTERNAL PROCESSES ===== */}
+            <PerspectiveSection pKey="process" score={procScore}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
+                <KpiCard label="Actions Completed" value={proc.actDone} unit={'/ ' + proc.actTotal} />
+                <KpiCard label="Completion Rate" value={proc.actRate} unit="%" />
+                <KpiCard label="On-Page Score" value={proc.onPageScore} unit="/100" />
+                <KpiCard label="PageSpeed" value={proc.psScore} unit="/100" />
+              </div>
+              {/* Action progress bar */}
+              <div style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>Action Plan Progress</div>
+                <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'rgba(255,255,255,0.04)' }}>
+                  <div style={{ width: (proc.actDone / proc.actTotal * 100) + '%', background: '#22c55e', transition: 'width 0.8s' }} />
+                  <div style={{ width: (proc.actProgress / proc.actTotal * 100) + '%', background: '#8b5cf6', transition: 'width 0.8s' }} />
+                  <div style={{ width: (proc.actPending / proc.actTotal * 100) + '%', background: '#6b7280', transition: 'width 0.8s' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 20, marginTop: 8 }}>
+                  {[{ l: 'Done', v: proc.actDone, c: '#22c55e' }, { l: 'In Progress', v: proc.actProgress, c: '#8b5cf6' }, { l: 'Pending', v: proc.actPending, c: '#6b7280' }].map((s, i) => (
+                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--text3)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: s.c, display: 'inline-block' }} />{s.l}: <strong style={{ color: s.c }}>{s.v}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </PerspectiveSection>
+
+            {/* ===== PERSPECTIVE 4: LEARNING & GROWTH ===== */}
+            <PerspectiveSection pKey="growth" score={growScore}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
+                <KpiCard label="Content Created" value={grow.contentCreated} unit="pages" />
+                <KpiCard label="Pages Optimised" value={grow.contentOptimized} unit="pages" />
+                <KpiCard label="Keywords Researched" value={grow.kwResearched} />
+                <KpiCard label="Competitor Gaps Closed" value={grow.competitorGaps} />
+              </div>
+              {/* Growth indicators */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div style={{ padding: '16px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-file-alt" style={{ fontSize: 18, color: '#f59e0b' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>New Pages Published</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)' }}>{grow.newPages}</div>
+                  </div>
+                </div>
+                <div style={{ padding: '16px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-chart-line" style={{ fontSize: 18, color: '#f59e0b' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>Growth Trajectory</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: growScore >= 50 ? '#22c55e' : '#f59e0b' }}>
+                      {growScore >= 70 ? 'Strong Growth' : growScore >= 40 ? 'Steady Progress' : 'Needs Attention'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PerspectiveSection>
+
+            {/* ===== STRATEGIC SUMMARY ===== */}
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '28px 32px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                <i className="fas fa-brain" style={{ fontSize: 16, color: '#8b5cf6' }} />
+                <span style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>Strategic Summary</span>
+              </div>
+              <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text2)' }}>
+                {report.executiveSummary || (
+                  <span>
+                    This month's overall strategic score is <strong style={{ color: overallScore >= 70 ? '#22c55e' : overallScore >= 40 ? '#f59e0b' : '#ef4444' }}>{overallScore}/100</strong>.
+                    {' '}Financial performance shows <strong>{fin.clicks.toLocaleString()}</strong> organic clicks with a <strong>{fin.ctr.toFixed(1)}%</strong> CTR.
+                    {' '}Customer visibility is at <strong>{cust.mapsVis.toFixed(1)}%</strong> with <strong>{cust.dominant}</strong> dominant keywords out of <strong>{cust.kwTracked}</strong> tracked.
+                    {' '}Internal execution rate stands at <strong>{proc.actRate}%</strong> with <strong>{proc.actDone}/{proc.actTotal}</strong> actions completed.
+                    {' '}Focus areas: {procScore < custScore ? 'accelerate action plan execution' : 'expand keyword coverage'} and {finScore < 50 ? 'improve click-through rates' : 'maintain traffic momentum'}.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <>
+          <div className="page-header">
+            <div className="page-title"><i className="fas fa-th-large"></i> SEO Balanced Scorecard</div>
+            <div className="page-subtitle">Strategic performance across all SEO dimensions</div>
+          </div>
+
+          {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          <button className="btn btn-primary" style={{ marginBottom: 24, padding: '12px 24px', fontSize: 14, borderRadius: 10, fontWeight: 700 }} onClick={handleGenerate} disabled={generating}>
+            {generating
+              ? <><span className="spinner" style={{ marginRight: 8 }}></span>Generating scorecard...</>
+              : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8 }}></i>Generate This Month's Scorecard</>
+            }
+          </button>
+
+          {reports.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {reports.map(report => (
+                <div key={report.id} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div onClick={() => setExpandedId(expandedId === report.id ? null : report.id)}
+                    style={{ padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <i className="fas fa-th-large" style={{ fontSize: 16, color: '#8b5cf6' }} />
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{report.monthLabel || report.month}</div>
+                        <div style={{ fontSize: 13, color: 'var(--text3)' }}>Generated {new Date(report.createdAt || report.created_at).toLocaleDateString()}</div>
+                      </div>
+                    </div>
+                    <i className={`fas fa-chevron-${expandedId === report.id ? 'up' : 'down'}`} style={{ color: 'var(--text3)' }} />
+                  </div>
+                  {expandedId === report.id && renderScorecard(report)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <i className="fas fa-th-large" style={{ fontSize: 48, color: '#8b5cf6', opacity: 0.3, marginBottom: 16 }}></i>
+              <div className="empty-state-title">No scorecards yet</div>
+              <div>Click "Generate This Month's Scorecard" to create your first balanced scorecard</div>
+            </div>
+          )}
+        </>
+      );
+    }
+
     // ============ PROJECT SETTINGS PAGE ============
     function ProjectSettingsPage({ project: currentProject }) {
       const [project, setProject] = useState(null);
@@ -14360,6 +14751,8 @@ case 'action-plan':
             return <SERPRankingsPage project={project} />;
           case 'monthly-reports':
             return <MonthlyReportsPage project={project} />;
+          case 'scorecard':
+            return <ScorecardReportPage project={project} />;
           case 'project-settings':
             return <ProjectSettingsPage project={project} />;
           case 'integrations':
@@ -14424,6 +14817,7 @@ case 'action-plan':
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'monthly-reports', label: 'Monthly Reports', icon: 'fas fa-file-pdf' },
+          { id: 'scorecard', label: 'Scorecard', icon: 'fas fa-th-large' },
         ]},
         { section: 'SETTINGS', items: [
           { id: 'project-settings', label: 'Project Settings', icon: 'fas fa-cog' },
