@@ -12409,6 +12409,7 @@
       const [expandedId, setExpandedId] = useState(null);
       const [activeSection, setActiveSection] = useState('overview');
       const [reportTab, setReportTab] = useState('overview');
+      const [expandedCats, setExpandedCats] = useState({});
 
       useEffect(() => {
         if (project) loadReports();
@@ -12813,40 +12814,92 @@
             </div>
 
             {/* === ROW 5: Action Plan Progress === */}
-            <div style={{ ...wCard, padding: '24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-                <i className="fas fa-tasks" style={{ fontSize: 14, color: '#4a7dfc' }} />
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Action Plan Progress</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
-                <div style={{ flex: '0 0 auto' }}>
-                  <ScoreRing score={d.actRate} size={100} strokeWidth={7} color="#4a7dfc" />
+            {(() => {
+              const actionsExpanded = expandedCats?.['actions'];
+              const recentActions = report.actions?.recentActions || [];
+              const statusColor = { done: '#22c55e', 'in-progress': '#3b82f6', pending: '#f59e0b' };
+              const statusLabel = { done: 'Done', 'in-progress': 'In Progress', pending: 'Pending' };
+              const sevColor = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#6b7280' };
+              const pillarLabel = { gbp: 'GBP', gbp_external: 'GBP', gsc: 'GSC', gsc_agent: 'GSC', website: 'Website', technical: 'Website' };
+              return (
+              <div style={{ ...wCard, padding: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, cursor: 'pointer' }}
+                  onClick={() => setExpandedCats(prev => ({ ...prev, actions: !prev?.actions }))}>
+                  <i className="fas fa-tasks" style={{ fontSize: 14, color: '#4a7dfc' }} />
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>Action Plan Progress</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{actionsExpanded ? 'Hide Details' : 'View Details'}</span>
+                  <i className={`fas fa-chevron-${actionsExpanded ? 'up' : 'down'}`} style={{ fontSize: 12, color: 'var(--text3)' }} />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
-                    {d.actDone} of {d.actTotal} actions completed
+                <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+                  <div style={{ flex: '0 0 auto' }}>
+                    <ScoreRing score={d.actRate} size={100} strokeWidth={7} color="#4a7dfc" />
                   </div>
-                  <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 14 }}>
-                    <div style={{ width: (d.actDone / d.actTotal * 100) + '%', background: '#22c55e' }} />
-                    <div style={{ width: (d.actProgress / d.actTotal * 100) + '%', background: '#3b82f6' }} />
-                    <div style={{ width: (d.actPending / d.actTotal * 100) + '%', background: '#f59e0b' }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
+                      {d.actDone} of {d.actTotal} actions completed
+                    </div>
+                    <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', background: 'rgba(255,255,255,0.04)', marginBottom: 14 }}>
+                      <div style={{ width: (d.actDone / Math.max(d.actTotal,1) * 100) + '%', background: '#22c55e' }} />
+                      <div style={{ width: (d.actProgress / Math.max(d.actTotal,1) * 100) + '%', background: '#3b82f6' }} />
+                      <div style={{ width: (d.actPending / Math.max(d.actTotal,1) * 100) + '%', background: '#f59e0b' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 24 }}>
+                      {[
+                        { label: 'Done', value: d.actDone, color: '#22c55e' },
+                        { label: 'In Progress', value: d.actProgress, color: '#3b82f6' },
+                        { label: 'Pending', value: d.actPending, color: '#f59e0b' },
+                      ].map((s, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
+                          <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{s.label}</span>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: s.color }}>{s.value}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 24 }}>
-                    {[
-                      { label: 'Done', value: d.actDone, color: '#22c55e' },
-                      { label: 'In Progress', value: d.actProgress, color: '#3b82f6' },
-                      { label: 'Pending', value: d.actPending, color: '#f59e0b' },
-                    ].map((s, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
-                        <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{s.label}</span>
-                        <span style={{ fontSize: 15, fontWeight: 800, color: s.color }}>{s.value}</span>
+                </div>
+                {actionsExpanded && (
+                  <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                    {recentActions.length > 0 ? (
+                      <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 4px' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px' }}>Action</th>
+                            <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Pillar</th>
+                            <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Severity</th>
+                            <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 100 }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentActions.map((act, i) => (
+                            <tr key={i} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderRadius: 8 }}>
+                              <td style={{ padding: '10px 10px', fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{act.title}</td>
+                              <td style={{ textAlign: 'center', padding: '10px 10px' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: 'rgba(74,125,252,0.12)', color: '#4a7dfc' }}>{pillarLabel[act.pillar] || act.pillar}</span>
+                              </td>
+                              <td style={{ textAlign: 'center', padding: '10px 10px' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: `${sevColor[act.severity] || '#6b7280'}18`, color: sevColor[act.severity] || '#6b7280', textTransform: 'capitalize' }}>{act.severity || '—'}</span>
+                              </td>
+                              <td style={{ textAlign: 'center', padding: '10px 10px' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: `${statusColor[act.status] || '#6b7280'}18`, color: statusColor[act.status] || '#6b7280' }}>{statusLabel[act.status] || act.status}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 16 }}>No action items yet — run audits to generate actions</div>
+                    )}
+                    {recentActions.length > 0 && d.actTotal > recentActions.length && (
+                      <div style={{ textAlign: 'center', marginTop: 12, fontSize: 12, color: 'var(--text3)' }}>
+                        Showing {recentActions.length} of {d.actTotal} actions — view full list in Action Plan pages
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
+                )}
               </div>
-            </div>
+              );
+            })()}
           </div>
         );
       };

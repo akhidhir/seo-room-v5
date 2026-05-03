@@ -12179,7 +12179,7 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     const recentActions = [];
     for (const r of actionsRes.rows) {
       actionsByStatus[r.status] = (actionsByStatus[r.status] || 0) + 1;
-      if (recentActions.length < 10) recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, severity: r.severity });
+      recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, severity: r.severity });
     }
     const totalActions = Object.values(actionsByStatus).reduce((s, v) => s + v, 0);
     const completionRate = totalActions > 0 ? Math.round((actionsByStatus.done / totalActions) * 100) : 0;
