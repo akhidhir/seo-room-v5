@@ -2061,7 +2061,7 @@
                 if (/^.*minimal.*$/.test(sv)) return false;
               }
               // Catch all issue indicators
-              if (/not listed|not found|missing|partial|significant|moderate|mismatch|weak|poor|fail|needs improvement|unclear|likely|website only|gbp only|missed|credibility gap|inconsisten|limited|insufficient|outdated|minimal.*post|no evidence|no visible|no clear|not verified|low visibility/i.test(allText)) return true;
+              if (/not listed|not found|missing|partial|significant|moderate|mismatch|weak|poor|fail|needs improvement|unclear|likely|website only|gbp only|missed|credibility gap|inconsisten|limited|insufficient|outdated|minimal.*post|no evidence|no visible|no clear|not verified|low visibility|anomal|risk|dilut|mixed signal|wrong|incorrect|not an? |warn|potential|duplicate|thin content|orphan/i.test(allText)) return true;
               // "unverifiable" only matters in directory tables
               if (/unverif/i.test(allText) && /directory|listed|present/i.test(headers.join(' '))) return true;
               // Explicit "No" as a cell value (but not inside longer text)
