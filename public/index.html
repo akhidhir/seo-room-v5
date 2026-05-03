@@ -12607,22 +12607,171 @@
 
         const tabContent = {
           // ── OVERVIEW TAB ──
-          overview: (
+          overview: (() => {
+            // Build trend data from all reports (sorted oldest→newest)
+            const allSorted = [...reports].sort((a, b) => (a.month || '').localeCompare(b.month || ''));
+            const trendData = allSorted.map(r => ({
+              label: r.monthLabel || r.month || '?',
+              health: r.healthScore || 0,
+              clicks: r.gscData?.clicks || 0,
+              impressions: r.gscData?.impressions || 0,
+              mapsVis: r.mapsRankings?.avgVisibility || 0,
+              onPage: r.onPageStats?.avgScore || 0,
+              position: r.gscData?.avgPosition || 0,
+            }));
+            const hasTrend = trendData.length >= 1;
+
+            // Chart renderer — SVG line chart
+            const TrendChart = () => {
+              if (!hasTrend) return null;
+              const W = 700, H = 220, padL = 40, padR = 20, padT = 16, padB = 36;
+              const cw = W - padL - padR, ch = H - padT - padB;
+              const n = trendData.length;
+              const xStep = n > 1 ? cw / (n - 1) : cw / 2;
+
+              const series = [
+                { key: 'health', label: 'Health Score', color: '#6366f1' },
+                { key: 'mapsVis', label: 'Maps Visibility', color: '#22c55e' },
+                { key: 'onPage', label: 'On-Page Score', color: '#f59e0b' },
+              ];
+
+              const makePath = (key) => {
+                return trendData.map((d, i) => {
+                  const x = padL + (n > 1 ? i * xStep : cw / 2);
+                  const y = padT + ch - (Math.min(d[key], 100) / 100) * ch;
+                  return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+                }).join(' ');
+              };
+
+              return (
+                <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+                  {/* Grid lines */}
+                  {[0, 25, 50, 75, 100].map(v => {
+                    const y = padT + ch - (v / 100) * ch;
+                    return <g key={v}>
+                      <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="var(--border)" strokeWidth="1" strokeDasharray={v === 0 ? 'none' : '4,3'} />
+                      <text x={padL - 8} y={y + 3} textAnchor="end" fill="var(--text3)" fontSize="9" fontWeight="600">{v}</text>
+                    </g>;
+                  })}
+                  {/* X-axis labels */}
+                  {trendData.map((d, i) => {
+                    const x = padL + (n > 1 ? i * xStep : cw / 2);
+                    return <text key={i} x={x} y={H - 6} textAnchor="middle" fill="var(--text3)" fontSize="10" fontWeight="600">{d.label}</text>;
+                  })}
+                  {/* Lines + dots */}
+                  {series.map(s => (
+                    <g key={s.key}>
+                      <path d={makePath(s.key)} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                      {trendData.map((d, i) => {
+                        const x = padL + (n > 1 ? i * xStep : cw / 2);
+                        const y = padT + ch - (Math.min(d[s.key], 100) / 100) * ch;
+                        return <circle key={i} cx={x} cy={y} r="4" fill={s.color} stroke="var(--card)" strokeWidth="2" />;
+                      })}
+                    </g>
+                  ))}
+                </svg>
+              );
+            };
+
+            // Volume chart (clicks/impressions) — bar chart
+            const VolumeChart = () => {
+              if (!hasTrend) return null;
+              const W = 700, H = 180, padL = 60, padR = 20, padT = 16, padB = 36;
+              const cw = W - padL - padR, ch = H - padT - padB;
+              const n = trendData.length;
+              const maxVal = Math.max(...trendData.map(d => Math.max(d.clicks, d.impressions)), 1);
+              const barGroupW = Math.min(80, cw / Math.max(n, 1) * 0.8);
+              const barW = barGroupW / 2 - 2;
+              const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(f * maxVal));
+
+              return (
+                <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+                  {gridLines.map((v, gi) => {
+                    const y = padT + ch - (v / maxVal) * ch;
+                    return <g key={gi}>
+                      <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="var(--border)" strokeWidth="1" strokeDasharray={v === 0 ? 'none' : '4,3'} />
+                      <text x={padL - 8} y={y + 3} textAnchor="end" fill="var(--text3)" fontSize="9" fontWeight="600">{v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}</text>
+                    </g>;
+                  })}
+                  {trendData.map((d, i) => {
+                    const cx = padL + (n > 1 ? (i / (n - 1)) * cw : cw / 2);
+                    const clickH = (d.clicks / maxVal) * ch;
+                    const impH = (d.impressions / maxVal) * ch;
+                    return <g key={i}>
+                      <rect x={cx - barGroupW / 2} y={padT + ch - impH} width={barW} height={impH} rx="3" fill="#6366f1" opacity="0.7" />
+                      <rect x={cx - barGroupW / 2 + barW + 4} y={padT + ch - clickH} width={barW} height={clickH} rx="3" fill="#3b82f6" />
+                      <text x={cx} y={H - 6} textAnchor="middle" fill="var(--text3)" fontSize="10" fontWeight="600">{d.label}</text>
+                    </g>;
+                  })}
+                </svg>
+              );
+            };
+
+            return (
             <div>
-              <CoverPage report={report} />
-              {report.executiveSummary && (
-                <div style={{ marginBottom: 28 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg, #f59e0b25, #f59e0b10)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f59e0b30' }}>
-                      <i className="fas fa-lightbulb" style={{ fontSize: 16, color: '#f59e0b' }} />
+              {/* Health Score header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 28, padding: '24px 28px', background: 'var(--card)', borderRadius: 16, border: '1px solid var(--border)' }}>
+                <ScoreRing score={report.healthScore || 0} size={90} strokeWidth={7} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{report.monthLabel || report.month}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>{report.project?.name} · {report.project?.domain}</div>
+                  {pm?.healthScore != null && (() => {
+                    const t = trendCalc(report.healthScore, pm.healthScore, false);
+                    return t ? <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, padding: '4px 10px', borderRadius: 20, background: t.isGood ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', fontSize: 12, fontWeight: 700, color: t.isGood ? '#22c55e' : '#ef4444' }}>
+                      <i className={`fas fa-arrow-${t.isUp ? 'up' : 'down'}`} style={{ fontSize: 9 }} /> {t.pct}% vs last month
+                    </div> : null;
+                  })()}
+                </div>
+                {/* Quick stats pills */}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Findings', value: report.criticalFindings?.length || 0, color: '#ef4444', icon: 'fas fa-exclamation-triangle' },
+                    { label: 'Actions', value: acts.total || 0, color: '#3b82f6', icon: 'fas fa-tasks' },
+                    { label: 'Done', value: acts.completed || 0, color: '#22c55e', icon: 'fas fa-check' },
+                  ].map((p, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 10, background: p.color + '10', border: '1px solid ' + p.color + '25' }}>
+                      <i className={p.icon} style={{ fontSize: 10, color: p.color }} />
+                      <span style={{ fontSize: 18, fontWeight: 800, color: p.color }}>{p.value}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{p.label}</span>
                     </div>
-                    <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text)', margin: 0 }}>Executive Summary</h2>
+                  ))}
+                </div>
+              </div>
+
+              {/* Trend graphs */}
+              {hasTrend && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
+                  <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '18px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', margin: 0 }}>Score Trends</h3>
+                      <div style={{ display: 'flex', gap: 12 }}>
+                        {[{ label: 'Health', color: '#6366f1' }, { label: 'Maps Vis', color: '#22c55e' }, { label: 'On-Page', color: '#f59e0b' }].map((s, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text3)' }}>
+                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.color }} />
+                            {s.label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <TrendChart />
                   </div>
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '4px solid #f59e0b', borderRadius: '4px 12px 12px 4px', padding: '20px 24px' }}>
-                    <p style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, margin: 0, fontStyle: 'italic' }}>{report.executiveSummary}</p>
+                  <div style={{ background: 'var(--card)', borderRadius: 14, border: '1px solid var(--border)', padding: '18px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', margin: 0 }}>Search Volume</h3>
+                      <div style={{ display: 'flex', gap: 12 }}>
+                        {[{ label: 'Impressions', color: '#6366f1' }, { label: 'Clicks', color: '#3b82f6' }].map((s, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text3)' }}>
+                            <div style={{ width: 8, height: 8, borderRadius: s.label === 'Clicks' ? '50%' : 2, background: s.color }} />
+                            {s.label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <VolumeChart />
                   </div>
                 </div>
               )}
+
               <Section id="overview" title="Key Metrics" icon="fas fa-chart-pie" color="#6366f1">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
                   <MetricCard label="Maps Avg Rank" value={maps.avgArp ? '#' + maps.avgArp.toFixed(1) : '—'} prev={pm?.mapsRankings?.avgArp} invert icon="fas fa-map-marker-alt" color="#22c55e" sub={maps.totalKeywords ? maps.totalKeywords + ' keywords tracked' : ''} onClick={() => setReportTab('maps')} />
@@ -12659,7 +12808,7 @@
                 </Section>
               )}
             </div>
-          ),
+          ); })(),
 
           // ── MAPS TAB ──
           maps: (
