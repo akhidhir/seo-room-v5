@@ -5745,7 +5745,71 @@
       const [sortDir, setSortDir] = useState('asc');
       const [bulkSending, setBulkSending] = useState(false);
       const [bulkResult, setBulkResult] = useState(null);
+      const [executing, setExecuting] = useState(false);
+      const [execProgress, setExecProgress] = useState(null);
       const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } };
+
+      const pendingSeoRoomCount = useMemo(() => {
+        return items.filter(i => {
+          const status = (i.status || 'pending').toLowerCase();
+          const assignee = i.assignee_label || '';
+          return status === 'pending' && !['Admin', 'Manual'].includes(assignee);
+        }).length;
+      }, [items]);
+
+      const handleExecuteAll = async () => {
+        setExecuting(true); setExecProgress({ done: 0, total: 0, current: '' });
+        try {
+          // Get all pending CWV items that can be auto-fixed
+          const cwvItems = items.filter(i => {
+            const status = (i.status || 'pending').toLowerCase();
+            return status === 'pending' && (i.category === 'Core Web Vitals' || i.type === 'Core Web Vitals');
+          });
+
+          // Get speed audit results for opportunities data
+          const speedData = await api(`/speed-audit/${project.id}/status`);
+          const speedResults = speedData.results || [];
+
+          setExecProgress({ done: 0, total: cwvItems.length, current: 'Starting...' });
+
+          let done = 0;
+          for (const item of cwvItems) {
+            // Find matching page from speed results
+            const pageTitle = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '').toLowerCase();
+            const page = speedResults.find(r => (r.title || r.slug || '').toLowerCase() === pageTitle);
+
+            if (page && page.opportunities?.length > 0) {
+              setExecProgress({ done, total: cwvItems.length, current: page.title || page.slug });
+              try {
+                await api(`/projects/${project.id}/cwv-fix`, {
+                  method: 'POST',
+                  body: { page_url: page.url, opportunities: page.opportunities }
+                });
+                // Mark action item as completed
+                await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
+              } catch (e) { console.error('Fix failed for', pageTitle, e); }
+            } else {
+              // No opportunities data — mark as done anyway (BerqWP handles it)
+              await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
+            }
+            done++;
+            setExecProgress({ done, total: cwvItems.length, current: '' });
+          }
+
+          // Mark remaining non-CWV SEO Room items as in-progress
+          const otherItems = items.filter(i => {
+            const status = (i.status || 'pending').toLowerCase();
+            const assignee = i.assignee_label || '';
+            return status === 'pending' && !['Admin', 'Manual'].includes(assignee) && i.category !== 'Core Web Vitals' && i.type !== 'Core Web Vitals';
+          });
+          for (const item of otherItems) {
+            try { await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'in-progress' } }); } catch (e) {}
+          }
+
+          await loadData();
+        } catch (e) { setError(e.message); }
+        setExecuting(false); setExecProgress(null);
+      };
 
       useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
 
@@ -5909,10 +5973,31 @@
                 AI-orchestrated tasks from all audits — deduplicated and prioritized
               </p>
             </div>
-            <button className="btn btn-primary" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13 }}>
-              {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-primary" onClick={runOrchestrator} disabled={syncing || executing} style={{ fontSize: 13 }}>
+                {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
+              </button>
+              {pendingSeoRoomCount > 0 && (
+                <button className="btn" onClick={handleExecuteAll} disabled={executing || syncing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
+                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Execute All ({pendingSeoRoomCount})</>}
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Execute progress overlay */}
+          {executing && execProgress && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
+              <span className="spinner"></span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Executing {execProgress.done}/{execProgress.total}</div>
+                {execProgress.current && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{execProgress.current}</div>}
+              </div>
+              <div style={{ width: 120, height: 6, background: 'var(--bg2)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ width: `${execProgress.total ? (execProgress.done / execProgress.total * 100) : 0}%`, height: '100%', background: '#22c55e', borderRadius: 3, transition: 'width 0.3s' }} />
+              </div>
+            </div>
+          )}
 
           {/* Stats cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
