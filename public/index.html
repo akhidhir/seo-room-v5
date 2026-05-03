@@ -12915,33 +12915,27 @@
       const [reports, setReports] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
+      const [expanded, setExpanded] = useState({});
       const [generating, setGenerating] = useState(false);
       const [expandedId, setExpandedId] = useState(null);
 
       useEffect(() => { if (project) loadReports(); }, [project?.id]);
-
       const loadReports = async () => {
         setLoading(true);
-        try {
-          const data = await api(`/projects/${project.id}/reports`);
-          setReports(data.reports || []);
-        } catch (err) { setError(err.message); }
-        finally { setLoading(false); }
+        try { const data = await api(`/projects/${project.id}/reports`); setReports(data.reports || []); }
+        catch (err) { setError(err.message); } finally { setLoading(false); }
       };
-
       const handleGenerate = async () => {
         setGenerating(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/reports/generate`, { method: 'POST' });
-          if (data.report) {
-            setReports(prev => [data.report, ...prev.filter(r => r.month !== data.report.month)]);
-            setExpandedId(data.report.id);
-          }
-        } catch (err) { setError(err.message); }
-        finally { setGenerating(false); }
+          if (data.report) { setReports(prev => [data.report, ...prev.filter(r => r.month !== data.report.month)]); setExpandedId(data.report.id); }
+        } catch (err) { setError(err.message); } finally { setGenerating(false); }
       };
 
-      // ---- Score Ring (local version) ----
+      const toggle = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+
+      // Score Ring
       const Ring = ({ score, size = 120, sw = 8, color }) => {
         const r = (size - sw) / 2, circ = 2 * Math.PI * r;
         const off = circ - (Math.min(score, 100) / 100) * circ;
@@ -12956,181 +12950,312 @@
         );
       };
 
-      // ---- Mini sparkline ----
-      const Spark = ({ data, color, width = 80, height = 28 }) => {
-        if (!data || data.length < 2) return null;
-        const max = Math.max(...data), min = Math.min(...data);
-        const range = max - min || 1;
-        const pts = data.map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * (height - 4) - 2}`).join(' ');
+      // Perspectives with SEO-relevant names
+      const PERSPECTIVES = {
+        traffic: { name: 'Organic Performance', sub: 'How is organic traffic performing?', icon: 'fas fa-chart-line', color: '#22c55e', bg: 'rgba(34,197,94,0.06)', border: 'rgba(34,197,94,0.2)' },
+        visibility: { name: 'Search Visibility', sub: 'How visible are we to searchers?', icon: 'fas fa-eye', color: '#3b82f6', bg: 'rgba(59,130,246,0.06)', border: 'rgba(59,130,246,0.2)' },
+        technical: { name: 'Technical Health', sub: 'How solid is the website foundation?', icon: 'fas fa-server', color: '#8b5cf6', bg: 'rgba(139,92,246,0.06)', border: 'rgba(139,92,246,0.2)' },
+        growth: { name: 'Content & Strategy', sub: 'Are we building for the future?', icon: 'fas fa-seedling', color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.2)' },
+      };
+
+      // ---- Recursive drill-down node ----
+      const DrillNode = ({ node, depth = 0, parentId = '' }) => {
+        const nodeId = parentId + '/' + node.id;
+        const isOpen = expanded[nodeId];
+        const hasChildren = node.children && node.children.length > 0;
+        const hasAction = !!node.action;
+        const sc = node.score >= 70 ? '#22c55e' : node.score >= 40 ? '#f59e0b' : '#ef4444';
+        const indent = depth * 24;
+
         return (
-          <svg width={width} height={height} style={{ display: 'block' }}>
-            <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <div>
+            <div
+              onClick={() => hasChildren && toggle(nodeId)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', paddingLeft: 16 + indent,
+                cursor: hasChildren ? 'pointer' : 'default',
+                borderBottom: '1px solid rgba(255,255,255,0.04)',
+                background: depth === 0 ? 'rgba(255,255,255,0.02)' : 'transparent',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { if (hasChildren) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = depth === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'; }}
+            >
+              {/* Expand/collapse button */}
+              {hasChildren ? (
+                <div style={{
+                  width: 26, height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: sc + '18', border: `1.5px solid ${sc}40`, cursor: 'pointer', flexShrink: 0,
+                }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: sc, lineHeight: 1 }}>{isOpen ? '−' : '+'}</span>
+                </div>
+              ) : (
+                <div style={{ width: 26, height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', flexShrink: 0 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: sc }} />
+                </div>
+              )}
+
+              {/* Label */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: depth === 0 ? 15 : 14, fontWeight: depth === 0 ? 700 : 500, color: 'var(--text)' }}>{node.label}</div>
+                {node.detail && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{node.detail}</div>}
+              </div>
+
+              {/* Value */}
+              <div style={{ fontSize: depth === 0 ? 18 : 15, fontWeight: 700, color: sc, textAlign: 'right', minWidth: 80 }}>
+                {node.value}
+              </div>
+
+              {/* Action button at leaf */}
+              {hasAction && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); alert('Action: ' + node.action); }}
+                  style={{
+                    fontSize: 11, fontWeight: 700, padding: '5px 12px', borderRadius: 6,
+                    border: `1px solid ${sc}`, background: sc + '15', color: sc, cursor: 'pointer',
+                    whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  <i className="fas fa-bolt" style={{ marginRight: 4, fontSize: 9 }} /> Fix
+                </button>
+              )}
+            </div>
+
+            {/* Children */}
+            {isOpen && hasChildren && (
+              <div style={{ borderLeft: `2px solid ${sc}20`, marginLeft: 28 + indent }}>
+                {node.children.map((child, i) => (
+                  <DrillNode key={i} node={child} depth={depth + 1} parentId={nodeId} />
+                ))}
+              </div>
+            )}
+          </div>
         );
       };
 
-      // ---- Perspective colors ----
-      const PERSPECTIVES = {
-        financial: { name: 'Financial', icon: 'fas fa-dollar-sign', color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)' },
-        customer: { name: 'Customer', icon: 'fas fa-users', color: '#3b82f6', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)' },
-        process: { name: 'Internal Processes', icon: 'fas fa-cogs', color: '#8b5cf6', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)' },
-        growth: { name: 'Learning & Growth', icon: 'fas fa-seedling', color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)' },
-      };
-
-      const renderScorecard = (report) => {
-        // Pull real data with fallbacks
-        const fin = {
+      // ---- Build drill-down tree from report data ----
+      const buildTree = (report) => {
+        const d = {
           clicks: report.gscData?.clicks ?? 197,
           impressions: report.gscData?.impressions ?? 29460,
           ctr: report.gscData?.ctr ?? 0.7,
           avgPos: report.gscData?.avgPosition ?? 30.0,
-          prevClicks: report.previousMonth?.gscData?.clicks,
-          prevImps: report.previousMonth?.gscData?.impressions,
-        };
-        const cust = {
           mapsVis: report.mapsRankings?.avgVisibility ?? 18.6,
           mapsAvgRank: report.mapsRankings?.avgArp ?? 4.8,
           kwTracked: report.mapsRankings?.totalKeywords ?? 20,
           dominant: report.mapsRankings?.dominant ?? 5,
           competitive: report.mapsRankings?.competitive ?? 8,
+          needsWork: report.mapsRankings?.needsWork ?? 4,
+          notVisible: report.mapsRankings?.notVisible ?? 3,
           healthScore: report.healthScore ?? 15,
-          prevVis: report.previousMonth?.mapsRankings?.avgVisibility,
-        };
-        const proc = {
+          onPageScore: report.onPageStats?.avgScore ?? 0,
+          psScore: report.pageSpeedStats?.avgPerformance ?? 58,
           actTotal: report.actions?.total ?? 36,
           actDone: report.actions?.completed ?? 14,
           actProgress: report.actions?.inProgress ?? 8,
           actPending: report.actions?.pending ?? 14,
           actRate: report.actions?.completionRate ?? 39,
-          onPageScore: report.onPageStats?.avgScore ?? 0,
-          psScore: report.pageSpeedStats?.avgPerformance ?? 58,
-          techHealth: report.healthScore ?? 15,
-        };
-        const grow = {
-          contentCreated: report.contentStats?.created ?? 3,
-          contentOptimized: report.contentStats?.optimized ?? 7,
-          kwResearched: report.contentStats?.keywordsResearched ?? 45,
-          competitorGaps: report.contentStats?.gapsClosed ?? 4,
-          newPages: report.contentStats?.newPages ?? 2,
-          prevContent: report.previousMonth?.contentStats?.created,
         };
 
-        // Calculate perspective scores (0-100)
-        const finScore = Math.min(100, Math.round(
-          (Math.min(fin.clicks / 500, 1) * 30) + (Math.min(fin.impressions / 50000, 1) * 25) +
-          (Math.min(fin.ctr / 5, 1) * 25) + (Math.min((50 - fin.avgPos) / 50, 1) * 20)
-        ));
-        const custScore = Math.min(100, Math.round(
-          (Math.min(cust.mapsVis / 60, 1) * 35) + (Math.min(cust.dominant / cust.kwTracked, 1) * 25) +
-          (Math.min(cust.healthScore / 80, 1) * 20) + (Math.min((20 - cust.mapsAvgRank) / 20, 1) * 20)
-        ));
-        const procScore = Math.min(100, Math.round(
-          (proc.actRate / 100 * 35) + (Math.min(proc.onPageScore / 80, 1) * 25) +
-          (Math.min(proc.psScore / 90, 1) * 20) + (Math.min(proc.techHealth / 80, 1) * 20)
-        ));
-        const growScore = Math.min(100, Math.round(
-          (Math.min(grow.contentCreated / 5, 1) * 25) + (Math.min(grow.contentOptimized / 10, 1) * 25) +
-          (Math.min(grow.kwResearched / 50, 1) * 25) + (Math.min(grow.competitorGaps / 5, 1) * 25)
-        ));
-        const overallScore = Math.round((finScore + custScore + procScore + growScore) / 4);
+        const topQueries = report.gscData?.topQueries || [
+          { query: 'gold pc services', clicks: 17, impressions: 67, ctr: 25.4, position: 1.1 },
+          { query: 'goldpc', clicks: 8, impressions: 35, ctr: 22.9, position: 5.4 },
+          { query: 'gold pc', clicks: 6, impressions: 207, ctr: 2.9, position: 7.1 },
+          { query: 'refurbished laptops perth', clicks: 5, impressions: 195, ctr: 2.6, position: 8.8 },
+          { query: 'gold pc bayswater', clicks: 3, impressions: 12, ctr: 25.0, position: 1.0 },
+        ];
 
-        // Trend data for sparklines
-        const allSorted = [...reports].sort((a, b) => (a.month || '').localeCompare(b.month || ''));
-        const clicksTrend = allSorted.map(r => r.gscData?.clicks || 0);
-        const impsTrend = allSorted.map(r => r.gscData?.impressions || 0);
-        const visTrend = allSorted.map(r => r.mapsRankings?.avgVisibility || 0);
+        const mapsKws = report.mapsRankings?.topKeywords || [
+          { keyword: 'computer repairs bayswater', arp: 1.8, visibility: 82, status: 'Dominant' },
+          { keyword: 'pc repair morley', arp: 3.2, visibility: 64, status: 'Dominant' },
+          { keyword: 'laptop repair perth', arp: 5.4, visibility: 38, status: 'Competitive' },
+          { keyword: 'data recovery bayswater', arp: 8.1, visibility: 22, status: 'Needs Work' },
+          { keyword: 'phone repair midland', arp: 12.4, visibility: 8, status: 'Needs Work' },
+        ];
 
-        // Helpers
-        const delta = (cur, prev) => {
-          if (prev == null || cur == null) return null;
-          const diff = cur - prev;
-          return diff;
+        const findings = report.findingsByPillar || {};
+        const criticals = report.criticalFindings || [];
+
+        // Score helpers
+        const ctrScore = Math.min(100, Math.round(d.ctr / 5 * 100));
+        const posScore = Math.min(100, Math.round(Math.max(0, (30 - d.avgPos) / 30) * 100));
+        const visScore = Math.min(100, Math.round(d.mapsVis / 60 * 100));
+        const domScore = Math.min(100, Math.round(d.dominant / Math.max(d.kwTracked, 1) * 100));
+        const psNorm = Math.min(100, d.psScore);
+        const opNorm = Math.min(100, d.onPageScore);
+        const actNorm = Math.min(100, d.actRate);
+
+        // Calculate perspective scores
+        const trafficScore = Math.round((Math.min(d.clicks / 500, 1) * 30 + Math.min(d.impressions / 50000, 1) * 25 + ctrScore / 100 * 25 + posScore / 100 * 20) * 100 / 100);
+        const visibilityScore = Math.round((visScore / 100 * 35 + domScore / 100 * 25 + Math.min(d.healthScore / 80, 1) * 20 + Math.min((20 - d.mapsAvgRank) / 20, 1) * 20) * 100 / 100);
+        const techScore = Math.round((actNorm / 100 * 35 + opNorm / 100 * 25 + psNorm / 100 * 20 + Math.min(d.healthScore / 80, 1) * 20) * 100 / 100);
+        const growthScore = Math.round(45); // placeholder until content stats are real
+
+        return {
+          overall: Math.round((trafficScore + visibilityScore + techScore + growthScore) / 4),
+          perspectives: [
+            {
+              key: 'traffic', score: trafficScore,
+              nodes: [
+                { id: 'clicks', label: 'Organic Clicks', value: d.clicks.toLocaleString(), score: Math.min(100, d.clicks / 5), children: topQueries.slice(0, 5).map((q, i) => ({
+                  id: 'q' + i, label: q.query, value: q.clicks + ' clicks', score: q.position <= 3 ? 90 : q.position <= 10 ? 60 : 30,
+                  detail: `Position #${q.position.toFixed(1)} • CTR ${q.ctr}%`,
+                  children: [
+                    ...(q.position > 10 ? [{ id: 'pos', label: 'Ranking too low', value: '#' + q.position.toFixed(0), score: 20, detail: 'Page is below fold in search results', action: 'Optimise on-page SEO for "' + q.query + '"' }] : []),
+                    ...(q.ctr < 3 ? [{ id: 'ctr', label: 'Low click-through rate', value: q.ctr + '%', score: 25, detail: 'Meta title/description not compelling enough', action: 'Rewrite meta title & description for "' + q.query + '"' }] : []),
+                    ...(q.position <= 3 && q.ctr > 10 ? [{ id: 'good', label: 'Performing well', value: 'Top 3', score: 90 }] : []),
+                  ],
+                }))},
+                { id: 'impressions', label: 'Search Impressions', value: d.impressions.toLocaleString(), score: Math.min(100, d.impressions / 500), children: [
+                  { id: 'indexed', label: 'Pages indexed', value: 'Check', score: 50, detail: 'Number of pages Google has indexed', action: 'Run indexing audit' },
+                  { id: 'coverage', label: 'Keyword coverage', value: d.kwTracked + ' tracked', score: d.kwTracked > 15 ? 70 : 35, detail: d.kwTracked + ' keywords being tracked', children: d.kwTracked < 20 ? [
+                    { id: 'more', label: 'Need more keyword targets', value: 'Low', score: 25, action: 'Research & add 10+ new keyword targets' },
+                  ] : [] },
+                ]},
+                { id: 'ctr', label: 'Click-Through Rate', value: d.ctr.toFixed(1) + '%', score: ctrScore, children: [
+                  ...(d.ctr < 2 ? [{ id: 'meta', label: 'Weak meta descriptions', value: 'Low CTR', score: 20, detail: 'Meta descriptions aren\'t driving clicks', action: 'AI-rewrite meta descriptions for top 20 pages' }] : []),
+                  ...(d.ctr < 2 ? [{ id: 'titles', label: 'Generic page titles', value: 'Needs work', score: 25, detail: 'Page titles lack keywords or compelling hooks', action: 'Optimise page titles with power words' }] : []),
+                  ...(d.ctr >= 2 ? [{ id: 'ok', label: 'CTR is acceptable', value: d.ctr.toFixed(1) + '%', score: 65 }] : []),
+                ]},
+                { id: 'pos', label: 'Average Position', value: '#' + d.avgPos.toFixed(1), score: posScore, children: [
+                  ...(d.avgPos > 20 ? [{ id: 'deep', label: 'Most pages ranking deep', value: 'Page 3+', score: 15, detail: 'Average position is beyond page 2', children: [
+                    { id: 'content', label: 'Thin content on key pages', value: 'Likely', score: 20, action: 'Expand content on top 10 landing pages' },
+                    { id: 'backlinks', label: 'Low domain authority', value: 'Check', score: 25, action: 'Build 5+ quality backlinks this month' },
+                  ]}] : []),
+                  ...(d.avgPos <= 20 && d.avgPos > 10 ? [{ id: 'mid', label: 'Page 2 — close to breakthrough', value: '#' + d.avgPos.toFixed(0), score: 50, action: 'Focus link building on Quick Win pages (pos 11-20)' }] : []),
+                  ...(d.avgPos <= 10 ? [{ id: 'good', label: 'Strong average position', value: 'Page 1', score: 85 }] : []),
+                ]},
+              ]
+            },
+            {
+              key: 'visibility', score: visibilityScore,
+              nodes: [
+                { id: 'mapsvis', label: 'Maps Visibility', value: d.mapsVis.toFixed(1) + '%', score: visScore, children: [
+                  { id: 'dominant', label: 'Dominant Keywords (top 3)', value: d.dominant + '/' + d.kwTracked, score: domScore, children: mapsKws.filter(k => k.status === 'Dominant').map((k, i) => ({
+                    id: 'd' + i, label: k.keyword, value: '#' + k.arp.toFixed(1), score: 90, detail: 'Visibility ' + k.visibility + '%',
+                  }))},
+                  { id: 'competitive', label: 'Competitive Keywords (4-10)', value: d.competitive + '/' + d.kwTracked, score: 55, children: mapsKws.filter(k => k.status === 'Competitive').map((k, i) => ({
+                    id: 'c' + i, label: k.keyword, value: '#' + k.arp.toFixed(1), score: 55, detail: 'Visibility ' + k.visibility + '%',
+                    children: [
+                      { id: 'rev', label: 'Competitors have more reviews', value: 'Gap', score: 30, action: 'Request 5+ new Google reviews' },
+                      { id: 'cat', label: 'Check GBP category match', value: 'Verify', score: 40, action: 'Audit GBP categories for "' + k.keyword + '"' },
+                    ],
+                  }))},
+                  { id: 'needswork', label: 'Needs Work (11-20)', value: d.needsWork + '/' + d.kwTracked, score: 30, children: mapsKws.filter(k => k.status === 'Needs Work').map((k, i) => ({
+                    id: 'n' + i, label: k.keyword, value: '#' + k.arp.toFixed(1), score: 25, detail: 'Visibility ' + k.visibility + '%',
+                    children: [
+                      { id: 'prox', label: 'Business too far from search location', value: 'Distance', score: 15, detail: 'Proximity is the #1 Maps ranking factor' },
+                      { id: 'rel', label: 'Low relevance signal', value: 'Weak', score: 20, action: 'Add "' + k.keyword.split(' ')[0] + '" to GBP description & services' },
+                      { id: 'cit', label: 'Missing directory citations', value: 'Check', score: 25, action: 'Submit to 5 niche directories' },
+                    ],
+                  }))},
+                  ...(d.notVisible > 0 ? [{ id: 'novis', label: 'Not Visible (20+)', value: d.notVisible + '/' + d.kwTracked, score: 10, children: [
+                    { id: 'fix', label: 'These keywords need suburb pages', value: 'Missing', score: 10, action: 'Create landing pages for missing suburbs' },
+                  ]}] : []),
+                ]},
+                { id: 'mapsrank', label: 'Avg Maps Rank', value: '#' + d.mapsAvgRank.toFixed(1), score: Math.min(100, Math.round((20 - d.mapsAvgRank) / 20 * 100)), children: [
+                  { id: 'gbp', label: 'GBP Profile Completeness', value: d.healthScore + '%', score: d.healthScore, children: [
+                    ...(d.healthScore < 50 ? [{ id: 'desc', label: 'Business description incomplete', value: 'Missing', score: 15, action: 'Write optimised 750-char GBP description' }] : []),
+                    ...(d.healthScore < 70 ? [{ id: 'photos', label: 'Need more photos', value: '<15', score: 25, action: 'Upload 20+ quality business photos' }] : []),
+                    ...(d.healthScore < 60 ? [{ id: 'posts', label: 'No recent Google Posts', value: 'Inactive', score: 20, action: 'Create weekly Google Posts for 4 weeks' }] : []),
+                  ]},
+                  { id: 'reviews', label: 'Reviews & Rating', value: 'Check', score: 50, children: [
+                    { id: 'count', label: 'Review count vs competitors', value: 'Gap', score: 35, action: 'Launch review generation campaign' },
+                    { id: 'respond', label: 'Review response rate', value: 'Check', score: 45, action: 'Respond to all unresponded reviews' },
+                  ]},
+                ]},
+              ]
+            },
+            {
+              key: 'technical', score: techScore,
+              nodes: [
+                { id: 'pagespeed', label: 'PageSpeed Performance', value: d.psScore + '/100', score: psNorm, children: [
+                  ...(d.psScore < 50 ? [{ id: 'lcp', label: 'Largest Contentful Paint (LCP)', value: 'Slow', score: 20, children: [
+                    { id: 'img', label: 'Hero images not optimised', value: 'Large files', score: 15, action: 'Compress & convert images to WebP' },
+                    { id: 'host', label: 'Server response time', value: 'Check TTFB', score: 30, action: 'Upgrade hosting or enable CDN' },
+                  ]}] : [{ id: 'lcp', label: 'LCP is acceptable', value: 'OK', score: 70 }]),
+                  ...(d.psScore < 60 ? [{ id: 'cls', label: 'Cumulative Layout Shift', value: 'Check', score: 40, children: [
+                    { id: 'dims', label: 'Images missing width/height', value: 'Likely', score: 30, action: 'Add explicit dimensions to all images' },
+                  ]}] : []),
+                  ...(d.psScore < 70 ? [{ id: 'tbt', label: 'Total Blocking Time', value: 'High', score: 35, children: [
+                    { id: 'js', label: 'Too much JavaScript', value: 'Heavy', score: 25, action: 'Defer non-critical JS & remove unused plugins' },
+                  ]}] : []),
+                ]},
+                { id: 'onpage', label: 'On-Page SEO Score', value: d.onPageScore + '/100', score: opNorm, children: [
+                  ...(d.onPageScore < 50 ? [
+                    { id: 'meta', label: 'Missing/duplicate meta titles', value: 'Issues', score: 20, action: 'Run On-Page Audit & apply AI fixes' },
+                    { id: 'h1', label: 'Missing or duplicate H1 tags', value: 'Check', score: 25, action: 'Fix H1 tags on flagged pages' },
+                    { id: 'thin', label: 'Thin content pages (<300 words)', value: 'Likely', score: 20, action: 'Expand thin pages to 800+ words' },
+                  ] : [{ id: 'good', label: 'On-page SEO is solid', value: 'Good', score: 75 }]),
+                ]},
+                { id: 'actions', label: 'Action Completion Rate', value: d.actRate + '%', score: actNorm, children: [
+                  { id: 'done', label: 'Completed actions', value: d.actDone + '/' + d.actTotal, score: actNorm },
+                  { id: 'prog', label: 'In progress', value: d.actProgress + ' items', score: 60, detail: 'Currently being worked on' },
+                  ...(d.actPending > 5 ? [{ id: 'stuck', label: 'Pending actions piling up', value: d.actPending + ' stuck', score: 25, detail: d.actPending + ' actions haven\'t been started', action: 'Review and prioritise pending actions' }] : []),
+                ]},
+                { id: 'health', label: 'Site Health Score', value: d.healthScore + '/100', score: d.healthScore, children: [
+                  ...(d.healthScore < 50 ? [
+                    { id: 'crawl', label: 'Crawl errors detected', value: 'Check', score: 20, action: 'Run Website Audit to find crawl issues' },
+                    { id: 'ssl', label: 'Mixed content or SSL issues', value: 'Possible', score: 30, action: 'Fix mixed content warnings' },
+                    { id: 'mobile', label: 'Mobile usability issues', value: 'Check', score: 35, action: 'Test mobile responsiveness on key pages' },
+                  ] : [{ id: 'ok', label: 'Site health is acceptable', value: 'OK', score: d.healthScore }]),
+                ]},
+              ]
+            },
+            {
+              key: 'growth', score: growthScore,
+              nodes: [
+                { id: 'content', label: 'Content Pipeline', value: report.contentStats?.created ?? 3 + ' created', score: 50, children: [
+                  { id: 'new', label: 'New pages this month', value: (report.contentStats?.newPages ?? 2) + ' pages', score: (report.contentStats?.newPages ?? 2) >= 4 ? 80 : 35, children: (report.contentStats?.newPages ?? 2) < 4 ? [
+                    { id: 'more', label: 'Below target (4+ pages/month)', value: 'Behind', score: 25, action: 'Create 2 new service pages + 2 blog posts' },
+                  ] : [] },
+                  { id: 'opt', label: 'Pages optimised', value: (report.contentStats?.optimized ?? 7) + ' pages', score: (report.contentStats?.optimized ?? 7) >= 5 ? 70 : 35 },
+                ]},
+                { id: 'keywords', label: 'Keyword Strategy', value: (report.contentStats?.keywordsResearched ?? 45) + ' researched', score: 55, children: [
+                  { id: 'gaps', label: 'Competitor keyword gaps', value: (report.contentStats?.gapsClosed ?? 4) + ' closed', score: 45, children: [
+                    { id: 'more', label: 'Uncovered gaps remain', value: 'Research needed', score: 30, action: 'Run competitor gap analysis in Ahrefs' },
+                  ]},
+                  { id: 'coverage', label: 'Service area keyword coverage', value: 'Partial', score: 40, children: [
+                    { id: 'suburbs', label: 'Missing suburb landing pages', value: 'Gaps exist', score: 25, action: 'Create landing pages for top 5 missing suburbs' },
+                  ]},
+                ]},
+                { id: 'authority', label: 'Domain Authority', value: 'Building', score: 35, children: [
+                  { id: 'backlinks', label: 'New backlinks this month', value: 'Check', score: 30, action: 'Acquire 3+ quality backlinks via outreach' },
+                  { id: 'citations', label: 'Directory citations', value: 'Incomplete', score: 35, action: 'Submit to remaining Australian directories' },
+                ]},
+              ]
+            },
+          ],
         };
-        const DeltaBadge = ({ value, suffix = '', invert = false }) => {
-          if (value == null || value === 0) return <span style={{ fontSize: 13, color: 'var(--text3)' }}>—</span>;
-          const good = invert ? value < 0 : value > 0;
-          return (
-            <span style={{ fontSize: 14, fontWeight: 700, color: good ? '#22c55e' : '#ef4444' }}>
-              {value > 0 ? '▲' : '▼'} {Math.abs(value).toFixed(1)}{suffix}
-            </span>
-          );
-        };
+      };
 
-        const KpiCard = ({ label, value, unit, trend, trendColor, delta: d, invert }) => (
-          <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: 8, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-              <div>
-                <span style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>{value}</span>
-                {unit && <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)', marginLeft: 4 }}>{unit}</span>}
-              </div>
-              {trend && <Spark data={trend} color={trendColor || 'var(--text3)'} />}
-            </div>
-            {d != null && <DeltaBadge value={d} invert={invert} />}
-          </div>
-        );
-
-        const PerspectiveSection = ({ pKey, score, children }) => {
-          const p = PERSPECTIVES[pKey];
-          return (
-            <div style={{ background: 'var(--card)', border: `1px solid ${p.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
-              {/* Header bar */}
-              <div style={{ background: p.bg, padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${p.border}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: p.color + '20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className={p.icon} style={{ fontSize: 18, color: p.color }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{p.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
-                      {pKey === 'financial' && 'What is the business impact?'}
-                      {pKey === 'customer' && 'How visible are we to customers?'}
-                      {pKey === 'process' && 'How well are we executing?'}
-                      {pKey === 'growth' && 'Are we improving over time?'}
-                    </div>
-                  </div>
-                </div>
-                <Ring score={score} size={72} sw={6} color={p.color} />
-              </div>
-              {/* KPI grid */}
-              <div style={{ padding: '20px 24px' }}>
-                {children}
-              </div>
-            </div>
-          );
-        };
+      const renderScorecard = (report) => {
+        const tree = buildTree(report);
 
         return (
           <div style={{ padding: '40px 48px', minHeight: '100vh' }}>
-            {/* ===== HEADER ===== */}
-            <div style={{ textAlign: 'center', marginBottom: 48 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8 }}>Strategic Performance</div>
-              <h1 style={{ fontSize: 36, fontWeight: 800, color: 'var(--text)', margin: '0 0 8px' }}>SEO Balanced Scorecard</h1>
+            {/* Header */}
+            <div style={{ textAlign: 'center', marginBottom: 40 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8 }}>Root Cause Analysis</div>
+              <h1 style={{ fontSize: 36, fontWeight: 800, color: 'var(--text)', margin: '0 0 8px' }}>SEO Performance Scorecard</h1>
               <div style={{ fontSize: 15, color: 'var(--text3)' }}>{report.monthLabel || report.month} — {project?.name || 'Project'}</div>
             </div>
 
-            {/* ===== OVERALL SCORE + 4 MINI PERSPECTIVES ===== */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 48, marginBottom: 48, padding: '32px 0' }}>
-              {/* Overall ring */}
+            {/* Overall + 4 perspectives */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, marginBottom: 48 }}>
               <div style={{ textAlign: 'center' }}>
-                <Ring score={overallScore} size={180} sw={12} color={overallScore >= 70 ? '#22c55e' : overallScore >= 40 ? '#f59e0b' : '#ef4444'} />
-                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginTop: 12 }}>Overall Score</div>
+                <Ring score={tree.overall} size={160} sw={11} />
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginTop: 10 }}>Overall Score</div>
               </div>
-              {/* 4 mini scores */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {[
-                  { key: 'financial', score: finScore },
-                  { key: 'customer', score: custScore },
-                  { key: 'process', score: procScore },
-                  { key: 'growth', score: growScore },
-                ].map((item) => {
-                  const p = PERSPECTIVES[item.key];
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                {tree.perspectives.map(p => {
+                  const cfg = PERSPECTIVES[p.key];
                   return (
-                    <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'var(--card)', border: `1px solid ${p.border}`, borderRadius: 10, padding: '14px 20px', minWidth: 220 }}>
-                      <Ring score={item.score} size={52} sw={4} color={p.color} />
+                    <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--card)', border: `1px solid ${cfg.border}`, borderRadius: 10, padding: '12px 18px', minWidth: 200 }}>
+                      <Ring score={p.score} size={48} sw={4} color={cfg.color} />
                       <div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{p.name}</div>
-                        <div style={{ fontSize: 12, color: p.color, fontWeight: 600 }}>{item.score}/100</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{cfg.name}</div>
+                        <div style={{ fontSize: 12, color: cfg.color, fontWeight: 600 }}>{p.score}/100</div>
                       </div>
                     </div>
                   );
@@ -13138,119 +13263,36 @@
               </div>
             </div>
 
-            {/* ===== PERSPECTIVE 1: FINANCIAL ===== */}
-            <PerspectiveSection pKey="financial" score={finScore}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-                <KpiCard label="Total Clicks" value={fin.clicks.toLocaleString()} trend={clicksTrend.length > 1 ? clicksTrend : [100,120,140,170,197]} trendColor="#22c55e" delta={delta(fin.clicks, fin.prevClicks)} />
-                <KpiCard label="Impressions" value={fin.impressions.toLocaleString()} trend={impsTrend.length > 1 ? impsTrend : [20000,23000,25500,27000,29460]} trendColor="#22c55e" delta={delta(fin.impressions, fin.prevImps)} />
-                <KpiCard label="Click-Through Rate" value={fin.ctr.toFixed(1)} unit="%" />
-                <KpiCard label="Avg Position" value={'#' + fin.avgPos.toFixed(1)} delta={delta(fin.avgPos, report.previousMonth?.gscData?.avgPosition)} invert={true} />
-              </div>
-            </PerspectiveSection>
-
-            {/* ===== PERSPECTIVE 2: CUSTOMER ===== */}
-            <PerspectiveSection pKey="customer" score={custScore}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-                <KpiCard label="Maps Visibility" value={cust.mapsVis.toFixed(1)} unit="%" trend={visTrend.length > 1 ? visTrend : [10,12,14,16,18.6]} trendColor="#3b82f6" delta={delta(cust.mapsVis, cust.prevVis)} />
-                <KpiCard label="Avg Maps Rank" value={'#' + cust.mapsAvgRank.toFixed(1)} />
-                <KpiCard label="Dominant Keywords" value={cust.dominant} unit={'/ ' + cust.kwTracked} />
-                <KpiCard label="Health Score" value={cust.healthScore} unit="/100" />
-              </div>
-              {/* Keyword distribution mini-bar */}
-              <div style={{ marginTop: 16, padding: '14px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>Keyword Distribution</div>
-                <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'rgba(255,255,255,0.04)' }}>
-                  <div style={{ width: (cust.dominant / cust.kwTracked * 100) + '%', background: '#22c55e', transition: 'width 0.8s' }} />
-                  <div style={{ width: (cust.competitive / cust.kwTracked * 100) + '%', background: '#3b82f6', transition: 'width 0.8s' }} />
-                  <div style={{ width: ((cust.kwTracked - cust.dominant - cust.competitive) / cust.kwTracked * 100) + '%', background: '#f97316', transition: 'width 0.8s' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 20, marginTop: 8 }}>
-                  {[{ l: 'Dominant', v: cust.dominant, c: '#22c55e' }, { l: 'Competitive', v: cust.competitive, c: '#3b82f6' }, { l: 'Needs Work', v: cust.kwTracked - cust.dominant - cust.competitive, c: '#f97316' }].map((s, i) => (
-                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--text3)' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: s.c, display: 'inline-block' }} />{s.l}: <strong style={{ color: s.c }}>{s.v}</strong>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </PerspectiveSection>
-
-            {/* ===== PERSPECTIVE 3: INTERNAL PROCESSES ===== */}
-            <PerspectiveSection pKey="process" score={procScore}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-                <KpiCard label="Actions Completed" value={proc.actDone} unit={'/ ' + proc.actTotal} />
-                <KpiCard label="Completion Rate" value={proc.actRate} unit="%" />
-                <KpiCard label="On-Page Score" value={proc.onPageScore} unit="/100" />
-                <KpiCard label="PageSpeed" value={proc.psScore} unit="/100" />
-              </div>
-              {/* Action progress bar */}
-              <div style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>Action Plan Progress</div>
-                <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: 'rgba(255,255,255,0.04)' }}>
-                  <div style={{ width: (proc.actDone / proc.actTotal * 100) + '%', background: '#22c55e', transition: 'width 0.8s' }} />
-                  <div style={{ width: (proc.actProgress / proc.actTotal * 100) + '%', background: '#8b5cf6', transition: 'width 0.8s' }} />
-                  <div style={{ width: (proc.actPending / proc.actTotal * 100) + '%', background: '#6b7280', transition: 'width 0.8s' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 20, marginTop: 8 }}>
-                  {[{ l: 'Done', v: proc.actDone, c: '#22c55e' }, { l: 'In Progress', v: proc.actProgress, c: '#8b5cf6' }, { l: 'Pending', v: proc.actPending, c: '#6b7280' }].map((s, i) => (
-                    <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--text3)' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: s.c, display: 'inline-block' }} />{s.l}: <strong style={{ color: s.c }}>{s.v}</strong>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </PerspectiveSection>
-
-            {/* ===== PERSPECTIVE 4: LEARNING & GROWTH ===== */}
-            <PerspectiveSection pKey="growth" score={growScore}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-                <KpiCard label="Content Created" value={grow.contentCreated} unit="pages" />
-                <KpiCard label="Pages Optimised" value={grow.contentOptimized} unit="pages" />
-                <KpiCard label="Keywords Researched" value={grow.kwResearched} />
-                <KpiCard label="Competitor Gaps Closed" value={grow.competitorGaps} />
-              </div>
-              {/* Growth indicators */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <div style={{ padding: '16px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-file-alt" style={{ fontSize: 18, color: '#f59e0b' }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>New Pages Published</div>
-                    <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text)' }}>{grow.newPages}</div>
-                  </div>
-                </div>
-                <div style={{ padding: '16px 18px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-chart-line" style={{ fontSize: 18, color: '#f59e0b' }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>Growth Trajectory</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: growScore >= 50 ? '#22c55e' : '#f59e0b' }}>
-                      {growScore >= 70 ? 'Strong Growth' : growScore >= 40 ? 'Steady Progress' : 'Needs Attention'}
+            {/* Perspective sections with drill-down */}
+            {tree.perspectives.map(p => {
+              const cfg = PERSPECTIVES[p.key];
+              return (
+                <div key={p.key} style={{ background: 'var(--card)', border: `1px solid ${cfg.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
+                  {/* Perspective header */}
+                  <div style={{ background: cfg.bg, padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${cfg.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 38, height: 38, borderRadius: 10, background: cfg.color + '20', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <i className={cfg.icon} style={{ fontSize: 16, color: cfg.color }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>{cfg.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>{cfg.sub}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <Ring score={p.score} size={56} sw={5} color={cfg.color} />
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Click <strong style={{ color: cfg.color }}>+</strong> to drill down</div>
                     </div>
                   </div>
+                  {/* Drill-down nodes */}
+                  <div>
+                    {p.nodes.map((node, i) => (
+                      <DrillNode key={i} node={node} depth={0} parentId={p.key} />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </PerspectiveSection>
-
-            {/* ===== STRATEGIC SUMMARY ===== */}
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '28px 32px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                <i className="fas fa-brain" style={{ fontSize: 16, color: '#8b5cf6' }} />
-                <span style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)' }}>Strategic Summary</span>
-              </div>
-              <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text2)' }}>
-                {report.executiveSummary || (
-                  <span>
-                    This month's overall strategic score is <strong style={{ color: overallScore >= 70 ? '#22c55e' : overallScore >= 40 ? '#f59e0b' : '#ef4444' }}>{overallScore}/100</strong>.
-                    {' '}Financial performance shows <strong>{fin.clicks.toLocaleString()}</strong> organic clicks with a <strong>{fin.ctr.toFixed(1)}%</strong> CTR.
-                    {' '}Customer visibility is at <strong>{cust.mapsVis.toFixed(1)}%</strong> with <strong>{cust.dominant}</strong> dominant keywords out of <strong>{cust.kwTracked}</strong> tracked.
-                    {' '}Internal execution rate stands at <strong>{proc.actRate}%</strong> with <strong>{proc.actDone}/{proc.actTotal}</strong> actions completed.
-                    {' '}Focus areas: {procScore < custScore ? 'accelerate action plan execution' : 'expand keyword coverage'} and {finScore < 50 ? 'improve click-through rates' : 'maintain traffic momentum'}.
-                  </span>
-                )}
-              </div>
-            </div>
+              );
+            })}
           </div>
         );
       };
@@ -13258,25 +13300,18 @@
       return (
         <>
           <div className="page-header">
-            <div className="page-title"><i className="fas fa-th-large"></i> SEO Balanced Scorecard</div>
-            <div className="page-subtitle">Strategic performance across all SEO dimensions</div>
+            <div className="page-title"><i className="fas fa-th-large"></i> SEO Scorecard</div>
+            <div className="page-subtitle">Drill down to root causes — click + to investigate</div>
           </div>
-
           {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
-
           <button className="btn btn-primary" style={{ marginBottom: 24, padding: '12px 24px', fontSize: 14, borderRadius: 10, fontWeight: 700 }} onClick={handleGenerate} disabled={generating}>
-            {generating
-              ? <><span className="spinner" style={{ marginRight: 8 }}></span>Generating scorecard...</>
-              : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8 }}></i>Generate This Month's Scorecard</>
-            }
+            {generating ? <><span className="spinner" style={{ marginRight: 8 }}></span>Generating...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8 }}></i>Generate This Month's Scorecard</>}
           </button>
-
           {reports.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {reports.map(report => (
                 <div key={report.id} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                  <div onClick={() => setExpandedId(expandedId === report.id ? null : report.id)}
-                    style={{ padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                  <div onClick={() => setExpandedId(expandedId === report.id ? null : report.id)} style={{ padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                       <i className="fas fa-th-large" style={{ fontSize: 16, color: '#8b5cf6' }} />
                       <div>
@@ -13294,7 +13329,7 @@
             <div className="empty-state">
               <i className="fas fa-th-large" style={{ fontSize: 48, color: '#8b5cf6', opacity: 0.3, marginBottom: 16 }}></i>
               <div className="empty-state-title">No scorecards yet</div>
-              <div>Click "Generate This Month's Scorecard" to create your first balanced scorecard</div>
+              <div>Generate a report to see your drill-down scorecard</div>
             </div>
           )}
         </>
