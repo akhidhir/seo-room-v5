@@ -5941,9 +5941,21 @@
         return { ...item, _assigneeLabel: assigneeLabel };
       }), [items]);
 
+      // Map pillar + category to audit page label
+      const getAuditPageLabel = (item) => {
+        const pillar = (item._pillar || item.pillar || '').toLowerCase();
+        const cat = (item._category || item.category || '').toLowerCase();
+        if (pillar.includes('gbp')) return 'External Audit';
+        if (pillar.includes('gsc')) return 'GSC Audit';
+        if (cat === 'core web vitals') return 'Website Audit';
+        if (cat === 'on-page issues' || cat === 'content quality') return 'Website Audit';
+        if (pillar.includes('website') || pillar.includes('technical')) return 'Website Audit';
+        return 'Website Audit';
+      };
+
       // Derive unique filter options from data
       const filterOptions = useMemo(() => {
-        const categories = [...new Set(itemsWithAssignee.map(i => i._category || i.category).filter(Boolean))].sort();
+        const categories = [...new Set(itemsWithAssignee.map(i => getAuditPageLabel(i)))].sort();
         const severities = [...new Set(itemsWithAssignee.map(i => (i.severity || 'medium').toLowerCase()).filter(Boolean))].sort((a, b) => {
           const order = { critical: 0, high: 1, medium: 2, low: 3 };
           return (order[a] ?? 9) - (order[b] ?? 9);
@@ -5958,7 +5970,7 @@
         const result = itemsWithAssignee.filter(i => {
           if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
           if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
-          if (filterCategory !== 'all' && (i._category || i.category) !== filterCategory) return false;
+          if (filterCategory !== 'all' && getAuditPageLabel(i) !== filterCategory) return false;
           if (filterAssignee !== 'all' && i._assigneeLabel !== filterAssignee) return false;
           if (filterStatus !== 'all' && (i.status || 'pending') !== filterStatus) return false;
           return true;
