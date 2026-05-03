@@ -3670,11 +3670,9 @@
 
       const handleBulkAdd = async () => {
         setBulkAdding(true);
-        for (let i = 0; i < sortedResults.length; i++) {
-          const pageKey = `speed_${i}`;
-          if (checkedRows[pageKey] && !addedActions[pageKey] && !ignoredActions[pageKey]) {
-            await handleAddAction(pageKey, sortedResults[i]);
-          }
+        const toAdd = sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey }) => checkedRows[pageKey] && !addedActions[pageKey] && !ignoredActions[pageKey]);
+        for (const { pageKey, page } of toAdd) {
+          await handleAddAction(pageKey, page);
         }
         setCheckedRows({});
         setBulkAdding(false);
