@@ -3529,11 +3529,13 @@
         try {
           const data = await api(`/speed-audit/${project.id}/status`);
           if (data.status === 'running') {
-            setSpeedLoading(true);
+            setSpeedLoading(true); setSpeedError('');
             if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
             pollForResults();
+          } else if (data.status === 'failed') {
+            setSpeedError(data.error || 'Speed audit failed. Please run again.');
           } else if (data.results) {
-            setSpeedResults(data.results);
+            setSpeedResults(data.results); setSpeedError('');
           }
         } catch (e) { /* no previous speed audit */ }
       };

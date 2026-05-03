@@ -1831,6 +1831,10 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
         console.log(`[speed-audit] Discovered ${pages.length} pages for project ${req.params.projectId}`);
 
+        // Save total immediately so frontend can show counter
+        await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
+
         const BATCH_SIZE = 5;
         const results = [];
 
