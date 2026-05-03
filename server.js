@@ -12250,6 +12250,25 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       (Math.min(100, (gscData.ctr || 0) * 20) * 0.15) // CTR weight (5% CTR = 100)
     )));
 
+    // 9. Previous month comparison
+    let previousMonth = null;
+    try {
+      const prevDate = new Date(now);
+      prevDate.setMonth(prevDate.getMonth() - 1);
+      const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+      const prevRes = await pool.query('SELECT report_data FROM monthly_reports WHERE project_id=$1 AND month=$2', [projectId, prevMonth]);
+      if (prevRes.rows.length > 0) {
+        const prev = typeof prevRes.rows[0].report_data === 'string' ? JSON.parse(prevRes.rows[0].report_data) : prevRes.rows[0].report_data;
+        previousMonth = {
+          healthScore: prev.healthScore,
+          mapsRankings: { avgArp: prev.mapsRankings?.avgArp, avgVisibility: prev.mapsRankings?.avgVisibility },
+          gscData: { clicks: prev.gscData?.clicks, impressions: prev.gscData?.impressions, ctr: prev.gscData?.ctr, avgPosition: prev.gscData?.avgPosition },
+          onPageStats: { avgScore: prev.onPageStats?.avgScore },
+          pageSpeedStats: { avgPerformance: prev.pageSpeedStats?.avgPerformance },
+        };
+      }
+    } catch (e) { console.log('[reports] Previous month lookup skipped:', e.message); }
+
     const reportData = {
       version: 2,
       monthLabel,
@@ -12264,6 +12283,7 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       actions: { completed: actionsByStatus.done, inProgress: actionsByStatus['in-progress'], pending: actionsByStatus.pending, total: totalActions, completionRate, recentActions },
       onPageStats,
       pageSpeedStats,
+      previousMonth,
       generatedAt: now.toISOString()
     };
 
