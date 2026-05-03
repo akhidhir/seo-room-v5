@@ -1440,14 +1440,17 @@ YOUR JOB:
 6. DEDUPLICATE — same issue across audits = ONE item.
 
 ASSIGN execution_type AND assignee_label — there are ONLY 2 assignees:
-- "SEO Room" — the system handles it automatically. This covers ALL automated fixes: meta title/desc fixes, content optimization, H1 fixes, schema, CWV/performance fixes, GBP edits, indexing, API tasks. Use for ANY task the dashboard or plugin can execute.
-- "Admin" — tasks that require a human (business owner/admin). ONLY use for physical tasks: take photos, request reviews from customers, register in directories in person, claim GBP listing, upload photos manually.
+- "SEO Room" — the system handles it automatically via WordPress plugin or Chrome extension. Covers: meta title/desc/H1 fixes, content optimization, schema, CWV/performance fixes, GBP profile edits (description, categories, services, hours, posts), indexing.
+- "Admin" — tasks that require a human to do manually. Covers: ALL third-party directory/citation updates, taking photos, requesting reviews, responding to reviews, uploading photos, claiming listings, any task requiring logging into an external website.
 
 DECISION GUIDE:
-- ANY meta/content/SEO fix → SEO Room (automated)
-- ANY performance/CWV fix → SEO Room (automated via plugin)
-- ANY GBP edit → SEO Room (automated via extension)
-- "Take photos" / "Request reviews" / "Register in directory" / "Upload photos" → Admin (human required)
+- Meta/content/SEO fix (title, desc, H1, schema, canonicals) → SEO Room
+- Performance/CWV fix (defer scripts, preconnect, image dimensions) → SEO Room
+- GBP profile edit (description, categories, services, hours, posts) → SEO Room
+- Fix NAP on third-party directories (Yellow Pages, Yelp, True Local, Hotfrog, etc.) → Admin
+- Register/update/claim ANY external directory or citation → Admin
+- Take photos, upload photos, request reviews → Admin
+- Respond to Google reviews → Admin (business owner voice needed)
 
 execution_type: "plugin" for fixes applied via WordPress, "api" for API tasks, "manual" for Admin tasks.
 
