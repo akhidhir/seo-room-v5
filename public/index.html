@@ -3540,8 +3540,21 @@
             setSpeedError(data.error || 'Speed audit failed. Please run again.');
           } else if (data.results) {
             setSpeedResults(data.results); setSpeedError('');
+            loadExistingActions();
           }
         } catch (e) { /* no previous speed audit */ }
+      };
+
+      const [existingCwvTitles, setExistingCwvTitles] = useState(new Set());
+
+      const loadExistingActions = async () => {
+        try {
+          const resp = await api(`/projects/${project.id}/action-items?pillar=website`);
+          const cwvItems = (resp.action_items || []).filter(a => a.category === 'Core Web Vitals' || a.type === 'Core Web Vitals');
+          if (!cwvItems.length) return;
+          const titles = new Set(cwvItems.map(item => (item.title || '').toLowerCase()));
+          setExistingCwvTitles(titles);
+        } catch (e) { /* ignore */ }
       };
 
       const pollForResults = () => {
@@ -3682,9 +3695,15 @@
         setFixingPage(null);
       };
 
+      const isPageAdded = (pageKey, page) => {
+        if (addedActions[pageKey]) return true;
+        const title = `fix cwv issues on: ${(page.title || page.slug || '').toLowerCase()}`;
+        return existingCwvTitles.has(title);
+      };
+
       const failingPages = useMemo(() => {
-        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !addedActions[pageKey] && !ignoredActions[pageKey]);
-      }, [sortedResults, addedActions, ignoredActions]);
+        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !isPageAdded(pageKey, page) && !ignoredActions[pageKey]);
+      }, [sortedResults, addedActions, ignoredActions, existingCwvTitles]);
 
       const handleAddAll = async () => {
         setBulkAdding(true);
@@ -3807,7 +3826,7 @@
                           <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: siColor(cwv.si) }}>{cwv.si || 'N/A'}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                             {!needsAction ? <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Pass</span> :
-                             addedActions[pageKey] ? (
+                             isPageAdded(pageKey, page) ? (
                               <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
                                 <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700 }}>Added</span>
                                 <button onClick={() => handleUndo(pageKey)} style={{ fontSize: 11, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-undo" /></button>
