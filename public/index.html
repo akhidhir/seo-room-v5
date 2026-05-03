@@ -3093,10 +3093,27 @@
       const loadExisting = async () => {
         const data = await api(`/projects/${project.id}/audit-findings`);
         if (data.findings) setFindings(data.findings.filter(f => f.pillar === 'technical'));
-        // Load previous speed audit results
+        // Load previous speed audit results or resume polling if running
         try {
-          const speedData = await api(`/projects/${project.id}/audits/speed/latest`);
-          if (speedData.results) {
+          const speedData = await api(`/speed-audit/${project.id}/status`);
+          if (speedData.status === 'running') {
+            setSpeedLoading(true);
+            const poll = setInterval(async () => {
+              try {
+                const s = await api(`/speed-audit/${project.id}/status`);
+                if (s.status === 'completed') {
+                  clearInterval(poll);
+                  setSpeedResults(s.results || []);
+                  const cwvMap = {};
+                  (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+                  setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+                  setSpeedLoading(false);
+                } else if (s.status === 'failed') {
+                  clearInterval(poll); setSpeedError(s.error || 'Failed'); setSpeedLoading(false);
+                }
+              } catch (e) { clearInterval(poll); setSpeedLoading(false); }
+            }, 5000);
+          } else if (speedData.results) {
             setSpeedResults(speedData.results);
             const cwvMap = {};
             speedData.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
@@ -3119,8 +3136,29 @@
         setSpeedLoading(true); setSpeedError('');
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
+          if (data.status === 'running') {
+            // Poll for results
+            const poll = setInterval(async () => {
+              try {
+                const s = await api(`/speed-audit/${project.id}/status`);
+                if (s.status === 'completed') {
+                  clearInterval(poll);
+                  setSpeedResults(s.results || []);
+                  const cwvMap = {};
+                  (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+                  setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+                  setSpeedLoading(false);
+                } else if (s.status === 'failed') {
+                  clearInterval(poll);
+                  setSpeedError(s.error || 'Speed audit failed');
+                  setSpeedLoading(false);
+                }
+              } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); }
+            }, 5000);
+            return;
+          }
+          // Fallback: synchronous response (shouldn't happen with new endpoint)
           setSpeedResults(data.results || []);
-          // Auto-populate CWV data from batch results
           const cwvMap = {};
           (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
           setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
@@ -3482,18 +3520,41 @@
 
       const loadExisting = async () => {
         try {
-          const data = await api(`/projects/${project.id}/audits/speed/latest`);
-          if (data.results) setSpeedResults(data.results);
+          const data = await api(`/speed-audit/${project.id}/status`);
+          if (data.status === 'running') {
+            setSpeedLoading(true);
+            pollForResults();
+          } else if (data.results) {
+            setSpeedResults(data.results);
+          }
         } catch (e) { /* no previous speed audit */ }
+      };
+
+      const pollForResults = () => {
+        const poll = setInterval(async () => {
+          try {
+            const s = await api(`/speed-audit/${project.id}/status`);
+            if (s.status === 'completed') {
+              clearInterval(poll);
+              setSpeedResults(s.results || []);
+              setSpeedLoading(false);
+            } else if (s.status === 'failed') {
+              clearInterval(poll);
+              setSpeedError(s.error || 'Speed audit failed');
+              setSpeedLoading(false);
+            }
+          } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); }
+        }, 5000);
       };
 
       const runSpeedAudit = async () => {
         setSpeedLoading(true); setSpeedError('');
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
+          if (data.status === 'running') { pollForResults(); return; }
           setSpeedResults(data.results || []);
         } catch (err) { setSpeedError(err.message); }
-        finally { setSpeedLoading(false); }
+        finally { if (!speedLoading) setSpeedLoading(false); }
       };
 
       const scoreColor = (s) => s >= 90 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
@@ -3658,7 +3719,7 @@
               <i className="fas fa-tachometer-alt" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
               <div style={{ fontSize: 16, marginBottom: 8 }}>No Core Web Vitals audit run yet</div>
               <div style={{ fontSize: 13 }}>Click "Run CWV Audit" to test all pages with Google PageSpeed Insights.</div>
-              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Scans up to 50 pages via sitemap.xml or WordPress REST API. Shows Performance score, LCP, FCP, CLS, TBT, and Speed Index per page.</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Scans up to 100 pages via sitemap.xml or WordPress REST API. Shows Performance score, LCP, FCP, CLS, TBT, and Speed Index per page.</div>
             </div>
           )}
         </div>

@@ -1800,7 +1800,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   return pages;
 }
 
-// Run speed audit on ALL pages (via Google PageSpeed Insights)
+// Run speed audit on ALL pages (via Google PageSpeed Insights) — async background job
 app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
@@ -1809,59 +1809,93 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
     const siteUrl = project.wordpress_url || (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : null);
     if (!siteUrl) return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' });
 
-    const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+    // Cancel any running speed audits
+    await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='speed' AND status='running'`, [req.params.projectId]);
 
-    // Process pages in parallel batches of 5
-    const BATCH_SIZE = 5;
-    const results = [];
-
-    async function processPage(page) {
-      try {
-        const psData = await runPageSpeedAudit(page.url, 'mobile');
-        const metrics = psData.lighthouseResult?.audits || {};
-        const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
-        return {
-          page_id: page.page_id,
-          title: page.title,
-          slug: page.slug,
-          url: page.url,
-          performance_score: score,
-          cwv: {
-            lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
-            fid: metrics['max-potential-fid']?.displayValue || 'N/A',
-            cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
-            fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
-            si: metrics['speed-index']?.displayValue || 'N/A',
-            tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
-            score,
-          },
-        };
-      } catch (err) {
-        return {
-          page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
-          error: err.message,
-        };
-      }
-    }
-
-    for (let i = 0; i < pages.length; i += BATCH_SIZE) {
-      const batch = pages.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(batch.map(processPage));
-      results.push(...batchResults);
-    }
-
-    // Save audit to DB
-    const auditResult = await pool.query(
-      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, completed_at)
-       VALUES ($1, 'speed', 'completed', $2, NOW(), NOW())
-       RETURNING id`,
-      [req.params.projectId, JSON.stringify({ results, ran_at: new Date().toISOString() })]
+    // Create audit record
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'speed', 'running', NOW()) RETURNING id`,
+      [req.params.projectId]
     );
+    const auditId = auditRes.rows[0].id;
 
+    // Return immediately
+    res.json({ auditId, status: 'running' });
+
+    // Run in background
+    (async () => {
+      try {
+        const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+        console.log(`[speed-audit] Discovered ${pages.length} pages for project ${req.params.projectId}`);
+
+        const BATCH_SIZE = 5;
+        const results = [];
+
+        async function processPage(page) {
+          try {
+            const psData = await runPageSpeedAudit(page.url, 'mobile');
+            const metrics = psData.lighthouseResult?.audits || {};
+            const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+            return {
+              page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
+              performance_score: score,
+              cwv: {
+                lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
+                fid: metrics['max-potential-fid']?.displayValue || 'N/A',
+                cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
+                fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
+                si: metrics['speed-index']?.displayValue || 'N/A',
+                tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
+                score,
+              },
+            };
+          } catch (err) {
+            console.warn(`[speed-audit] Failed for ${page.url}: ${err.message}`);
+            return { page_id: page.page_id, title: page.title, slug: page.slug, url: page.url, error: err.message };
+          }
+        }
+
+        for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+          const batch = pages.slice(i, i + BATCH_SIZE);
+          const batchResults = await Promise.all(batch.map(processPage));
+          results.push(...batchResults);
+          console.log(`[speed-audit] Progress: ${results.length}/${pages.length} pages`);
+        }
+
+        await pool.query(
+          `UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ results, ran_at: new Date().toISOString() }), auditId]
+        );
+        console.log(`[speed-audit] Completed: ${results.length} pages for project ${req.params.projectId}`);
+      } catch (bgErr) {
+        console.error('[speed-audit] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
+      }
+    })();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Poll speed audit status
+app.get('/api/speed-audit/:projectId/status', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='speed' ORDER BY started_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ status: 'none' });
+    const audit = result.rows[0];
+    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
     res.json({
-      audit_id: auditResult.rows[0].id,
-      total_pages: results.length,
-      results,
+      status: audit.status,
+      auditId: audit.id,
+      results: data.results || null,
+      total_pages: (data.results || []).length,
+      error: data.error || null,
+      startedAt: audit.started_at,
+      completedAt: audit.completed_at,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
