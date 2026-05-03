@@ -5980,7 +5980,7 @@
         });
         const assignees = [...new Set(itemsWithAssignee.map(i => i._assigneeLabel).filter(Boolean))].sort();
         return { categories, severities, assignees };
-      }, [itemsWithAssignee]);
+      }, [itemsWithAssignee, activePillar]);
 
       const filtered = useMemo(() => {
         const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
