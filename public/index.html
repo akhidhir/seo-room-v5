@@ -5854,10 +5854,16 @@
         try {
           const d = await api(`/projects/${project.id}/orchestrator`);
           const grouped = d.grouped || {};
+          const normPillar = (p) => {
+            const lp = (p || '').toLowerCase();
+            if (lp.includes('gbp')) return 'GBP';
+            if (lp.includes('gsc')) return 'GSC';
+            return 'Website';
+          };
           const all = [];
           for (const [pillar, cats] of Object.entries(grouped)) {
             for (const [cat, tasks] of Object.entries(cats)) {
-              tasks.forEach(t => all.push({ ...t, _category: cat, _pillar: pillar }));
+              tasks.forEach(t => all.push({ ...t, _category: cat, _pillar: normPillar(pillar), _rawPillar: pillar }));
             }
           }
           setItems(all);
@@ -5953,13 +5959,21 @@
         return 'Website Audit';
       };
 
+      const PILLAR_VALID_CATS = {
+        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+        GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+        Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+      };
+      const ALL_VALID_CATS = new Set([...PILLAR_VALID_CATS.GBP, ...PILLAR_VALID_CATS.GSC, ...PILLAR_VALID_CATS.Website]);
+
       // Reset category filter when pillar changes
       useEffect(() => { setFilterCategory('all'); }, [activePillar]);
 
       // Derive unique filter options — categories scoped to active pillar
       const filterOptions = useMemo(() => {
         const pillarItems = activePillar === 'all' ? itemsWithAssignee : itemsWithAssignee.filter(i => (i._pillar || i.pillar) === activePillar);
-        const categories = [...new Set(pillarItems.map(i => i._category || i.category).filter(Boolean))].sort();
+        const validForPillar = activePillar === 'all' ? ALL_VALID_CATS : new Set(PILLAR_VALID_CATS[activePillar] || []);
+        const categories = [...new Set(pillarItems.map(i => i._category || i.category).filter(c => c && validForPillar.has(c)))].sort();
         const severities = [...new Set(itemsWithAssignee.map(i => (i.severity || 'medium').toLowerCase()).filter(Boolean))].sort((a, b) => {
           const order = { critical: 0, high: 1, medium: 2, low: 3 };
           return (order[a] ?? 9) - (order[b] ?? 9);
