@@ -6056,11 +6056,8 @@
               placeholder: 'plumber\nelectrician\nair conditioning service\n(one per line or comma-separated)',
               rows: 5, style: Object.assign({}, fieldStyle, { resize: 'vertical', fontFamily: 'inherit' })
             }),
-            React.createElement('div', { style: { marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 } },
-              React.createElement('label', { style: { fontSize: 13, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' } },
-                React.createElement('input', { type: 'checkbox', checked: isLocal, onChange: function() { setIsLocal(!isLocal); } }),
-                'Local business (append city/state to keywords)'
-              )
+            React.createElement('div', { style: { marginTop: 12, fontSize: 12, color: 'var(--text3)' } },
+              'Volume data is geo-targeted to the selected city/state'
             )
           ),
 
@@ -6125,7 +6122,7 @@
               { label: 'KEYWORDS FOUND', value: results.total_found, color: 'var(--accent)' },
               { label: 'SHOWING', value: filteredKeywords.length, color: '#10b981' },
               { label: 'SELECTED', value: selected.filter(function(i) { return minVolume <= 0 || (results.keywords[i] && (results.keywords[i].volume || 0) >= minVolume); }).length, color: '#f59e0b' },
-              { label: 'LOCATION', value: results.location.split(',')[0] + (results.local_ratio ? ' (' + (results.local_ratio * 100).toFixed(1) + '%)' : ''), color: '#8b5cf6', small: true },
+              { label: 'LOCATION', value: results.location.split(',')[0], color: '#8b5cf6', small: true },
             ].map(function(s, i) {
               return React.createElement('div', { key: i, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', textAlign: 'center' } },
                 React.createElement('div', { style: { fontSize: s.small ? 18 : 28, fontWeight: 700, color: s.color } }, s.value),
@@ -6200,7 +6197,7 @@
                     ),
                     React.createElement('td', { style: { padding: '10px 12px', fontWeight: 500 } }, kw.keyword),
                     React.createElement('td', { style: { padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--accent)' } },
-                      kw.local_volume != null ? kw.local_volume.toLocaleString() : (kw.volume != null ? kw.volume.toLocaleString() : '—')
+                      kw.volume != null ? kw.volume.toLocaleString() : '—'
                     ),
                     React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center' } },
                       kw.competition ? React.createElement('span', { style: { fontSize: 11, fontWeight: 600, color: compColor, textTransform: 'uppercase' } }, kw.competition) : '—'

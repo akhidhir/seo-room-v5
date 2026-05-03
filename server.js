@@ -7673,24 +7673,18 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
   const locationCity = city || null;
   const locationState = state || null;
 
-  // Always use COUNTRY-level location code for volume data (city-level gives tiny buckets)
-  const locationCode = AU_LOCATIONS.country.code; // 2036 = Australia
+  // Use the most specific location code available: city > state > country
+  let locationCode = AU_LOCATIONS.country.code; // 2036 = Australia
   let locationName = 'Australia';
-  if (locationCity && locationState) {
+  if (locationCity && locationState && AU_LOCATIONS.states[locationState]?.cities?.[locationCity]) {
+    locationCode = AU_LOCATIONS.states[locationState].cities[locationCity];
     locationName = locationCity + ', ' + locationState + ', Australia';
-  } else if (locationState) {
+  } else if (locationState && AU_LOCATIONS.states[locationState]) {
+    locationCode = AU_LOCATIONS.states[locationState].code;
     locationName = locationState + ', Australia';
   }
 
-  // Calculate local volume ratio from population
-  let localRatio = 1;
-  if (is_local && locationCity && AU_CITY_POP[locationCity]) {
-    localRatio = AU_CITY_POP[locationCity] / AU_POPULATION;
-  } else if (is_local && locationState && AU_STATE_POP[locationState]) {
-    localRatio = AU_STATE_POP[locationState] / AU_POPULATION;
-  }
-
-  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} | Local: ${is_local} (ratio: ${(localRatio*100).toFixed(1)}%) | Cap: ${cap}`);
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (code: ${locationCode}) | Cap: ${cap}`);
 
   try {
     // Step 1: Expand seeds with SerpAPI autocomplete
@@ -7709,15 +7703,7 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
       }
     }
 
-    // If local, also create location variants
-    if (is_local && locationCity) {
-      const localVariants = seeds.map(s => `${s} ${locationCity}`);
-      expandedSeeds.push(...localVariants);
-    }
-    if (is_local && locationState) {
-      const stateVariants = seeds.map(s => `${s} ${locationState}`);
-      expandedSeeds.push(...stateVariants);
-    }
+    // No need to append city/state to keywords — DataForSEO location_code handles geo-targeting
 
     // Deduplicate
     expandedSeeds = [...new Set(expandedSeeds.map(s => s.trim().toLowerCase()))].filter(Boolean);
@@ -7840,19 +7826,7 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
       final = final.filter(kw => (kw.volume || 0) >= min_volume);
     }
 
-    // Add local volume estimate — but skip ratio for keywords that already contain the city/state name
-    if (is_local && localRatio < 1) {
-      const cityLower = (locationCity || '').toLowerCase();
-      const stateLower = (locationState || '').toLowerCase();
-      final = final.map(kw => {
-        const kwLower = (kw.keyword || '').toLowerCase();
-        const hasLocation = (cityLower && kwLower.includes(cityLower)) || (stateLower && kwLower.includes(stateLower));
-        return {
-          ...kw,
-          local_volume: hasLocation ? (kw.volume || 0) : Math.round((kw.volume || 0) * localRatio),
-        };
-      });
-    }
+    // Volume is already location-specific from DataForSEO — no ratio needed
 
     // Sort by volume descending
     final.sort((a, b) => (b.volume || 0) - (a.volume || 0));
@@ -7860,13 +7834,12 @@ app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
     // Cap to package size
     final = final.slice(0, cap);
 
-    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, local_ratio: ${(localRatio*100).toFixed(1)}%)`);
+    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, location_code: ${locationCode})`);
     res.json({
       keywords: final,
       total_found: Object.keys(kwMap).length,
       location: locationName,
       location_code: locationCode,
-      local_ratio: is_local ? localRatio : null,
     });
   } catch (e) {
     console.error('[kw-research] Error:', e.message, e.stack);
