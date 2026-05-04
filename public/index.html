@@ -4073,6 +4073,8 @@
               startPolling();
             } else if (data.results && data.results.length > 0) {
               handleCompleted(data);
+            } else if (data.status === 'failed') {
+              setError(data.error || 'Last indexing check failed. Please run again.');
             }
           } catch (err) { console.error('[indexing] Failed to load:', err.message); }
           finally { setInitialLoading(false); }

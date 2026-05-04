@@ -2278,11 +2278,29 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
       if (elapsed > 10 * 60 * 1000) {
         await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
-        return res.json({ status: 'failed', error: 'Indexing timed out. Please run again.' });
+        // Fall through to find last completed audit below
+      } else {
+        // Still running — return progress
+        const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+        return res.json({ status: 'running', ...data, completed_at: audit.completed_at });
       }
     }
-    const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
-    res.json({ status: audit.status, ...data, completed_at: audit.completed_at });
+    if (audit.status === 'completed') {
+      const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+      return res.json({ status: audit.status, ...data, completed_at: audit.completed_at });
+    }
+    // Latest audit is failed/timed-out — find last completed one instead
+    const completedResult = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='indexing' AND status='completed' ORDER BY started_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (completedResult.rows.length > 0) {
+      const completed = completedResult.rows[0];
+      const data = typeof completed.audit_data === 'string' ? JSON.parse(completed.audit_data) : (completed.audit_data || {});
+      return res.json({ status: 'completed', ...data, completed_at: completed.completed_at, note: 'Last run failed; showing previous results.' });
+    }
+    // No completed audits at all
+    res.json({ status: 'none', results: [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
