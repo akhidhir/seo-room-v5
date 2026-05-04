@@ -5442,10 +5442,11 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-    console.log('[import-current] Item:', { id: item.id, page_id: item.page_id, page_url: item.page_url, page_title: item.page_title, has_current: !!(item.current_content) });
+    const force = req.body?.force === true;
+    console.log('[import-current] Item:', { id: item.id, page_id: item.page_id, page_url: item.page_url, page_title: item.page_title, has_current: !!(item.current_content), force });
 
-    // If current_content already stored, return it
-    if (item.current_content && item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 20) {
+    // If current_content already stored and not forcing refresh, return it
+    if (!force && item.current_content && item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 20) {
       console.log('[import-current] Returning cached content, words:', item.current_content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length);
       return res.json({
         content: item.current_content,

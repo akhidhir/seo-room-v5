@@ -9728,7 +9728,16 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
-      return html
+      // Strip sliders/carousels — they render as stacked images without JS
+      let cleaned = html;
+      // Remove common slider containers (Smart Slider, Revolution, Elementor, Swiper, Slick, MetaSlider, etc.)
+      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?:<\/div>\s*)*/gi, '');
+      // Remove standalone slider shortcode output wrappers
+      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?:<\/div>\s*)*/gi, '');
+      // Remove blocks of 3+ consecutive img tags (likely a slider dumped as images)
+      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, '');
+      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, '');
+      return cleaned
         .replace(/<p>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/p>/gi, '')
         .replace(/<h[2-4]>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/h[2-4]>/gi, '')
         .replace(/<p>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '')
@@ -10839,7 +10848,7 @@
                 onClick: async () => {
                   setReAnalysing(true);
                   try {
-                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST' });
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST', body: { force: true } });
                     if (r.content) {
                       const cleaned = cleanWpHtml(r.content);
                       setEditContent(cleaned);
