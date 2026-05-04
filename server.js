@@ -1629,8 +1629,15 @@ Website (pillar: website):
   - "Core Web Vitals" — LCP, CLS, FCP, TBT, performance scores
   - "Schema & Data" — structured data, schema markup, rich snippets
 
-IMPORTANT: Create at least 1 action item per category that has findings. Every category with audit data MUST have action items — do NOT skip categories to save space. Distribute items across ALL relevant categories.
-Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description under 120 chars. No markdown in values.
+CRITICAL RULES:
+1. Create ONE action item per individual issue/finding. Do NOT consolidate multiple issues into one item.
+2. Every category with audit data MUST have action items — do NOT skip categories.
+3. If there are 15 pages with bad meta titles, create 15 separate action items (one per page), NOT one generic "fix meta titles" item.
+4. For GSC metrics: create one item per keyword/page that needs attention.
+5. For directory citations: create one item per directory that needs updating.
+6. The total number of action items should roughly match the total number of individual findings across all audits.
+
+Return ONLY a JSON array. No item limit — include ALL issues. Keep title under 60 chars, description under 120 chars. No markdown in values.
 [{
   "pillar": "<gbp_external|gsc_agent|website>",
   "category": "<section name>",
@@ -1645,7 +1652,7 @@ Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description u
 
         const resp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 16000,
+          max_tokens: 32000,
           messages: [{ role: 'user', content: orchestratorPrompt }]
         });
 
@@ -1700,9 +1707,9 @@ Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description u
         }
         console.log(`[orchestrator] Step 2: AI returned ${items.length} action items`);
 
-        // Filter out duplicates flagged by AI
-        const uniqueItems = items.filter(i => !i.duplicate_of);
-        console.log(`[orchestrator] After dedup: ${uniqueItems.length} items`);
+        // No AI-side dedup — let the GET endpoint handle dedup with DP tagging
+        const uniqueItems = items;
+        console.log(`[orchestrator] Total items to save: ${uniqueItems.length}`);
 
         // Validate
         const validExecTypes = ['plugin', 'manual', 'api'];
