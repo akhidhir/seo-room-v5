@@ -5846,14 +5846,14 @@
                               if (status === 'in-progress') return <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
                               return (
                                 <button onClick={() => handleStatusChange(item.id, 'in-progress')}
-                                  style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-pen-fancy" style={{ marginRight: 4, fontSize: 10 }} />Send
+                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-pen-fancy" style={{ marginRight: 5, fontSize: 13 }} />Send
                                 </button>
                               );
                             }
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 12, padding: '5px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
+                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
@@ -6340,19 +6340,19 @@
 
           {!loading && filtered.length > 0 && (
             <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, tableLayout: 'fixed' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 18, tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
                     {[
-                      { key: 'severity', label: 'PRIORITY', w: 90, align: 'left' },
+                      { key: 'severity', label: 'PRIORITY', w: 110, align: 'left' },
                       { key: 'title', label: 'ACTION', w: null, align: 'left' },
-                      ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 85, align: 'left' }] : []),
-                      { key: 'category', label: 'CATEGORY', w: 140, align: 'left' },
-                      { key: 'assignee', label: 'ASSIGNEE', w: 130, align: 'left' },
-                      { key: 'status', label: 'STATUS', w: 110, align: 'center' },
+                      ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 100, align: 'left' }] : []),
+                      { key: 'category', label: 'CATEGORY', w: 170, align: 'left' },
+                      { key: 'assignee', label: 'ASSIGNEE', w: 150, align: 'left' },
+                      { key: 'status', label: 'STATUS', w: 130, align: 'center' },
                     ].map(col => (
                       <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
-                        style={{ padding: '12px 14px', textAlign: col.align, fontSize: 12, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
+                        style={{ padding: '16px 18px', textAlign: col.align, fontSize: 15, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
                         {col.label}
                         {sortCol === col.key && <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10 }} />}
                       </th>
@@ -6370,14 +6370,14 @@
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px 14px', verticalAlign: 'top' }}>
-                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 13, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
+                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 17, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
                         </td>
-                        <td style={{ padding: '14px 14px', verticalAlign: 'top', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.6, color: 'var(--text1)' }}>
+                        <td style={{ padding: '18px', verticalAlign: 'top', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                          <div style={{ fontWeight: 600, fontSize: 20, lineHeight: 1.5, color: 'var(--text1)' }}>
                             {item.title}
-                            {item.is_duplicate && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 3, background: '#8b5cf620', color: '#8b5cf6', verticalAlign: 'middle' }} title={`Consolidates ${item.duplicate_ids.length} duplicate(s) — fixing this fixes all`}>DP ×{item.duplicate_ids.length}</span>}
+                            {item.is_duplicate && <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700, padding: '3px 7px', borderRadius: 4, background: '#8b5cf620', color: '#8b5cf6', verticalAlign: 'middle' }} title={`Consolidates ${item.duplicate_ids.length} duplicate(s) — fixing this fixes all`}>DP ×{item.duplicate_ids.length}</span>}
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginTop: 4 }}>{item.description}</div>
+                          <div style={{ fontSize: 16, color: 'var(--text2)', lineHeight: 1.7, marginTop: 6 }}>{item.description}</div>
                           {(() => {
                             const pLower = (item._pillar || item.pillar || '').toLowerCase();
                             const isGBP = pLower.includes('gbp');
@@ -6387,15 +6387,15 @@
                             if (isGBP) { navPage = 'ext-sec-' + cat; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-sec-' + cat; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
                             else { navPage = 'web-sec-' + cat; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
-                            return <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                              <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ fontSize: 12, padding: '4px 12px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 11 }} />{navLabel}</button>
-                              {(assigneeLabel === 'Manual' || assigneeLabel === 'Copywriter') && <button onClick={() => loadHowTo(item.id)} style={{ fontSize: 12, padding: '4px 12px', background: howToExpanded[item.id] ? '#f59e0b20' : 'var(--bg2)', border: '1px solid ' + (howToExpanded[item.id] ? '#f59e0b40' : 'var(--border)'), borderRadius: 4, color: howToExpanded[item.id] ? '#f59e0b' : 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className={howToLoading[item.id] ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb'} style={{ marginRight: 5, fontSize: 11 }} />{howToExpanded[item.id] ? 'Hide Steps' : 'How To'}</button>}
+                            return <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                              <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ fontSize: 14, padding: '6px 16px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 5, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 6, fontSize: 13 }} />{navLabel}</button>
+                              {(assigneeLabel === 'Manual' || assigneeLabel === 'Copywriter') && <button onClick={() => loadHowTo(item.id)} style={{ fontSize: 14, padding: '6px 16px', background: howToExpanded[item.id] ? '#f59e0b20' : 'var(--bg2)', border: '1px solid ' + (howToExpanded[item.id] ? '#f59e0b40' : 'var(--border)'), borderRadius: 5, color: howToExpanded[item.id] ? '#f59e0b' : 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className={howToLoading[item.id] ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb'} style={{ marginRight: 6, fontSize: 13 }} />{howToExpanded[item.id] ? 'Hide Steps' : 'How To'}</button>}
                               {/\b(?:for|:)\s+.+\s*[+&,]\s*.+/.test(item.title || '') && <button onClick={async () => {
                                 try {
                                   const data = await api(`/action-items/${item.id}/split`, { method: 'POST' });
                                   if (data.created) { loadData(); }
                                 } catch(err) { console.error('Split failed:', err); }
-                              }} style={{ fontSize: 12, padding: '4px 12px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className="fas fa-code-branch" style={{ marginRight: 5, fontSize: 11 }} />Split</button>}
+                              }} style={{ fontSize: 14, padding: '6px 16px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className="fas fa-code-branch" style={{ marginRight: 6, fontSize: 13 }} />Split</button>}
                             </div>;
                           })()}
                           {howToExpanded[item.id] && (
@@ -6406,13 +6406,13 @@
                         </td>
                         {activePillar === 'all' && (
                           <td style={{ padding: '14px', verticalAlign: 'top' }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '4px 10px', borderRadius: 4 }}>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '5px 12px', borderRadius: 5 }}>
                               {pillarLabels[itemPillar] || itemPillar}
                             </span>
                           </td>
                         )}
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 13, color: 'var(--text2)' }}>{item._category || item.category}</td>
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 13, whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, color: 'var(--text2)' }}>{item._category || item.category}</td>
+                        <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, whiteSpace: 'nowrap' }}>
                           <select value={assigneeLabel} onChange={async (e) => {
                             const newLabel = e.target.value;
                             const execMap = { Automated: 'automated', Copywriter: 'copywriter', Manual: 'manual' };
@@ -6426,7 +6426,7 @@
                                 } catch(cqErr) { console.warn('Auto-send to content queue:', cqErr); }
                               }
                             } catch(err) { console.error(err); }
-                          }} style={{ fontSize: 13, padding: '4px 8px', background: 'transparent', border: '1px solid transparent', borderRadius: 4, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
+                          }} style={{ fontSize: 16, padding: '6px 10px', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
                             onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
                             <option value="Automated" style={{ color: '#22c55e' }}>Automated</option>
                             <option value="Copywriter" style={{ color: '#8b5cf6' }}>Copywriter</option>
@@ -6438,20 +6438,20 @@
                             const status = (item.status || 'pending').toLowerCase();
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
                               const canExec = canAutoExecute(item);
-                              if (!canExec) return <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pending</span>;
+                              if (!canExec) return <span style={{ fontSize: 15, color: 'var(--text3)' }}>Pending</span>;
                               return (
                                 <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
-                                  style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
-                                  {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 10 }} />Run</>}
+                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
+                                  {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Run</>}
                                 </button>
                               );
                             }
                             // COPYWRITER: Send button or status
                             if (assigneeLabel === 'Copywriter') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 11 }} /> In Queue</span>;
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 14 }} /> In Queue</span>;
                               return (
                                 <button onClick={async () => {
                                   try {
@@ -6459,15 +6459,15 @@
                                     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
                                   } catch(err) { console.error('Send to copywriter:', err); }
                                 }}
-                                  style={{ padding: '5px 14px', fontSize: 12, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-pen-fancy" style={{ marginRight: 4, fontSize: 10 }} />Send
+                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-pen-fancy" style={{ marginRight: 5, fontSize: 13 }} />Send
                                 </button>
                               );
                             }
                             // MANUAL: status dropdown (Not Started / In Progress / Done)
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 12, padding: '5px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
+                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
