@@ -1574,11 +1574,30 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         let savedCount = 0;
         try {
           await client.query('BEGIN');
-          // Only delete action_items — findings are the source of truth, never delete them
-          await client.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
+          // Preserve done/in-progress items — only replace pending ones
+          // 1. Get existing done/in-progress items by finding_id or title+pillar
+          const existingDone = await client.query(
+            `SELECT id, finding_id, title, pillar, status FROM action_items WHERE project_id=$1 AND status IN ('done', 'completed', 'in-progress')`,
+            [projectId]
+          );
+          const doneKeys = new Set();
+          for (const d of existingDone.rows) {
+            if (d.finding_id) doneKeys.add(`fid:${d.finding_id}`);
+            doneKeys.add(`tp:${(d.title || '').toLowerCase().trim()}|${(d.pillar || '').toLowerCase()}`);
+          }
 
+          // 2. Delete only pending action_items (done ones stay)
+          await client.query(`DELETE FROM action_items WHERE project_id=$1 AND status NOT IN ('done', 'completed', 'in-progress')`, [projectId]);
+
+          // 3. Insert new items only if not already done
           for (const item of uniqueItems) {
             if (!item.title) continue;
+            const fidKey = item._finding_id ? `fid:${item._finding_id}` : null;
+            const tpKey = `tp:${(item.title || '').toLowerCase().trim()}|${(item.pillar || '').toLowerCase()}`;
+            if ((fidKey && doneKeys.has(fidKey)) || doneKeys.has(tpKey)) {
+              console.log(`[orchestrator] Skipping already-done item: ${item.title}`);
+              continue;
+            }
             await client.query(
               `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,

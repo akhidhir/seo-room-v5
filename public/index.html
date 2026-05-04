@@ -5910,16 +5910,30 @@
       const pendingSeoRoomCount = useMemo(() => {
         return items.filter(i => {
           const status = (i.status || 'pending').toLowerCase();
-          return status === 'pending' && canAutoExecute(i);
+          if (status !== 'pending' || !canAutoExecute(i)) return false;
+          if (activePillar === 'all') return true;
+          const p = (i.pillar || '').toLowerCase();
+          const ap = activePillar.toLowerCase();
+          if (ap === 'gbp') return p === 'gbp' || p === 'gbp_external';
+          if (ap === 'gsc') return p === 'gsc' || p === 'gsc_agent';
+          if (ap === 'website') return p === 'website' || p === 'technical';
+          return p === ap;
         }).length;
-      }, [items]);
+      }, [items, activePillar]);
 
       const handleExecuteAll = async () => {
         setExecuting(true); setExecProgress({ done: 0, total: 0, current: '' });
         try {
           const executableItems = items.filter(i => {
             const status = (i.status || 'pending').toLowerCase();
-            return status === 'pending' && canAutoExecute(i);
+            if (status !== 'pending' || !canAutoExecute(i)) return false;
+            if (activePillar === 'all') return true;
+            const p = (i.pillar || '').toLowerCase();
+            const ap = activePillar.toLowerCase();
+            if (ap === 'gbp') return p === 'gbp' || p === 'gbp_external';
+            if (ap === 'gsc') return p === 'gsc' || p === 'gsc_agent';
+            if (ap === 'website') return p === 'website' || p === 'technical';
+            return p === ap;
           });
 
           setExecProgress({ done: 0, total: executableItems.length, current: 'Starting...' });
