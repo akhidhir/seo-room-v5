@@ -1480,18 +1480,33 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         const allFindings = refreshedResult.rows;
         console.log(`[orchestrator] Total findings after re-extraction: ${allFindings.length}`);
 
-        // Simple classification: Automated or Manual
+        // Classification: Automated, Copywriter, or Manual
         function assignItem(finding) {
           const t = ((finding.title || '') + ' ' + (finding.description || '') + ' ' + (finding.category || '')).toLowerCase();
 
-          // Manual: physical actions, external registrations, review solicitation, link building
-          if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|phone call|print|brochure|flyer)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim.*listing|create.*account)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(ask.*review|collect.*review|request.*review|get.*review|review.*campaign|ask.*customer)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(backlink|link.?build|off.?page|guest.?post|outreach)\b/.test(t) && !/\b(internal.?link|broken.?link)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          // --- COPYWRITER: content creation, writing, rewriting tasks ---
+          if (/\b(write|rewrite|craft|draft|create.*content|add.*content|expand.*content|improve.*content|update.*content)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(meta.?description|meta.?title|title.?tag|page.?title)\b/.test(t) && /\b(write|add|create|improve|optimis|missing|empty|duplicate|too short|too long)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(thin.?content|low.?word.?count|short.?content|content.?quality|content.?length|word.?count)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(blog.?post|article|landing.?page.?copy|page.?copy|service.?page|suburb.?page)\b/.test(t) && /\b(create|write|add|missing|need)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(gbp.?post|google.?post|business.?description|business.?profile.?description)\b/.test(t) && /\b(write|create|add|update|improve|missing)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(faq|frequently.?asked|q\s*&\s*a)\b/.test(t) && /\b(add|create|write|missing)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(heading|h1|h2)\b/.test(t) && /\b(missing|add|rewrite|improve|duplicate|optimis)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(alt.?text|image.?alt|alt.?tag|alt.?attribute)\b/.test(t) && /\b(missing|add|write|empty)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(keyword|cannibali[sz]|cannibal)\b/.test(t) && /\b(target|optimis|differentiat|refocus|consolidat)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(anchor.?text|internal.?link)\b/.test(t) && /\b(descriptive|improve|keyword|optimis)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          if (/\b(ctr|click.?through)\b/.test(t) && /\b(improve|low|optimis|rewrite|title|description)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
 
-          // Everything else: Automated
+          // --- MANUAL: physical actions, external registrations, review solicitation, link building ---
+          if (/\b(photo|picture|image.?shoot|camera|testimonial|in.?person|physically|visit|phone.?call|print|brochure|flyer)\b/.test(t) && !/\b(alt.?text|image.?alt|compress|optimi[sz]e.?image|image.?size|lazy.?load|webp|format)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim.*listing|create.*account)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(ask.*review|collect.*review|request.*review|get.*review|review.*campaign|ask.*customer|solicit.*review)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(backlink|link.?build|off.?page|guest.?post|outreach|pr.?campaign)\b/.test(t) && !/\b(internal.?link|broken.?link)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(google.?ads|ppc|paid.?search|ad.?campaign)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+
+          // --- AUTOMATED: technical fixes, schema, config, compression, redirects ---
           return { assignee: 'Automated', execType: 'automated' };
         }
 
