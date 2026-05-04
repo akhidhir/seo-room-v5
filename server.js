@@ -1528,41 +1528,20 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         function isInformational(finding) {
           const title = (finding.title || '').trim();
           const titleLower = title.toLowerCase();
-          const all = (title + ' ' + (finding.description || '') + ' ' + (finding.current_value || '') + ' ' + (finding.recommendation || '')).toLowerCase();
+          const desc = (finding.description || '').toLowerCase();
 
-          // --- Explicit non-actionable title patterns ---
-          const infoTitles = [
-            /^pages?\s+(successfully\s+)?crawled/i,
-            /^sitemap\s+present/i,
-            /^https?\s*[\/\\]?\s*ssl/i,
-            /^total\s+pages?\s+in/i,
-            /^robots\.?txt/i,
-            /^viewport\s+meta/i,
-            /^mobile.?friendly/i,
-            /^server\s+response/i,
-            /^page\s+load\s+time/i,
-            /^dns\s+resolution/i,
-            /^ssl\s+certificate/i,
-          ];
-          // Only skip if there's no actionable language in the full text
-          if (infoTitles.some(rx => rx.test(title)) && !/\b(fix|improve|add|missing|error|broken|fail|issue|problem|not |no |need|should|must|recommend|warning|slow|block)\b/i.test(all)) return true;
+          // --- ALWAYS filter: these titles are status checks, never actionable ---
+          if (/^pages?\s+(successfully\s+)?crawled/i.test(title)) return true;
+          if (/^total\s+pages?\s+in/i.test(title)) return true;
+          if (/^sitemap\s+present/i.test(title) && !/missing|not found|error/i.test(desc)) return true;
+          if (/^https?\s*[\/ ]\s*ssl/i.test(title) && !/mixed|insecure|expired|error|not /i.test(desc)) return true;
+          if (/^(robots\.?txt|viewport\s+meta|mobile.?friendly|server\s+response|page\s+load|dns\s+resolution|ssl\s+cert)/i.test(title) && !/missing|error|slow|block|fail|not /i.test(desc)) return true;
 
-          // --- Any ✅ in title or description without negative context ---
-          if (/✅/.test(title + ' ' + (finding.description || '')) && !/\b(but|however|partial|issue|need|missing|fix|improve|not |no )\b/i.test(all)) return true;
-
-          // --- "Pass" / "Yes" / "Good" / "OK" verdicts without issues ---
-          if (/\b(pass|passed)\b/i.test(all) && !/\b(bypass|password|fail|not pass|doesn.?t pass|fix|improve|add|need|should|must|recommend|missing|error|slow)\b/i.test(all)) return true;
-          if (/\byes\s*[—–\-:]/i.test(all) && !/\b(but|however|partial|issue|need|missing|fix|improve)\b/i.test(all)) return true;
-
-          // --- Status-only items (no recommendation or recommendation is just "none"/"n/a") ---
-          const rec = (finding.recommendation || finding.description || '').trim().toLowerCase();
-          if (/^(n\/a|none|no action|no issues?|looks? good|all good|no changes?\s+needed|—|-|–)$/i.test(rec)) return true;
+          // --- ✅ emoji means passing — always filter unless "partial" or "but" in desc ---
+          if (/✅/.test(title + ' ' + (finding.description || '')) && !/\b(but|however|partial|issue|need|missing|fix|improve)\b/i.test(desc)) return true;
 
           // --- Monitoring-only (no fix action) ---
-          if (/\bmonitor\b/i.test(titleLower) && !/\b(fix|add|create|implement|update|change|improve)\b/i.test(all)) return true;
-
-          // --- Pure data points (just listing pages/counts with no issue) ---
-          if (/\b(successfully|correctly|properly|fully)\b/i.test(all) && !/\b(not |no |missing|error|issue|problem|fix|improve|add|need|should|must)\b/i.test(all)) return true;
+          if (/\bmonitor\b/i.test(titleLower) && !/\b(fix|add|create|implement|update|change|improve)\b/i.test(desc)) return true;
 
           return false;
         }
