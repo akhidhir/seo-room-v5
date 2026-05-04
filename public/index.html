@@ -5907,21 +5907,14 @@
         return null;
       };
 
-      const pendingSeoRoomCount = useMemo(() => {
-        return items.filter(i => {
-          const status = (i.status || 'pending').toLowerCase();
-          if (status !== 'pending' || !canAutoExecute(i)) return false;
-          if (activePillar === 'all') return true;
-          return (i._pillar || i.pillar) === activePillar;
-        }).length;
-      }, [items, activePillar]);
+      // pendingSeoRoomCount is below itemsWithAssignee
 
       const handleExecuteAll = async () => {
         setExecuting(true); setExecProgress({ done: 0, total: 0, current: '' });
         try {
-          const executableItems = items.filter(i => {
+          const executableItems = itemsWithAssignee.filter(i => {
             const status = (i.status || 'pending').toLowerCase();
-            if (status !== 'pending' || !canAutoExecute(i)) return false;
+            if (status !== 'pending' || i._assigneeLabel !== 'Automated' || !canAutoExecute(i)) return false;
             if (activePillar === 'all') return true;
             return (i._pillar || i.pillar) === activePillar;
           });
@@ -6081,6 +6074,17 @@
         const execInfo = detectExecType(item.description || item.title, item._pillar || item.pillar, item._category || item.category);
         return { ...item, _assigneeLabel: execInfo.label };
       }), [items]);
+
+      const pendingSeoRoomCount = useMemo(() => {
+        return itemsWithAssignee.filter(i => {
+          const status = (i.status || 'pending').toLowerCase();
+          if (status !== 'pending') return false;
+          if (i._assigneeLabel !== 'Automated') return false;
+          if (!canAutoExecute(i)) return false;
+          if (activePillar === 'all') return true;
+          return (i._pillar || i.pillar) === activePillar;
+        }).length;
+      }, [itemsWithAssignee, activePillar]);
 
       // Map pillar + category to audit page label
       const getAuditPageLabel = (item) => {
