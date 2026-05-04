@@ -11233,6 +11233,17 @@
                   )
                 ),
                 React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  // Split button for multi-location items
+                  stage === 'queue' && /\b(?:for|:)\s+.+\s*[+&,]\s*.+/.test(item.page_title || '') && React.createElement('button', {
+                    onClick: async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await api(`/projects/${pid}/content-queue/${item.id}/split`, { method: 'POST' });
+                        loadItems();
+                      } catch(err) { console.error('Split failed:', err); }
+                    },
+                    style: { padding: '6px 12px', background: 'var(--bg3)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                  }, React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-code-branch', style: { marginRight: 4 } }), 'Split')),
                   // Generate Draft button (queue only, no draft yet)
                   stage === 'queue' && !item.draft_content && React.createElement('button', {
                     onClick: (e) => { e.stopPropagation(); handleGenerateDraft(item); },

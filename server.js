@@ -5280,6 +5280,38 @@ app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Split a multi-location content queue item into individual items
+app.post('/api/projects/:projectId/content-queue/:id/split', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const original = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!original) return res.status(404).json({ error: 'Not found' });
+
+    const title = original.page_title || '';
+    const multiMatch = title.match(/^(.+?)\s+(?:for|:)\s+(.+)$/i);
+    if (!multiMatch) return res.status(400).json({ error: 'Cannot detect multiple locations in title' });
+
+    const baseTitle = multiMatch[1].trim();
+    const locations = multiMatch[2].split(/\s*[+&,]\s*|\s+and\s+/i).map(s => s.trim()).filter(Boolean);
+    if (locations.length < 2) return res.status(400).json({ error: 'Only one location detected' });
+
+    const created = [];
+    for (const loc of locations) {
+      const newTitle = `${baseTitle} for ${loc}`;
+      const newBrief = (original.brief || '').replace(multiMatch[2], loc);
+      const r = await pool.query(
+        `INSERT INTO content_queue (project_id, page_id, page_url, page_title, content_type, source, priority, brief, stage)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [projectId, null, original.page_url, newTitle, original.content_type || 'rewrite', original.source || 'action-plan', original.priority || 'medium', newBrief, 'queue']
+      );
+      created.push(r.rows[0]);
+    }
+
+    await pool.query('DELETE FROM content_queue WHERE id=$1', [id]);
+    res.json({ split: locations.length, created });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Helper: build copywriter context block from project settings (tone, wireframe, persona)
 // Returns a string to inject into AI prompts — empty string if none set
 function buildCopywriterContext(project, item) {
