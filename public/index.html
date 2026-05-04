@@ -6371,8 +6371,10 @@
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              const canExec = canAutoExecute(item);
+                              if (!canExec) return <span style={{ fontSize: 11, color: 'var(--text3)' }}>Pending</span>;
                               return (
-                                <button onClick={() => { const execType = canAutoExecute(item); if (execType) handleExecuteOne(item); else handleStatusChange(item.id, 'done'); }} disabled={executingItem === item.id}
+                                <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
                                   style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
                                   {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run</>}
                                 </button>
