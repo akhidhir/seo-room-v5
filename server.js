@@ -2235,8 +2235,7 @@ Return ONLY JSON: {"new_meta_title": "...", "new_meta_desc": "...", "new_focus_k
       }
 
       if (changes.length === 0) {
-        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'Current meta already looks good' });
+        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'AI found no meta changes needed — review manually in On-Page Audit.' });
       }
 
       const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageData.type}/${pageData.wpId}`, {
@@ -2408,9 +2407,12 @@ Return ONLY: [{"fix_type": "...", "params": {...}, "reason": "..."}]`;
         signal: AbortSignal.timeout(10000),
       });
 
-      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-      console.log(`[auto-fix] Image optimization: lazy load applied`);
-      return res.json({ success: true, fix_type: 'image', applied: wpResp.ok, message: wpResp.ok ? 'Lazy loading enabled site-wide' : 'Plugin not available — install ShortPixel or Imagify for image compression' });
+      if (wpResp.ok) {
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        console.log(`[auto-fix] Image optimization: lazy load applied`);
+        return res.json({ success: true, fix_type: 'image', applied: true, message: 'Lazy loading enabled site-wide' });
+      }
+      return res.json({ success: true, fix_type: 'image', applied: false, message: 'seoroom-helper plugin not available — install it or use ShortPixel/Imagify for image compression' });
     }
 
     // ---- ROUTE 5: Everything else — keep pending, explain why ----
