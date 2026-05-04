@@ -9853,6 +9853,43 @@ async function pollAgentSession(apiBase, agentHeaders, sessionId, label, maxWait
   throw new Error('Agent timed out after 10 minutes');
 }
 
+// ==================== FOLLOW-UP EXTRACTION MESSAGE ====================
+// Send a second message to the agent asking it to enumerate EVERY finding from its report as JSON.
+// The agent already has the context — it just needs to output structured data without consolidating.
+
+async function extractFindingsViaFollowUp(apiBase, agentHeaders, sessionId, pillar, label) {
+  const validCategories = PILLAR_CATEGORIES[pillar] || [];
+  const followUpPrompt = `Now I need you to create a complete JSON inventory of EVERY individual finding from your report above.
+
+CRITICAL RULES:
+- Go through your report section by section
+- Every single row in every table = one JSON object
+- Every single bullet point that describes an issue = one JSON object
+- Do NOT consolidate or summarize — if your report mentions 12 on-page issues, I need 12 JSON objects
+- Count your items and verify the total matches what your report shows
+
+Output ONLY this, nothing else:
+~~~findings
+[
+  {"category":"<one of: ${validCategories.join(', ')}>","title":"<exact issue from your report, under 60 chars>","description":"<what is wrong — be specific, include page URLs>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state>","recommended_value":"<target state>"}
+]
+~~~
+
+Remember: one JSON object per table row, per bullet point, per issue. The total count MUST match your report.`;
+
+  try {
+    console.log(`[${label}] Sending follow-up extraction message...`);
+    await waitForSessionReady(apiBase, agentHeaders, sessionId, label, 30000);
+    await sendAgentMessage(apiBase, agentHeaders, sessionId, followUpPrompt, label);
+    const extractionText = await pollAgentSession(apiBase, agentHeaders, sessionId, label, 300000);
+    console.log(`[${label}] Follow-up response: ${extractionText.length} chars`);
+    return extractionText;
+  } catch (e) {
+    console.error(`[${label}] Follow-up extraction failed: ${e.message}`);
+    return null;
+  }
+}
+
 // ==================== AGENT REPORT → STRUCTURED FINDINGS EXTRACTOR ====================
 
 // Valid categories per pillar — findings MUST map to one of these
@@ -10366,25 +10403,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
 
-    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}
-
-CRITICAL OUTPUT REQUIREMENT:
-After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
-
-At the very end of your response, output this EXACT format:
-~~~findings
-[
-  {"category":"<one of: Profile Completeness, NAP Consistency, Reviews & Reputation, Competitor Analysis, Directory & Citations, Photos & Media, Suburb Coverage>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
-]
-~~~
-
-RULES for the findings block:
-- One JSON object per individual issue (per directory, per competitor, per problem)
-- Do NOT consolidate multiple issues into one finding
-- Every item visible in your tables MUST have a corresponding finding
-- Category must be one of the 7 listed above
-- The count of JSON findings must match the total actionable items in your report
-- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
+    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}`;
 
     // Run the managed agent via Sessions API (raw fetch — SDK may not have beta.sessions)
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -10418,14 +10437,15 @@ RULES for the findings block:
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gbp-external');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gbp-external');
 
-        // Strip ~~~findings block from display report (keep for extraction)
         const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
         console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
 
-        // Extract findings: try structured JSON block first, fall back to deterministic parser
-        const extracted = await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
+        // PASS 2: Follow-up extraction
+        const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'gbp_external', 'gbp-external');
+        const textForExtraction = extractionText || finalText;
+        const extracted = await extractFindingsFromReport(textForExtraction, 'gbp_external', projectId, auditId);
         console.log(`[gbp-external] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
@@ -10496,25 +10516,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
 
     console.log(`[website-agent] Starting audit for "${domain}"`);
 
-    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.
-
-CRITICAL OUTPUT REQUIREMENT:
-After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
-
-At the very end of your response, output this EXACT format:
-~~~findings
-[
-  {"category":"<one of: Site Health, Crawlability, On-Page Issues, Content Quality, Core Web Vitals, Schema & Data>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
-]
-~~~
-
-RULES for the findings block:
-- One JSON object per individual issue (per page, per problem, per missing element)
-- Do NOT consolidate multiple issues into one finding
-- Every item visible in your tables MUST have a corresponding finding
-- Category must be one of the 6 listed above
-- The count of JSON findings must match the total actionable items in your report
-- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
+    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
@@ -10545,14 +10547,18 @@ RULES for the findings block:
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'website-agent');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'website-agent');
 
-        // Strip ~~~findings block from display report (keep for extraction)
+        // Store report for display (strip any inline findings block)
         const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
         console.log(`[website-agent] Report stored (${displayReport.length} chars)`);
 
-        // Extract findings: try structured JSON block first, fall back to deterministic parser
-        const extracted = await extractFindingsFromReport(finalText, 'website', projectId, auditId);
+        // PASS 2: Send follow-up message asking agent to enumerate every finding as JSON
+        const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'website', 'website-agent');
+        const textForExtraction = extractionText || finalText; // fall back to original report if follow-up fails
+
+        // Extract findings from follow-up response (or original report as fallback)
+        const extracted = await extractFindingsFromReport(textForExtraction, 'website', projectId, auditId);
         console.log(`[website-agent] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[website-agent] Background error:', bgErr.message);
@@ -10649,26 +10655,6 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
     console.log(`[gsc-agent] Starting audit for "${domain}"`);
 
-    const FINDINGS_INSTRUCTION = `
-
-CRITICAL OUTPUT REQUIREMENT:
-After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
-
-At the very end of your response, output this EXACT format:
-~~~findings
-[
-  {"category":"<one of: Quick Wins, Low CTR Pages, Cannibalization, Zero-Click Pages, Underperforming Pages>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
-]
-~~~
-
-RULES for the findings block:
-- One JSON object per individual issue (per keyword, per page, per cannibalization pair)
-- Do NOT consolidate multiple issues into one finding
-- Every item visible in your tables MUST have a corresponding finding
-- Category must be one of the 5 listed above
-- The count of JSON findings must match the total actionable items in your report
-- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
-
     let userPrompt = `Conduct a comprehensive Google Search Console audit for: ${domain}`;
     if (gscData && gscData.rows && gscData.rows.length > 0) {
       // Summarize top data for the agent
@@ -10684,7 +10670,6 @@ RULES for the findings block:
     } else {
       userPrompt += `\n\nNote: GSC API data was not available. Analyze the site externally — check indexing, keyword targeting, content gaps, and SERP presence. Use pipe-delimited markdown tables for all findings.`;
     }
-    userPrompt += FINDINGS_INSTRUCTION;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
@@ -10721,14 +10706,15 @@ RULES for the findings block:
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gsc-agent');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gsc-agent');
 
-        // Strip ~~~findings block from display report (keep for extraction)
         const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
         console.log(`[gsc-agent] Report stored (${displayReport.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
 
-        // Extract findings: try structured JSON block first, fall back to deterministic parser
-        const extracted = await extractFindingsFromReport(finalText, 'gsc_agent', projectId, auditId);
+        // PASS 2: Follow-up extraction
+        const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'gsc_agent', 'gsc-agent');
+        const textForExtraction = extractionText || finalText;
+        const extracted = await extractFindingsFromReport(textForExtraction, 'gsc_agent', projectId, auditId);
         console.log(`[gsc-agent] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
