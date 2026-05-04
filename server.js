@@ -1501,7 +1501,9 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           // Core Web Vitals — all can be attempted via seoroom-helper (preconnect, defer, preload, etc.)
           if (cat === 'core web vitals') return { assignee: 'Automated', execType: 'automated' };
           // Schema/structured data — inject JSON-LD via seoroom-helper custom_snippet
-          if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business.?schema)\b/.test(t) && /\b(add|missing|implement|create|no |partial)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Match category OR specific schema type names in title/description
+          if (cat === 'schema & data' || cat === 'schema') return { assignee: 'Automated', execType: 'automated' };
+          if (/\b(schema|structured.?data|json.?ld|rich.?snippet|faqpage|localbusiness|aggregaterating|itemlist|howto|searchaction|breadcrumb|service.?schema|review.?schema)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
           // Image lazy loading / format hints
           if (/\b(lazy.?load|image.?dimension|fetchpriority)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
           // Font loading optimizations

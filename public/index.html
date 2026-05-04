@@ -1392,7 +1392,8 @@
 
       // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
       if (cat === 'core web vitals') return AUTOMATED;
-      if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business.?schema)\b/.test(t) && /\b(add|missing|implement|create|no |partial)\b/.test(t)) return AUTOMATED;
+      if (cat === 'schema & data' || cat === 'schema') return AUTOMATED;
+      if (/\b(schema|structured.?data|json.?ld|rich.?snippet|faqpage|localbusiness|aggregaterating|itemlist|howto|searchaction|breadcrumb|service.?schema|review.?schema)\b/.test(t)) return AUTOMATED;
       if (/\b(lazy.?load|image.?dimension|fetchpriority)\b/.test(t)) return AUTOMATED;
       if (/\b(font.?display|font.?swap|preconnect.*font|font.*preconnect)\b/.test(t)) return AUTOMATED;
       if (/\b(defer.?script|delay.?script|render.?block|third.?party.*script)\b/.test(t)) return AUTOMATED;
