@@ -5616,7 +5616,9 @@
         const critical = items.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
         const pending = items.filter(i => i.status === 'pending').length;
         const done = items.filter(i => i.status === 'done' || i.status === 'completed').length;
-        return { total, critical, pending, done };
+        const duplicates = items.filter(i => i.is_duplicate).length;
+        const dupTotal = items.reduce((sum, i) => sum + (i.duplicate_ids?.length || 0), 0);
+        return { total, critical, pending, done, duplicates, dupTotal };
       }, [items]);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
@@ -5912,8 +5914,12 @@
 
       const handleStatusChange = async (actionId, newStatus) => {
         try {
-          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus } });
-          setItems(prev => prev.map(i => i.id === actionId ? { ...i, status: newStatus } : i));
+          const item = items.find(i => i.id === actionId);
+          const dupIds = item?.duplicate_ids || [];
+          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus, duplicate_ids: dupIds } });
+          // Update master + all hidden duplicates in local state
+          const allIds = new Set([actionId, ...dupIds]);
+          setItems(prev => prev.map(i => allIds.has(i.id) ? { ...i, status: newStatus } : i));
         } catch (e) { setError(e.message); }
       };
 
@@ -6209,7 +6215,10 @@
                           <span style={{ color: sevColor, fontWeight: 700, fontSize: 12, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
                         </td>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.5, color: 'var(--text1)' }}>{item.title}</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.5, color: 'var(--text1)' }}>
+                            {item.title}
+                            {item.is_duplicate && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '2px 5px', borderRadius: 3, background: '#8b5cf620', color: '#8b5cf6', verticalAlign: 'middle' }} title={`Consolidates ${item.duplicate_ids.length} duplicate(s) — fixing this fixes all`}>DP ×{item.duplicate_ids.length}</span>}
+                          </div>
                           <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginTop: 2 }}>{item.description}</div>
                           {(() => {
                             const aLabel = (item._assigneeLabel || item.assignee_label || '').toLowerCase();

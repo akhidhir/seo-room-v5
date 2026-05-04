@@ -972,14 +972,81 @@ app.get('/api/projects/:id/audits', async (req, res) => {
   }
 });
 
-// List findings for a project
+// List findings for a project — with category + pillar normalization
 app.get('/api/projects/:id/audit-findings', async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM audit_findings WHERE project_id=$1 ORDER BY created_at DESC',
       [req.params.id]
     );
-    res.json({ findings: result.rows });
+
+    const PILLAR_MAP = {
+      gbp_external: 'gbp_external', gbp: 'gbp_external',
+      gsc_agent: 'gsc_agent', gsc: 'gsc_agent',
+      website: 'website', technical: 'website',
+    };
+    const PILLAR_DISPLAY = { gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website' };
+    const VALID_CATS = {
+      GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+      GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+      Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+    };
+    const ALIASES = {
+      'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
+      'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages', 'low ctr pages': 'Low CTR Pages',
+      'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages', 'zero-click pages': 'Zero-Click Pages',
+      'underperforming page': 'Underperforming Pages', 'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+      'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+      'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
+      'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
+      'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation', 'reviews & reputation': 'Reviews & Reputation',
+      'competitor': 'Competitor Analysis', 'competitors': 'Competitor Analysis', 'competitor analysis': 'Competitor Analysis',
+      'directory': 'Directory & Citations', 'directories': 'Directory & Citations', 'citations': 'Directory & Citations', 'directory & citations': 'Directory & Citations',
+      'photos': 'Photos & Media', 'media': 'Photos & Media', 'photos & media': 'Photos & Media',
+      'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'suburb coverage': 'Suburb Coverage', 'service area': 'Suburb Coverage', 'service areas': 'Suburb Coverage',
+      'schema': 'Schema & Data', 'structured data': 'Schema & Data', 'schema & data': 'Schema & Data',
+      'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'on_page': 'On-Page Issues', 'meta': 'On-Page Issues',
+      'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
+      'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
+      'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
+      'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health', 'security': 'Site Health', 'mobile': 'Site Health', 'structure': 'Site Health', 'links': 'Crawlability',
+      'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
+      'brand dependency': 'Quick Wins', 'manual': null,
+      // GBP internal "Pillar > Sub" mappings
+      'proximity > maps ranking': 'Suburb Coverage', 'proximity > geo-targeting': 'Suburb Coverage', 'proximity > service areas': 'Suburb Coverage',
+      'prominence > social profiles': 'Profile Completeness', 'prominence > reviews': 'Reviews & Reputation',
+      'prominence > citations': 'Directory & Citations', 'prominence > photos': 'Photos & Media',
+      'relevance > description': 'Profile Completeness', 'relevance > profile completeness': 'Profile Completeness',
+      'relevance > posts & updates': 'Profile Completeness', 'relevance > categories & services': 'Profile Completeness',
+    };
+
+    function normCat(rawCat, pillarDisplay) {
+      const cat = (rawCat || '').toLowerCase().trim();
+      const validCats = VALID_CATS[pillarDisplay] || [];
+      if (validCats.find(c => c.toLowerCase() === cat)) return validCats.find(c => c.toLowerCase() === cat);
+      if (ALIASES[cat] !== undefined) {
+        if (ALIASES[cat] === null) return null; // drop "manual" etc
+        if (validCats.includes(ALIASES[cat])) return ALIASES[cat];
+        // alias exists but wrong pillar — still return it
+        return ALIASES[cat];
+      }
+      const wordMatch = validCats.find(c => {
+        const words = c.toLowerCase().split(/[\s&-]+/).filter(w => w.length > 3);
+        return words.some(w => cat.includes(w));
+      });
+      if (wordMatch) return wordMatch;
+      return validCats[0] || rawCat || 'General';
+    }
+
+    const findings = result.rows.map(f => {
+      const normPillar = PILLAR_MAP[(f.pillar || '').toLowerCase()] || f.pillar;
+      const display = PILLAR_DISPLAY[normPillar] || 'Website';
+      const normCategory = normCat(f.category, display);
+      if (normCategory === null) return null; // drop junk
+      return { ...f, pillar: normPillar, category: normCategory };
+    }).filter(Boolean);
+
+    res.json({ findings });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1056,9 +1123,9 @@ app.post('/api/projects/:id/action-items', async (req, res) => {
   }
 });
 
-// Update action item (status, execution_type)
+// Update action item (status, execution_type) — cascades to duplicates
 app.put('/api/action-items/:id', async (req, res) => {
-  const { status, approved_at, execution_type } = req.body;
+  const { status, approved_at, execution_type, duplicate_ids } = req.body;
   try {
     const result = await pool.query(
       `UPDATE action_items
@@ -1067,7 +1134,27 @@ app.put('/api/action-items/:id', async (req, res) => {
       [status || null, approved_at || null, execution_type || null, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Action item not found' });
-    res.json({ action_item: result.rows[0] });
+
+    // Cascade status to duplicate action items
+    let cascaded = 0;
+    if (status && duplicate_ids && Array.isArray(duplicate_ids) && duplicate_ids.length > 0) {
+      const cascadeResult = await pool.query(
+        `UPDATE action_items SET status=$1 WHERE id = ANY($2::int[]) RETURNING id`,
+        [status, duplicate_ids]
+      );
+      cascaded = cascadeResult.rowCount;
+      // Also cascade to linked audit_findings
+      if (status === 'done' || status === 'completed') {
+        await pool.query(
+          `UPDATE audit_findings SET status='resolved' WHERE id IN (
+            SELECT finding_id FROM action_items WHERE id = ANY($1::int[]) AND finding_id IS NOT NULL
+          )`, [duplicate_ids]
+        );
+      }
+      console.log(`[action-items] Cascaded status '${status}' to ${cascaded} duplicate items`);
+    }
+
+    res.json({ action_item: result.rows[0], cascaded });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1207,8 +1294,9 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
         .replace(/\s+/g, ' ').trim();
     }
 
-    // Deduplicate: same pillar + similar title = duplicate, keep the one with assignee_label (orchestrator) first, then newest
-    const seen = new Map();
+    // Deduplicate: same pillar + similar title = duplicate
+    // Keep master item, tag with DP + store duplicate IDs for cascading fixes
+    const seen = new Map(); // key → index in deduped array
     const deduped = [];
     // Sort so orchestrator items (have assignee_label) come first
     const sorted = [...items].sort((a, b) => {
@@ -1219,10 +1307,19 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
     for (const item of sorted) {
       const exactKey = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
       const fuzzyKey = `${item.pillar}:${normalizeTitle(item.title)}`;
-      if (!seen.has(exactKey) && !seen.has(fuzzyKey)) {
-        seen.set(exactKey, true);
-        if (fuzzyKey !== exactKey) seen.set(fuzzyKey, true);
+      const existingIdx = seen.get(exactKey) ?? seen.get(fuzzyKey);
+      if (existingIdx === undefined) {
+        // First occurrence — master item
+        item.duplicate_ids = [];
+        item.is_duplicate = false;
+        const idx = deduped.length;
+        seen.set(exactKey, idx);
+        if (fuzzyKey !== exactKey) seen.set(fuzzyKey, idx);
         deduped.push(item);
+      } else {
+        // Duplicate — link to master
+        deduped[existingIdx].duplicate_ids.push(item.id);
+        deduped[existingIdx].is_duplicate = true; // has duplicates = tagged DP
       }
     }
 
