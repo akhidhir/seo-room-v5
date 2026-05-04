@@ -1379,49 +1379,17 @@
     const detectExecType = (text, pillar) => {
       const t = (text || '').toLowerCase();
       const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
-      const SEO_SPECIALIST = { type: 'manual', label: 'SEO Specialist', icon: 'fas fa-user-tie', color: '#10b981' };
-      const AUTOMATED = { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6' };
-      const WP_PLUGIN = { type: 'plugin', label: 'WP Plugin', icon: 'fas fa-wrench', color: '#f59e0b' };
+      const AUTOMATED = { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e' };
 
-      if (pillar === 'gbp_external' || pillar === 'gbp') {
-        // 1. WP Plugin — check first so "create landing page" wins over incidental "review" mentions
-        if (/\b(landing.?page|suburb.?page|service.?page|create.*page|develop.*page|build.*page|wordpress|wp|meta.?title|meta.?desc|schema|web.?page|website.?content|blog.?post|web.?content|about.?us.?page)\b/.test(t)) return WP_PLUGIN;
-        // 2. Photos — physical action
-        if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-        // 3. Social media — SEO Specialist manages
-        if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter|x\.com)\b/.test(t)) return SEO_SPECIALIST;
-        // 4. Directories — business owner registers/claims
-        if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim)\b/.test(t)) return MANUAL;
-        // 5. Review responses — SEO Specialist
-        if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return SEO_SPECIALIST;
-        // 6. Getting reviews — business owner action (only action-oriented phrases)
-        if (/\b(ask.*review|collect.*review|request.*review|share.*review|get.*review|more.*review|review.*campaign|review.*request|ask.*customer|ask.*client)\b/.test(t)) return MANUAL;
-        // 7. Everything else in GBP — SEO Specialist
-        return SEO_SPECIALIST;
-      }
-      if (pillar === 'gsc_agent' || pillar === 'gsc') {
-        if (/\b(submit.*url|request.*index|fetch.*render|sitemap)\b/.test(t)) return AUTOMATED;
-        if (/\b(cannibal|consolidat|merge.*page|redirect.*competing|duplicate.*target)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(backlink|link.?build|off.?page|directory.?link|guest.?post|outreach)\b/.test(t) && !/\b(title|meta|h1|heading|rewrite|content)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(page.?speed|speed|server|hosting|cache|minif|render.?block)\b/.test(t) && !/\b(title|meta|h1|heading|rewrite|content)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(title|meta|rewrite|heading|h1|h2|schema|content|landing.?page|web.?page|wordpress|yoast|quick.?win|ctr|click.?through|underperform|zero.?click|internal.?link|add.*link|intro|snippet|description|keyword|cta|call.?to.?action|above.?fold)\b/.test(t)) return WP_PLUGIN;
-        return SEO_SPECIALIST;
-      }
-      if (pillar === 'website' || pillar === 'technical') {
-        if (/\b(photo|picture|image|shoot|camera)\b/.test(t)) return MANUAL;
-        if (/\b(core.?web.?vitals|cwv|lcp|cls|tbt|fid|inp|page.?speed|minif|cache|lazy.?load|render.?block|server|hosting|cdn|gzip|compress(?!.*image)|brotli)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(crawl.?error|crawl.?budget|robots\.txt|ssl.?cert|ssl.?issue|mixed.?content|security.?header|certificate|redirect.?chain|mobile.?usab|responsive|viewport)\b/.test(t)) return SEO_SPECIALIST;
-        if (/\b(canonical|meta.?title|meta.?desc|title.?tag|title|meta|description.?tag|heading|h1|h2|schema|structured.?data|alt.?text|image.?alt|broken.?link|internal.?link|link|href|anchor|content|thin.?content|word.?count|duplicate|redirect|301|302|rewrite|cta|intro|snippet)\b/.test(t)) return WP_PLUGIN;
-        return WP_PLUGIN;
-      }
+      // Manual: physical actions, external registrations, review solicitation
+      if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|phone call|handshake|print|brochure|flyer)\b/.test(t)) return MANUAL;
+      if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim.*listing|create.*account)\b/.test(t)) return MANUAL;
+      if (/\b(ask.*review|collect.*review|request.*review|get.*review|review.*campaign|ask.*customer)\b/.test(t)) return MANUAL;
+      if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter)\b/.test(t)) return MANUAL;
+      if (/\b(backlink|link.?build|off.?page|guest.?post|outreach)\b/.test(t) && !/\b(internal.?link|broken.?link)\b/.test(t)) return MANUAL;
 
-      // No pillar context — fall back to text-based detection
-      if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|call |phone call|handshake|print|brochure|flyer|sign\.?up|create.*account|register on|claim.*listing)\b/.test(t)) return MANUAL;
-      if (/\b(gbp|google business|business description|business name|categor|service area|hours|opening|google posts?|review.*respon|respond.*review|nap|name.?address|consistency|maintain)\b/.test(t)) return SEO_SPECIALIST;
-      if (/\b(search console|gsc|indexing|submit.*url|pagespeed|sitemap|robots\.txt|crawl|api|fetch.*render)\b/.test(t)) return AUTOMATED;
-      if (/\b(schema|structured data|website|landing page|web.?page|code|html|css|wordpress|elementor|yoast|meta.?title|meta.?desc|heading|h1|alt.?text|content|faq.*section|internal.?link|page.*speed|lazy.?load|minif|compress|mobile.?responsive)\b/.test(t)) return WP_PLUGIN;
-      if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth)\b/.test(t)) return MANUAL;
-      return SEO_SPECIALIST;
+      // Everything else is automated (WP plugin, API, extension, or dashboard can handle it)
+      return AUTOMATED;
     };
 
     // Normalize messy agent section names into clean sidebar labels
@@ -1574,8 +1542,8 @@
       };
 
       // Assignee auto-mapping from exec type
-      const execAssignee = { extension: 'SEO Room', api: 'SEO Room', plugin: 'SEO Room', manual: 'Admin' };
-      const execAssigneeIcon = { extension: 'fas fa-robot', api: 'fas fa-robot', plugin: 'fas fa-robot', manual: 'fas fa-user' };
+      const execAssignee = { extension: 'Automated', api: 'Automated', plugin: 'Automated', automated: 'Automated', manual: 'Manual' };
+      const execAssigneeIcon = { extension: 'fas fa-robot', api: 'fas fa-robot', plugin: 'fas fa-robot', automated: 'fas fa-robot', manual: 'fas fa-user' };
 
       const renderActionCells = (row, ri) => {
         if (!hasActions) return null;
@@ -3768,7 +3736,7 @@
               description: `Performance score: ${score}/100. Failing metrics: ${issueList}. ${issues.map(i => i.fix).join(' ')}`,
               severity,
               execution_type: 'plugin',
-              assignee_label: 'SEO Room'
+              assignee_label: 'Automated'
             }
           });
           setAddedActions(prev => ({ ...prev, [pageKey]: true }));
@@ -4135,30 +4103,30 @@
         const indexing = (page.indexingState || '').toLowerCase();
         // Blocked by robots.txt → Manual (Cloudflare/hosting)
         if (robots === 'disallowed' || /blocked.*robot/i.test(state))
-          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280',
             steps: ['Log into Cloudflare or hosting panel', 'Find robots.txt rules', 'Remove or modify the Disallow rule for this path', 'Save and verify at /robots.txt', 'Request indexing in Google Search Console', 'Re-check in 1 week'] };
-        // Noindex tag → Plugin (Yoast)
+        // Noindex tag → Automated (Yoast)
         if (/noindex/i.test(indexing) || /noindex/i.test(state))
-          return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b', assignee: 'WordPress Plugin', assigneeIcon: 'fas fa-wrench',
+          return { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e',
             steps: ['Open page in WordPress editor', 'Go to Yoast SEO → Advanced tab', 'Change "Allow search engines to show this page" to Yes', 'Update the page', 'Request indexing in GSC'] };
         // Redirect → Manual
         if (/redirect/i.test(state))
-          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280',
             steps: ['Check if redirect is intentional (301 to new URL)', 'If unintentional: remove redirect in WordPress → Redirection plugin', 'If redirect chain (A→B→C): update to direct A→C', 'Verify the final destination page exists and is indexable', 'Request indexing of correct URL in GSC'] };
         // 404 / Soft 404 → Manual
         if (/404|not.?found/i.test(state))
-          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+          return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280',
             steps: ['Decide: restore the page OR set up 301 redirect to relevant page', 'If restoring: recreate content with 500+ words', 'If redirecting: add 301 in WordPress → Redirection plugin', 'Update internal links pointing to this URL', 'Request indexing in GSC'] };
-        // Crawled but not indexed → Plugin (content improvement)
+        // Crawled but not indexed → Automated (content improvement)
         if (/crawled/i.test(state))
-          return { type: 'plugin', label: 'Plugin', icon: 'fas fa-wrench', color: '#f59e0b', assignee: 'WordPress Plugin', assigneeIcon: 'fas fa-wrench',
+          return { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e',
             steps: ['Add at least 500+ unique, valuable words to the page', 'Add 3-5 internal links from your highest-traffic indexed pages', 'Add structured data (FAQ schema, LocalBusiness schema)', 'Ensure meta title and description are unique and keyword-optimized', 'Request indexing in Google Search Console', 'Re-check in 2 weeks'] };
-        // Discovered but not crawled → API (request crawl)
+        // Discovered but not crawled → Automated (request crawl)
         if (/discovered/i.test(state))
-          return { type: 'api', label: 'Automated', icon: 'fas fa-robot', color: '#3b82f6', assignee: 'SEO Room (Auto)', assigneeIcon: 'fas fa-robot',
+          return { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e',
             steps: ['Add internal links from homepage and main service pages', 'Verify page is in sitemap.xml', 'Check robots.txt is not blocking', 'Submit URL for indexing via Search Console API', 'Re-check in 1 week'] };
         // Default → Manual
-        return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280', assignee: 'SEO Specialist', assigneeIcon: 'fas fa-user',
+        return { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280',
           steps: ['Investigate the specific indexing issue', 'Check Google Search Console for details', 'Fix the root cause', 'Request indexing', 'Re-check in 1-2 weeks'] };
       };
 
@@ -5771,16 +5739,11 @@
                   {items.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
-                    // Use AI-assigned label from DB if available, fall back to detectExecType
-                    const aiLabel = item.assignee_label;
-                    const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item.pillar || pillar);
-                    const rawLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Room';
-                    // Normalize old assignee labels to new system
-                    const assigneeLabel = ['Admin', 'Manual'].includes(rawLabel) ? 'Admin'  : 'SEO Room';
-                    const assigneeColorMap = { 'SEO Room': '#3b82f6', 'Admin': '#f59e0b' };
-                    const assigneeIconMap = { 'SEO Room': 'fas fa-robot', 'Admin': 'fas fa-user' };
-                    const aColor = assigneeColorMap[assigneeLabel] || '#3b82f6';
-                    const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-robot';
+                    // Classify as Automated or Manual
+                    const execInfo = detectExecType(item.description || item.title, item.pillar || pillar);
+                    const assigneeLabel = execInfo.label;
+                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : '#6b7280';
+                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : 'fas fa-user';
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px', verticalAlign: 'top' }}>
@@ -6047,11 +6010,8 @@
 
       // Compute assignee label for each item (memoized)
       const itemsWithAssignee = useMemo(() => items.map(item => {
-        const aiLabel = item.assignee_label;
-        const execInfo = aiLabel ? null : detectExecType(item.description || item.title, item._pillar || item.pillar);
-        const rawLabel = aiLabel || (execInfo && execInfo.label) || 'SEO Room';
-        const assigneeLabel = ['Admin', 'Manual'].includes(rawLabel) ? 'Admin' : 'SEO Room';
-        return { ...item, _assigneeLabel: assigneeLabel };
+        const execInfo = detectExecType(item.description || item.title, item._pillar || item.pillar);
+        return { ...item, _assigneeLabel: execInfo.label };
       }), [items]);
 
       // Map pillar + category to audit page label
@@ -6220,7 +6180,7 @@
             {[
               { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
               { value: filterCategory, set: setFilterCategory, label: 'Category', options: filterOptions.categories },
-              { value: filterAssignee, set: setFilterAssignee, label: 'Assignee', options: filterOptions.assignees },
+              { value: filterAssignee, set: setFilterAssignee, label: 'Type', options: filterOptions.assignees },
               { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done'] },
             ].map(f => (
               <select key={f.label} value={f.value} onChange={e => f.set(e.target.value)}
@@ -6304,11 +6264,9 @@
                   {filtered.map((item) => {
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
-                    const assigneeLabel = item._assigneeLabel;
-                    const assigneeColorMap = { 'SEO Room': '#3b82f6', 'Admin': '#f59e0b', 'WP Plugin': '#f59e0b', 'On-Page Audit': '#f59e0b', 'Copywriter': '#8b5cf6', 'SEO Specialist': '#10b981', 'Manual': '#6b7280', 'Automated': '#3b82f6' };
-                    const assigneeIconMap = { 'SEO Room': 'fas fa-robot', 'Admin': 'fas fa-user', 'WP Plugin': 'fas fa-wrench', 'On-Page Audit': 'fas fa-magic', 'Copywriter': 'fas fa-pen-fancy', 'SEO Specialist': 'fas fa-user-tie', 'Manual': 'fas fa-user', 'Automated': 'fas fa-robot' };
-                    const aColor = assigneeColorMap[assigneeLabel] || '#6b7280';
-                    const aIcon = assigneeIconMap[assigneeLabel] || 'fas fa-user';
+                    const assigneeLabel = item._assigneeLabel || 'Manual';
+                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : '#6b7280';
+                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : 'fas fa-user';
                     const itemPillar = item._pillar || item.pillar;
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -6322,14 +6280,12 @@
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginTop: 2 }}>{item.description}</div>
                           {(() => {
-                            const aLabel = (item._assigneeLabel || item.assignee_label || '').toLowerCase();
                             const isGBP = (item._pillar || item.pillar || '').includes('gbp');
                             const isGSC = (item._pillar || item.pillar || '').includes('gsc');
                             let navPage = null, navLabel = '', navIcon = '', navColor = '';
-                            if (aLabel.includes('on-page') || aLabel === 'wp plugin') { navPage = 'onpage-audit'; navLabel = 'Fix in On-Page Audit'; navIcon = 'fas fa-magic'; navColor = '#f59e0b'; }
-                            else if (aLabel.includes('copywriter')) { navPage = 'new-copywriter'; navLabel = 'Send to Copywriter'; navIcon = 'fas fa-pen-fancy'; navColor = '#8b5cf6'; }
-                            else if (isGBP) { navPage = 'gbp-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
+                            if (isGBP) { navPage = 'gbp-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-audit'; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
+                            else { navPage = 'website-audit'; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
                             if (!navPage) return null;
                             return <button onClick={() => setPage(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
                           })()}

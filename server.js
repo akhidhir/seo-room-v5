@@ -510,7 +510,7 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_category TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_tags TEXT[]`).catch(() => {});
 
-    // GBP tasks are manual (SEO Specialist) — no extension automation
+    // GBP tasks are manual — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
       WHERE pillar IN ('gbp_external', 'gbp') AND execution_type = 'extension'
@@ -1480,36 +1480,19 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         const allFindings = refreshedResult.rows;
         console.log(`[orchestrator] Total findings after re-extraction: ${allFindings.length}`);
 
-        // Rule-based assignee + execution_type (no AI needed)
+        // Simple classification: Automated or Manual
         function assignItem(finding) {
-          const cat = (finding.category || '').toLowerCase();
-          const title = (finding.title || '').toLowerCase();
-          const pillar = (finding.pillar || '').toLowerCase();
+          const t = ((finding.title || '') + ' ' + (finding.description || '') + ' ' + (finding.category || '')).toLowerCase();
 
-          // Admin tasks — anything requiring human action on external sites
-          const isAdmin = cat.includes('directory') || cat.includes('citation') || cat.includes('nap') ||
-            title.includes('directory') || title.includes('yellow pages') || title.includes('yelp') ||
-            title.includes('true local') || title.includes('hotfrog') || title.includes('claim') ||
-            title.includes('respond to review') || title.includes('upload photo') || title.includes('take photo') ||
-            title.includes('request review');
+          // Manual: physical actions, external registrations, review solicitation, link building
+          if (/\b(photo|picture|image|shoot|camera|testimonial|in.?person|physically|visit|phone call|print|brochure|flyer)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim.*listing|create.*account)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(ask.*review|collect.*review|request.*review|get.*review|review.*campaign|ask.*customer)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
+          if (/\b(backlink|link.?build|off.?page|guest.?post|outreach)\b/.test(t) && !/\b(internal.?link|broken.?link)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
 
-          if (isAdmin) return { assignee: 'Admin', execType: 'manual' };
-
-          // SEO Room auto-fixes
-          if (cat.includes('core web vitals') || cat.includes('cwv') || title.includes('lcp') || title.includes('cls'))
-            return { assignee: 'SEO Room', execType: 'plugin' };
-          if (cat.includes('on-page') || cat.includes('content') || title.includes('meta title') || title.includes('meta desc') || title.includes('h1'))
-            return { assignee: 'SEO Room', execType: 'plugin' };
-          if (cat.includes('schema') || title.includes('schema') || title.includes('structured data'))
-            return { assignee: 'SEO Room', execType: 'plugin' };
-          if (pillar.includes('gbp') && (cat.includes('profile') || title.includes('description') || title.includes('categor') || title.includes('service') || title.includes('hours') || title.includes('post')))
-            return { assignee: 'SEO Room', execType: 'api' };
-          if (cat.includes('crawl') || cat.includes('site health') || title.includes('sitemap') || title.includes('robots') || title.includes('redirect') || title.includes('404'))
-            return { assignee: 'SEO Room', execType: 'plugin' };
-
-          // Default: SEO Room for GSC/website, Admin for GBP external tasks
-          if (pillar.includes('gbp')) return { assignee: 'Admin', execType: 'manual' };
-          return { assignee: 'SEO Room', execType: 'plugin' };
+          // Everything else: Automated
+          return { assignee: 'Automated', execType: 'automated' };
         }
 
         // Build action items from findings — 1:1 mapping
@@ -1907,7 +1890,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             );
             await pool.query(
               `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
-               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'plugin', 'SEO Room')`,
+               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'automated', 'Automated')`,
               [req.params.projectId, fRes.rows[0].id, title, description, `Score: ${score}`, 'Score: 90+', severity]
             );
             findingsCount++;
