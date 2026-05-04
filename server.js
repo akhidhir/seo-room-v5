@@ -1286,45 +1286,14 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       titleCounts[key] = (titleCounts[key] || 0) + 1;
     }
 
-    // Normalize title for fuzzy dedup: only strip articles + prepositions, keep action verbs to avoid false merges
-    function normalizeTitle(t) {
-      return (t || '').toLowerCase().trim()
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\b(the|a|an|to|for|of|in|on|and|or|with)\b/g, '')
-        .replace(/\s+/g, ' ').trim();
-    }
-
-    // Deduplicate: same pillar + similar title = duplicate
-    // Keep master item, tag with DP + store duplicate IDs for cascading fixes
-    const seen = new Map(); // key → index in deduped array
-    const deduped = [];
+    // No dedup — frontend sync is the source of truth and produces clean, non-duplicate data.
     // Sort so orchestrator items (have assignee_label) come first
-    const sorted = [...items].sort((a, b) => {
+    const deduped = [...items].sort((a, b) => {
       if (a.assignee_label && !b.assignee_label) return -1;
       if (!a.assignee_label && b.assignee_label) return 1;
       return new Date(b.created_at) - new Date(a.created_at);
     });
-    for (const item of sorted) {
-      // Dedup key: pillar + category + title + first 60 chars of description (to distinguish different issues on same page)
-      const descSnippet = (item.description || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
-      const exactKey = `${item.pillar}:${item.category || ''}:${(item.title || '').toLowerCase().trim()}:${descSnippet}`;
-      const fuzzyKey = `${item.pillar}:${item.category || ''}:${normalizeTitle(item.title)}:${descSnippet}`;
-      const existingIdx = seen.get(exactKey) ?? seen.get(fuzzyKey);
-      if (existingIdx === undefined) {
-        // First occurrence — master item
-        item.duplicate_ids = [];
-        item.is_duplicate = false;
-        const idx = deduped.length;
-        seen.set(exactKey, idx);
-        if (fuzzyKey !== exactKey) seen.set(fuzzyKey, idx);
-        deduped.push(item);
-      } else {
-        // Duplicate — link to master
-        deduped[existingIdx].duplicate_ids.push(item.id);
-        deduped[existingIdx].is_duplicate = true;
-        console.log(`[orchestrator-dedup] Merged "${item.title}" → master "${deduped[existingIdx].title}" (key: ${fuzzyKey})`);
-      }
-    }
+    deduped.forEach(item => { item.duplicate_ids = []; item.is_duplicate = false; });
 
     // Trust scoring
     const HIGH_IMPACT_KEYWORDS = /ranking|position|index|crawl|canonical|redirect|404|broken|duplicate|title|meta|h1|schema|speed|lcp|cls|conversion|ctr|traffic/i;
