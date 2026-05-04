@@ -5803,7 +5803,12 @@
                             const status = (item.status || 'pending').toLowerCase();
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              return <span style={{ fontSize: 11, color: 'var(--text3)' }}>Pending</span>;
+                              return (
+                                <button onClick={() => handleStatusChange(item.id, 'done')}
+                                  style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run
+                                </button>
+                              );
                             }
                             if (assigneeLabel === 'Copywriter') {
                               if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
@@ -5845,7 +5850,7 @@
     }
 
     // ============ UNIFIED ACTION PLAN ============
-    function UnifiedActionPlanPage({ project }) {
+    function UnifiedActionPlanPage({ project, setActiveTab }) {
       const [activePillar, setActivePillar] = useState('all');
       const [filterSeverity, setFilterSeverity] = useState('all');
       const [filterCategory, setFilterCategory] = useState('all');
@@ -5980,7 +5985,19 @@
               tasks.forEach(t => all.push({ ...t, _category: cat, _pillar: normPillar(pillar), _rawPillar: pillar }));
             }
           }
-          setItems(all);
+          // Filter out informational/passing items that aren't actionable
+          const filtered = all.filter(item => {
+            const title = (item.title || '').trim();
+            const desc = (item.description || '').toLowerCase();
+            if (/^pages?\s+(successfully\s+)?crawled/i.test(title)) return false;
+            if (/^total\s+pages?\s+in/i.test(title)) return false;
+            if (/^sitemap\s+present/i.test(title) && !/missing|not found|error/i.test(desc)) return false;
+            if (/^https?\s*[\/ ]\s*ssl/i.test(title) && !/mixed|insecure|expired|error|not /i.test(desc)) return false;
+            if (/✅/.test(title + ' ' + desc) && !/\b(but|however|partial|issue|need|missing|fix|improve)\b/i.test(desc)) return false;
+            if (/\bmonitor\b/i.test(title) && !/\b(fix|add|create|implement|update|change|improve)\b/i.test(desc)) return false;
+            return true;
+          });
+          setItems(filtered);
         } catch (e) { setError(e.message); }
         setLoading(false);
       };
@@ -6331,11 +6348,11 @@
                             const isGBP = pLower.includes('gbp');
                             const isGSC = pLower.includes('gsc');
                             let navPage = null, navLabel = '', navIcon = '', navColor = '';
-                            if (isGBP) { navPage = 'gbp-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
+                            if (isGBP) { navPage = 'gbp-audit-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-audit'; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
                             else { navPage = 'website-audit'; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
                             if (!navPage) return null;
-                            return <button onClick={() => setPage(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
+                            return <button onClick={() => setActiveTab(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
                           })()}
                         </td>
                         {activePillar === 'all' && (
@@ -6355,14 +6372,12 @@
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              const execType = canAutoExecute(item);
-                              if (execType) return (
-                                <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
+                              return (
+                                <button onClick={() => { const execType = canAutoExecute(item); if (execType) handleExecuteOne(item); else handleStatusChange(item.id, 'done'); }} disabled={executingItem === item.id}
                                   style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
                                   {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run</>}
                                 </button>
                               );
-                              return <span style={{ fontSize: 11, color: 'var(--text3)' }}>Pending</span>;
                             }
                             // COPYWRITER: Send button or status
                             if (assigneeLabel === 'Copywriter') {
@@ -15976,7 +15991,7 @@
           case 'citations':
             return <CitationsPage project={project} />;
 case 'action-plan':
-            return <UnifiedActionPlanPage project={project} />;
+            return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
           case 'nw-project':
             return <NewWebsiteSetupPage project={project} />;
           case 'nw-research':
