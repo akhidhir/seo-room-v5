@@ -1261,11 +1261,57 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       website: 'Website', technical: 'Website',
     };
 
+    // Category normalization for display
+    const DISPLAY_PILLAR_CATS = {
+      GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+      GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+      Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+    };
+    const CAT_ALIASES = {
+      'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
+      'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages', 'low ctr pages': 'Low CTR Pages',
+      'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages', 'zero-click pages': 'Zero-Click Pages',
+      'underperforming page': 'Underperforming Pages', 'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+      'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+      'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
+      'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
+      'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation', 'reviews & reputation': 'Reviews & Reputation',
+      'competitor': 'Competitor Analysis', 'competitors': 'Competitor Analysis', 'competitor analysis': 'Competitor Analysis',
+      'directory': 'Directory & Citations', 'directories': 'Directory & Citations', 'citations': 'Directory & Citations', 'directory & citations': 'Directory & Citations',
+      'photos': 'Photos & Media', 'media': 'Photos & Media', 'photos & media': 'Photos & Media',
+      'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'suburb coverage': 'Suburb Coverage', 'service area': 'Suburb Coverage',
+      'schema': 'Schema & Data', 'structured data': 'Schema & Data', 'schema & data': 'Schema & Data',
+      'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'meta': 'On-Page Issues',
+      'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
+      'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
+      'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
+      'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health',
+      'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
+      'brand dependency': 'Quick Wins',
+    };
+    function normalizeCategory(rawCat, displayPillar) {
+      const cat = (rawCat || '').toLowerCase().trim();
+      const validCats = DISPLAY_PILLAR_CATS[displayPillar] || [];
+      // Exact match
+      if (validCats.find(c => c.toLowerCase() === cat)) return validCats.find(c => c.toLowerCase() === cat);
+      // Alias
+      if (CAT_ALIASES[cat] && validCats.includes(CAT_ALIASES[cat])) return CAT_ALIASES[cat];
+      // Partial word match
+      const wordMatch = validCats.find(c => {
+        const words = c.toLowerCase().split(/[\s&-]+/).filter(w => w.length > 3);
+        return words.some(w => cat.includes(w));
+      });
+      if (wordMatch) return wordMatch;
+      // Default to first valid category
+      return validCats[0] || rawCat || 'General';
+    }
+
     // Group by display pillar → category, sorted by trust score desc
     const grouped = {};
     for (const item of deduped) {
       const displayPillar = pillarDisplayMap[item.pillar] || item.pillar;
-      const category = item.category || item.type || 'General';
+      const rawCategory = item.category || item.type || 'General';
+      const category = normalizeCategory(rawCategory, displayPillar);
       if (!grouped[displayPillar]) grouped[displayPillar] = {};
       if (!grouped[displayPillar][category]) grouped[displayPillar][category] = [];
       grouped[displayPillar][category].push(item);
@@ -1574,12 +1620,60 @@ Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description u
         const newFindings = [];
         const newActions = [];
         let skippedCount = 0;
+        // Fuzzy category matcher — handles plurals, partial matches, abbreviations
+        function matchCategory(rawCat, validCats) {
+          const cat = (rawCat || '').toLowerCase().trim();
+          // Exact match
+          const exact = validCats.find(c => c.toLowerCase() === cat);
+          if (exact) return exact;
+          // Normalize: strip trailing s, spaces, hyphens
+          const norm = cat.replace(/[-\s]+/g, ' ').replace(/s$/, '').replace(/pages?$/, '').trim();
+          const normMatch = validCats.find(c => {
+            const cn = c.toLowerCase().replace(/[-\s]+/g, ' ').replace(/s$/, '').replace(/pages?$/, '').trim();
+            return cn === norm;
+          });
+          if (normMatch) return normMatch;
+          // Contains first significant word
+          const wordMatch = validCats.find(c => {
+            const words = c.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            return words.some(w => cat.includes(w));
+          });
+          if (wordMatch) return wordMatch;
+          // Known aliases
+          const aliases = {
+            'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
+            'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages',
+            'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages',
+            'underperforming page': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+            'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+            'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
+            'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
+            'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation',
+            'competitor': 'Competitor Analysis', 'competitors': 'Competitor Analysis',
+            'directory': 'Directory & Citations', 'directories': 'Directory & Citations', 'citations': 'Directory & Citations',
+            'photos': 'Photos & Media', 'media': 'Photos & Media', 'images': 'Photos & Media',
+            'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'service area': 'Suburb Coverage',
+            'schema': 'Schema & Data', 'structured data': 'Schema & Data',
+            'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'meta': 'On-Page Issues',
+            'content': 'Content Quality', 'thin content': 'Content Quality',
+            'cwv': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
+            'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
+            'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health',
+            'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
+            'brand dependency': 'Quick Wins', 'brand': 'Quick Wins',
+            'manual': null,
+          };
+          const aliasMatch = aliases[cat];
+          if (aliasMatch && validCats.includes(aliasMatch)) return aliasMatch;
+          return null;
+        }
+
         for (const item of uniqueItems) {
           const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
           const validCats = PILLAR_CATEGORIES[pillar] || [];
-          const category = validCats.find(c => c.toLowerCase() === (item.category || '').toLowerCase())
-            || validCats.find(c => (item.category || '').toLowerCase().includes(c.toLowerCase().split(' ')[0]))
-            || validCats[0] || 'General';
+          const matched = matchCategory(item.category, validCats);
+          // Skip items with no valid category (junk like "manual" with no context)
+          const category = matched || validCats[0] || 'General';
           const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
           const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
           const validAssignees = ['SEO Room', 'Admin'];
