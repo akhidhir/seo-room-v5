@@ -354,6 +354,7 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS effort TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS assignee_label TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS how_to_steps TEXT`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
 
@@ -1161,6 +1162,39 @@ app.put('/api/action-items/:id', async (req, res) => {
 
     res.json({ action_item: result.rows[0], cascaded });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate how-to instructions for a manual action item
+app.get('/api/action-items/:id/how-to', async (req, res) => {
+  try {
+    const item = (await pool.query(
+      `SELECT ai.*, p.business_name, p.domain, p.location FROM action_items ai JOIN projects p ON ai.project_id = p.id WHERE ai.id=$1`, [req.params.id]
+    )).rows[0];
+    if (!item) return res.status(404).json({ error: 'Action item not found' });
+
+    // Check if we already have cached instructions
+    if (item.how_to_steps) return res.json({ steps: item.how_to_steps });
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 800,
+      messages: [{ role: 'user', content: `You are an SEO expert assistant. Generate clear, actionable step-by-step instructions for this task.
+
+Task: ${item.title}
+Details: ${item.description || ''}
+Category: ${item.category || ''}
+Business: ${item.business_name || ''} (${item.domain || ''}) in ${item.location || 'Australia'}
+
+Return 3-7 numbered steps. Be specific — include exact URLs to visit, buttons to click, fields to fill. Keep each step to 1-2 sentences. If there's a direct link, include it. Format as plain numbered list, no markdown.` }]
+    });
+
+    const steps = aiResp.content[0].text.trim();
+    // Cache it
+    await pool.query('UPDATE action_items SET how_to_steps=$1 WHERE id=$2', [steps, req.params.id]);
+    res.json({ steps });
+  } catch (e) {
+    console.error('[how-to]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

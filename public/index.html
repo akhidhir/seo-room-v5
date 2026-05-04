@@ -5949,6 +5949,20 @@
       };
 
       const [executingItem, setExecutingItem] = useState(null);
+      const [howToExpanded, setHowToExpanded] = useState({});
+      const [howToData, setHowToData] = useState({});
+      const [howToLoading, setHowToLoading] = useState({});
+      const loadHowTo = async (itemId) => {
+        if (howToExpanded[itemId]) { setHowToExpanded(p => ({ ...p, [itemId]: false })); return; }
+        setHowToExpanded(p => ({ ...p, [itemId]: true }));
+        if (howToData[itemId]) return;
+        setHowToLoading(p => ({ ...p, [itemId]: true }));
+        try {
+          const r = await api(`/action-items/${itemId}/how-to`);
+          setHowToData(p => ({ ...p, [itemId]: r.steps }));
+        } catch(e) { setHowToData(p => ({ ...p, [itemId]: 'Failed to load instructions.' })); }
+        setHowToLoading(p => ({ ...p, [itemId]: false }));
+      };
 
       const handleExecuteOne = async (item) => {
         const execType = canAutoExecute(item);
@@ -6369,8 +6383,16 @@
                             if (isGBP) { navPage = 'ext-sec-' + cat; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-sec-' + cat; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
                             else { navPage = 'web-sec-' + cat; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
-                            return <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
+                            return <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                              <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>
+                              <button onClick={() => loadHowTo(item.id)} style={{ fontSize: 11, padding: '3px 10px', background: howToExpanded[item.id] ? '#f59e0b20' : 'var(--bg2)', border: '1px solid ' + (howToExpanded[item.id] ? '#f59e0b40' : 'var(--border)'), borderRadius: 4, color: howToExpanded[item.id] ? '#f59e0b' : 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className={howToLoading[item.id] ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb'} style={{ marginRight: 5, fontSize: 10 }} />{howToExpanded[item.id] ? 'Hide Steps' : 'How To'}</button>
+                            </div>;
                           })()}
+                          {howToExpanded[item.id] && (
+                            <div style={{ marginTop: 8, padding: '10px 14px', background: '#f59e0b08', border: '1px solid #f59e0b20', borderRadius: 6, fontSize: 12, lineHeight: 1.7, color: 'var(--text2)', whiteSpace: 'pre-wrap' }}>
+                              {howToLoading[item.id] ? <span><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Generating instructions...</span> : (howToData[item.id] || '')}
+                            </div>
+                          )}
                         </td>
                         {activePillar === 'all' && (
                           <td style={{ padding: '14px', verticalAlign: 'top' }}>
