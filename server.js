@@ -1482,11 +1482,15 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
 
         // Classification: Automated, Copywriter, or Manual
         // AUTOMATED = system can actually execute it (Yoast meta, schema, redirects, compression, robots, sitemap)
-        // COPYWRITER = requires human writing/content creation
-        // MANUAL = everything else (physical actions, external sites, monitoring, config changes outside WP)
+        // COPYWRITER = website content tasks only (writing, rewriting, meta, headings, alt text)
+        // MANUAL = everything else (GBP, directories, physical actions, external sites)
         function assignItem(finding) {
           const t = ((finding.title || '') + ' ' + (finding.description || '') + ' ' + (finding.category || '')).toLowerCase();
           const cat = (finding.category || '').toLowerCase();
+          const pillar = (finding.pillar || '').toLowerCase();
+
+          // --- GBP is always Manual (no automation yet) ---
+          if (pillar.includes('gbp')) return { assignee: 'Manual', execType: 'manual' };
 
           // --- AUTOMATED: only things the dashboard/API can actually execute ---
           // On-Page Issues that Yoast can fix (meta via WP REST API)

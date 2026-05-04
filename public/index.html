@@ -1385,6 +1385,10 @@
       const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
       const AUTOMATED = { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e' };
       const COPYWRITER = { type: 'copywriter', label: 'Copywriter', icon: 'fas fa-pen-fancy', color: '#8b5cf6' };
+      const p = (pillar || '').toLowerCase();
+
+      // --- GBP is always Manual (no automation yet) ---
+      if (p.includes('gbp')) return MANUAL;
 
       // --- AUTOMATED: only things the dashboard/API can actually execute ---
       if ((cat === 'on-page issues' || cat === 'core web vitals') && /\b(meta|title.?tag|schema|structured.?data|robots|sitemap|redirect|canonical|viewport|hreflang|noindex|nofollow)\b/.test(t)) return AUTOMATED;
@@ -6152,6 +6156,9 @@
               </p>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text1)' }}>
+                {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audits</>}
+              </button>
               {pendingSeoRoomCount > 0 && (
                 <button className="btn" onClick={handleExecuteAll} disabled={executing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
                   {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run All Automated ({pendingSeoRoomCount})</>}
