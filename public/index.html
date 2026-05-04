@@ -5853,10 +5853,11 @@
                             }
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : 'var(--text1)' }}>
+                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
+                                <option value="ignored">Ignore</option>
                               </select>
                             );
                           })()}
@@ -6164,10 +6165,11 @@
         const total = base.length;
         const critical = base.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
         const high = base.filter(i => (i.severity || '').toLowerCase() === 'high').length;
+        const ignored = base.filter(i => i.status === 'ignored').length;
         const pending = base.filter(i => i.status === 'pending').length;
         const done = base.filter(i => i.status === 'done' || i.status === 'completed').length;
         const inProgress = base.filter(i => i.status === 'in-progress').length;
-        return { total, critical, high, pending, done, inProgress };
+        return { total, critical, high, pending, done, inProgress, ignored };
       }, [itemsWithAssignee, activePillar]);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
@@ -6219,6 +6221,8 @@
               { label: 'WEBSITE AUDIT', icon: 'fas fa-spider', color: '#8b5cf6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit' && (i.status || 'pending') === 'pending').length },
               { label: 'PENDING', icon: 'fas fa-clock', color: '#f59e0b', count: stats.pending, pending: stats.pending },
               { label: 'DONE', icon: 'fas fa-check-circle', color: '#22c55e', count: stats.done, pending: 0 },
+              { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
+              { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
             ];
             return (
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${auditStats.length}, 1fr)`, gap: 12, marginBottom: 20 }}>
@@ -6259,7 +6263,7 @@
               { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
               { value: filterCategory, set: setFilterCategory, label: 'Category', options: filterOptions.categories },
               { value: filterAssignee, set: setFilterAssignee, label: 'Type', options: filterOptions.assignees },
-              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done'] },
+              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done', 'ignored'] },
             ].map(f => (
               <select key={f.label} value={f.value} onChange={e => f.set(e.target.value)}
                 style={{ fontSize: 12, padding: '5px 8px', background: f.value !== 'all' ? 'var(--accent)' : 'var(--card)', border: '1px solid var(--border)', borderRadius: 6,
@@ -6408,10 +6412,11 @@
                             // MANUAL: status dropdown (Not Started / In Progress / Done)
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : 'var(--text1)' }}>
+                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
+                                <option value="ignored">Ignore</option>
                               </select>
                             );
                           })()}

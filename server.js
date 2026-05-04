@@ -1590,7 +1590,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           // Preserve done/in-progress items — only replace pending ones
           // 1. Get existing done/in-progress items by finding_id or title+pillar
           const existingDone = await client.query(
-            `SELECT id, finding_id, title, pillar, status FROM action_items WHERE project_id=$1 AND status IN ('done', 'completed', 'in-progress')`,
+            `SELECT id, finding_id, title, pillar, status FROM action_items WHERE project_id=$1 AND status IN ('done', 'completed', 'in-progress', 'ignored')`,
             [projectId]
           );
           const doneKeys = new Set();
@@ -1600,7 +1600,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           }
 
           // 2. Delete only pending action_items (done ones stay)
-          await client.query(`DELETE FROM action_items WHERE project_id=$1 AND status NOT IN ('done', 'completed', 'in-progress')`, [projectId]);
+          await client.query(`DELETE FROM action_items WHERE project_id=$1 AND status NOT IN ('done', 'completed', 'in-progress', 'ignored')`, [projectId]);
 
           // 3. Insert new items only if not already done
           for (const item of uniqueItems) {
