@@ -2164,6 +2164,24 @@ app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
 
+    // Preflight: check WP + plugin reachable for routes that need it
+    if (wpUrl && authHeaders) {
+      try {
+        const ping = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fixes`, {
+          headers: authHeaders, signal: AbortSignal.timeout(8000)
+        });
+        if (!ping.ok && ping.status === 404) {
+          console.error(`[auto-fix] seoroom-helper plugin not found at ${wpUrl}`);
+          return res.json({ success: true, fix_type: 'preflight', applied: false,
+            message: 'seoroom-helper plugin not found on WordPress site. Install & activate it first.' });
+        }
+      } catch (pingErr) {
+        console.error(`[auto-fix] WP unreachable: ${pingErr.message}`);
+        return res.json({ success: true, fix_type: 'preflight', applied: false,
+          message: `WordPress site unreachable: ${pingErr.message}` });
+      }
+    }
+
     // ---- ROUTE 1: On-page meta fixes (titles, descriptions, focus keywords) ----
     if (/\b(meta.?title|meta.?desc|title.?tag|page.?title|focus.?keyword|yoast)\b/.test(allText) ||
         (cat === 'on-page issues' && /\b(title|description|keyword|duplicate|missing|empty|too short|too long)\b/.test(allText))) {
@@ -2378,6 +2396,7 @@ If NOTHING can be fixed by the plugin (e.g. server config, hosting changes), ret
 
       let appliedCount = 0;
       const appliedFixes = [];
+      const failedFixes = [];
       for (const fix of fixes) {
         try {
           const wr = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
@@ -2395,17 +2414,22 @@ If NOTHING can be fixed by the plugin (e.g. server config, hosting changes), ret
             appliedFixes.push(fix.fix_type);
           } else {
             const errText = await wr.text();
+            failedFixes.push(`${fix.fix_type}: ${wr.status} ${errText.slice(0, 80)}`);
             console.error(`[auto-fix] CWV fix ${fix.fix_type} failed: ${wr.status} ${errText.slice(0, 100)}`);
           }
-        } catch (e) { console.error('[auto-fix] CWV fix error:', e.message); }
+        } catch (e) {
+          failedFixes.push(`${fix.fix_type}: ${e.message}`);
+          console.error('[auto-fix] CWV fix error:', e.message);
+        }
       }
 
       if (appliedCount > 0) {
         await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        console.log(`[auto-fix] CWV: ${appliedCount} fixes applied for "${item.title}": ${appliedFixes.join(', ')}`);
-        return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, fixes: appliedFixes });
+        console.log(`[auto-fix] CWV: ${appliedCount}/${fixes.length} fixes applied for "${item.title}": ${appliedFixes.join(', ')}`);
+        return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, fixes: appliedFixes, failed: failedFixes });
       }
-      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'seoroom-helper plugin not reachable. Is it installed and activated?' });
+      return res.json({ success: true, fix_type: 'cwv', applied: false,
+        message: `All ${fixes.length} fixes failed. Errors: ${failedFixes.join('; ').slice(0, 200)}` });
     }
 
     // ---- ROUTE 5: Everything else — keep pending, explain why ----

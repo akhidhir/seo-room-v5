@@ -309,9 +309,37 @@ add_action('wp_head', function() {
                     echo '<style id="seoroom-critical-css">' . wp_strip_all_tags($p['css']) . "</style>\n";
                 }
                 break;
+
+            case 'custom_snippet':
+                if (!empty($p['html'])) {
+                    $location = !empty($p['location']) ? $p['location'] : 'head';
+                    if ($location === 'head') {
+                        // Output in <head> — allow JSON-LD script tags and link tags
+                        echo "<!-- seoroom custom snippet -->\n";
+                        echo $p['html'] . "\n";
+                    }
+                }
+                break;
         }
     }
 }, 1); // Priority 1 = very early in <head>
+
+// Custom snippets in footer
+add_action('wp_footer', function() {
+    $fixes = seoroom_get_fixes();
+    if (empty($fixes)) return;
+    $current_url = home_url($_SERVER['REQUEST_URI']);
+    foreach ($fixes as $fix) {
+        if (!$fix['active'] || $fix['fix_type'] !== 'custom_snippet') continue;
+        if (!empty($fix['page_url']) && strpos($current_url, rtrim($fix['page_url'], '/')) === false) continue;
+        $p = $fix['params'];
+        $location = !empty($p['location']) ? $p['location'] : 'head';
+        if ($location === 'footer' && !empty($p['html'])) {
+            echo "<!-- seoroom custom snippet -->\n";
+            echo $p['html'] . "\n";
+        }
+    }
+}, 99);
 
 // Fetchpriority + image dimensions via content filter
 add_filter('the_content', function($content) {
