@@ -1166,6 +1166,44 @@ app.put('/api/action-items/:id', async (req, res) => {
   }
 });
 
+// Split a multi-location action item into individual items
+app.post('/api/action-items/:id/split', async (req, res) => {
+  try {
+    const original = (await pool.query('SELECT * FROM action_items WHERE id=$1', [req.params.id])).rows[0];
+    if (!original) return res.status(404).json({ error: 'Not found' });
+
+    const title = original.title || '';
+    const multiMatch = title.match(/^(.+?)\s+(?:for|:)\s+(.+)$/i);
+    if (!multiMatch) return res.status(400).json({ error: 'Cannot detect multiple locations in title' });
+
+    const baseTitle = multiMatch[1].trim();
+    const locations = multiMatch[2].split(/\s*[+&,]\s*|\s+and\s+/i).map(s => s.trim()).filter(Boolean);
+    if (locations.length < 2) return res.status(400).json({ error: 'Only one location detected' });
+
+    const created = [];
+    for (const loc of locations) {
+      const newTitle = `${baseTitle} for ${loc}`;
+      const newDesc = (original.description || '').replace(multiMatch[2], loc);
+      const r = await pool.query(
+        `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+        [original.project_id, original.finding_id, original.pillar, original.type, original.category,
+         newTitle, newDesc, original.current_value, original.new_value, original.severity,
+         'pending', original.execution_type, original.assignee_label]
+      );
+      created.push(r.rows[0]);
+    }
+
+    // Delete the original combined item + its content_queue entry
+    await pool.query('DELETE FROM content_queue WHERE page_title=$1 AND project_id=$2', [original.title, original.project_id]);
+    await pool.query('DELETE FROM action_items WHERE id=$1', [original.id]);
+
+    res.json({ split: locations.length, created });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Generate how-to instructions for a manual action item
 app.get('/api/action-items/:id/how-to', async (req, res) => {
   try {
@@ -10272,6 +10310,7 @@ CRITICAL RULES:
 - Count your items and verify the total matches what your report shows
 - TITLE MUST describe the specific issue, NOT just the page URL. Bad: "/about-us/". Good: "Missing H1 tag on /about-us/". Bad: "All pages". Good: "No viewport meta tag on all pages"
 - Each title must be UNIQUE — if two findings have different issues, they need different titles
+- NEVER combine multiple suburbs/locations into one finding. "Create pages for Morley + Guilford" is WRONG. Create SEPARATE findings: "Create location page for Morley" and "Create location page for Guilford"
 
 Output ONLY this, nothing else:
 ~~~findings
@@ -10441,8 +10480,29 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
           });
         }
 
-        if (validFindings.length > 0) {
-          const deduped = validFindings; // No silent dedup — orchestrator DP tagging handles duplicates visibly
+        // Post-process: split multi-suburb/location findings into individual items
+        const expanded = [];
+        for (const f of validFindings) {
+          const title = f.title || '';
+          // Match patterns like "for Morley + Guilford", "for Morley, Guilford and Bayswater", "for Morley & Guilford"
+          const multiMatch = title.match(/^(.+?)\s+(?:for|:)\s+(.+)$/i);
+          if (multiMatch) {
+            const baseTitle = multiMatch[1].trim();
+            const locationPart = multiMatch[2].trim();
+            // Split on + , & "and"
+            const locations = locationPart.split(/\s*[+&,]\s*|\s+and\s+/i).map(s => s.trim()).filter(Boolean);
+            if (locations.length > 1) {
+              for (const loc of locations) {
+                expanded.push({ ...f, title: `${baseTitle} for ${loc}`, description: f.description.replace(locationPart, loc) });
+              }
+              continue;
+            }
+          }
+          expanded.push(f);
+        }
+
+        if (expanded.length > 0) {
+          const deduped = expanded; // No silent dedup — orchestrator DP tagging handles duplicates visibly
 
           console.log(`[findings-extractor] Structured block: ${parsed.length} raw → ${deduped.length} valid findings for ${pillar}`);
 

@@ -6390,6 +6390,12 @@
                             return <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                               <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>
                               {(assigneeLabel === 'Manual' || assigneeLabel === 'Copywriter') && <button onClick={() => loadHowTo(item.id)} style={{ fontSize: 11, padding: '3px 10px', background: howToExpanded[item.id] ? '#f59e0b20' : 'var(--bg2)', border: '1px solid ' + (howToExpanded[item.id] ? '#f59e0b40' : 'var(--border)'), borderRadius: 4, color: howToExpanded[item.id] ? '#f59e0b' : 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className={howToLoading[item.id] ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb'} style={{ marginRight: 5, fontSize: 10 }} />{howToExpanded[item.id] ? 'Hide Steps' : 'How To'}</button>}
+                              {/\b(?:for|:)\s+.+\s*[+&,]\s*.+/.test(item.title || '') && <button onClick={async () => {
+                                try {
+                                  const data = await api(`/action-items/${item.id}/split`, { method: 'POST' });
+                                  if (data.created) { loadData(); }
+                                } catch(err) { console.error('Split failed:', err); }
+                              }} style={{ fontSize: 11, padding: '3px 10px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className="fas fa-code-branch" style={{ marginRight: 5, fontSize: 10 }} />Split</button>}
                             </div>;
                           })()}
                           {howToExpanded[item.id] && (
