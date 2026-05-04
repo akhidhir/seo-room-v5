@@ -13980,6 +13980,13 @@ app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/debug/outbound-ip', async (req, res) => {
+  try {
+    const r = await fetch('https://api.ipify.org');
+    const ip = await r.text();
+    res.json({ outbound_ip: ip });
+  } catch (e) { res.json({ error: e.message }); }
+});
 
 // Static files
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }));
