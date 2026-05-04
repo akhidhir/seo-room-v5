@@ -2208,8 +2208,10 @@ app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
     }
 
     // ---- ROUTE 1: On-page meta fixes (titles, descriptions, focus keywords) ----
-    if (/\b(meta.?title|meta.?desc|title.?tag|page.?title|focus.?keyword|yoast)\b/.test(allText) ||
-        (cat === 'on-page issues' && /\b(title|description|keyword|duplicate|missing|empty|too short|too long)\b/.test(allText))) {
+    // Skip if this is a schema item (Route 2 handles those)
+    const isSchemaItem = /\b(schema|structured.?data|json.?ld)\b/.test(allText) && cat !== 'core web vitals';
+    if (!isSchemaItem && (/\b(meta.?title|meta.?desc|title.?tag|page.?title|focus.?keyword|yoast)\b/.test(allText) ||
+        (cat === 'on-page issues' && /\b(title|description|keyword|duplicate|missing|empty|too short|too long)\b/.test(allText)))) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
 
       // Find the page this item refers to — try to extract URL or page name from title/desc
