@@ -1305,8 +1305,10 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       return new Date(b.created_at) - new Date(a.created_at);
     });
     for (const item of sorted) {
-      const exactKey = `${item.pillar}:${item.category || ''}:${(item.title || '').toLowerCase().trim()}`;
-      const fuzzyKey = `${item.pillar}:${item.category || ''}:${normalizeTitle(item.title)}`;
+      // Dedup key: pillar + category + title + first 60 chars of description (to distinguish different issues on same page)
+      const descSnippet = (item.description || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+      const exactKey = `${item.pillar}:${item.category || ''}:${(item.title || '').toLowerCase().trim()}:${descSnippet}`;
+      const fuzzyKey = `${item.pillar}:${item.category || ''}:${normalizeTitle(item.title)}:${descSnippet}`;
       const existingIdx = seen.get(exactKey) ?? seen.get(fuzzyKey);
       if (existingIdx === undefined) {
         // First occurrence — master item
@@ -9868,11 +9870,13 @@ CRITICAL RULES:
 - Every single bullet point that describes an issue = one JSON object
 - Do NOT consolidate or summarize — if your report mentions 12 on-page issues, I need 12 JSON objects
 - Count your items and verify the total matches what your report shows
+- TITLE MUST describe the specific issue, NOT just the page URL. Bad: "/about-us/". Good: "Missing H1 tag on /about-us/". Bad: "All pages". Good: "No viewport meta tag on all pages"
+- Each title must be UNIQUE — if two findings have different issues, they need different titles
 
 Output ONLY this, nothing else:
 ~~~findings
 [
-  {"category":"<one of: ${validCategories.join(', ')}>","title":"<exact issue from your report, under 60 chars>","description":"<what is wrong — be specific, include page URLs>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state>","recommended_value":"<target state>"}
+  {"category":"<one of: ${validCategories.join(', ')}>","title":"<DESCRIPTIVE issue title, not just a URL, under 60 chars>","description":"<what is wrong — be specific, include page URLs>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state>","recommended_value":"<target state>"}
 ]
 ~~~
 
