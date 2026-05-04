@@ -1272,7 +1272,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
        LEFT JOIN audit_findings af ON ai.finding_id = af.id
        WHERE ai.project_id = $1
        ORDER BY
-         CASE ai.severity WHEN 'Critical' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END,
+         CASE ai.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 WHEN 'Low' THEN 4 ELSE 5 END,
          ai.created_at DESC`,
       [req.params.id]
     );
@@ -1286,11 +1286,11 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       titleCounts[key] = (titleCounts[key] || 0) + 1;
     }
 
-    // Normalize title for fuzzy dedup: strip filler words, punctuation, collapse whitespace
+    // Normalize title for fuzzy dedup: only strip articles + prepositions, keep action verbs to avoid false merges
     function normalizeTitle(t) {
       return (t || '').toLowerCase().trim()
         .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\b(the|a|an|to|for|of|in|on|and|or|with|your|their|its|this|that|add|create|update|implement|ensure|improve|optimize)\b/g, '')
+        .replace(/\b(the|a|an|to|for|of|in|on|and|or|with)\b/g, '')
         .replace(/\s+/g, ' ').trim();
     }
 
@@ -1319,7 +1319,8 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       } else {
         // Duplicate — link to master
         deduped[existingIdx].duplicate_ids.push(item.id);
-        deduped[existingIdx].is_duplicate = true; // has duplicates = tagged DP
+        deduped[existingIdx].is_duplicate = true;
+        console.log(`[orchestrator-dedup] Merged "${item.title}" → master "${deduped[existingIdx].title}" (key: ${fuzzyKey})`);
       }
     }
 
