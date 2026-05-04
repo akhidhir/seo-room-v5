@@ -1305,8 +1305,8 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       return new Date(b.created_at) - new Date(a.created_at);
     });
     for (const item of sorted) {
-      const exactKey = `${item.pillar}:${(item.title || '').toLowerCase().trim()}`;
-      const fuzzyKey = `${item.pillar}:${normalizeTitle(item.title)}`;
+      const exactKey = `${item.pillar}:${item.category || ''}:${(item.title || '').toLowerCase().trim()}`;
+      const fuzzyKey = `${item.pillar}:${item.category || ''}:${normalizeTitle(item.title)}`;
       const existingIdx = seen.get(exactKey) ?? seen.get(fuzzyKey);
       if (existingIdx === undefined) {
         // First occurrence — master item
