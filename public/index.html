@@ -5795,12 +5795,31 @@
                           </span>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
-                          <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
-                            style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)' }}>
-                            <option value="pending">Pending</option>
-                            <option value="in-progress">In Progress</option>
-                            <option value="done">Done</option>
-                          </select>
+                          {(() => {
+                            const status = (item.status || 'pending').toLowerCase();
+                            if (assigneeLabel === 'Automated') {
+                              if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              return <span style={{ fontSize: 11, color: 'var(--text3)' }}>Pending</span>;
+                            }
+                            if (assigneeLabel === 'Copywriter') {
+                              if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
+                              return (
+                                <button onClick={() => handleStatusChange(item.id, 'in-progress')}
+                                  style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-pen-fancy" style={{ marginRight: 4, fontSize: 9 }} />Send
+                                </button>
+                              );
+                            }
+                            return (
+                              <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
+                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : 'var(--text1)' }}>
+                                <option value="not-started">Not Started</option>
+                                <option value="in-progress">In Progress</option>
+                                <option value="done">Done</option>
+                              </select>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );
@@ -6271,8 +6290,7 @@
                       ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 80, align: 'left' }] : []),
                       { key: 'category', label: 'CATEGORY', w: 140, align: 'left' },
                       { key: 'assignee', label: 'ASSIGNEE', w: 140, align: 'left' },
-                      { key: 'status', label: 'STATUS', w: 90, align: 'center' },
-                      { key: 'action', label: '', w: 80, align: 'center' },
+                      { key: 'status', label: 'STATUS', w: 120, align: 'center' },
                     ].map(col => (
                       <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
                         style={{ padding: '10px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
@@ -6287,8 +6305,8 @@
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
                     const assigneeLabel = item._assigneeLabel || 'Manual';
-                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : '#6b7280';
-                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : 'fas fa-user';
+                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : assigneeLabel === 'Copywriter' ? '#8b5cf6' : '#6b7280';
+                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : assigneeLabel === 'Copywriter' ? 'fas fa-pen-fancy' : 'fas fa-user';
                     const itemPillar = item._pillar || item.pillar;
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -6325,24 +6343,39 @@
                           <span style={{ color: aColor }}><i className={aIcon} style={{ marginRight: 5, fontSize: 11 }} />{assigneeLabel}</span>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
-                          <select value={item.status || 'pending'} onChange={e => handleStatusChange(item.id, e.target.value)}
-                            style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text1)' }}>
-                            <option value="pending">Pending</option>
-                            <option value="in-progress">In Progress</option>
-                            <option value="done">Done</option>
-                          </select>
-                        </td>
-                        <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
                           {(() => {
                             const status = (item.status || 'pending').toLowerCase();
-                            const execType = canAutoExecute(item);
-                            if (status === 'done') return <i className="fas fa-check-circle" style={{ color: '#22c55e', fontSize: 14 }} />;
-                            if (status !== 'pending' || !execType) return null;
+                            // AUTOMATED: Run button or Done checkmark
+                            if (assigneeLabel === 'Automated') {
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              const execType = canAutoExecute(item);
+                              if (execType) return (
+                                <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
+                                  style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
+                                  {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run</>}
+                                </button>
+                              );
+                              return <span style={{ fontSize: 11, color: 'var(--text3)' }}>Pending</span>;
+                            }
+                            // COPYWRITER: Send button or status
+                            if (assigneeLabel === 'Copywriter') {
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
+                              return (
+                                <button onClick={() => handleStatusChange(item.id, 'in-progress')}
+                                  style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-pen-fancy" style={{ marginRight: 4, fontSize: 9 }} />Send
+                                </button>
+                              );
+                            }
+                            // MANUAL: status dropdown (Not Started / In Progress / Done)
                             return (
-                              <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
-                                {executingItem === item.id ? <span className="spinner" style={{ width: 12, height: 12 }}></span> : <><i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run</>}
-                              </button>
+                              <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
+                                style={{ fontSize: 11, padding: '4px 6px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : 'var(--text1)' }}>
+                                <option value="not-started">Not Started</option>
+                                <option value="in-progress">In Progress</option>
+                                <option value="done">Done</option>
+                              </select>
                             );
                           })()}
                         </td>
