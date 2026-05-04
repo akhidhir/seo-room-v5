@@ -1463,7 +1463,8 @@ VALIDATION RULES — every action item MUST pass ALL of these:
 - The "description" must reference specific data from STRUCTURED FACTS
 - If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
 
-Return ONLY a JSON array. MAX 30 items. Keep title under 60 chars, description under 120 chars. No markdown in values.
+IMPORTANT: Create at least 1 action item per category that has findings. Every category with audit data MUST have action items — do NOT skip categories to save space.
+Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description under 120 chars. No markdown in values.
 [{
   "pillar": "<gbp_external|gsc_agent|website>",
   "category": "<section name>",
