@@ -10325,6 +10325,68 @@ app.post('/api/projects/:projectId/audits/:pillar/extract-findings', async (req,
   }
 });
 
+// ==================== FRONTEND-DRIVEN FINDINGS SYNC (Source of Truth) ====================
+// Frontend extracts findings from parsed report sections (same code that renders them)
+// and POSTs here. This guarantees 100% match between displayed items and DB.
+app.post('/api/projects/:projectId/audits/:pillar/sync-findings', async (req, res) => {
+  const { projectId } = req.params;
+  let { pillar } = req.params;
+  const { findings } = req.body;
+  if (!findings || !Array.isArray(findings)) return res.status(400).json({ error: 'findings array required' });
+
+  // Map frontend pillar names to DB pillar names
+  const PILLAR_DB_MAP = { gsc: 'gsc_agent', gbp: 'gbp_external', gbp_external: 'gbp_external', gsc_agent: 'gsc_agent', website: 'website' };
+  const dbPillar = PILLAR_DB_MAP[pillar] || pillar;
+
+  try {
+    // Get the latest completed audit ID for this pillar
+    const auditRes = await pool.query(
+      `SELECT id FROM audits WHERE project_id=$1 AND pillar=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+      [projectId, dbPillar]
+    );
+    if (auditRes.rows.length === 0) return res.status(404).json({ error: `No completed ${dbPillar} audit found` });
+    const auditId = auditRes.rows[0].id;
+
+    // Check if we already synced for this audit (avoid re-syncing on every page load)
+    const existingCount = await pool.query(
+      `SELECT COUNT(*) as cnt FROM audit_findings WHERE project_id=$1 AND pillar=$2 AND audit_id=$3`,
+      [projectId, dbPillar, auditId]
+    );
+    const existing = parseInt(existingCount.rows[0].cnt);
+    if (existing === findings.length && existing > 0) {
+      // Already synced with same count — skip
+      return res.json({ synced: existing, skipped: true });
+    }
+
+    // Clear old findings + action items for this pillar
+    await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [projectId, dbPillar]);
+    await pool.query('DELETE FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, dbPillar]);
+
+    // Insert all findings 1:1
+    let saved = 0;
+    for (const f of findings) {
+      const fRes = await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+        [projectId, auditId, dbPillar, f.category || 'Uncategorized', f.title, f.description || '', f.recommendation || '', f.severity || 'Medium', f.current_value || '', f.recommended_value || '']
+      );
+      const findingId = fRes.rows[0].id;
+      await pool.query(
+        `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
+        [projectId, findingId, dbPillar, f.category || 'Uncategorized', f.category || 'Uncategorized', f.title, f.recommendation || f.description || '', f.current_value || '', f.recommended_value || '', f.severity || 'Medium']
+      );
+      saved++;
+    }
+
+    console.log(`[sync-findings] Frontend synced ${saved} findings for ${dbPillar} (audit ${auditId})`);
+    res.json({ synced: saved, auditId });
+  } catch (e) {
+    console.error(`[sync-findings] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== EXTERNAL GBP AUDIT (Managed Agent — Sonnet + Web Search) ====================
 
 app.get('/api/projects/:projectId/audits/gbp-external/status', async (req, res) => {

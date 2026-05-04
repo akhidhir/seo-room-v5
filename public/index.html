@@ -1839,6 +1839,107 @@
         } catch (e) {}
       };
 
+      // ===== FRONTEND-DRIVEN FINDINGS SYNC =====
+      // Extracts findings from the same parsed sections that render in the UI,
+      // guaranteeing 100% match between displayed item count and DB count.
+      const syncRef = React.useRef(null);
+      useEffect(() => {
+        if (!report || !project?.id || loading) return;
+        // Debounce — only sync once per report
+        const reportHash = report.length + ':' + report.slice(0, 50);
+        if (syncRef.current === reportHash) return;
+        syncRef.current = reportHash;
+
+        const extractAndSync = async () => {
+          try {
+            const sections = parseReportSections(report);
+            const findings = [];
+
+            for (const sec of sections) {
+              if (sec.title === 'Summary') continue;
+              const category = sec.title;
+              const lines = sec.content;
+              let tableRows = [];
+              let inTable = false;
+              let headers = [];
+
+              const flushExtract = () => {
+                if (tableRows.length < 2) { tableRows = []; return; }
+                headers = tableRows[0];
+                const rows = tableRows.slice(1);
+
+                // Detect columns (same logic as renderSectionContent)
+                const actionColIdx = headers.findIndex(h => /fix|action|recommend|resolution|what.?to.?do|implementation/i.test(h));
+                const sevColIdx = headers.findIndex(h => /priority|severity|gap|coverage/i.test(h));
+                const notesColIdx = headers.findIndex(h => /notes|explanation|details|status/i.test(h));
+
+                for (const row of rows) {
+                  const itemName = (row[0] || '').replace(/\*\*/g, '').trim();
+                  if (!itemName) continue; // skip empty rows
+                  const severity = sevColIdx !== -1 ? (row[sevColIdx] || '').replace(/\*\*/g, '').trim() : 'Medium';
+                  const description = notesColIdx !== -1 ? (row[notesColIdx] || '').replace(/\*\*/g, '').trim() : row.slice(1).map(c => c.replace(/\*\*/g, '').trim()).filter(c => c.length > 2).join('; ');
+                  const recommendation = actionColIdx !== -1 ? (row[actionColIdx] || '').replace(/\*\*/g, '').trim() : '';
+                  const currentVal = row[1] ? row[1].replace(/\*\*/g, '').trim() : '';
+
+                  // Normalize severity
+                  let normSeverity = 'Medium';
+                  if (/critical/i.test(severity)) normSeverity = 'Critical';
+                  else if (/high|significant/i.test(severity)) normSeverity = 'High';
+                  else if (/medium|moderate/i.test(severity)) normSeverity = 'Medium';
+                  else if (/low|minimal/i.test(severity)) normSeverity = 'Low';
+
+                  findings.push({
+                    category,
+                    title: itemName.substring(0, 120),
+                    description: description.substring(0, 500),
+                    recommendation: recommendation.substring(0, 500),
+                    severity: normSeverity,
+                    current_value: currentVal.substring(0, 200),
+                    recommended_value: ''
+                  });
+                }
+                tableRows = [];
+              };
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (/^\|[\s-:|]+\|$/.test(trimmed)) continue;
+                if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+                  const rawCells = trimmed.split('|').filter(c => c.trim()).map(c => c.trim());
+                  const cells = [];
+                  let pending = null;
+                  for (const c of rawCells) {
+                    if (pending !== null) {
+                      pending += ' | ' + c;
+                      if ((pending.split('`').length - 1) % 2 === 0) { cells.push(pending); pending = null; }
+                    } else if ((c.split('`').length - 1) % 2 === 1) { pending = c; }
+                    else { cells.push(c); }
+                  }
+                  if (pending !== null) cells.push(pending);
+                  if (cells.length >= 2) { tableRows.push(cells); inTable = true; continue; }
+                }
+                if (inTable) { flushExtract(); inTable = false; }
+              }
+              if (inTable) flushExtract();
+            }
+
+            if (findings.length === 0) return;
+
+            // POST to server
+            const resp = await api(`/projects/${project.id}/audits/${pillar}/sync-findings`, {
+              method: 'POST',
+              body: { findings }
+            });
+            console.log(`[sync-findings] ${pillar}: synced ${resp.synced || 0} findings${resp.skipped ? ' (already up-to-date)' : ''}`);
+          } catch (e) {
+            console.error('[sync-findings] Error:', e);
+          }
+        };
+
+        // Delay slightly to avoid blocking render
+        setTimeout(extractAndSync, 1000);
+      }, [report, project?.id, loading]);
+
       const runAudit = async () => {
         setLoading(true); setError(''); setReport('');
         try {
