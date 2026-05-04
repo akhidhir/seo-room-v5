@@ -1299,7 +1299,7 @@
       const recSteps = finding.recommendation ? finding.recommendation.split(/(?:\d+\)\s*|\d+\.\s+)/).filter(Boolean) : [];
 
       return (
-        <div style={{ marginBottom: 10, background: 'var(--bg)', borderRadius: 10, border: `1px solid var(--border)`, borderLeft: `4px solid ${sevColor}`, overflow: 'hidden' }}>
+        <div id={`finding-${finding.id}`} style={{ marginBottom: 10, background: 'var(--bg)', borderRadius: 10, border: `1px solid var(--border)`, borderLeft: `4px solid ${sevColor}`, overflow: 'hidden' }}>
           <div style={{ cursor: 'pointer', padding: '14px 16px' }} onClick={onToggle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
@@ -1509,7 +1509,7 @@
     }
 
     // ============ SORTABLE TABLE FOR AGENT AUDITS ============
-    function AgentSortableTable({ headers, rows, tblIdx, actionColIdx, sevColIdx, notesColIdx, listedColIdx, hasActions, actionMode, getActionBrief, rowNeedsAction }) {
+    function AgentSortableTable({ headers, rows, tblIdx, actionColIdx, sevColIdx, notesColIdx, listedColIdx, hasActions, actionMode, getActionBrief, rowNeedsAction, highlightText }) {
       const [sortCol, setSortCol] = useState(null);
       const [sortDir, setSortDir] = useState('asc');
 
@@ -1626,6 +1626,29 @@
         );
       };
 
+      const highlightRef = React.useRef(null);
+      const [highlightIdx, setHighlightIdx] = useState(null);
+
+      // Find and scroll to highlighted row
+      useEffect(() => {
+        if (!highlightText) return;
+        const ht = highlightText.toLowerCase().replace(/\*\*/g, '').trim();
+        // Try exact match on first col, then fuzzy on first col, then any col
+        let idx = sortedRows.findIndex(row => (row[0] || '').replace(/\*\*/g, '').trim().toLowerCase() === ht);
+        if (idx === -1) idx = sortedRows.findIndex(row => {
+          const first = (row[0] || '').replace(/\*\*/g, '').trim().toLowerCase();
+          return first.includes(ht) || ht.includes(first);
+        });
+        if (idx === -1) idx = sortedRows.findIndex(row => row.some(c => (c || '').replace(/\*\*/g, '').toLowerCase().includes(ht)));
+        if (idx !== -1) {
+          setHighlightIdx(idx);
+          setTimeout(() => {
+            if (highlightRef.current) highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 300);
+          setTimeout(() => setHighlightIdx(null), 5000);
+        }
+      }, [highlightText, sortedRows]);
+
       return (
         <div style={{ marginBottom: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
           <div style={{ maxHeight: 600, overflowY: 'auto' }}>
@@ -1643,12 +1666,15 @@
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((row, ri) => (
-                  <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                    {row.slice(0, headers.length).map((cell, ci) => renderCell(cell, ci, row))}
-                    {renderActionCells(row, ri)}
-                  </tr>
-                ))}
+                {sortedRows.map((row, ri) => {
+                  const isHL = highlightIdx === ri;
+                  return (
+                    <tr key={ri} ref={isHL ? highlightRef : null} style={{ borderBottom: '1px solid var(--border)', background: isHL ? 'rgba(59,130,246,0.12)' : undefined, boxShadow: isHL ? 'inset 3px 0 0 #3b82f6' : undefined, transition: 'background 0.5s' }}>
+                      {row.slice(0, headers.length).map((cell, ci) => renderCell(cell, ci, row))}
+                      {renderActionCells(row, ri)}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2045,7 +2071,7 @@
 
       // Render a section's content — tables with optional inline action buttons
       // actionMode: { onAdd, addedKeys, addingKey } — adds inline action buttons to table rows
-      const renderSectionContent = (lines, actionMode) => {
+      const renderSectionContent = (lines, actionMode, highlightText) => {
         const elements = [];
         let tableRows = [];
         let inTable = false;
@@ -2183,7 +2209,7 @@
               <AgentSortableTable key={tblKey} headers={headers} rows={rows} tblIdx={tblIdx}
                 actionColIdx={actionColIdx} sevColIdx={sevColIdx} notesColIdx={notesColIdx} listedColIdx={listedColIdx}
                 hasActions={hasActions} actionMode={actionMode}
-                getActionBrief={getActionBrief} rowNeedsAction={rowNeedsAction} />
+                getActionBrief={getActionBrief} rowNeedsAction={rowNeedsAction} highlightText={highlightText} />
             );
           }
           tableRows = [];
@@ -2575,7 +2601,7 @@
                   </div>
                 )}
                 <div style={{ padding: '20px 24px' }}>
-                  {renderSectionContent(sec.content, actionMode)}
+                  {renderSectionContent(sec.content, actionMode, window.__highlightFinding)}
                 </div>
               </div>
             </div>
@@ -6352,7 +6378,7 @@
                             if (isGBP) { navPage = 'ext-sec-' + cat; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-sec-' + cat; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
                             else { navPage = 'web-sec-' + cat; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
-                            return <button onClick={() => setActiveTab(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
+                            return <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
                           })()}
                         </td>
                         {activePillar === 'all' && (
