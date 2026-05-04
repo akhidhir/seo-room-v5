@@ -6381,7 +6381,19 @@
                         )}
                         <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>{item._category || item.category}</td>
                         <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, whiteSpace: 'nowrap' }}>
-                          <span style={{ color: aColor }}><i className={aIcon} style={{ marginRight: 5, fontSize: 11 }} />{assigneeLabel}</span>
+                          <select value={assigneeLabel} onChange={async (e) => {
+                            const newLabel = e.target.value;
+                            const execMap = { Automated: 'automated', Copywriter: 'copywriter', Manual: 'manual' };
+                            try {
+                              await api(`/action-items/${item.id}`, { method: 'PUT', body: { execution_type: execMap[newLabel], assignee_label: newLabel } });
+                              setItems(prev => prev.map(i => i.id === item.id ? { ...i, execution_type: execMap[newLabel], assignee_label: newLabel } : i));
+                            } catch(err) { console.error(err); }
+                          }} style={{ fontSize: 11, padding: '3px 6px', background: 'transparent', border: '1px solid transparent', borderRadius: 4, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
+                            onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
+                            <option value="Automated" style={{ color: '#22c55e' }}>Automated</option>
+                            <option value="Copywriter" style={{ color: '#8b5cf6' }}>Copywriter</option>
+                            <option value="Manual" style={{ color: '#6b7280' }}>Manual</option>
+                          </select>
                         </td>
                         <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
                           {(() => {

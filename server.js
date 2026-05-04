@@ -1125,13 +1125,13 @@ app.post('/api/projects/:id/action-items', async (req, res) => {
 
 // Update action item (status, execution_type) — cascades to duplicates
 app.put('/api/action-items/:id', async (req, res) => {
-  const { status, approved_at, execution_type, duplicate_ids } = req.body;
+  const { status, approved_at, execution_type, assignee_label, duplicate_ids } = req.body;
   try {
     const result = await pool.query(
       `UPDATE action_items
-       SET status=COALESCE($1, status), approved_at=COALESCE($2, approved_at), execution_type=COALESCE($3, execution_type)
-       WHERE id=$4 RETURNING *`,
-      [status || null, approved_at || null, execution_type || null, req.params.id]
+       SET status=COALESCE($1, status), approved_at=COALESCE($2, approved_at), execution_type=COALESCE($3, execution_type), assignee_label=COALESCE($4, assignee_label)
+       WHERE id=$5 RETURNING *`,
+      [status || null, approved_at || null, execution_type || null, assignee_label || null, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Action item not found' });
 
