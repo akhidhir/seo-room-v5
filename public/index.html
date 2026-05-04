@@ -6070,8 +6070,8 @@
       };
 
       const handleBulkSendToCopywriter = async () => {
-        const copywriterItems = itemsWithAssignee.filter(i => /content|copy|meta|title|description/i.test(i.type || i.title || '') && (i.status || 'pending') === 'pending');
-        if (!copywriterItems.length) { setBulkResult({ error: 'No pending content items to send' }); return; }
+        const copywriterItems = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter') && (i.status || 'pending') === 'pending');
+        if (!copywriterItems.length) { setBulkResult({ error: 'No pending Copywriter items to send' }); return; }
         setBulkSending(true); setBulkResult(null);
         try {
           const data = await api(`/projects/${project.id}/content-queue/bulk-from-actions`, {
@@ -6413,6 +6413,12 @@
                             try {
                               await api(`/action-items/${item.id}`, { method: 'PUT', body: { execution_type: execMap[newLabel], assignee_label: newLabel } });
                               setItems(prev => prev.map(i => i.id === item.id ? { ...i, execution_type: execMap[newLabel], assignee_label: newLabel } : i));
+                              // Auto-send to content queue when switching to Copywriter
+                              if (newLabel === 'Copywriter') {
+                                try {
+                                  await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                } catch(cqErr) { console.warn('Auto-send to content queue:', cqErr); }
+                              }
                             } catch(err) { console.error(err); }
                           }} style={{ fontSize: 11, padding: '3px 6px', background: 'transparent', border: '1px solid transparent', borderRadius: 4, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
                             onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
@@ -6439,9 +6445,14 @@
                             // COPYWRITER: Send button or status
                             if (assigneeLabel === 'Copywriter') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 10 }} /> In Queue</span>;
                               return (
-                                <button onClick={() => handleStatusChange(item.id, 'in-progress')}
+                                <button onClick={async () => {
+                                  try {
+                                    await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
+                                  } catch(err) { console.error('Send to copywriter:', err); }
+                                }}
                                   style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                   <i className="fas fa-pen-fancy" style={{ marginRight: 4, fontSize: 9 }} />Send
                                 </button>
