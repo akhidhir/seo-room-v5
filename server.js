@@ -2141,6 +2141,293 @@ Return ONLY a JSON array of fixes:
   }
 });
 
+// ============ UNIFIED AUTO-FIX ============
+// Routes action items to the appropriate fix handler
+app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { action_item_id } = req.body;
+    if (!action_item_id) return res.status(400).json({ error: 'action_item_id required' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const item = (await pool.query(
+      `SELECT ai.*, af.recommendation as finding_recommendation, af.current_value as finding_current, af.recommended_value as finding_recommended
+       FROM action_items ai LEFT JOIN audit_findings af ON ai.finding_id = af.id
+       WHERE ai.id = $1 AND ai.project_id = $2`, [action_item_id, projectId]
+    )).rows[0];
+    if (!item) return res.status(404).json({ error: 'Action item not found' });
+
+    const cat = (item.category || '').toLowerCase();
+    const title = (item.title || '').toLowerCase();
+    const desc = (item.description || '').toLowerCase();
+    const allText = title + ' ' + desc;
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+
+    // ---- ROUTE 1: On-page meta fixes (titles, descriptions, focus keywords) ----
+    if (/\b(meta.?title|meta.?desc|title.?tag|page.?title|focus.?keyword|yoast)\b/.test(allText) ||
+        (cat === 'on-page issues' && /\b(title|description|keyword|duplicate|missing|empty|too short|too long)\b/.test(allText))) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
+
+      // Find the page this item refers to — try to extract URL or page name from title/desc
+      const urlMatch = (item.title + ' ' + item.description).match(/https?:\/\/[^\s"]+/);
+      const pageSlug = (item.title || '').replace(/^(Fix|Update|Add|Missing|Duplicate|Improve)\s+/i, '')
+        .replace(/\s+(meta title|meta description|title tag|focus keyword).*$/i, '').trim();
+
+      let pageData = null;
+      if (urlMatch) {
+        const slug = urlMatch[0].replace(wpUrl, '').replace(/^\/|\/$/g, '').split('/').pop();
+        pageData = await readWpYoastMeta(wpUrl, slug, authHeaders);
+      }
+      if (!pageData && pageSlug) {
+        const slug = pageSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        pageData = await readWpYoastMeta(wpUrl, slug, authHeaders);
+      }
+
+      if (!pageData) {
+        // Can't identify the page — mark done with note
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'Could not identify specific page — mark as reviewed. Fix manually in On-Page Audit.' });
+      }
+
+      // AI-generate fix
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: `You are an SEO expert. Fix the meta for this WordPress page.
+
+Issue: ${item.title}
+Details: ${item.description}
+Page: ${pageData.title} (${pageData.type}/${pageData.wpId})
+Current meta title: ${pageData.yoast_wpseo_title || '(empty)'}
+Current meta desc: ${pageData.yoast_wpseo_metadesc || '(empty)'}
+Current focus keyword: ${pageData.yoast_wpseo_focuskw || '(empty)'}
+Business: ${project.business_name || project.name} — ${project.industry || 'services'} in ${project.location || 'Australia'}
+
+Return ONLY JSON: {"new_meta_title": "...", "new_meta_desc": "...", "new_focus_keyword": "..."}
+- Title: 50-60 chars, include primary keyword
+- Desc: 120-155 chars, compelling with CTA
+- Keyword: 2-4 word focus keyword
+- Only include fields that need changing (omit if current is already good)` }]
+      });
+
+      let fix = {};
+      try {
+        const jsonMatch = aiResp.content[0].text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) fix = JSON.parse(jsonMatch[0]);
+      } catch (e) { return res.status(500).json({ error: 'AI failed to generate meta fix' }); }
+
+      // Apply changes via Yoast REST API
+      const changes = [];
+      const meta = {};
+      if (fix.new_meta_title && fix.new_meta_title !== pageData.yoast_wpseo_title) {
+        changes.push({ field: 'yoast_wpseo_title', old: pageData.yoast_wpseo_title, new: fix.new_meta_title });
+        meta._yoast_wpseo_title = fix.new_meta_title;
+      }
+      if (fix.new_meta_desc && fix.new_meta_desc !== pageData.yoast_wpseo_metadesc) {
+        changes.push({ field: 'yoast_wpseo_metadesc', old: pageData.yoast_wpseo_metadesc, new: fix.new_meta_desc });
+        meta._yoast_wpseo_metadesc = fix.new_meta_desc;
+      }
+      if (fix.new_focus_keyword && fix.new_focus_keyword !== pageData.yoast_wpseo_focuskw) {
+        changes.push({ field: 'yoast_wpseo_focuskw', old: pageData.yoast_wpseo_focuskw, new: fix.new_focus_keyword });
+        meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
+      }
+
+      if (changes.length === 0) {
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'Current meta already looks good' });
+      }
+
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${pageData.type}/${pageData.wpId}`, {
+        method: 'POST', headers: authHeaders, body: JSON.stringify({ meta }), signal: AbortSignal.timeout(15000)
+      });
+
+      if (!writeResp.ok) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WP write failed: ${writeResp.status} — ${errText.slice(0, 200)}` });
+      }
+
+      // Log to wp_change_history for rollback
+      for (const change of changes) {
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'auto_fix_meta', $5, $6, $7)`,
+          [projectId, pageData.wpId, '', pageData.title, change.field, change.old || '', change.new]
+        );
+      }
+
+      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      console.log(`[auto-fix] Meta fix applied: ${changes.length} changes on ${pageData.title}`);
+      return res.json({ success: true, fix_type: 'meta', applied: true, changes: changes.length, page: pageData.title });
+    }
+
+    // ---- ROUTE 2: Schema/Structured Data injection ----
+    if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business)\b/.test(allText) && cat !== 'core web vitals') {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
+
+      // AI-generate the schema markup
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: `You are a Schema.org structured data expert. Generate JSON-LD markup for this fix.
+
+Issue: ${item.title}
+Details: ${item.description}
+Business: ${project.business_name || project.name}
+Industry: ${project.industry || 'services'}
+Location: ${project.location || 'Australia'}
+Website: ${project.domain || wpUrl}
+
+RULES:
+- Return ONLY the JSON-LD script tag content (the JSON object, no <script> tags)
+- Use schema.org vocabulary
+- Include all relevant properties
+- For LocalBusiness: include name, url, telephone (if known), address, geo, openingHours
+- For FAQ: include mainEntity with Question/Answer pairs based on common questions for this industry
+- For BreadcrumbList: include itemListElement
+- Be specific and complete
+
+Return ONLY valid JSON-LD (the object, no wrapping).` }]
+      });
+
+      let schemaJson = '';
+      try {
+        const text = aiResp.content[0].text;
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          JSON.parse(jsonMatch[0]); // validate
+          schemaJson = jsonMatch[0];
+        }
+      } catch (e) { return res.status(500).json({ error: 'AI failed to generate valid schema' }); }
+
+      if (!schemaJson) return res.status(500).json({ error: 'No schema generated' });
+
+      // Inject via seoroom-helper custom_snippet
+      const snippetHtml = `<script type="application/ld+json">\n${schemaJson}\n</script>`;
+      const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fix_type: 'custom_snippet',
+          params: { html: snippetHtml, location: 'head' },
+          page_url: '', // site-wide
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!wpResp.ok) {
+        const errText = await wpResp.text();
+        return res.status(500).json({ error: `WP plugin returned ${wpResp.status}: ${errText.slice(0, 200)}` });
+      }
+
+      const wpResult = await wpResp.json();
+
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, 0, '', $2, 'auto_fix_schema', 'json_ld', 'none', $3)`,
+        [projectId, item.title, JSON.stringify({ fix_id: wpResult.fix_id, schema: schemaJson.slice(0, 500) })]
+      );
+
+      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      console.log(`[auto-fix] Schema injected: ${item.title}`);
+      return res.json({ success: true, fix_type: 'schema', applied: true, fix_id: wpResult.fix_id });
+    }
+
+    // ---- ROUTE 3: CWV / Performance fixes ----
+    if (cat === 'core web vitals' || /\b(lcp|cls|fcp|tbt|speed|performance|render|blocking)\b/.test(allText)) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
+
+      // Get speed audit data to find opportunities
+      const speedAudit = await pool.query(
+        `SELECT audit_data FROM audits WHERE project_id=$1 AND audit_type='speed' AND status='completed' ORDER BY created_at DESC LIMIT 1`,
+        [projectId]
+      );
+
+      if (speedAudit.rows.length === 0) {
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No speed audit data found. Run a PageSpeed audit first.' });
+      }
+
+      const speedResults = speedAudit.rows[0].audit_data?.results || [];
+      // Try to match the page from item title
+      const pageTitle = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '').replace(/^(Improve|Fix|Optimize)\s+/i, '').trim().toLowerCase();
+      const page = speedResults.find(r =>
+        (r.title || r.slug || '').toLowerCase().includes(pageTitle) ||
+        pageTitle.includes((r.title || r.slug || '').toLowerCase())
+      );
+
+      if (page && page.opportunities?.length > 0) {
+        // Forward to existing cwv-fix logic
+        const fixPrompt = `You are a WordPress Core Web Vitals expert. Analyze these Lighthouse audit failures for the page "${page.url}" and generate fix instructions.
+
+AVAILABLE FIX TYPES: preconnect, dns_prefetch, preload_resource, fetchpriority, font_display_swap, defer_script, delay_script, image_dimensions, lazy_load
+IMPORTANT: Only suggest fixes the WP plugin can apply. Do NOT suggest image compression, WebP, CSS/JS minification, or caching (handled by BerqWP). MAX 5 fixes.
+
+OPPORTUNITIES:
+${JSON.stringify(page.opportunities, null, 2)}
+
+Return ONLY: [{"fix_type": "...", "params": {...}, "reason": "..."}]`;
+
+        const aiResp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, messages: [{ role: 'user', content: fixPrompt }] });
+        let fixes = [];
+        try { const m = aiResp.content[0].text.match(/\[[\s\S]*\]/); if (m) fixes = JSON.parse(m[0]); } catch (e) {}
+
+        let appliedCount = 0;
+        for (const fix of fixes) {
+          try {
+            const wr = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fix_type: fix.fix_type, params: fix.params, page_url: page.url }),
+              signal: AbortSignal.timeout(10000),
+            });
+            if (wr.ok) {
+              const r = await wr.json();
+              await pool.query(
+                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, 0, $2, $3, 'cwv_fix', $4, 'none', $5)`,
+                [projectId, page.url, page.url, fix.fix_type, JSON.stringify({ fix_id: r.fix_id, params: fix.params, reason: fix.reason })]
+              );
+              appliedCount++;
+            }
+          } catch (e) { console.error('[auto-fix] CWV fix error:', e.message); }
+        }
+
+        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        console.log(`[auto-fix] CWV: ${appliedCount} fixes applied for ${page.url}`);
+        return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, page: page.url });
+      }
+
+      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No matching page/opportunities in speed audit data' });
+    }
+
+    // ---- ROUTE 4: Image optimization (lazy load, dimensions, compression advice) ----
+    if (/\b(image|lazy.?load|webp|avif|compress|optimi[sz]e.?image)\b/.test(allText)) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
+
+      // Apply lazy loading site-wide via seoroom-helper
+      const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fix_type: 'lazy_load', params: {}, page_url: '' }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      console.log(`[auto-fix] Image optimization: lazy load applied`);
+      return res.json({ success: true, fix_type: 'image', applied: wpResp.ok, message: wpResp.ok ? 'Lazy loading enabled site-wide' : 'Plugin not available — install ShortPixel or Imagify for image compression' });
+    }
+
+    // ---- ROUTE 5: Everything else — mark done (server config, external, etc.) ----
+    // These are classified as "Automated" but require manual server/hosting changes
+    await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+    console.log(`[auto-fix] Marked done (no auto-handler): ${item.title}`);
+    return res.json({ success: true, fix_type: 'manual_review', applied: false, message: `"${item.title}" requires manual action — marked as reviewed. Check audit details for specific steps.` });
+
+  } catch (e) {
+    console.error('[auto-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Rollback a CWV fix via seoroom-helper plugin
 app.post('/api/projects/:projectId/cwv-fix/rollback', async (req, res) => {
   try {

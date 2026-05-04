@@ -5896,9 +5896,12 @@
 
       const canAutoExecute = (item) => {
         const cat = (item._category || item.category || '').toLowerCase();
-        const type = (item.type || '').toLowerCase();
-        if (cat === 'core web vitals' || type === 'core web vitals') return 'cwv';
-        if (cat === 'on-page issues' || cat === 'content quality') return 'onpage';
+        const assignee = (item.assignee_label || item.execution_type || '').toLowerCase();
+        // All items classified as Automated can be auto-executed
+        if (assignee === 'automated' || item.execution_type === 'automated') return 'auto';
+        if (cat === 'core web vitals') return 'auto';
+        if (cat === 'on-page issues' && assignee !== 'copywriter') return 'auto';
+        if (cat === 'schema & data') return 'auto';
         return null;
       };
 
@@ -5912,41 +5915,23 @@
       const handleExecuteAll = async () => {
         setExecuting(true); setExecProgress({ done: 0, total: 0, current: '' });
         try {
-          // Get all pending items that can actually be auto-executed
           const executableItems = items.filter(i => {
             const status = (i.status || 'pending').toLowerCase();
             return status === 'pending' && canAutoExecute(i);
           });
 
-          // Get speed audit results for CWV items
-          const speedData = await api(`/speed-audit/${project.id}/status`);
-          const speedResults = speedData.results || [];
-
           setExecProgress({ done: 0, total: executableItems.length, current: 'Starting...' });
 
           let done = 0;
           for (const item of executableItems) {
-            const execType = canAutoExecute(item);
-            const label = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '');
+            const label = (item.title || '').substring(0, 60);
             setExecProgress({ done, total: executableItems.length, current: label });
 
             try {
-              if (execType === 'cwv') {
-                const pageTitle = label.toLowerCase();
-                const page = speedResults.find(r => (r.title || r.slug || '').toLowerCase() === pageTitle);
-                if (page && page.opportunities?.length > 0) {
-                  await api(`/projects/${project.id}/cwv-fix`, {
-                    method: 'POST',
-                    body: { page_url: page.url, opportunities: page.opportunities }
-                  });
-                }
-              } else if (execType === 'onpage') {
-                await api(`/projects/${project.id}/ai-fix`, {
-                  method: 'POST',
-                  body: { action_item_id: item.id }
-                });
-              }
-              await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
+              await api(`/projects/${project.id}/auto-fix`, {
+                method: 'POST',
+                body: { action_item_id: item.id }
+              });
             } catch (e) { console.error('Fix failed for', label, e); }
             done++;
             setExecProgress({ done, total: executableItems.length, current: '' });
@@ -5964,29 +5949,14 @@
         if (!execType) return;
         setExecutingItem(item.id);
         try {
-          if (execType === 'cwv') {
-            const speedData = await api(`/speed-audit/${project.id}/status`);
-            const speedResults = speedData.results || [];
-            const pageTitle = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '').toLowerCase();
-            const page = speedResults.find(r => (r.title || r.slug || '').toLowerCase() === pageTitle);
-            if (page && page.opportunities?.length > 0) {
-              await api(`/projects/${project.id}/cwv-fix`, {
-                method: 'POST',
-                body: { page_url: page.url, opportunities: page.opportunities }
-              });
-              await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
-              setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
-            } else {
-              setError('No PageSpeed data found for this page. Run a speed audit first.');
-            }
-          } else if (execType === 'onpage') {
-            // On-page fixes use the AI Fix system
-            await api(`/projects/${project.id}/ai-fix`, {
-              method: 'POST',
-              body: { action_item_id: item.id }
-            });
-            await api(`/action-items/${item.id}`, { method: 'PUT', body: { status: 'done' } });
-            setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
+          const result = await api(`/projects/${project.id}/auto-fix`, {
+            method: 'POST',
+            body: { action_item_id: item.id }
+          });
+          setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
+          if (result.message && !result.applied) {
+            setError(result.message); // Informational — not a real error
+            setTimeout(() => setError(''), 5000);
           }
         } catch (e) { setError('Execute failed: ' + e.message); }
         setExecutingItem(null);
