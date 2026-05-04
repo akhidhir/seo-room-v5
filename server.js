@@ -1135,6 +1135,12 @@ app.put('/api/action-items/:id', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Action item not found' });
 
+    // When done → mark linked finding as resolved
+    if ((status === 'done' || status === 'completed') && result.rows[0].finding_id) {
+      await pool.query(`UPDATE audit_findings SET status='resolved' WHERE id=$1`, [result.rows[0].finding_id]);
+      console.log(`[action-items] Marked finding ${result.rows[0].finding_id} as resolved`);
+    }
+
     // Cascade status to duplicate action items
     let cascaded = 0;
     if (status && duplicate_ids && Array.isArray(duplicate_ids) && duplicate_ids.length > 0) {
@@ -1143,7 +1149,6 @@ app.put('/api/action-items/:id', async (req, res) => {
         [status, duplicate_ids]
       );
       cascaded = cascadeResult.rowCount;
-      // Also cascade to linked audit_findings
       if (status === 'done' || status === 'completed') {
         await pool.query(
           `UPDATE audit_findings SET status='resolved' WHERE id IN (
@@ -1548,8 +1553,9 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           return false;
         }
 
-        const actionableFindings = allFindings.filter(f => !isInformational(f));
-        console.log(`[orchestrator] Filtered ${allFindings.length - actionableFindings.length} informational findings, ${actionableFindings.length} actionable`);
+        const actionableFindings = allFindings.filter(f => !isInformational(f) && f.status !== 'resolved');
+        const resolvedCount = allFindings.filter(f => f.status === 'resolved').length;
+        console.log(`[orchestrator] Filtered ${allFindings.length - actionableFindings.length - resolvedCount} informational, ${resolvedCount} resolved, ${actionableFindings.length} actionable`);
 
         // Build action items from findings — 1:1 mapping
         const uniqueItems = actionableFindings.map(f => {
@@ -2291,6 +2297,7 @@ Return ONLY JSON: {"new_meta_title": "...", "new_meta_desc": "...", "new_focus_k
       }
 
       await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      if (item.finding_id) await pool.query(`UPDATE audit_findings SET status='resolved' WHERE id=$1`, [item.finding_id]);
       console.log(`[auto-fix] Meta fix applied: ${changes.length} changes on ${pageData.title}`);
       return res.json({ success: true, fix_type: 'meta', applied: true, changes: changes.length, page: pageData.title });
     }
@@ -2362,6 +2369,7 @@ Return ONLY valid JSON-LD (the object, no wrapping).` }]
       );
 
       await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+      if (item.finding_id) await pool.query(`UPDATE audit_findings SET status='resolved' WHERE id=$1`, [item.finding_id]);
       console.log(`[auto-fix] Schema injected: ${item.title}`);
       return res.json({ success: true, fix_type: 'schema', applied: true, fix_id: wpResult.fix_id });
     }
@@ -2444,6 +2452,7 @@ If NOTHING can be fixed by the plugin (e.g. server config, hosting changes), ret
 
       if (appliedCount > 0) {
         await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
+        if (item.finding_id) await pool.query(`UPDATE audit_findings SET status='resolved' WHERE id=$1`, [item.finding_id]);
         console.log(`[auto-fix] CWV: ${appliedCount}/${fixes.length} fixes applied for "${item.title}": ${appliedFixes.join(', ')}`);
         return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, fixes: appliedFixes, failed: failedFixes });
       }
