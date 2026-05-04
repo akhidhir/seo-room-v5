@@ -2187,9 +2187,8 @@ app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
       }
 
       if (!pageData) {
-        // Can't identify the page — mark done with note
-        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'Could not identify specific page — mark as reviewed. Fix manually in On-Page Audit.' });
+        // Can't identify the page — keep pending
+        return res.json({ success: true, fix_type: 'meta', applied: false, message: 'Could not identify specific page. Use On-Page Audit to fix manually.' });
       }
 
       // AI-generate fix
@@ -2344,8 +2343,7 @@ Return ONLY valid JSON-LD (the object, no wrapping).` }]
       );
 
       if (speedAudit.rows.length === 0) {
-        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No speed audit data found. Run a PageSpeed audit first.' });
+        return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No speed audit data. Run a PageSpeed audit first.' });
       }
 
       const speedResults = speedAudit.rows[0].audit_data?.results || [];
@@ -2396,8 +2394,7 @@ Return ONLY: [{"fix_type": "...", "params": {...}, "reason": "..."}]`;
         return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, page: page.url });
       }
 
-      await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No matching page/opportunities in speed audit data' });
+      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No matching page in speed audit data' });
     }
 
     // ---- ROUTE 4: Image optimization (lazy load, dimensions, compression advice) ----
@@ -2416,11 +2413,9 @@ Return ONLY: [{"fix_type": "...", "params": {...}, "reason": "..."}]`;
       return res.json({ success: true, fix_type: 'image', applied: wpResp.ok, message: wpResp.ok ? 'Lazy loading enabled site-wide' : 'Plugin not available — install ShortPixel or Imagify for image compression' });
     }
 
-    // ---- ROUTE 5: Everything else — mark done (server config, external, etc.) ----
-    // These are classified as "Automated" but require manual server/hosting changes
-    await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-    console.log(`[auto-fix] Marked done (no auto-handler): ${item.title}`);
-    return res.json({ success: true, fix_type: 'manual_review', applied: false, message: `"${item.title}" requires manual action — marked as reviewed. Check audit details for specific steps.` });
+    // ---- ROUTE 5: Everything else — keep pending, explain why ----
+    console.log(`[auto-fix] No auto-handler for: ${item.title} [${cat}]`);
+    return res.json({ success: true, fix_type: 'manual_review', applied: false, message: `"${(item.title || '').slice(0, 80)}" can't be auto-fixed — needs manual action. Check audit for steps.` });
 
   } catch (e) {
     console.error('[auto-fix] Error:', e.message);

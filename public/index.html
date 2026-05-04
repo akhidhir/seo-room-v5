@@ -5953,10 +5953,11 @@
             method: 'POST',
             body: { action_item_id: item.id }
           });
-          setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
-          if (result.message && !result.applied) {
-            setError(result.message); // Informational — not a real error
-            setTimeout(() => setError(''), 5000);
+          if (result.applied) {
+            setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
+          } else {
+            setError(result.message || 'Fix not applied — needs manual action');
+            setTimeout(() => setError(''), 8000);
           }
         } catch (e) { setError('Execute failed: ' + e.message); }
         setExecutingItem(null);
