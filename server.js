@@ -1526,21 +1526,44 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
 
         // Filter out informational/passing findings — these aren't actionable
         function isInformational(finding) {
-          const t = ((finding.title || '') + ' ' + (finding.description || '')).toLowerCase();
-          // Passing checks (✅, Pass, Yes, OK, Good, Correct, Present, Detected, Confirmed, Found, Enabled, Active)
-          if (/^✅|^\*\*✅/.test((finding.title || '').trim()) || /^✅|^\*\*✅/.test((finding.description || '').trim())) return true;
-          // "X Present", "X Detected", "X Found", "X Confirmed" without negative context
-          if (/\b(present|detected|confirmed|found|enabled|active|served|fully served)\b/i.test(t) && !/\b(not |no |missing|partial|issue|problem|error|fix|improve|add|need)\b/i.test(t)) return true;
-          // Status reports without actionable language: "Pages Successfully Crawled", "Total Pages in sitemap"
-          if (/\b(successfully crawled|pages crawled|total pages in)\b/i.test(t) && !/\b(not |error|issue|problem|fix|too few|missing)\b/i.test(t)) return true;
-          // "Pass" as a verdict
-          if (/\bpass\b/i.test(t) && !/\b(bypass|password|fail|not pass|doesn.?t pass)\b/i.test(t) && !/\b(fix|improve|add|need|should|must|recommend)\b/i.test(t)) return true;
-          // "Yes —" or "✅ Yes" without issues
-          if (/\byes\s*[—–-]/i.test(t) && !/\b(but|however|partial|issue|need|missing|fix)\b/i.test(t)) return true;
-          // "Good consistency" / "Good" as a passing status
-          if (/^good\b/i.test(t.trim()) && !/\b(but|however|need|could|should|improve)\b/i.test(t)) return true;
-          // Monitoring tasks (not actions)
-          if (/\bmonitor\b/i.test(t) && !/\b(fix|add|create|implement|update|change)\b/i.test(t)) return true;
+          const title = (finding.title || '').trim();
+          const titleLower = title.toLowerCase();
+          const all = (title + ' ' + (finding.description || '') + ' ' + (finding.current_value || '') + ' ' + (finding.recommendation || '')).toLowerCase();
+
+          // --- Explicit non-actionable title patterns ---
+          const infoTitles = [
+            /^pages?\s+(successfully\s+)?crawled/i,
+            /^sitemap\s+present/i,
+            /^https?\s*[\/\\]?\s*ssl/i,
+            /^total\s+pages?\s+in/i,
+            /^robots\.?txt/i,
+            /^viewport\s+meta/i,
+            /^mobile.?friendly/i,
+            /^server\s+response/i,
+            /^page\s+load\s+time/i,
+            /^dns\s+resolution/i,
+            /^ssl\s+certificate/i,
+          ];
+          // Only skip if there's no actionable language in the full text
+          if (infoTitles.some(rx => rx.test(title)) && !/\b(fix|improve|add|missing|error|broken|fail|issue|problem|not |no |need|should|must|recommend|warning|slow|block)\b/i.test(all)) return true;
+
+          // --- Any ✅ in title or description without negative context ---
+          if (/✅/.test(title + ' ' + (finding.description || '')) && !/\b(but|however|partial|issue|need|missing|fix|improve|not |no )\b/i.test(all)) return true;
+
+          // --- "Pass" / "Yes" / "Good" / "OK" verdicts without issues ---
+          if (/\b(pass|passed)\b/i.test(all) && !/\b(bypass|password|fail|not pass|doesn.?t pass|fix|improve|add|need|should|must|recommend|missing|error|slow)\b/i.test(all)) return true;
+          if (/\byes\s*[—–\-:]/i.test(all) && !/\b(but|however|partial|issue|need|missing|fix|improve)\b/i.test(all)) return true;
+
+          // --- Status-only items (no recommendation or recommendation is just "none"/"n/a") ---
+          const rec = (finding.recommendation || finding.description || '').trim().toLowerCase();
+          if (/^(n\/a|none|no action|no issues?|looks? good|all good|no changes?\s+needed|—|-|–)$/i.test(rec)) return true;
+
+          // --- Monitoring-only (no fix action) ---
+          if (/\bmonitor\b/i.test(titleLower) && !/\b(fix|add|create|implement|update|change|improve)\b/i.test(all)) return true;
+
+          // --- Pure data points (just listing pages/counts with no issue) ---
+          if (/\b(successfully|correctly|properly|fully)\b/i.test(all) && !/\b(not |no |missing|error|issue|problem|fix|improve|add|need|should|must)\b/i.test(all)) return true;
+
           return false;
         }
 
