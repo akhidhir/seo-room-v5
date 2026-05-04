@@ -5896,11 +5896,14 @@
       const canAutoExecute = (item) => {
         const cat = (item._category || item.category || '').toLowerCase();
         const assignee = (item.assignee_label || item.execution_type || '').toLowerCase();
-        // All items classified as Automated can be auto-executed
-        if (assignee === 'automated' || item.execution_type === 'automated') return 'auto';
+        if (assignee !== 'automated') return null;
+        // Only categories the auto-fix endpoint can actually handle
         if (cat === 'core web vitals') return 'auto';
-        if (cat === 'on-page issues' && assignee !== 'copywriter') return 'auto';
-        if (cat === 'schema & data') return 'auto';
+        if (cat === 'schema & data' || cat === 'schema') return 'auto';
+        if (cat === 'site health') return 'auto';
+        // On-page meta fixes (titles, descriptions)
+        const t = ((item.title || '') + ' ' + (item.description || '')).toLowerCase();
+        if (cat === 'on-page issues' && /\b(meta|title|description|keyword|yoast)\b/.test(t)) return 'auto';
         return null;
       };
 

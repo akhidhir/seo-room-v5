@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SEO Room Helper
  * Description: Registers Yoast SEO meta fields for REST API access + CWV auto-fix via WordPress hooks. Required by SEO Room Dashboard.
- * Version: 2.0.0
+ * Version: 2.1.0
  * Author: The SEO Room
  */
 

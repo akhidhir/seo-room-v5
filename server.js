@@ -2277,7 +2277,7 @@ Return ONLY JSON: {"new_meta_title": "...", "new_meta_desc": "...", "new_focus_k
     }
 
     // ---- ROUTE 2: Schema/Structured Data injection ----
-    if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business)\b/.test(allText) && cat !== 'core web vitals') {
+    if (cat === 'schema & data' || cat === 'schema' || (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business|faqpage|itemlist|aggregaterating|breadcrumb|service|review)\b/.test(allText) && cat !== 'core web vitals')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
 
       // AI-generate the schema markup
