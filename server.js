@@ -10037,15 +10037,7 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
         }
 
         if (validFindings.length > 0) {
-          // Dedup by title
-          const deduped = [];
-          const seenTitles = new Set();
-          for (const f of validFindings) {
-            const key = f.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
-            if (seenTitles.has(key)) continue;
-            seenTitles.add(key);
-            deduped.push(f);
-          }
+          const deduped = validFindings; // No silent dedup — orchestrator DP tagging handles duplicates visibly
 
           console.log(`[findings-extractor] Structured block: ${parsed.length} raw → ${deduped.length} valid findings for ${pillar}`);
 
@@ -10272,17 +10264,10 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
 
     console.log(`[findings-extractor-deterministic] Parsed ${allFindings.length} findings from ${mergedOrder.length} sections (${pillar})`);
 
-    // ===== STEP 5: Deduplicate by title similarity =====
-    const deduped = [];
-    const seenTitles = new Set();
-    for (const f of allFindings) {
-      const key = f.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      deduped.push(f);
-    }
+    // No silent dedup — pass everything through, orchestrator DP tagging handles duplicates visibly
+    const deduped = allFindings;
 
-    console.log(`[findings-extractor-deterministic] After dedup: ${deduped.length} unique findings (${pillar})`);
+    console.log(`[findings-extractor-deterministic] Total: ${deduped.length} findings for ${pillar}`);
 
     // ===== STEP 6: Save to DB =====
     if (deduped.length > 0) {
