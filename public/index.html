@@ -6347,11 +6347,11 @@
                             const pLower = (item._pillar || item.pillar || '').toLowerCase();
                             const isGBP = pLower.includes('gbp');
                             const isGSC = pLower.includes('gsc');
-                            let navPage = null, navLabel = '', navIcon = '', navColor = '';
-                            if (isGBP) { navPage = 'gbp-audit-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
-                            else if (isGSC) { navPage = 'gsc-audit'; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
-                            else { navPage = 'website-audit'; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
-                            if (!navPage) return null;
+                            const cat = (item._category || item.category || '').toLowerCase().replace(/\s*&\s*/g, ' ').replace(/\s+/g, '-');
+                            let navPage = '', navLabel = '', navIcon = '', navColor = '';
+                            if (isGBP) { navPage = 'ext-sec-' + cat; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
+                            else if (isGSC) { navPage = 'gsc-sec-' + cat; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
+                            else { navPage = 'web-sec-' + cat; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
                             return <button onClick={() => setActiveTab(navPage)} style={{ marginTop: 6, fontSize: 11, padding: '3px 10px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 4, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 5, fontSize: 10 }} />{navLabel}</button>;
                           })()}
                         </td>
