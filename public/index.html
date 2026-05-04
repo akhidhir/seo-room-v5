@@ -6090,8 +6090,12 @@
         { id: 'Website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
       ];
 
-      // Compute assignee label for each item (memoized)
+      // Compute assignee label for each item (memoized) — DB override takes priority
       const itemsWithAssignee = useMemo(() => items.map(item => {
+        const dbLabel = item.assignee_label;
+        if (dbLabel && ['Automated', 'Copywriter', 'Manual'].includes(dbLabel)) {
+          return { ...item, _assigneeLabel: dbLabel };
+        }
         const execInfo = detectExecType(item.description || item.title, item._pillar || item.pillar, item._category || item.category);
         return { ...item, _assigneeLabel: execInfo.label };
       }), [items]);
