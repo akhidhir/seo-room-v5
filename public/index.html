@@ -1387,8 +1387,13 @@
       const COPYWRITER = { type: 'copywriter', label: 'Copywriter', icon: 'fas fa-pen-fancy', color: '#8b5cf6' };
       const p = (pillar || '').toLowerCase();
 
-      // --- GBP is always Manual (no automation yet) ---
-      if (p.includes('gbp')) return MANUAL;
+      // --- GBP: Copywriter for content tasks, Manual for everything else ---
+      if (p.includes('gbp')) {
+        if (/\b(description|write|post|respond.*review|reply.*review|review.*response|create.*post|weekly.*post|content|caption|update.*description|expand.*description|business.*description)\b/.test(t)) return COPYWRITER;
+        if (/\b(photo.*caption|add.*photo.*desc|service.*desc|product.*desc)\b/.test(t)) return COPYWRITER;
+        if (/\b(create.*page|add.*page|suburb.*page|service.*area.*page|landing.*page|keyword)\b/.test(t)) return COPYWRITER;
+        return MANUAL;
+      }
 
       // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
       if (cat === 'core web vitals') return AUTOMATED;

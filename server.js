@@ -1494,8 +1494,13 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           const cat = (finding.category || '').toLowerCase();
           const pillar = (finding.pillar || '').toLowerCase();
 
-          // --- GBP is always Manual (no automation yet) ---
-          if (pillar.includes('gbp')) return { assignee: 'Manual', execType: 'manual' };
+          // --- GBP: Copywriter for content tasks, Manual for everything else ---
+          if (pillar.includes('gbp')) {
+            if (/\b(description|write|post|respond.*review|reply.*review|review.*response|create.*post|weekly.*post|content|caption|update.*description|expand.*description|business.*description)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(photo.*caption|add.*photo.*desc|service.*desc|product.*desc)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(create.*page|add.*page|suburb.*page|service.*area.*page|landing.*page|keyword)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            return { assignee: 'Manual', execType: 'manual' };
+          }
 
           // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
           // Core Web Vitals — all can be attempted via seoroom-helper (preconnect, defer, preload, etc.)
