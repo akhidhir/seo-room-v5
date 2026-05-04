@@ -6390,7 +6390,7 @@
                           })()}
                           {howToExpanded[item.id] && (
                             <div style={{ marginTop: 8, padding: '14px 18px', background: '#f59e0b08', border: '1px solid #f59e0b20', borderRadius: 6, fontSize: 14, lineHeight: 1.8, color: 'var(--text1)', whiteSpace: 'pre-wrap' }}>
-                              {howToLoading[item.id] ? <span><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Generating instructions...</span> : (howToData[item.id] || '').split(/(https?:\/\/[^\s,)]+)/g).map((part, idx) => /^https?:\/\//.test(part) ? <a key={idx} href={part} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6', textDecoration: 'underline' }}>{part}</a> : part)}
+                              {howToLoading[item.id] ? <span><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Generating instructions...</span> : (howToData[item.id] || '').split(/((?:https?:\/\/|www\.)[^\s,)]+)/g).map((part, idx) => /^(?:https?:\/\/|www\.)/.test(part) ? <a key={idx} href={part.startsWith('www.') ? 'https://' + part : part} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6', textDecoration: 'underline' }}>{part}</a> : part)}
                             </div>
                           )}
                         </td>

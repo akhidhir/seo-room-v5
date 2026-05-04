@@ -1186,7 +1186,7 @@ Details: ${item.description || ''}
 Category: ${item.category || ''}
 Business: ${item.business_name || ''} (${item.domain || ''}) in ${item.location || 'Australia'}
 
-Return 3-7 numbered steps. Be specific — include exact URLs to visit, buttons to click, fields to fill. Keep each step to 1-2 sentences. If there's a direct link, include it. Format as plain numbered list, no markdown.` }]
+Return 3-7 numbered steps. Be specific — include exact URLs (always with https://) to visit, buttons to click, fields to fill. Keep each step to 1-2 sentences. If there's a direct link, include it. Format as plain numbered list, no markdown headers.` }]
     });
 
     const steps = aiResp.content[0].text.trim();
