@@ -5704,7 +5704,7 @@
               </p>
             </div>
             <button className="btn btn-primary" onClick={syncFindings} disabled={syncing} style={{ fontSize: 13 }}>
-              {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
+              {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audits</>}
             </button>
           </div>
 
@@ -6104,16 +6104,13 @@
                 <i className="fas fa-tasks" style={{ marginRight: 10, color: 'var(--accent)' }} />Action Plan
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
-                AI-orchestrated tasks from all audits — deduplicated and prioritized
+                All findings from audits — Automated or Manual
               </p>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-primary" onClick={runOrchestrator} disabled={syncing || executing} style={{ fontSize: 13 }}>
-                {syncing ? <><span className="spinner"></span> Running Orchestrator...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }} />Run Orchestrator</>}
-              </button>
               {pendingSeoRoomCount > 0 && (
-                <button className="btn" onClick={handleExecuteAll} disabled={executing || syncing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
-                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Execute All ({pendingSeoRoomCount})</>}
+                <button className="btn" onClick={handleExecuteAll} disabled={executing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
+                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run All Automated ({pendingSeoRoomCount})</>}
                 </button>
               )}
             </div>
@@ -6280,8 +6277,9 @@
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginTop: 2 }}>{item.description}</div>
                           {(() => {
-                            const isGBP = (item._pillar || item.pillar || '').includes('gbp');
-                            const isGSC = (item._pillar || item.pillar || '').includes('gsc');
+                            const pLower = (item._pillar || item.pillar || '').toLowerCase();
+                            const isGBP = pLower.includes('gbp');
+                            const isGSC = pLower.includes('gsc');
                             let navPage = null, navLabel = '', navIcon = '', navColor = '';
                             if (isGBP) { navPage = 'gbp-external'; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
                             else if (isGSC) { navPage = 'gsc-audit'; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
@@ -6335,7 +6333,7 @@
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
               <i className="fas fa-tasks" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
               <div style={{ fontSize: 16, marginBottom: 8 }}>No action items yet</div>
-              <div style={{ fontSize: 13 }}>Run your audits first, then click "Run Orchestrator" to generate a unified action plan.</div>
+              <div style={{ fontSize: 13 }}>Run your audits first. Findings sync automatically to the Action Plan.</div>
             </div>
           )}
         </div>
