@@ -1492,21 +1492,19 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           // --- GBP is always Manual (no automation yet) ---
           if (pillar.includes('gbp')) return { assignee: 'Manual', execType: 'manual' };
 
-          // --- AUTOMATED: only things the dashboard/API can actually execute ---
-          // On-Page Issues that Yoast can fix (meta via WP REST API)
-          if ((cat === 'on-page issues' || cat === 'core web vitals') && /\b(meta|title.?tag|schema|structured.?data|robots|sitemap|redirect|canonical|viewport|hreflang|noindex|nofollow)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // Image compression / lazy loading / format conversion
-          if (/\b(compress|optimi[sz]e.?image|image.?size|lazy.?load|webp|avif|image.?format|minif)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // Technical fixes: caching, minification, render-blocking, security headers
-          if (/\b(cache|caching|minif|render.?block|gzip|brotli|security.?header|hsts|x-frame|csp|ssl|https)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // Schema/structured data additions
-          if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business.?schema)\b/.test(t) && /\b(add|missing|implement|create)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // Redirect fixes, broken link fixes, sitemap, robots.txt
-          if (/\b(redirect|301|302|broken.?link|dead.?link|sitemap|robots\.txt|crawl.?error)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // WordPress plugin/config changes
-          if (/\b(plugin|yoast|wp.?config|wordpress.?setting|permalink)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
-          // Core Web Vitals category items
+          // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
+          // Core Web Vitals — all can be attempted via seoroom-helper (preconnect, defer, preload, etc.)
           if (cat === 'core web vitals') return { assignee: 'Automated', execType: 'automated' };
+          // Schema/structured data — inject JSON-LD via seoroom-helper custom_snippet
+          if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business.?schema)\b/.test(t) && /\b(add|missing|implement|create|no |partial)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Image lazy loading / format hints
+          if (/\b(lazy.?load|image.?dimension|fetchpriority)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Font loading optimizations
+          if (/\b(font.?display|font.?swap|preconnect.*font|font.*preconnect)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Script defer/delay (third-party, render-blocking)
+          if (/\b(defer.?script|delay.?script|render.?block|third.?party.*script)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Preconnect/preload hints
+          if (/\b(preconnect|preload|dns.?prefetch)\b/.test(t) && /\b(add|missing|implement)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
 
           // --- COPYWRITER: content creation, writing, rewriting tasks ---
           if (/\b(write|rewrite|craft|draft|create.*content|add.*content|expand.*content|improve.*content|update.*content)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
@@ -2332,87 +2330,82 @@ Return ONLY valid JSON-LD (the object, no wrapping).` }]
     }
 
     // ---- ROUTE 3: CWV / Performance fixes ----
-    if (cat === 'core web vitals' || /\b(lcp|cls|fcp|tbt|speed|performance|render|blocking)\b/.test(allText)) {
+    // Parse the action item description directly into seoroom-helper fix instructions
+    if (cat === 'core web vitals' || /\b(lcp|cls|fcp|tbt|ttfb|inp|speed|performance|render|blocking|font.?loading|third.?party|lazy)\b/.test(allText)) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
 
-      // Get speed audit data to find opportunities
-      const speedAudit = await pool.query(
-        `SELECT audit_data FROM audits WHERE project_id=$1 AND audit_type='speed' AND status='completed' ORDER BY created_at DESC LIMIT 1`,
-        [projectId]
-      );
+      const fullDesc = `${item.title}\n${item.description || ''}\n${item.finding_recommendation || ''}`;
 
-      if (speedAudit.rows.length === 0) {
-        return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No speed audit data. Run a PageSpeed audit first.' });
+      const fixPrompt = `You are a WordPress CWV fix expert. Parse this audit finding and generate seoroom-helper plugin fix instructions.
+
+FINDING:
+${fullDesc}
+
+AVAILABLE FIX TYPES (use ONLY these):
+- preconnect: {domain, crossorigin?} — add <link rel="preconnect">
+- dns_prefetch: {domain} — add <link rel="dns-prefetch">
+- preload_resource: {url, as, type?, crossorigin?} — preload resource. "as" = font|image|style|script
+- fetchpriority: {image_src?} — add fetchpriority="high" to LCP image
+- font_display_swap: {} — add font-display:swap globally
+- defer_script: {url_pattern?} — defer a render-blocking script
+- delay_script: {url_pattern?} — delay script until user interaction (analytics, chat widgets, maps)
+- image_dimensions: {image_src, width, height} — add missing width/height
+- lazy_load: {} — add loading="lazy" to below-fold images
+- custom_snippet: {html, location} — inject HTML into head or footer. location = "head" or "footer"
+
+RULES:
+- Extract specific URLs, domains, file paths from the finding text
+- Do NOT suggest image compression, WebP, CSS/JS minification, or page caching (handled by BerqWP)
+- If the finding mentions a specific resource URL, use it in params
+- For font-display issues → use font_display_swap + preconnect to fonts.googleapis.com and fonts.gstatic.com
+- For LCP image → use fetchpriority + preload_resource with the image URL
+- For third-party scripts → use delay_script with the domain pattern
+- For render-blocking CSS/JS → use defer_script or custom_snippet for critical CSS
+- For CLS / image dimensions → use image_dimensions if specific images mentioned, otherwise lazy_load
+- page_url: "" means site-wide, or use specific page path if mentioned
+- MAX 5 fixes
+
+Return ONLY a JSON array: [{"fix_type": "...", "params": {...}, "page_url": "", "reason": "short why"}]
+If NOTHING can be fixed by the plugin (e.g. server config, hosting changes), return: []`;
+
+      const aiResp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, messages: [{ role: 'user', content: fixPrompt }] });
+      let fixes = [];
+      try { const m = aiResp.content[0].text.match(/\[[\s\S]*\]/); if (m) fixes = JSON.parse(m[0]); } catch (e) {}
+
+      if (!fixes.length) {
+        return res.json({ success: true, fix_type: 'cwv', applied: false, message: `${item.title}: requires server/hosting config — can't be applied via WordPress plugin.` });
       }
 
-      const speedResults = speedAudit.rows[0].audit_data?.results || [];
-      // Try to match the page from item title
-      const pageTitle = (item.title || '').replace(/^Fix CWV issues on:\s*/i, '').replace(/^(Improve|Fix|Optimize)\s+/i, '').trim().toLowerCase();
-      const page = speedResults.find(r =>
-        (r.title || r.slug || '').toLowerCase().includes(pageTitle) ||
-        pageTitle.includes((r.title || r.slug || '').toLowerCase())
-      );
+      let appliedCount = 0;
+      const appliedFixes = [];
+      for (const fix of fixes) {
+        try {
+          const wr = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
+            method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fix_type: fix.fix_type, params: fix.params, page_url: fix.page_url || '' }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (wr.ok) {
+            const r = await wr.json();
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, 0, $2, $3, 'cwv_fix', $4, 'none', $5)`,
+              [projectId, fix.page_url || '', item.title, fix.fix_type, JSON.stringify({ fix_id: r.fix_id, params: fix.params, reason: fix.reason })]
+            );
+            appliedCount++;
+            appliedFixes.push(fix.fix_type);
+          } else {
+            const errText = await wr.text();
+            console.error(`[auto-fix] CWV fix ${fix.fix_type} failed: ${wr.status} ${errText.slice(0, 100)}`);
+          }
+        } catch (e) { console.error('[auto-fix] CWV fix error:', e.message); }
+      }
 
-      if (page && page.opportunities?.length > 0) {
-        // Forward to existing cwv-fix logic
-        const fixPrompt = `You are a WordPress Core Web Vitals expert. Analyze these Lighthouse audit failures for the page "${page.url}" and generate fix instructions.
-
-AVAILABLE FIX TYPES: preconnect, dns_prefetch, preload_resource, fetchpriority, font_display_swap, defer_script, delay_script, image_dimensions, lazy_load
-IMPORTANT: Only suggest fixes the WP plugin can apply. Do NOT suggest image compression, WebP, CSS/JS minification, or caching (handled by BerqWP). MAX 5 fixes.
-
-OPPORTUNITIES:
-${JSON.stringify(page.opportunities, null, 2)}
-
-Return ONLY: [{"fix_type": "...", "params": {...}, "reason": "..."}]`;
-
-        const aiResp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, messages: [{ role: 'user', content: fixPrompt }] });
-        let fixes = [];
-        try { const m = aiResp.content[0].text.match(/\[[\s\S]*\]/); if (m) fixes = JSON.parse(m[0]); } catch (e) {}
-
-        let appliedCount = 0;
-        for (const fix of fixes) {
-          try {
-            const wr = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
-              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fix_type: fix.fix_type, params: fix.params, page_url: page.url }),
-              signal: AbortSignal.timeout(10000),
-            });
-            if (wr.ok) {
-              const r = await wr.json();
-              await pool.query(
-                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, 0, $2, $3, 'cwv_fix', $4, 'none', $5)`,
-                [projectId, page.url, page.url, fix.fix_type, JSON.stringify({ fix_id: r.fix_id, params: fix.params, reason: fix.reason })]
-              );
-              appliedCount++;
-            }
-          } catch (e) { console.error('[auto-fix] CWV fix error:', e.message); }
-        }
-
+      if (appliedCount > 0) {
         await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        console.log(`[auto-fix] CWV: ${appliedCount} fixes applied for ${page.url}`);
-        return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, page: page.url });
+        console.log(`[auto-fix] CWV: ${appliedCount} fixes applied for "${item.title}": ${appliedFixes.join(', ')}`);
+        return res.json({ success: true, fix_type: 'cwv', applied: true, fixes_applied: appliedCount, fixes: appliedFixes });
       }
-
-      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'No matching page in speed audit data' });
-    }
-
-    // ---- ROUTE 4: Image optimization (lazy load, dimensions, compression advice) ----
-    if (/\b(image|lazy.?load|webp|avif|compress|optimi[sz]e.?image)\b/.test(allText)) {
-      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required' });
-
-      // Apply lazy loading site-wide via seoroom-helper
-      const wpResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/cwv-fix`, {
-        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fix_type: 'lazy_load', params: {}, page_url: '' }),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      if (wpResp.ok) {
-        await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['done', action_item_id]);
-        console.log(`[auto-fix] Image optimization: lazy load applied`);
-        return res.json({ success: true, fix_type: 'image', applied: true, message: 'Lazy loading enabled site-wide' });
-      }
-      return res.json({ success: true, fix_type: 'image', applied: false, message: 'seoroom-helper plugin not available — install it or use ShortPixel/Imagify for image compression' });
+      return res.json({ success: true, fix_type: 'cwv', applied: false, message: 'seoroom-helper plugin not reachable. Is it installed and activated?' });
     }
 
     // ---- ROUTE 5: Everything else — keep pending, explain why ----
