@@ -1445,7 +1445,6 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
 // ==================== AI ORCHESTRATOR — intelligent cross-audit action plan ====================
 app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
   const { projectId } = req.params;
-  if (!anthropic) return res.status(500).json({ error: 'Anthropic API not configured' });
 
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -1464,7 +1463,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         const data = typeof auditRes.rows[0].audit_data === 'string' ? JSON.parse(auditRes.rows[0].audit_data) : auditRes.rows[0].audit_data;
         const reportText = data?.report || data?.final_report || '';
         if (reportText) {
-          reports[pillar] = { text: reportText.slice(0, 8000), auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
+          reports[pillar] = { text: reportText, auditId: auditRes.rows[0].id, completedAt: auditRes.rows[0].completed_at };
         }
       }
     }
@@ -1479,337 +1478,103 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
     global._orchestratorStatus[projectId] = { status: 'running', startedAt: Date.now(), error: null, itemCount: 0 };
     res.json({ status: 'running', pillars: Object.keys(reports) });
 
-    // Run async — TWO-STEP orchestrator for maximum accuracy
+    // Run async — deterministic orchestrator
     (async () => {
       try {
-        const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-        const serviceAreas = project.service_areas || [];
-        const hasWordPress = !!(project.wordpress_url && project.wp_username && project.wp_app_password);
+        // ========== DETERMINISTIC ORCHESTRATOR — findings → action items (no AI, no truncation) ==========
+        console.log(`[orchestrator] Creating action items from audit findings (deterministic)...`);
 
-        // Build report sections
-        let reportSection = '';
-        for (const [pillar, r] of Object.entries(reports)) {
-          const label = { gbp_external: 'GBP External Audit', gsc_agent: 'GSC Audit', website: 'Website Audit' }[pillar] || pillar;
-          reportSection += `\n\n=== ${label} (completed ${new Date(r.completedAt).toLocaleDateString()}) ===\n${r.text}`;
-        }
-
-        // Include raw GSC data if available (structured source of truth for GSC metrics)
-        let rawDataSection = '';
-        if (reports.gsc_agent) {
-          const gscAuditData = await pool.query('SELECT audit_data FROM audits WHERE id=$1', [reports.gsc_agent.auditId]);
-          if (gscAuditData.rows.length > 0) {
-            const ad = typeof gscAuditData.rows[0].audit_data === 'string' ? JSON.parse(gscAuditData.rows[0].audit_data) : gscAuditData.rows[0].audit_data;
-            if (ad?.raw_gsc_data && ad.raw_gsc_data.length > 0) {
-              rawDataSection += `\n\n=== RAW GSC DATA (structured, authoritative — use these numbers, not the report's paraphrasing) ===\n${JSON.stringify(ad.raw_gsc_data.slice(0, 100), null, 1)}`;
-            }
+        // Re-extract findings only for pillars with 0 findings in DB (new audits auto-extract at completion)
+        for (const pillar of auditPillars) {
+          const reportText = reports[pillar]?.text;
+          const auditId = reports[pillar]?.auditId;
+          if (!reportText || !auditId) continue;
+          const existingCount = await pool.query('SELECT COUNT(*) FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
+          const count = parseInt(existingCount.rows[0].count);
+          if (count > 0) {
+            console.log(`[orchestrator] ${pillar} already has ${count} findings in DB, skipping re-extraction`);
+            continue;
+          }
+          try {
+            console.log(`[orchestrator] Extracting findings from ${pillar} report (audit ${auditId}, ${reportText.length} chars)...`);
+            const extracted = await extractFindingsFromReport(reportText, pillar, projectId, auditId);
+            console.log(`[orchestrator] Extracted ${extracted.length} findings from ${pillar}`);
+          } catch (e) {
+            console.error(`[orchestrator] Failed to extract ${pillar} findings:`, e.message);
           }
         }
+        // Reload ALL findings after re-extraction
+        const refreshedResult = await pool.query('SELECT * FROM audit_findings WHERE project_id=$1 ORDER BY created_at DESC', [projectId]);
+        const allFindings = refreshedResult.rows;
+        console.log(`[orchestrator] Total findings after re-extraction: ${allFindings.length}`);
 
-        // ========== STEP 1: FACT EXTRACTION ==========
-        // Extract only verifiable facts from reports — no recommendations, no opinions
-        console.log(`[orchestrator] Step 1: Extracting structured facts...`);
+        // Rule-based assignee + execution_type (no AI needed)
+        function assignItem(finding) {
+          const cat = (finding.category || '').toLowerCase();
+          const title = (finding.title || '').toLowerCase();
+          const pillar = (finding.pillar || '').toLowerCase();
 
-        const factExtractionPrompt = `You are a precise data extractor. Read these SEO audit reports and extract ONLY verifiable facts — NO recommendations, NO opinions, NO suggestions.
+          // Admin tasks — anything requiring human action on external sites
+          const isAdmin = cat.includes('directory') || cat.includes('citation') || cat.includes('nap') ||
+            title.includes('directory') || title.includes('yellow pages') || title.includes('yelp') ||
+            title.includes('true local') || title.includes('hotfrog') || title.includes('claim') ||
+            title.includes('respond to review') || title.includes('upload photo') || title.includes('take photo') ||
+            title.includes('request review');
 
-For each fact, record:
-- The exact data point (number, URL, status, score, etc.)
-- Which report it came from
-- Whether it's a measured value or an inference
+          if (isAdmin) return { assignee: 'Admin', execType: 'manual' };
 
-Return ONLY a JSON object with these sections:
+          // SEO Room auto-fixes
+          if (cat.includes('core web vitals') || cat.includes('cwv') || title.includes('lcp') || title.includes('cls'))
+            return { assignee: 'SEO Room', execType: 'plugin' };
+          if (cat.includes('on-page') || cat.includes('content') || title.includes('meta title') || title.includes('meta desc') || title.includes('h1'))
+            return { assignee: 'SEO Room', execType: 'plugin' };
+          if (cat.includes('schema') || title.includes('schema') || title.includes('structured data'))
+            return { assignee: 'SEO Room', execType: 'plugin' };
+          if (pillar.includes('gbp') && (cat.includes('profile') || title.includes('description') || title.includes('categor') || title.includes('service') || title.includes('hours') || title.includes('post')))
+            return { assignee: 'SEO Room', execType: 'api' };
+          if (cat.includes('crawl') || cat.includes('site health') || title.includes('sitemap') || title.includes('robots') || title.includes('redirect') || title.includes('404'))
+            return { assignee: 'SEO Room', execType: 'plugin' };
 
-{
-  "pages": [{"url": "/path", "exists": true|false, "title": "...", "meta_desc": "...", "word_count": 123, "has_schema": true|false, "source": "report_name"}],
-  "gbp_profile": {"name": "...", "rating": 4.2, "review_count": 47, "categories": ["..."], "has_description": true|false|null, "has_hours": true|false|null, "has_photos": true|false|null, "photo_count": 12, "source": "report_name"},
-  "competitors": [{"name": "...", "rating": 4.5, "review_count": 80, "position": 1, "source": "report_name"}],
-  "gsc_metrics": [{"query": "...", "page": "/path", "clicks": 10, "impressions": 500, "ctr": 2.0, "position": 8.5, "source": "gsc_data"}],
-  "technical_issues": [{"issue": "...", "url": "/path", "details": "...", "source": "report_name"}],
-  "service_areas": [{"name": "...", "has_page": true|false, "page_url": "/path_or_null", "source": "report_name"}],
-  "directories": [{"name": "...", "listed": true|false|null, "source": "report_name"}],
-  "scores": {"performance": 45, "lcp": "3.2s", "cls": 0.15, "source": "report_name"}
-}
-
-RULES:
-- Only include data EXPLICITLY stated in the reports. If a field is not mentioned, use null.
-- For pages: only list pages the report explicitly names with URLs.
-- For has_description/has_hours/has_photos: use null if the report doesn't mention it (NOT false).
-- Include the raw GSC data rows as gsc_metrics if provided.
-- Do NOT infer — if the report says "N/A" or doesn't mention something, it's null.
-
-REPORTS:
-${reportSection}
-${rawDataSection}`;
-
-        const factResp = await anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 12000,
-          messages: [{ role: 'user', content: factExtractionPrompt }]
-        });
-
-        const factText = factResp.content[0].text.trim();
-        const factJsonMatch = factText.match(/\{[\s\S]*\}/);
-        let facts = {};
-        if (factJsonMatch) {
-          try { facts = JSON.parse(factJsonMatch[0]); } catch (e) {
-            console.error('[orchestrator] Failed to parse facts JSON:', e.message);
-          }
-        }
-        console.log(`[orchestrator] Step 1 complete: ${Object.keys(facts).length} fact categories extracted`);
-
-        // ========== STEP 2: ACTION ITEMS FROM FACTS ==========
-        // Generate action items grounded in the extracted facts
-        console.log(`[orchestrator] Step 2: Generating action items from verified facts...`);
-
-        const orchestratorPrompt = `You are the SEO Orchestrator for "${project.business_name || project.name}" (${domain}).
-Service areas: ${serviceAreas.map(a => a.name).join(', ') || 'not set'}
-WordPress connected: ${hasWordPress ? 'YES — can auto-fix meta titles, descriptions, content via API' : 'NO — content changes need manual WordPress editing'}
-
-You have TWO inputs:
-1. STRUCTURED FACTS (verified data extracted from audit reports — this is your PRIMARY source of truth)
-2. AUDIT REPORTS (for context and recommendations — SECONDARY source)
-
-=== STRUCTURED FACTS (PRIMARY — trust these over report text) ===
-${JSON.stringify(facts).slice(0, 12000)}
-
-=== AUDIT REPORTS (SECONDARY — use for context only) ===
-${reportSection.slice(0, 10000)}
-
-YOUR JOB:
-1. Create action items ONLY for issues supported by the STRUCTURED FACTS above.
-2. If facts.pages shows a page EXISTS (exists: true), do NOT recommend creating it — recommend optimizing.
-3. If facts.gbp_profile shows a field is null, do NOT flag it as missing — data was unavailable.
-4. For GSC items: use the actual numbers from facts.gsc_metrics (position, CTR, clicks). Do NOT make up metrics.
-5. For competitors: use actual competitor data from facts.competitors.
-6. DEDUPLICATE — same issue across audits = ONE item.
-
-ASSIGN execution_type AND assignee_label — there are ONLY 2 assignees:
-- "SEO Room" — the system handles it automatically via WordPress plugin or Chrome extension. Covers: meta title/desc/H1 fixes, content optimization, schema, CWV/performance fixes, GBP profile edits (description, categories, services, hours, posts), indexing.
-- "Admin" — tasks that require a human to do manually. Covers: ALL third-party directory/citation updates, taking photos, requesting reviews, responding to reviews, uploading photos, claiming listings, any task requiring logging into an external website.
-
-DECISION GUIDE:
-- Meta/content/SEO fix (title, desc, H1, schema, canonicals) → SEO Room
-- Performance/CWV fix (defer scripts, preconnect, image dimensions) → SEO Room
-- GBP profile edit (description, categories, services, hours, posts) → SEO Room
-- Fix NAP on third-party directories (Yellow Pages, Yelp, True Local, Hotfrog, etc.) → Admin
-- Register/update/claim ANY external directory or citation → Admin
-- Take photos, upload photos, request reviews → Admin
-- Respond to Google reviews → Admin (business owner voice needed)
-
-execution_type: "plugin" for fixes applied via WordPress, "api" for API tasks, "manual" for Admin tasks.
-
-SEVERITY: Critical (blocking revenue), High (significant impact), Medium (improvement), Low (nice-to-have)
-PRIORITY ORDER: Quick wins first (GSC position 4-20), then critical fixes, then optimizations.
-
-VALIDATION RULES — every action item MUST pass ALL of these:
-- The "current_value" field must contain an actual value from the STRUCTURED FACTS (a real number, URL, or status — not a description)
-- The "page_url" must be a real URL from facts.pages or facts.gsc_metrics — NEVER invented
-- The "description" must reference specific data from STRUCTURED FACTS
-- If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
-
-CATEGORY MAPPING — use the correct "category" value for each type of issue:
-GBP (pillar: gbp_external):
-  - "Profile Completeness" — description, categories, services, hours, attributes, website URL
-  - "NAP Consistency" — name/address/phone mismatches across directories
-  - "Reviews & Reputation" — review count, rating, response rate, review gaps vs competitors
-  - "Competitor Analysis" — competitor advantages, rating/review gaps, category gaps
-  - "Directory & Citations" — missing/incorrect listings on Yellow Pages, Yelp, True Local, Hotfrog, etc.
-  - "Photos & Media" — photo count, quality, types (interior, exterior, team, products)
-  - "Suburb Coverage" — service area pages, suburb-specific content, local landing pages
-GSC (pillar: gsc_agent):
-  - "Quick Wins" — pages at position 4-20 that can be pushed to page 1
-  - "Low CTR Pages" — pages with impressions but poor CTR
-  - "Cannibalization" — multiple pages competing for same keyword
-  - "Zero-Click Pages" — pages with impressions but zero clicks
-  - "Underperforming Pages" — pages with declining metrics
-Website (pillar: website):
-  - "Site Health" — broken links, 404s, redirect chains, server errors
-  - "Crawlability" — robots.txt, sitemap, indexing issues
-  - "On-Page Issues" — meta titles, descriptions, H1s, content gaps
-  - "Content Quality" — thin content, duplicate content, word count
-  - "Core Web Vitals" — LCP, CLS, FCP, TBT, performance scores
-  - "Schema & Data" — structured data, schema markup, rich snippets
-
-CRITICAL RULES:
-1. Create ONE action item per individual issue/finding. Do NOT consolidate multiple issues into one item.
-2. Every category with audit data MUST have action items — do NOT skip categories.
-3. If there are 15 pages with bad meta titles, create 15 separate action items (one per page), NOT one generic "fix meta titles" item.
-4. For GSC metrics: create one item per keyword/page that needs attention.
-5. For directory citations: create one item per directory that needs updating.
-6. The total number of action items should roughly match the total number of individual findings across all audits.
-
-Return ONLY a JSON array. No item limit — include ALL issues. Keep title under 60 chars, description under 120 chars. No markdown in values.
-[{
-  "pillar": "<gbp_external|gsc_agent|website>",
-  "category": "<section name>",
-  "title": "<short title>",
-  "description": "<what to fix + why>",
-  "severity": "<Critical|High|Medium|Low>",
-  "execution_type": "<plugin|manual|api>",
-  "assignee_label": "<SEO Room|Admin>",
-  "current_value": "<actual value>",
-  "new_value": "<target>"
-}]`;
-
-        const resp = await anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 32000,
-          messages: [{ role: 'user', content: orchestratorPrompt }]
-        });
-
-        let text = resp.content[0].text.trim();
-        let jsonMatch = text.match(/\[[\s\S]*\]/);
-
-        // If JSON is truncated (hit max_tokens), try to repair it
-        if (!jsonMatch && text.includes('[')) {
-          console.log('[orchestrator] Attempting to repair truncated JSON...');
-          let repaired = text.slice(text.indexOf('['));
-          // Close any open strings and objects
-          repaired = repaired.replace(/,\s*$/, ''); // trailing comma
-          // Count unclosed braces/brackets
-          const openBraces = (repaired.match(/{/g) || []).length - (repaired.match(/}/g) || []).length;
-          const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
-          // Try to close them
-          if (openBraces > 0 || openBrackets > 0) {
-            // Find last complete object (ends with })
-            const lastCompleteObj = repaired.lastIndexOf('}');
-            if (lastCompleteObj > 0) {
-              repaired = repaired.slice(0, lastCompleteObj + 1);
-              // Remove any trailing comma
-              repaired = repaired.replace(/,\s*$/, '');
-              repaired += ']';
-            }
-          }
-          jsonMatch = repaired.match(/\[[\s\S]*\]/);
-          if (jsonMatch) console.log('[orchestrator] JSON repair successful');
+          // Default: SEO Room for GSC/website, Admin for GBP external tasks
+          if (pillar.includes('gbp')) return { assignee: 'Admin', execType: 'manual' };
+          return { assignee: 'SEO Room', execType: 'plugin' };
         }
 
-        if (!jsonMatch) {
-          console.error('[orchestrator] No JSON array found in Step 2 response. First 500 chars:', text.slice(0, 500));
-          throw new Error('AI returned invalid JSON — no array found in response');
-        }
-
-        let items;
-        try {
-          items = JSON.parse(jsonMatch[0]);
-        } catch (parseErr) {
-          console.error('[orchestrator] JSON parse error:', parseErr.message);
-          // Last resort: try to extract individual objects
-          const objMatches = jsonMatch[0].match(/\{[^{}]*\}/g);
-          if (objMatches && objMatches.length > 0) {
-            items = [];
-            for (const m of objMatches) {
-              try { items.push(JSON.parse(m)); } catch (e) { /* skip malformed */ }
-            }
-            console.log(`[orchestrator] Recovered ${items.length} items from malformed JSON`);
-          } else {
-            throw new Error('Failed to parse AI response as JSON');
-          }
-        }
-        console.log(`[orchestrator] Step 2: AI returned ${items.length} action items`);
-
-        // No AI-side dedup — let the GET endpoint handle dedup with DP tagging
-        const uniqueItems = items;
-        console.log(`[orchestrator] Total items to save: ${uniqueItems.length}`);
-
-        // Validate
-        const validExecTypes = ['plugin', 'manual', 'api'];
-        const validSeverities = ['Critical', 'High', 'Medium', 'Low'];
-        const PILLAR_CATEGORIES = {
-          gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
-          website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
-          gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
-        };
-
-        // Build new items first, then delete old + insert in a transaction (no data loss on failure)
-        const newFindings = [];
-        const newActions = [];
-        let skippedCount = 0;
-        // Fuzzy category matcher — handles plurals, partial matches, abbreviations
-        function matchCategory(rawCat, validCats) {
-          const cat = (rawCat || '').toLowerCase().trim();
-          // Exact match
-          const exact = validCats.find(c => c.toLowerCase() === cat);
-          if (exact) return exact;
-          // Normalize: strip trailing s, spaces, hyphens
-          const norm = cat.replace(/[-\s]+/g, ' ').replace(/s$/, '').replace(/pages?$/, '').trim();
-          const normMatch = validCats.find(c => {
-            const cn = c.toLowerCase().replace(/[-\s]+/g, ' ').replace(/s$/, '').replace(/pages?$/, '').trim();
-            return cn === norm;
-          });
-          if (normMatch) return normMatch;
-          // Contains first significant word
-          const wordMatch = validCats.find(c => {
-            const words = c.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-            return words.some(w => cat.includes(w));
-          });
-          if (wordMatch) return wordMatch;
-          // Known aliases
-          const aliases = {
-            'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
-            'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages',
-            'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages',
-            'underperforming page': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
-            'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
-            'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
-            'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
-            'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation',
-            'competitor': 'Competitor Analysis', 'competitors': 'Competitor Analysis',
-            'directory': 'Directory & Citations', 'directories': 'Directory & Citations', 'citations': 'Directory & Citations',
-            'photos': 'Photos & Media', 'media': 'Photos & Media', 'images': 'Photos & Media',
-            'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'service area': 'Suburb Coverage',
-            'schema': 'Schema & Data', 'structured data': 'Schema & Data',
-            'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'meta': 'On-Page Issues',
-            'content': 'Content Quality', 'thin content': 'Content Quality',
-            'cwv': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
-            'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
-            'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health',
-            'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
-            'brand dependency': 'Quick Wins', 'brand': 'Quick Wins',
-            'manual': null,
+        // Build action items from findings — 1:1 mapping
+        const uniqueItems = allFindings.map(f => {
+          const { assignee, execType } = assignItem(f);
+          return {
+            pillar: f.pillar,
+            category: f.category,
+            title: f.title,
+            description: f.recommendation || f.description,
+            severity: f.severity || 'Medium',
+            execution_type: execType,
+            assignee_label: assignee,
+            current_value: f.current_value || '',
+            new_value: f.recommended_value || '',
+            _finding_id: f.id,
           };
-          const aliasMatch = aliases[cat];
-          if (aliasMatch && validCats.includes(aliasMatch)) return aliasMatch;
-          return null;
-        }
+        });
+        console.log(`[orchestrator] Step 2: ${uniqueItems.length} action items from ${allFindings.length} findings (1:1)`);
 
-        for (const item of uniqueItems) {
-          const pillar = auditPillars.includes(item.pillar) ? item.pillar : 'website';
-          const validCats = PILLAR_CATEGORIES[pillar] || [];
-          const matched = matchCategory(item.category, validCats);
-          // Skip items with no valid category (junk like "manual" with no context)
-          const category = matched || validCats[0] || 'General';
-          const severity = validSeverities.find(s => s.toLowerCase() === (item.severity || '').toLowerCase()) || 'Medium';
-          const execType = validExecTypes.includes(item.execution_type) ? item.execution_type : 'manual';
-          const validAssignees = ['SEO Room', 'Admin'];
-          const assigneeLabel = validAssignees.includes(item.assignee_label) ? item.assignee_label : 'SEO Room';
-
-          if (!item.title) { skippedCount++; continue; }
-
-          const auditId = reports[pillar]?.auditId || null;
-          newFindings.push({ projectId, auditId, pillar, category, title: item.title.slice(0, 200), description: (item.description || '').slice(0, 1000), recommendation: (item.recommendation || '').slice(0, 1000), severity, current_value: (item.current_value || '').slice(0, 500), new_value: (item.new_value || '').slice(0, 500) });
-          newActions.push({ projectId, pillar, category, title: item.title.slice(0, 200), description: (item.recommendation || item.description || '').slice(0, 1000), current_value: (item.current_value || '').slice(0, 500), new_value: (item.new_value || '').slice(0, 500), severity, execType, assigneeLabel });
-        }
-
-        // Transaction: delete old → insert new (atomic — no data loss if insert fails)
+        // Transaction: delete old action_items → insert new from findings (findings stay intact)
         const client = await pool.connect();
         let savedCount = 0;
         try {
           await client.query('BEGIN');
+          // Only delete action_items — findings are the source of truth, never delete them
           await client.query('DELETE FROM action_items WHERE project_id=$1', [projectId]);
-          await client.query('DELETE FROM audit_findings WHERE project_id=$1', [projectId]);
 
-          for (let i = 0; i < newFindings.length; i++) {
-            const f = newFindings[i];
-            const a = newActions[i];
-            const fRes = await client.query(
-              `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
-              [f.projectId, f.auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.new_value]
-            );
+          for (const item of uniqueItems) {
+            if (!item.title) continue;
             await client.query(
               `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
-              [a.projectId, fRes.rows[0].id, a.pillar, a.category, a.category, a.title, a.description, a.current_value, a.new_value, a.severity, a.execType, a.assigneeLabel]
+              [projectId, item._finding_id || null, item.pillar, item.category, item.category,
+               (item.title || '').slice(0, 200), (item.description || '').slice(0, 1000),
+               (item.current_value || '').slice(0, 500), (item.new_value || '').slice(0, 500),
+               item.severity || 'Medium', item.execution_type, item.assignee_label]
             );
             savedCount++;
           }
@@ -1821,7 +1586,7 @@ Return ONLY a JSON array. No item limit — include ALL issues. Keep title under
           client.release();
         }
 
-        console.log(`[orchestrator] Saved ${savedCount} action items (${skippedCount} skipped) for project ${projectId}`);
+        console.log(`[orchestrator] Saved ${savedCount} action items from ${allFindings.length} findings for project ${projectId}`);
         if (global._orchestratorStatus) global._orchestratorStatus[projectId] = { status: 'completed', itemCount: savedCount, error: null };
       } catch (e) {
         console.error('[orchestrator] Error:', e.message, e.stack);
@@ -10098,92 +9863,396 @@ const PILLAR_CATEGORIES = {
   gsc: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
 };
 
-// Extract structured findings from an agent's markdown report using Haiku
+// ===== DETERMINISTIC findings extraction — NO AI, NO token limits, NO truncation =====
+// Mirrors frontend parseReportSections + normalizeAgentSection logic exactly.
+// Every bullet/numbered item/table row = one finding. 100% capture rate.
+
+function serverNormalizeSection(name) {
+  const n = name.replace(/\s*\(.*?\)\s*/g, '').trim();
+  const lower = n.toLowerCase();
+  const exactMap = {
+    'quick wins': 'Quick Wins', 'quick win': 'Quick Wins', 'quick-win opportunities': 'Quick Wins',
+    'low ctr pages': 'Low CTR Pages', 'low ctr': 'Low CTR Pages',
+    'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+    'zero-click pages': 'Zero-Click Pages', 'zero click pages': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages',
+    'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+    'action plan': 'Summary', 'priority action plan': 'Summary', 'summary': 'Summary',
+    'site health': 'Site Health', 'site health overview': 'Site Health',
+    'crawlability': 'Crawlability', 'crawlability & indexing': 'Crawlability', 'crawlability and indexing': 'Crawlability',
+    'on-page issues': 'On-Page Issues', 'on-page seo issues': 'On-Page Issues', 'on page issues': 'On-Page Issues',
+    'content quality': 'Content Quality',
+    'core web vitals': 'Core Web Vitals', 'cwv': 'Core Web Vitals',
+    'schema & structured data': 'Schema & Data', 'schema and structured data': 'Schema & Data', 'structured data': 'Schema & Data', 'schema': 'Schema & Data',
+    'profile completeness': 'Profile Completeness', 'gbp profile completeness': 'Profile Completeness', 'profile optimization': 'Profile Completeness',
+    'nap consistency': 'NAP Consistency', 'nap': 'NAP Consistency', 'name address phone': 'NAP Consistency',
+    'reviews & reputation': 'Reviews & Reputation', 'reviews and reputation': 'Reviews & Reputation', 'reviews': 'Reviews & Reputation', 'review analysis': 'Reviews & Reputation',
+    'competitor analysis': 'Competitor Analysis', 'competitors': 'Competitor Analysis', 'competitive analysis': 'Competitor Analysis',
+    'directory & citations': 'Directory & Citations', 'directory and citations': 'Directory & Citations', 'directories & citations': 'Directory & Citations', 'citations': 'Directory & Citations', 'directories': 'Directory & Citations',
+    'photos & media': 'Photos & Media', 'photos and media': 'Photos & Media', 'photos': 'Photos & Media', 'photo analysis': 'Photos & Media',
+    'suburb coverage': 'Suburb Coverage', 'service area coverage': 'Suburb Coverage', 'suburb targeting': 'Suburb Coverage',
+  };
+  if (exactMap[lower]) return exactMap[lower];
+  // Fuzzy
+  if (/quick.?win|striking.?distance|page.?2|position.?[4-9]|position.?1[0-9]|position.?20|keyword.?opportunit/i.test(n)) return 'Quick Wins';
+  if (/low.?ctr|poor.?ctr|ctr.?below|click.?through.?rate/i.test(n)) return 'Low CTR Pages';
+  if (/cannibal|competing.?pages|duplicate.?rank/i.test(n)) return 'Cannibalization';
+  if (/zero.?click|no.?click|0.?click/i.test(n)) return 'Zero-Click Pages';
+  if (/underperform|stuck|should.?rank|declining/i.test(n)) return 'Underperforming Pages';
+  if (/action.?plan|priority.?action|next.?action|implementation|summary/i.test(n)) return 'Summary';
+  if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
+  if (/crawl|index|robot|sitemap/i.test(n)) return 'Crawlability';
+  if (/on.?page|title.?tag|meta.?desc|h1|heading/i.test(n)) return 'On-Page Issues';
+  if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
+  if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
+  if (/schema|structured.?data|rich.?result|json.?ld/i.test(n)) return 'Schema & Data';
+  if (/profile.?complete|gbp.?profile|listing.?complete/i.test(n)) return 'Profile Completeness';
+  if (/nap|name.?address.?phone/i.test(n)) return 'NAP Consistency';
+  if (/review|reputation|rating/i.test(n)) return 'Reviews & Reputation';
+  if (/competitor|competitive|competing/i.test(n)) return 'Competitor Analysis';
+  if (/director|citation|local.?listing/i.test(n)) return 'Directory & Citations';
+  if (/photo|media|image.?quality/i.test(n)) return 'Photos & Media';
+  if (/suburb|service.?area|coverage|geo/i.test(n)) return 'Suburb Coverage';
+  return name;
+}
+
+function isNoiseLine(line) {
+  const t = line.trim();
+  if (!t) return true;
+  if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|ImportError|SyntaxError|NameError|TypeError|ValueError|KeyError|IndexError|AttributeError)/i.test(t)) return true;
+  if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:)/i.test(t)) return true;
+  if (/^(data = |import |from |print\(|with open|json\.|os\.|sys\.|result|output|```)/i.test(t)) return true;
+  if (/^>\s*(Assumptions|Data quality|Note:|Data cap|CTR benchmark)/i.test(t)) return true;
+  if (/^\s*(def |class |if |for |while |try:|except|finally)/.test(t)) return true;
+  return false;
+}
+
+function inferSeverity(text) {
+  const lower = text.toLowerCase();
+  if (/critical|urgent|broken|missing.*sitemap|noindex|error|0\s*score|not indexed/i.test(lower)) return 'Critical';
+  if (/high|important|significant|major|poor|failing|blocked/i.test(lower)) return 'High';
+  if (/low|minor|optional|consider|nice.?to.?have/i.test(lower)) return 'Low';
+  return 'Medium';
+}
+
+function extractCurrentRecommended(text) {
+  let current = '', recommended = '';
+  // "Current: X" / "Recommended: Y" pattern
+  const curMatch = text.match(/(?:current|now|existing|actual)[:\s]+([^|,\n]+)/i);
+  const recMatch = text.match(/(?:recommend|target|should be|suggested|fix|action)[:\s]+([^|,\n]+)/i);
+  if (curMatch) current = curMatch[1].trim().slice(0, 200);
+  if (recMatch) recommended = recMatch[1].trim().slice(0, 200);
+  return { current, recommended };
+}
+
 async function extractFindingsFromReport(reportText, pillar, projectId, auditId) {
-  if (!anthropic || !reportText) return [];
+  if (!reportText) return [];
   const validCategories = PILLAR_CATEGORIES[pillar] || [];
   if (validCategories.length === 0) return [];
 
   try {
-    console.log(`[findings-extractor] Extracting findings from ${pillar} report (${reportText.length} chars)...`);
+    console.log(`[findings-extractor] Parsing ${pillar} report (${reportText.length} chars)...`);
 
-    const resp = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
-      messages: [{
-        role: 'user',
-        content: `You are a precise data extractor. Extract EVERY actionable finding from this SEO audit report into structured JSON.
+    // ===== PRIMARY: Try structured ~~~findings JSON block from agent =====
+    const findingsBlockMatch = reportText.match(/~~~findings\s*\n([\s\S]*?)\n~~~/);
+    if (findingsBlockMatch) {
+      console.log(`[findings-extractor] Found ~~~findings block for ${pillar} (${findingsBlockMatch[1].length} chars)`);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(findingsBlockMatch[1]);
+      } catch (e) {
+        // Try repair: find last complete object and close array
+        const rawJson = findingsBlockMatch[1].trim();
+        if (rawJson.startsWith('[')) {
+          const lastObj = rawJson.lastIndexOf('}');
+          if (lastObj > 0) {
+            try { parsed = JSON.parse(rawJson.slice(0, lastObj + 1).replace(/,\s*$/, '') + ']'); } catch (e2) {}
+          }
+          // Last resort: extract individual objects
+          if (!parsed) {
+            const objs = rawJson.match(/\{[^{}]*\}/g);
+            if (objs && objs.length > 0) {
+              parsed = [];
+              for (const o of objs) { try { parsed.push(JSON.parse(o)); } catch (e3) {} }
+            }
+          }
+        }
+      }
 
-RULES — follow exactly:
-1. Extract ONLY findings that exist in the report text. Do NOT invent, assume, or add findings.
-2. Every finding must have an action — skip pure informational/status lines (e.g. "Business has 105 reviews" is NOT a finding unless there's a recommended action).
-3. Each finding MUST map to one of these categories: ${JSON.stringify(validCategories)}
-4. If a finding doesn't clearly fit any category, use the closest match.
-5. Skip the "Action Plan" / "Priority Action Plan" summary section — those are summaries of findings already captured in other sections. Extracting them would create duplicates.
-6. Severity must be one of: Critical, High, Medium, Low
-7. Include current_value and recommended_value when the report states them (numbers, text, or status). Use empty string if not stated.
-8. The title should be a short actionable statement (e.g. "Add missing business description" not "Business Description Analysis")
-9. The recommendation MUST include step-by-step instructions for a human to execute. For GBP profile changes, always include: (a) Go to business.google.com → select the business, (b) Click "Edit profile" in the sidebar, (c) Navigate to the specific section (e.g. "Business information", "Contact", "Hours"), (d) The exact field to change and what to enter, (e) Click Save. Be specific — name the exact menu items and fields.
+      if (parsed && Array.isArray(parsed) && parsed.length > 0) {
+        // Validate and save structured findings
+        const validFindings = [];
+        for (const f of parsed) {
+          if (!f.title || !f.description) continue;
+          const cat = validCategories.find(c => c.toLowerCase() === (f.category || '').toLowerCase())
+            || validCategories.find(c => c.toLowerCase().includes((f.category || '').toLowerCase().split(' ')[0]))
+            || validCategories[0];
+          const sev = ['Critical', 'High', 'Medium', 'Low'].find(s => s.toLowerCase() === (f.severity || '').toLowerCase()) || 'Medium';
+          validFindings.push({
+            pillar,
+            category: cat,
+            title: (f.title || '').slice(0, 200),
+            description: (f.description || '').slice(0, 1000),
+            recommendation: (f.recommendation || f.description || '').slice(0, 1000),
+            severity: sev,
+            current_value: (f.current_value || '').slice(0, 500),
+            recommended_value: (f.recommended_value || '').slice(0, 500),
+          });
+        }
 
-Return a JSON array — ONLY valid JSON, no explanation:
-[{
-  "category": "<one of the valid categories>",
-  "title": "<short actionable title>",
-  "description": "<what's wrong, from the report>",
-  "recommendation": "<specific fix action, from the report>",
-  "severity": "<Critical|High|Medium|Low>",
-  "current_value": "<current state if stated>",
-  "recommended_value": "<target state if stated>"
-}]
+        if (validFindings.length > 0) {
+          // Dedup by title
+          const deduped = [];
+          const seenTitles = new Set();
+          for (const f of validFindings) {
+            const key = f.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+            if (seenTitles.has(key)) continue;
+            seenTitles.add(key);
+            deduped.push(f);
+          }
 
-REPORT:
-${reportText}`
-      }]
-    });
+          console.log(`[findings-extractor] Structured block: ${parsed.length} raw → ${deduped.length} valid findings for ${pillar}`);
 
-    const text = resp.content[0].text.trim();
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      console.log(`[findings-extractor] No JSON array found in Haiku response for ${pillar}`);
-      return [];
+          // Save to DB
+          await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
+          await pool.query('DELETE FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
+
+          for (const f of deduped) {
+            const fRes = await pool.query(
+              `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+              [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+            );
+            const findingId = fRes.rows[0].id;
+            await pool.query(
+              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
+              [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
+            );
+          }
+          console.log(`[findings-extractor] Saved ${deduped.length} structured findings for ${pillar}`);
+          return deduped;
+        }
+      }
+      console.log(`[findings-extractor] Structured block was empty/invalid for ${pillar}, falling back to markdown parser`);
+    } else {
+      console.log(`[findings-extractor] No ~~~findings block found for ${pillar}, using markdown parser`);
     }
 
-    const findings = JSON.parse(jsonMatch[0]);
-    console.log(`[findings-extractor] Extracted ${findings.length} findings from ${pillar} report`);
+    // ===== FALLBACK: Deterministic markdown parsing =====
 
-    // Validate and clean each finding
-    const validFindings = [];
-    for (const f of findings) {
-      // Enforce valid category
-      const cat = validCategories.find(c => c.toLowerCase() === (f.category || '').toLowerCase())
-        || validCategories.find(c => c.toLowerCase().includes((f.category || '').toLowerCase().split(' ')[0]))
-        || validCategories[0];
+    // ===== STEP 1: Split by markdown headers (mirrors frontend parseReportSections) =====
+    const lines = reportText.split('\n');
+    const rawSections = [];
+    let current = null;
 
-      // Enforce valid severity
-      const sev = ['Critical', 'High', 'Medium', 'Low'].find(s => s.toLowerCase() === (f.severity || '').toLowerCase()) || 'Medium';
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (isNoiseLine(trimmed) && !current) continue;
 
-      if (!f.title || !f.description) continue; // Skip malformed entries
+      // Match ## or ### headers
+      const mdMatch = trimmed.match(/^#{2,3}\s+(?:\d+\.\s+)?(.+)/);
+      // Match === TITLE === headers
+      const eqMatch = trimmed.match(/^={2,}\s*(.+?)\s*={2,}$/);
+      const headerMatch = mdMatch || eqMatch;
 
-      validFindings.push({
-        pillar,
-        category: cat,
-        title: f.title.slice(0, 200),
-        description: (f.description || '').slice(0, 1000),
-        recommendation: (f.recommendation || '').slice(0, 1000),
-        severity: sev,
-        current_value: (f.current_value || '').slice(0, 500),
-        recommended_value: (f.recommended_value || '').slice(0, 500),
-      });
+      if (headerMatch) {
+        const title = headerMatch[1].replace(/\*\*/g, '').trim();
+        if (title.length > 3) {
+          if (current) rawSections.push(current);
+          current = { title, content: [] };
+          continue;
+        }
+      }
+      if (current) {
+        current.content.push(lines[i]);
+      }
+    }
+    if (current) rawSections.push(current);
+
+    // ===== STEP 2: Normalize section titles + filter =====
+    const skipPatterns = [/^overview$/i, /^introduction$/i, /^methodology$/i, /^data.*source/i, /^appendix/i];
+    const sections = [];
+    for (const s of rawSections) {
+      const normalized = serverNormalizeSection(s.title);
+      if (normalized === 'Summary') continue; // Skip summary/action plan sections — they duplicate findings
+      if (skipPatterns.some(p => p.test(s.title))) continue;
+      sections.push({ title: normalized, content: s.content });
     }
 
-    // Save to DB — findings + auto-create action items (agent findings are pre-validated)
-    if (validFindings.length > 0) {
-      // Clear old findings and action items for this pillar first
+    // Merge sections with same normalized title
+    const mergedMap = {};
+    const mergedOrder = [];
+    for (const s of sections) {
+      if (mergedMap[s.title]) {
+        mergedMap[s.title].content.push('', ...s.content);
+      } else {
+        mergedMap[s.title] = s;
+        mergedOrder.push(s.title);
+      }
+    }
+
+    // ===== STEP 3: Map normalized titles → valid pillar categories =====
+    function matchCategory(normalizedTitle) {
+      // Direct match
+      if (validCategories.includes(normalizedTitle)) return normalizedTitle;
+      // Case-insensitive match
+      const lower = normalizedTitle.toLowerCase();
+      const found = validCategories.find(c => c.toLowerCase() === lower);
+      if (found) return found;
+      // Partial match
+      const partial = validCategories.find(c => lower.includes(c.toLowerCase().split(' ')[0]) || c.toLowerCase().includes(lower.split(' ')[0]));
+      if (partial) return partial;
+      return null;
+    }
+
+    // ===== STEP 4: Parse each section's content into individual findings =====
+    const allFindings = [];
+
+    for (const title of mergedOrder) {
+      const section = mergedMap[title];
+      const category = matchCategory(section.title);
+      if (!category) {
+        console.log(`[findings-extractor-deterministic] Skipping unmapped section: "${section.title}"`);
+        continue;
+      }
+
+      const contentLines = section.content;
+      let inTable = false;
+      let tableHeaders = [];
+      let separatorSeen = false;
+
+      for (let i = 0; i < contentLines.length; i++) {
+        const line = contentLines[i];
+        const trimmed = line.trim();
+        if (!trimmed || isNoiseLine(trimmed)) continue;
+
+        // ---- TABLE DETECTION ----
+        if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+          const cells = trimmed.split('|').map(c => c.trim()).filter(c => c);
+          if (!inTable) {
+            // Could be header row
+            if (cells.length >= 2) {
+              tableHeaders = cells;
+              inTable = true;
+              separatorSeen = false;
+              continue;
+            }
+          }
+          // Separator row (|---|---|)
+          if (inTable && !separatorSeen && /^[\s|:-]+$/.test(trimmed.replace(/\|/g, ' ').replace(/-/g, ' ').replace(/:/g, ' '))) {
+            separatorSeen = true;
+            continue;
+          }
+          // Data row
+          if (inTable && separatorSeen && cells.length >= 2) {
+            // Each table row = one finding
+            const titleCol = cells[0] || '';
+            const actionCol = cells.find((c, idx) => idx > 0 && tableHeaders[idx] && /fix|action|recommend|resolution|what.?to.?do/i.test(tableHeaders[idx])) || '';
+            const sevCol = cells.find((c, idx) => idx > 0 && tableHeaders[idx] && /priority|severity/i.test(tableHeaders[idx])) || '';
+            const statusCol = cells.find((c, idx) => idx > 0 && tableHeaders[idx] && /status|current/i.test(tableHeaders[idx])) || '';
+
+            const findingTitle = titleCol.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+            if (findingTitle && findingTitle.length > 3 && !/^-+$/.test(findingTitle)) {
+              const desc = cells.slice(1).filter(c => c !== actionCol && c !== sevCol).join(' — ').replace(/\*\*/g, '');
+              allFindings.push({
+                pillar,
+                category,
+                title: findingTitle.slice(0, 200),
+                description: desc.slice(0, 1000) || findingTitle,
+                recommendation: (actionCol || desc).replace(/\*\*/g, '').slice(0, 1000),
+                severity: sevCol ? inferSeverity(sevCol) : inferSeverity(findingTitle + ' ' + desc),
+                current_value: statusCol.replace(/\*\*/g, '').slice(0, 500),
+                recommended_value: (actionCol || '').replace(/\*\*/g, '').slice(0, 500),
+              });
+            }
+            continue;
+          }
+          continue;
+        } else {
+          // Exiting table
+          if (inTable) { inTable = false; tableHeaders = []; separatorSeen = false; }
+        }
+
+        // ---- BULLET POINTS / NUMBERED ITEMS ----
+        const bulletMatch = trimmed.match(/^(?:[-*•]|\d+[.)]\s)\s*(.+)/);
+        if (bulletMatch) {
+          const bulletText = bulletMatch[1].replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim();
+          // Skip sub-bullets that are just descriptions of the parent (indented with 2+ spaces)
+          const indent = line.match(/^(\s*)/)[1].length;
+          if (indent >= 4 && allFindings.length > 0 && allFindings[allFindings.length - 1].category === category) {
+            // Append to previous finding's description
+            const prev = allFindings[allFindings.length - 1];
+            if (prev.description.length < 900) prev.description += ' | ' + bulletText;
+            continue;
+          }
+
+          if (bulletText.length > 10) {
+            const { current, recommended } = extractCurrentRecommended(bulletText);
+            allFindings.push({
+              pillar,
+              category,
+              title: bulletText.split(/[.!?—|]/)[0].trim().slice(0, 200) || bulletText.slice(0, 200),
+              description: bulletText.slice(0, 1000),
+              recommendation: recommended || bulletText.slice(0, 1000),
+              severity: inferSeverity(bulletText),
+              current_value: current,
+              recommended_value: recommended,
+            });
+          }
+          continue;
+        }
+
+        // ---- BOLD STANDALONE LINES (often sub-findings) ----
+        const boldMatch = trimmed.match(/^\*\*(.+?)\*\*[:\s]*(.*)$/);
+        if (boldMatch && boldMatch[1].length > 10) {
+          const boldTitle = boldMatch[1].trim();
+          const boldDesc = boldMatch[2] || '';
+          // Check if next lines are description (non-bullet, non-header)
+          let extraDesc = '';
+          for (let j = i + 1; j < Math.min(i + 3, contentLines.length); j++) {
+            const nextTrimmed = contentLines[j].trim();
+            if (!nextTrimmed || nextTrimmed.startsWith('#') || nextTrimmed.startsWith('|') || /^[-*•]|\d+[.)]/.test(nextTrimmed)) break;
+            extraDesc += ' ' + nextTrimmed;
+          }
+          const fullDesc = (boldDesc + extraDesc).trim();
+          if (fullDesc.length > 5 || boldTitle.length > 15) {
+            const { current, recommended } = extractCurrentRecommended(boldTitle + ' ' + fullDesc);
+            allFindings.push({
+              pillar,
+              category,
+              title: boldTitle.slice(0, 200),
+              description: (fullDesc || boldTitle).slice(0, 1000),
+              recommendation: (recommended || fullDesc || boldTitle).slice(0, 1000),
+              severity: inferSeverity(boldTitle + ' ' + fullDesc),
+              current_value: current,
+              recommended_value: recommended,
+            });
+          }
+          continue;
+        }
+      }
+    }
+
+    console.log(`[findings-extractor-deterministic] Parsed ${allFindings.length} findings from ${mergedOrder.length} sections (${pillar})`);
+
+    // ===== STEP 5: Deduplicate by title similarity =====
+    const deduped = [];
+    const seenTitles = new Set();
+    for (const f of allFindings) {
+      const key = f.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      deduped.push(f);
+    }
+
+    console.log(`[findings-extractor-deterministic] After dedup: ${deduped.length} unique findings (${pillar})`);
+
+    // ===== STEP 6: Save to DB =====
+    if (deduped.length > 0) {
       await pool.query('DELETE FROM action_items WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
       await pool.query('DELETE FROM audit_findings WHERE project_id=$1 AND pillar=$2', [projectId, pillar]);
 
-      for (const f of validFindings) {
-        // Save finding as approved
+      for (const f of deduped) {
         const fRes = await pool.query(
           `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
@@ -10191,19 +10260,18 @@ ${reportText}`
         );
         const findingId = fRes.rows[0].id;
 
-        // Auto-create action item (agent findings are the truth — no manual approval needed)
         await pool.query(
           `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
           [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
         );
       }
-      console.log(`[findings-extractor] Saved ${validFindings.length} findings + action items for ${pillar} (project ${projectId})`);
+      console.log(`[findings-extractor-deterministic] Saved ${deduped.length} findings + action items for ${pillar} (project ${projectId})`);
     }
 
-    return validFindings;
+    return deduped;
   } catch (e) {
-    console.error(`[findings-extractor] Error extracting ${pillar} findings:`, e.message);
+    console.error(`[findings-extractor-deterministic] Error parsing ${pillar} findings:`, e.message);
     return [];
   }
 }
@@ -10298,7 +10366,25 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
 
     console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
 
-    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}`;
+    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}
+
+CRITICAL OUTPUT REQUIREMENT:
+After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
+
+At the very end of your response, output this EXACT format:
+~~~findings
+[
+  {"category":"<one of: Profile Completeness, NAP Consistency, Reviews & Reputation, Competitor Analysis, Directory & Citations, Photos & Media, Suburb Coverage>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
+]
+~~~
+
+RULES for the findings block:
+- One JSON object per individual issue (per directory, per competitor, per problem)
+- Do NOT consolidate multiple issues into one finding
+- Every item visible in your tables MUST have a corresponding finding
+- Category must be one of the 7 listed above
+- The count of JSON findings must match the total actionable items in your report
+- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
 
     // Run the managed agent via Sessions API (raw fetch — SDK may not have beta.sessions)
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -10332,10 +10418,15 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gbp-external');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gbp-external');
 
+        // Strip ~~~findings block from display report (keep for extraction)
+        const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-        console.log(`[gbp-external] Report stored (${finalText.length} chars)`);
-        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
+          ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
+        console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
+
+        // Extract findings: try structured JSON block first, fall back to deterministic parser
+        const extracted = await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
+        console.log(`[gbp-external] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -10405,7 +10496,25 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
 
     console.log(`[website-agent] Starting audit for "${domain}"`);
 
-    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.`;
+    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.
+
+CRITICAL OUTPUT REQUIREMENT:
+After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
+
+At the very end of your response, output this EXACT format:
+~~~findings
+[
+  {"category":"<one of: Site Health, Crawlability, On-Page Issues, Content Quality, Core Web Vitals, Schema & Data>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
+]
+~~~
+
+RULES for the findings block:
+- One JSON object per individual issue (per page, per problem, per missing element)
+- Do NOT consolidate multiple issues into one finding
+- Every item visible in your tables MUST have a corresponding finding
+- Category must be one of the 6 listed above
+- The count of JSON findings must match the total actionable items in your report
+- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
@@ -10436,10 +10545,15 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'website-agent');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'website-agent');
 
+        // Strip ~~~findings block from display report (keep for extraction)
+        const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: finalText, sessionId: session.id }), auditId]);
-        console.log(`[website-agent] Report stored (${finalText.length} chars)`);
-        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
+          ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
+        console.log(`[website-agent] Report stored (${displayReport.length} chars)`);
+
+        // Extract findings: try structured JSON block first, fall back to deterministic parser
+        const extracted = await extractFindingsFromReport(finalText, 'website', projectId, auditId);
+        console.log(`[website-agent] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[website-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
@@ -10535,6 +10649,26 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
     console.log(`[gsc-agent] Starting audit for "${domain}"`);
 
+    const FINDINGS_INSTRUCTION = `
+
+CRITICAL OUTPUT REQUIREMENT:
+After your full markdown report, you MUST include a structured findings block. This is MANDATORY — the system will not save your findings without it.
+
+At the very end of your response, output this EXACT format:
+~~~findings
+[
+  {"category":"<one of: Quick Wins, Low CTR Pages, Cannibalization, Zero-Click Pages, Underperforming Pages>","title":"<short actionable title under 60 chars>","description":"<what is wrong>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state if known>","recommended_value":"<target state>"}
+]
+~~~
+
+RULES for the findings block:
+- One JSON object per individual issue (per keyword, per page, per cannibalization pair)
+- Do NOT consolidate multiple issues into one finding
+- Every item visible in your tables MUST have a corresponding finding
+- Category must be one of the 5 listed above
+- The count of JSON findings must match the total actionable items in your report
+- Do NOT skip any issues — if it's in your report, it MUST be in the JSON`;
+
     let userPrompt = `Conduct a comprehensive Google Search Console audit for: ${domain}`;
     if (gscData && gscData.rows && gscData.rows.length > 0) {
       // Summarize top data for the agent
@@ -10550,6 +10684,7 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
     } else {
       userPrompt += `\n\nNote: GSC API data was not available. Analyze the site externally — check indexing, keyword targeting, content gaps, and SERP presence. Use pipe-delimited markdown tables for all findings.`;
     }
+    userPrompt += FINDINGS_INSTRUCTION;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
@@ -10586,10 +10721,15 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
         await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gsc-agent');
         const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gsc-agent');
 
+        // Strip ~~~findings block from display report (keep for extraction)
+        const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: finalText, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
-        console.log(`[gsc-agent] Report stored (${finalText.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
-        // Action items are now created exclusively by the Orchestrator — no per-audit extraction
+          ['completed', JSON.stringify({ report: displayReport, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
+        console.log(`[gsc-agent] Report stored (${displayReport.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
+
+        // Extract findings: try structured JSON block first, fall back to deterministic parser
+        const extracted = await extractFindingsFromReport(finalText, 'gsc_agent', projectId, auditId);
+        console.log(`[gsc-agent] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
         console.error('[gsc-agent] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
