@@ -5895,7 +5895,7 @@
 
       const canAutoExecute = (item) => {
         const cat = (item._category || item.category || '').toLowerCase();
-        const assignee = (item.assignee_label || item.execution_type || '').toLowerCase();
+        const assignee = (item._assigneeLabel || item.assignee_label || item.execution_type || '').toLowerCase();
         if (assignee !== 'automated') return null;
         // Only categories the auto-fix endpoint can actually handle
         if (cat === 'core web vitals') return 'auto';
