@@ -1463,7 +1463,30 @@ VALIDATION RULES — every action item MUST pass ALL of these:
 - The "description" must reference specific data from STRUCTURED FACTS
 - If you cannot find supporting data in STRUCTURED FACTS for an issue mentioned in the reports, SKIP that issue entirely
 
-IMPORTANT: Create at least 1 action item per category that has findings. Every category with audit data MUST have action items — do NOT skip categories to save space.
+CATEGORY MAPPING — use the correct "category" value for each type of issue:
+GBP (pillar: gbp_external):
+  - "Profile Completeness" — description, categories, services, hours, attributes, website URL
+  - "NAP Consistency" — name/address/phone mismatches across directories
+  - "Reviews & Reputation" — review count, rating, response rate, review gaps vs competitors
+  - "Competitor Analysis" — competitor advantages, rating/review gaps, category gaps
+  - "Directory & Citations" — missing/incorrect listings on Yellow Pages, Yelp, True Local, Hotfrog, etc.
+  - "Photos & Media" — photo count, quality, types (interior, exterior, team, products)
+  - "Suburb Coverage" — service area pages, suburb-specific content, local landing pages
+GSC (pillar: gsc_agent):
+  - "Quick Wins" — pages at position 4-20 that can be pushed to page 1
+  - "Low CTR Pages" — pages with impressions but poor CTR
+  - "Cannibalization" — multiple pages competing for same keyword
+  - "Zero-Click Pages" — pages with impressions but zero clicks
+  - "Underperforming Pages" — pages with declining metrics
+Website (pillar: website):
+  - "Site Health" — broken links, 404s, redirect chains, server errors
+  - "Crawlability" — robots.txt, sitemap, indexing issues
+  - "On-Page Issues" — meta titles, descriptions, H1s, content gaps
+  - "Content Quality" — thin content, duplicate content, word count
+  - "Core Web Vitals" — LCP, CLS, FCP, TBT, performance scores
+  - "Schema & Data" — structured data, schema markup, rich snippets
+
+IMPORTANT: Create at least 1 action item per category that has findings. Every category with audit data MUST have action items — do NOT skip categories to save space. Distribute items across ALL relevant categories.
 Return ONLY a JSON array. MAX 60 items. Keep title under 60 chars, description under 120 chars. No markdown in values.
 [{
   "pillar": "<gbp_external|gsc_agent|website>",
