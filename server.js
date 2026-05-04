@@ -1481,8 +1481,28 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         console.log(`[orchestrator] Total findings after re-extraction: ${allFindings.length}`);
 
         // Classification: Automated, Copywriter, or Manual
+        // AUTOMATED = system can actually execute it (Yoast meta, schema, redirects, compression, robots, sitemap)
+        // COPYWRITER = requires human writing/content creation
+        // MANUAL = everything else (physical actions, external sites, monitoring, config changes outside WP)
         function assignItem(finding) {
           const t = ((finding.title || '') + ' ' + (finding.description || '') + ' ' + (finding.category || '')).toLowerCase();
+          const cat = (finding.category || '').toLowerCase();
+
+          // --- AUTOMATED: only things the dashboard/API can actually execute ---
+          // On-Page Issues that Yoast can fix (meta via WP REST API)
+          if ((cat === 'on-page issues' || cat === 'core web vitals') && /\b(meta|title.?tag|schema|structured.?data|robots|sitemap|redirect|canonical|viewport|hreflang|noindex|nofollow)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Image compression / lazy loading / format conversion
+          if (/\b(compress|optimi[sz]e.?image|image.?size|lazy.?load|webp|avif|image.?format|minif)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Technical fixes: caching, minification, render-blocking, security headers
+          if (/\b(cache|caching|minif|render.?block|gzip|brotli|security.?header|hsts|x-frame|csp|ssl|https)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Schema/structured data additions
+          if (/\b(schema|structured.?data|json.?ld|rich.?snippet|local.?business.?schema)\b/.test(t) && /\b(add|missing|implement|create)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Redirect fixes, broken link fixes, sitemap, robots.txt
+          if (/\b(redirect|301|302|broken.?link|dead.?link|sitemap|robots\.txt|crawl.?error)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // WordPress plugin/config changes
+          if (/\b(plugin|yoast|wp.?config|wordpress.?setting|permalink)\b/.test(t)) return { assignee: 'Automated', execType: 'automated' };
+          // Core Web Vitals category items
+          if (cat === 'core web vitals') return { assignee: 'Automated', execType: 'automated' };
 
           // --- COPYWRITER: content creation, writing, rewriting tasks ---
           if (/\b(write|rewrite|craft|draft|create.*content|add.*content|expand.*content|improve.*content|update.*content)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
@@ -1497,17 +1517,11 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           if (/\b(keyword|cannibali[sz]|cannibal)\b/.test(t) && /\b(target|optimis|differentiat|refocus|consolidat)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
           if (/\b(anchor.?text|internal.?link)\b/.test(t) && /\b(descriptive|improve|keyword|optimis)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
           if (/\b(ctr|click.?through)\b/.test(t) && /\b(improve|low|optimis|rewrite|title|description)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+          // On-page content issues are copywriter work
+          if (cat === 'on-page issues' || cat === 'content quality') return { assignee: 'Copywriter', execType: 'copywriter' };
 
-          // --- MANUAL: physical actions, external registrations, review solicitation, link building ---
-          if (/\b(photo|picture|image.?shoot|camera|testimonial|in.?person|physically|visit|phone.?call|print|brochure|flyer)\b/.test(t) && !/\b(alt.?text|image.?alt|compress|optimi[sz]e.?image|image.?size|lazy.?load|webp|format)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(directory|directories|listing|yelp|yellow.?pages|true.?local|hotfrog|word.?of.?mouth|register|sign.?up|claim.*listing|create.*account)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(ask.*review|collect.*review|request.*review|get.*review|review.*campaign|ask.*customer|solicit.*review)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(facebook|instagram|social.?media|linkedin|tiktok|youtube|twitter)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(backlink|link.?build|off.?page|guest.?post|outreach|pr.?campaign)\b/.test(t) && !/\b(internal.?link|broken.?link)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-          if (/\b(google.?ads|ppc|paid.?search|ad.?campaign)\b/.test(t)) return { assignee: 'Manual', execType: 'manual' };
-
-          // --- AUTOMATED: technical fixes, schema, config, compression, redirects ---
-          return { assignee: 'Automated', execType: 'automated' };
+          // --- MANUAL: everything else (physical, external sites, monitoring, GBP, directories) ---
+          return { assignee: 'Manual', execType: 'manual' };
         }
 
         // Build action items from findings — 1:1 mapping
