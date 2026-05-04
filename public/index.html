@@ -5912,12 +5912,7 @@
           const status = (i.status || 'pending').toLowerCase();
           if (status !== 'pending' || !canAutoExecute(i)) return false;
           if (activePillar === 'all') return true;
-          const p = (i.pillar || '').toLowerCase();
-          const ap = activePillar.toLowerCase();
-          if (ap === 'gbp') return p === 'gbp' || p === 'gbp_external';
-          if (ap === 'gsc') return p === 'gsc' || p === 'gsc_agent';
-          if (ap === 'website') return p === 'website' || p === 'technical';
-          return p === ap;
+          return (i._pillar || i.pillar) === activePillar;
         }).length;
       }, [items, activePillar]);
 
@@ -5928,12 +5923,7 @@
             const status = (i.status || 'pending').toLowerCase();
             if (status !== 'pending' || !canAutoExecute(i)) return false;
             if (activePillar === 'all') return true;
-            const p = (i.pillar || '').toLowerCase();
-            const ap = activePillar.toLowerCase();
-            if (ap === 'gbp') return p === 'gbp' || p === 'gbp_external';
-            if (ap === 'gsc') return p === 'gsc' || p === 'gsc_agent';
-            if (ap === 'website') return p === 'website' || p === 'technical';
-            return p === ap;
+            return (i._pillar || i.pillar) === activePillar;
           });
 
           setExecProgress({ done: 0, total: executableItems.length, current: 'Starting...' });
