@@ -7894,7 +7894,7 @@
                 },
                 stats: {
                   current: { words: scoreData ? scoreData.stats.words : 0 },
-                  proposed: { words: proposedWords, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
+                  proposed: { words: proposedWords, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
                 },
                 item_id: page.id
               });
@@ -8013,7 +8013,7 @@
                 setOptimisePreview({
                   preview: true,
                   proposed: { content_html: html, meta_title: editMeta.meta_title || '', meta_description: editMeta.meta_desc || '', ai_notes: null },
-                  stats: { current: { words: words }, proposed: { words: words, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length } },
+                  stats: { current: { words: words }, proposed: { words: words, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length } },
                   item_id: page.id
                 });
               },
@@ -10029,12 +10029,13 @@
         const words = text.trim() ? text.trim().split(/\s+/).length : 0;
         const div = document.createElement('div');
         div.innerHTML = content || '';
+        const h1s = div.querySelectorAll('h1').length;
         const h2s = div.querySelectorAll('h2').length;
         const h3s = div.querySelectorAll('h3').length;
         const links = div.querySelectorAll('a').length;
         const imgs = div.querySelectorAll('img').length;
         const paragraphs = div.querySelectorAll('p').length;
-        return { words, h2s, h3s, links, imgs, paragraphs };
+        return { words, h1s, h2s, h3s, links, imgs, paragraphs };
       }, [content]);
 
       const allKeywords = useMemo(() => {
@@ -10101,6 +10102,10 @@
         else { t.push({ type: 'error', msg: 'No H2 headings. Add at least 3' }); }
         if (stats.h3s >= 2) { s += 2; t.push({ type: 'success', msg: stats.h3s + ' H3 subheadings' }); }
         else { t.push({ type: 'warn', msg: 'Add H3 subheadings for better structure' }); }
+        // H1 check (5 pts)
+        if (stats.h1s === 1) { s += 5; t.push({ type: 'success', msg: 'Single H1 tag — correct' }); }
+        else if (stats.h1s > 1) { t.push({ type: 'error', msg: 'Multiple H1 tags (' + stats.h1s + '). Should be exactly 1 — extras will be demoted to H2 on fix' }); }
+        else { t.push({ type: 'error', msg: 'Missing H1 tag. Add exactly 1 H1' }); }
         // Links + images (10 pts)
         if (stats.links >= 3) { s += 8; t.push({ type: 'success', msg: stats.links + ' internal links' }); }
         else if (stats.links >= 1) { s += 4; t.push({ type: 'warn', msg: 'Add ' + (3 - stats.links) + ' more internal links' }); }
@@ -10240,6 +10245,7 @@
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 20 } },
           [
             { label: 'Words', value: stats.words, target: wt.toLocaleString() + '+', good: stats.words >= wt },
+            { label: 'H1', value: stats.h1s, target: '1', good: stats.h1s === 1 },
             { label: 'H2', value: stats.h2s, target: '3+', good: stats.h2s >= 3 },
             { label: 'H3', value: stats.h3s, target: '2+', good: stats.h3s >= 2 },
             { label: 'Links', value: stats.links, target: '3+', good: stats.links >= 3 },
@@ -10607,6 +10613,7 @@
               content_score: scoreData?.score || 0,
               stats: {
                 words: scoreData?.stats?.words || 0,
+                h1s: scoreData?.stats?.h1s || 0,
                 h2s: scoreData?.stats?.h2s || 0,
                 h3s: scoreData?.stats?.h3s || 0,
                 links: scoreData?.stats?.links || 0,
@@ -10728,7 +10735,7 @@
                     },
                     stats: {
                       current: { words },
-                      proposed: { words, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
+                      proposed: { words, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
                     },
                     item_id: selectedItem.id
                   });

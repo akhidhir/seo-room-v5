@@ -6084,6 +6084,7 @@ SCORING SYSTEM (100 points total — hit EVERY threshold):
 1. WORDS: 20 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
 2. H2 HEADINGS: 8 points if 3+ H2s. You MUST include at least 4 <h2> tags.
 3. H3 SUBHEADINGS: 2 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
+3b. H1 TAG: 5 points if EXACTLY 1 H1. You MUST include exactly ONE <h1> tag (the page title). NEVER use more than one H1 — if you see multiple, keep only the first and demote the rest to <h2>.
 4. INTERNAL LINKS: 8 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
 5. IMAGES: 2 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
 6. FOCUS KEYWORD IN CONTENT: 15 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
@@ -6256,6 +6257,29 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
 
         console.log(`[optimise] Post-process: boosted focus keyword from ${matches.length}x by +${injected} injections`);
       }
+    }
+
+    // Post-process: enforce single H1 (demote extras to H2)
+    const h1Matches = finalHtml.match(/<h1[\s>]/gi) || [];
+    if (h1Matches.length > 1) {
+      let h1Count = 0;
+      finalHtml = finalHtml.replace(/<h1([\s>])/gi, (match, after) => {
+        h1Count++;
+        if (h1Count === 1) return match; // keep first H1
+        return '<h2' + after; // demote to H2
+      });
+      finalHtml = finalHtml.replace(/<\/h1>/gi, () => {
+        // Need to track which closing tags to change — replace all after first
+        return '</h1>';
+      });
+      // More precise: replace closing tags for demoted H1s
+      let closeCount = 0;
+      finalHtml = finalHtml.replace(/<\/h1>/gi, () => {
+        closeCount++;
+        if (closeCount === 1) return '</h1>';
+        return '</h2>';
+      });
+      console.log(`[optimise] Post-process: demoted ${h1Matches.length - 1} extra H1(s) to H2`);
     }
 
     // Build proposed output
