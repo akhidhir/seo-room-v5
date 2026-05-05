@@ -6098,7 +6098,8 @@ MANDATORY:
 - Hit ALL thresholds above — this is how the score reaches 90+
 - Keep existing good content, expand it substantially
 - Australian English ONLY — use "optimise" not "optimize", "colour" not "color", "centre" not "center", "specialise" not "specialize", "organisation" not "organization", "behaviour" not "behavior", "analyse" not "analyze", "licence" (noun), "defence", "favour", "labour", "programme" (not "program" for plans/events). This is MANDATORY for every word in the output.
-- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div
+- Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div, section
+- NEW SECTIONS: When you ADD entirely new sections that did NOT exist in the original content, wrap them in <section class="new-section">...</section>. This helps the preview highlight what's new. Do NOT wrap modified/expanded existing sections — only brand new ones you created.
 - Every <a> MUST have a real href from the linking pages provided
 - Add an <img> tag with descriptive alt text where a relevant image should go
 
@@ -7355,131 +7356,79 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
         </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
     }
 
-    // Fetch the live page — if 404, fall back to a sibling page or homepage as template
-    console.log(`[preview] Fetching live page: ${pageUrl}`);
-    let resp = await fetch(pageUrl, {
-      signal: AbortSignal.timeout(15000),
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-    });
-    if (!resp.ok) {
-      // Try a sibling service page with same URL structure (e.g. /computer-repairs-bayswater/ if /computer-repairs-belmont/ is 404)
-      const siteBase = 'https://' + (project.domain || '').replace(/\/$/, '');
-      const fallbackUrls = [];
-      // Try other content_queue items that have the same domain
-      const siblings = (await pool.query(`SELECT DISTINCT page_url FROM content_queue WHERE project_id=$1 AND page_url IS NOT NULL AND page_url != $2 LIMIT 5`, [projectId, item.page_url || ''])).rows;
-      for (const sib of siblings) {
-        let sibUrl = sib.page_url;
-        if (sibUrl && !sibUrl.startsWith('http')) sibUrl = siteBase + sibUrl;
-        if (sibUrl) fallbackUrls.push(sibUrl);
-      }
-      // Always try homepage last
-      fallbackUrls.push(siteBase + '/');
-
-      let foundTemplate = false;
-      for (const fbUrl of fallbackUrls) {
-        try {
-          console.log(`[preview] Page 404, trying template from: ${fbUrl}`);
-          resp = await fetch(fbUrl, {
-            signal: AbortSignal.timeout(10000),
-            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-          });
-          if (resp.ok) { foundTemplate = true; break; }
-        } catch (e) { /* try next */ }
-      }
-      if (!foundTemplate) {
-        return res.status(502).send(`Failed to fetch live page or any template page from ${project.domain}`);
-      }
-    }
-    let html = await resp.text();
-
-    // Surgical swap: keep the FULL live page, only replace the content area
-    const baseUrl = new URL(pageUrl);
-    const base = baseUrl.origin;
-
-    // Add <base> tag so all relative URLs resolve correctly
-    html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${base}/">`);
-
-    // Replace meta title in <head>
-    if (draftTitle) {
-      html = html.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
-    }
-    if (draftDesc) {
-      html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
-    }
-
     // === PREVIEW STRATEGY ===
-    // Don't modify the live page at all — it breaks JS (sliders, carousels).
-    // Instead: load the full live page + add a slide-out draft panel.
-    // This is 100% generic — works with any CMS, page builder, theme.
+    // Iframe-based split view. Left = live page in iframe (fully working JS/CSS).
+    // Right = draft content rendered cleanly. 100% generic — any CMS/builder.
     const escapedDraft = JSON.stringify(draftContent);
     const escapedTitle = JSON.stringify(draftTitle || item.page_title || '');
     const escapedDesc = JSON.stringify(draftDesc || '');
+    const escapedUrl = JSON.stringify(pageUrl);
 
-    const previewPanel = `
-    <style>
-      .seo-draft-toggle { position:fixed;top:50%;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:14px 8px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:700;border-radius:8px 0 0 8px;cursor:pointer;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:1px;box-shadow:-2px 0 20px rgba(0,0,0,0.3);transition:all 0.3s;transform:translateY(-50%) }
-      .seo-draft-toggle:hover { padding:14px 12px }
-      .seo-draft-toggle.open { right:min(50vw,700px) }
-      .seo-draft-panel { position:fixed;top:0;right:0;width:min(50vw,700px);height:100vh;z-index:99998;background:#fff;box-shadow:-4px 0 30px rgba(0,0,0,0.2);transform:translateX(100%);transition:transform 0.3s ease;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif }
-      .seo-draft-panel.open { transform:translateX(0) }
-      .seo-draft-panel .dp-header { position:sticky;top:0;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:16px 24px;z-index:1 }
-      .seo-draft-panel .dp-header h3 { margin:0;font-size:16px;font-weight:700 }
-      .seo-draft-panel .dp-header .dp-sub { font-size:12px;opacity:0.8;margin-top:4px }
-      .seo-draft-panel .dp-meta { background:#f8fafc;padding:16px 24px;border-bottom:1px solid #e2e8f0 }
-      .seo-draft-panel .dp-meta-title { font-size:18px;color:#1e40af;font-weight:600;line-height:1.3;margin-bottom:4px }
-      .seo-draft-panel .dp-meta-url { font-size:13px;color:#16a34a;margin-bottom:6px }
-      .seo-draft-panel .dp-meta-desc { font-size:14px;color:#475569;line-height:1.5 }
-      .seo-draft-panel .dp-content { padding:24px;color:#1a1a1a;font-size:16px;line-height:1.8 }
-      .seo-draft-panel .dp-content h1 { font-size:28px;margin:0 0 16px;color:#111 }
-      .seo-draft-panel .dp-content h2 { font-size:22px;margin:24px 0 12px;color:#1e293b }
-      .seo-draft-panel .dp-content h3 { font-size:18px;margin:20px 0 10px;color:#334155 }
-      .seo-draft-panel .dp-content p { margin:0 0 14px;color:#374151 }
-      .seo-draft-panel .dp-content ul, .seo-draft-panel .dp-content ol { margin:0 0 14px;padding-left:24px }
-      .seo-draft-panel .dp-content li { margin:0 0 6px;color:#374151 }
-      .seo-draft-panel .dp-content a { color:#2563eb }
-      .seo-draft-panel .dp-content img { max-width:100%;height:auto;border-radius:8px;margin:12px 0 }
-      .seo-draft-panel .dp-content strong { color:#111 }
-      .seo-draft-panel .dp-label { font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;font-weight:700;margin-bottom:6px }
-    </style>
-    <div class="seo-draft-toggle" onclick="document.querySelector('.seo-draft-toggle').classList.toggle('open');document.querySelector('.seo-draft-panel').classList.toggle('open')">
-      DRAFT CONTENT
+    const splitHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Preview: ${(draftTitle || item.page_title || '').replace(/"/g, '&quot;')}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+.split-container{display:flex;width:100vw;height:100vh}
+.panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.panel-left{border-right:3px solid #6366f1}
+.panel-label{padding:10px 20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;text-align:center;flex-shrink:0}
+.panel-left .panel-label{background:linear-gradient(135deg,#1e293b,#334155);color:#94a3b8}
+.panel-right .panel-label{background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff}
+.panel-left iframe{flex:1;width:100%;border:none}
+.panel-right-scroll{flex:1;overflow-y:auto;background:#fff}
+.dp-meta{background:#f8fafc;padding:16px 24px;border-bottom:1px solid #e2e8f0}
+.dp-meta-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;font-weight:700;margin-bottom:6px}
+.dp-meta-title{font-size:18px;color:#1e40af;font-weight:600;line-height:1.3;margin-bottom:4px}
+.dp-meta-url{font-size:13px;color:#16a34a;margin-bottom:6px}
+.dp-meta-desc{font-size:14px;color:#475569;line-height:1.5}
+.dp-content{padding:32px 40px;color:#1a1a1a;font-size:16px;line-height:1.8}
+.dp-content h1{font-size:28px;margin:0 0 16px;color:#111;font-weight:800}
+.dp-content h2{font-size:22px;margin:28px 0 12px;color:#1e293b;font-weight:700;border-bottom:2px solid #e2e8f0;padding-bottom:8px}
+.dp-content h3{font-size:18px;margin:22px 0 10px;color:#334155;font-weight:600}
+.dp-content p{margin:0 0 16px;color:#374151}
+.dp-content ul,.dp-content ol{margin:0 0 16px;padding-left:24px}
+.dp-content li{margin:0 0 6px;color:#374151}
+.dp-content a{color:#2563eb;text-decoration:underline}
+.dp-content img{max-width:100%;height:auto;border-radius:8px;margin:16px 0}
+.dp-content strong{color:#111}
+.dp-content .new-section{border-left:4px solid #22c55e;padding-left:16px;margin:24px 0;background:#f0fdf4;padding:16px 16px 16px 20px;border-radius:0 8px 8px 0}
+.dp-content .new-section::before{content:'NEW SECTION';display:block;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;margin-bottom:8px}
+</style>
+</head><body>
+<div class="split-container">
+  <div class="panel panel-left">
+    <div class="panel-label">Current Live Page</div>
+    <iframe src="${pageUrl.replace(/"/g, '&quot;')}" sandbox="allow-same-origin allow-scripts allow-popups" onerror="this.style.display='none';this.parentElement.querySelector('.iframe-fallback').style.display='flex'"></iframe>
+    <div class="iframe-fallback" style="display:none;flex:1;align-items:center;justify-content:center;flex-direction:column;padding:40px;text-align:center;color:#64748b">
+      <p style="font-size:16px;margin-bottom:12px">Live page cannot be embedded (site blocks iframes)</p>
+      <a href="${pageUrl.replace(/"/g, '&quot;')}" target="_blank" style="color:#6366f1;font-weight:600">Open live page in new tab</a>
     </div>
-    <div class="seo-draft-panel">
-      <div class="dp-header">
-        <h3>Draft Preview</h3>
-        <div class="dp-sub">Compare with the live page on the left</div>
-      </div>
+  </div>
+  <div class="panel panel-right">
+    <div class="panel-label">Proposed Draft</div>
+    <div class="panel-right-scroll">
       <div class="dp-meta">
-        <div class="dp-label">Google Search Preview</div>
-        <div class="dp-meta-title" id="dp-mt"></div>
-        <div class="dp-meta-url" id="dp-mu"></div>
-        <div class="dp-meta-desc" id="dp-md"></div>
+        <div class="dp-meta-label">Google Search Preview</div>
+        <div class="dp-meta-title" id="meta-title"></div>
+        <div class="dp-meta-url" id="meta-url"></div>
+        <div class="dp-meta-desc" id="meta-desc"></div>
       </div>
       <div class="dp-content" id="dp-body"></div>
     </div>
-    <script>
-    (function() {
-      var mt = ${escapedTitle};
-      var md = ${escapedDesc};
-      var draft = ${escapedDraft};
-      var url = ${JSON.stringify(pageUrl)};
-      document.getElementById('dp-mt').textContent = mt;
-      document.getElementById('dp-mu').textContent = url;
-      document.getElementById('dp-md').textContent = md;
-      document.getElementById('dp-body').innerHTML = draft;
-    })();
-    </script>`;
+  </div>
+</div>
+<script>
+document.getElementById('meta-title').textContent = ${escapedTitle};
+document.getElementById('meta-url').textContent = ${escapedUrl};
+document.getElementById('meta-desc').textContent = ${escapedDesc};
+document.getElementById('dp-body').innerHTML = ${escapedDraft};
+</script>
+</body></html>`;
 
-    html = html.replace('</body>', previewPanel + '</body>');
-    const swapped = true;
-    console.log('[preview] Using slide-out draft panel (preserves full live page)');
-
-    // Disable page links so user doesn't navigate away (but allow draft panel links)
-    html = html.replace('</body>', `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-draft-panel')&&!a.closest('.seo-draft-toggle')){e.preventDefault();e.stopPropagation();}},true);</script></body>`);
-
-    console.log(`[preview] Serving pixel-perfect preview for "${item.page_title}", swapped=${swapped}`);
+    console.log(`[preview] Serving iframe split-view for "${item.page_title}"`);
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(splitHtml);
   } catch (e) {
     console.error('[preview] Error:', e.message);
     res.status(500).send('Preview error: ' + e.message);
