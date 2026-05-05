@@ -10161,7 +10161,7 @@
         setCheckingCompetitors(true);
         try {
           const r = await api('/projects/' + projectId + '/competitor-wordcount', {
-            method: 'POST', body: { keyword: kw }
+            method: 'POST', body: { keyword: kw, draft_content: draftContent || '' }
           });
           if (r.summary) {
             setCompetitorData(r);
@@ -10302,7 +10302,8 @@
             )
           ),
           competitorData && React.createElement('div', null,
-            React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 6 } },
+            // Stats row
+            React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
               [
                 { label: 'Top 3 Avg', val: competitorData.summary.top3_avg },
                 { label: 'All Avg', val: competitorData.summary.avg },
@@ -10312,14 +10313,57 @@
                 React.createElement('div', { style: { fontSize: 9, color: 'var(--text3)' } }, s.label)
               ))
             ),
-            React.createElement('div', { style: { maxHeight: 120, overflowY: 'auto' } },
-              (competitorData.results || []).filter(r => r.words && !r.isOwn).slice(0, 7).map((r, i) =>
-                React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--border)', fontSize: 11 } },
-                  React.createElement('span', { style: { color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 } },
-                    '#' + r.position + ' ' + (r.domain || '')
+            // Top 3 competitor cards
+            competitorData.top3 && competitorData.top3.length > 0 && React.createElement('div', { style: { marginBottom: 8 } },
+              React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, letterSpacing: 0.5 } }, 'Top 3 Ranking Pages'),
+              competitorData.top3.map((c, i) =>
+                React.createElement('div', { key: i, style: { padding: '8px 10px', marginBottom: 4, background: 'var(--card)', borderRadius: 6, border: '1px solid var(--border)' } },
+                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                      React.createElement('span', { style: { fontSize: 11, fontWeight: 700, color: i === 0 ? '#f59e0b' : i === 1 ? '#94a3b8' : '#cd7f32', background: i === 0 ? 'rgba(245,158,11,0.15)' : 'rgba(148,163,184,0.1)', padding: '1px 6px', borderRadius: 3 } }, '#' + c.position),
+                      React.createElement('span', { style: { fontSize: 11, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 } }, c.domain)
+                    ),
+                    React.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: c.words > stats.words ? '#ef4444' : '#22c55e' } }, (c.words || 0).toLocaleString() + ' words')
                   ),
-                  React.createElement('span', { style: { fontWeight: 600, color: r.words > stats.words ? '#ef4444' : '#22c55e' } }, r.words?.toLocaleString() + ' words')
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 3 } }, c.title || ''),
+                  React.createElement('div', { style: { display: 'flex', gap: 6, fontSize: 10, color: 'var(--text3)' } },
+                    React.createElement('span', null, c.h2s + ' H2s'),
+                    React.createElement('span', null, c.h3s + ' H3s'),
+                    c.h2Texts && c.h2Texts.length > 0 && React.createElement('span', { style: { color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 } }, c.h2Texts.slice(0, 3).join(' · '))
+                  )
                 )
+              )
+            ),
+            // Topic gaps
+            competitorData.topicGaps && React.createElement('div', { style: { marginBottom: 6 } },
+              // Missing topics
+              competitorData.topicGaps.missing_topics && competitorData.topicGaps.missing_topics.length > 0 && React.createElement('div', { style: { marginBottom: 6 } },
+                React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 3, letterSpacing: 0.5 } }, 'Missing Topics'),
+                React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+                  competitorData.topicGaps.missing_topics.map((t, i) =>
+                    React.createElement('span', { key: i, style: { fontSize: 10, padding: '2px 6px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 4, border: '1px solid rgba(239,68,68,0.2)' } }, t)
+                  )
+                )
+              ),
+              // Missing keywords
+              competitorData.topicGaps.missing_keywords && competitorData.topicGaps.missing_keywords.length > 0 && React.createElement('div', { style: { marginBottom: 6 } },
+                React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 3, letterSpacing: 0.5 } }, 'Missing Keywords'),
+                React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+                  competitorData.topicGaps.missing_keywords.map((k, i) =>
+                    React.createElement('span', { key: i, style: { fontSize: 10, padding: '2px 6px', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 4, border: '1px solid rgba(245,158,11,0.2)' } }, k)
+                  )
+                )
+              ),
+              // Strengths
+              competitorData.topicGaps.content_strengths && competitorData.topicGaps.content_strengths.length > 0 && React.createElement('div', { style: { marginBottom: 4 } },
+                React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 3, letterSpacing: 0.5 } }, 'Your Strengths'),
+                competitorData.topicGaps.content_strengths.map((s, i) =>
+                  React.createElement('div', { key: i, style: { fontSize: 10, color: '#22c55e', marginBottom: 1 } }, '+ ' + s)
+                )
+              ),
+              // Recommendation
+              competitorData.topicGaps.recommendation && React.createElement('div', { style: { fontSize: 10, color: 'var(--text2)', fontStyle: 'italic', marginTop: 4, padding: '4px 8px', background: 'rgba(99,102,241,0.08)', borderRadius: 4 } },
+                React.createElement('i', { className: 'fas fa-lightbulb', style: { marginRight: 4, color: '#a855f7' } }), competitorData.topicGaps.recommendation
               )
             ),
             React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', marginTop: 4 } },

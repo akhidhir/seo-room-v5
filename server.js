@@ -7103,7 +7103,16 @@ app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
         const h2s = (html.match(/<h2[\s>]/gi) || []).length;
         const h3s = (html.match(/<h3[\s>]/gi) || []).length;
 
-        return { position: idx + 1, url, domain, title: result.title, words, h2s, h3s, isOwn };
+        // Extract H2 heading texts for topic analysis
+        const h2Texts = [];
+        const h2Re = /<h2[^>]*>([\s\S]*?)<\/h2>/gi;
+        let h2m;
+        while ((h2m = h2Re.exec(html)) !== null) {
+          const ht = h2m[1].replace(/<[^>]+>/g, '').trim();
+          if (ht.length > 2 && ht.length < 200) h2Texts.push(ht);
+        }
+
+        return { position: idx + 1, url, domain, title: result.title, words, h2s, h3s, h2Texts, isOwn, textSnippet: text.slice(0, 3000) };
       } catch (e) {
         return { position: idx + 1, url, domain, title: result.title, words: null, error: e.message?.includes('abort') ? 'Timeout' : e.message, isOwn };
       }
@@ -7117,17 +7126,74 @@ app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
 
     const avg = wordCounts.length ? Math.round(wordCounts.reduce((a, b) => a + b, 0) / wordCounts.length) : 0;
     const median = wordCounts.length ? wordCounts[Math.floor(wordCounts.length / 2)] : 0;
-    // Top 3 = top 3 ranking pages (by SERP position), not lowest word count
-    const top3Words = byPosition.slice(0, 3).map(r => r.words);
+    const top3 = byPosition.slice(0, 3);
+    const top3Words = top3.map(r => r.words);
     const top3Avg = top3Words.length ? Math.round(top3Words.reduce((a, b) => a + b, 0) / top3Words.length) : 0;
-    // Recommended: aim for 10-20% more than top 3 average
     const recommended = top3Avg ? Math.round(top3Avg * 1.15 / 50) * 50 : 1500;
+
+    // Topic gap analysis via Haiku — compare top 3 competitor content vs draft
+    let topicGaps = null;
+    const draftContent = req.body.draft_content || '';
+    if (anthropic && top3.length > 0 && draftContent) {
+      try {
+        const competitorSummary = top3.map((c, i) =>
+          `COMPETITOR #${i+1}: "${c.title}" (${c.domain}, ${c.words} words)\nH2 Headings: ${(c.h2Texts || []).join(' | ') || 'none'}\nContent snippet: ${(c.textSnippet || '').slice(0, 1500)}`
+        ).join('\n\n');
+
+        const gapResponse = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 800,
+          messages: [{ role: 'user', content: `You are an SEO content analyst. Compare the top 3 ranking pages against a draft page for the keyword "${keyword}".
+
+TOP 3 COMPETITORS:
+${competitorSummary}
+
+DRAFT PAGE (first 2000 chars):
+${draftContent.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 2000)}
+
+Return ONLY valid JSON, no markdown:
+{
+  "missing_topics": ["topic 1", "topic 2", ...],
+  "missing_keywords": ["keyword 1", "keyword 2", ...],
+  "content_strengths": ["strength 1", ...],
+  "recommendation": "one sentence summary"
+}
+
+Rules:
+- missing_topics: H2-level topics competitors cover that the draft doesn't (max 8)
+- missing_keywords: important terms/phrases competitors use that the draft lacks (max 10)
+- content_strengths: what the draft does well vs competitors (max 3)
+- Be specific to "${keyword}" — no generic SEO advice` }]
+        });
+
+        const gapText = gapResponse.content[0]?.text || '';
+        const jsonMatch = gapText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) topicGaps = JSON.parse(jsonMatch[0]);
+        console.log(`[competitor-wordcount] Topic gap analysis complete: ${(topicGaps?.missing_topics || []).length} missing topics, ${(topicGaps?.missing_keywords || []).length} missing keywords`);
+      } catch (gapErr) {
+        console.error('[competitor-wordcount] Topic gap analysis failed:', gapErr.message);
+      }
+    }
+
+    // Build top 3 detail (without full textSnippet to keep response small)
+    const top3Detail = top3.map(c => ({
+      position: c.position, url: c.url, domain: c.domain, title: c.title,
+      words: c.words, h2s: c.h2s, h3s: c.h3s, h2Texts: (c.h2Texts || []).slice(0, 10)
+    }));
+
+    // Strip textSnippet from results to keep response lean
+    const cleanResults = results.map(r => {
+      const { textSnippet, h2Texts, ...rest } = r;
+      return rest;
+    });
 
     console.log(`[competitor-wordcount] "${keyword}": avg=${avg}, median=${median}, top3avg=${top3Avg}, recommended=${recommended}`);
     res.json({
       keyword,
       location: loc,
-      results,
+      results: cleanResults,
+      top3: top3Detail,
+      topicGaps,
       summary: {
         avg,
         median,
