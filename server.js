@@ -399,6 +399,7 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_status TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_content TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS page_sections JSONB`).catch(() => {});
 
     // Content keywords — for new project keyword workflow
     await client.query(`
@@ -5065,7 +5066,15 @@ app.get('/api/projects/:projectId/content-queue', async (req, res) => {
   try {
     const { projectId } = req.params;
     const { stage } = req.query; // optional filter: queue, drafts, approved, published
-    let q = 'SELECT * FROM content_queue WHERE project_id=$1';
+    // Exclude very heavy fields from list (page_sections, wireframe_image) — fetched individually when item is selected
+    let q = `SELECT id, project_id, page_id, page_url, page_title, content_type, source, priority, brief,
+             current_content, current_word_count, current_meta_title, current_meta_desc, current_focus_keyword,
+             draft_content, draft_meta_title, draft_meta_desc, draft_focus_keyword, draft_word_count,
+             stage, approved_by, approved_at, published_at, created_at, updated_at, target_keywords,
+             ai_notes, comments, schema_markup, page_wireframe, wireframe_mime,
+             CASE WHEN page_sections IS NOT NULL THEN jsonb_array_length(page_sections) ELSE 0 END AS sections_count,
+             CASE WHEN wireframe_image IS NOT NULL AND wireframe_image != '' THEN true ELSE false END AS has_wireframe
+             FROM content_queue WHERE project_id=$1`;
     const params = [projectId];
     if (stage) { q += ' AND stage=$2'; params.push(stage); }
     q += ' ORDER BY created_at DESC';
@@ -5517,11 +5526,16 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
                            'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime',
-                           'page_url', 'page_id', 'page_title'];
+                           'page_url', 'page_id', 'page_title', 'page_sections'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
-        vals.push(v);
+        // JSONB fields need stringify if passed as object
+        if ((k === 'page_sections' || k === 'target_keywords' || k === 'comments' || k === 'schema_markup') && typeof v === 'object' && v !== null) {
+          vals.push(JSON.stringify(v));
+        } else {
+          vals.push(v);
+        }
       }
     }
     if (fields.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
@@ -5802,6 +5816,12 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // If page has parsed sections, redirect client to use section-aware generation
+    if (item.page_sections && item.page_sections.length > 0) {
+      console.log(`[generate-draft] Item has ${item.page_sections.length} sections — client should use generate-sections`);
+      return res.json({ redirect_sections: true });
+    }
 
     // Auto-fetch content if missing or thin
     let currentContent = item.current_content || '';
@@ -8318,6 +8338,552 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-skeleton', async (
   } catch (e) {
     console.error('[skeleton] Error:', e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ===== SECTION-AWARE CONTENT SYSTEM =====
+
+// Parse live page into editable sections — stores structure in page_sections JSONB
+// Each section: { id, type, heading, original_text, draft_text, html_signature, order }
+app.post('/api/projects/:projectId/content-queue/:id/parse-sections', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Build page URL
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
+    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (domClean && puClean === domClean) pageUrl = '';
+    if (!pageUrl) return res.status(400).json({ error: 'No page URL set — pick a URL first' });
+
+    console.log(`[parse-sections] Fetching: ${pageUrl}`);
+    const resp = await fetch(pageUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch page: ${resp.status}` });
+    const fullHtml = await resp.text();
+
+    // Extract content between </header> and <footer>
+    const headerEnd = fullHtml.search(/<\/header>/i);
+    const footerStart = fullHtml.search(/<footer[\s>]/i);
+    const contentHtml = fullHtml.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : fullHtml.length
+    );
+
+    // Send to Claude to identify sections semantically
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: `You are a web page structure analyser. Given the HTML content area of a page, identify each visual section/block.
+For each section, extract:
+- type: one of "hero", "intro", "content", "services-grid", "features-list", "image-text", "cta", "faq", "testimonials", "form", "gallery", "stats", "process-steps", "comparison", "pricing", "team", "other"
+- heading: the H1/H2/H3 heading text (null if none)
+- text_content: ALL the text content in this section (stripped of HTML), preserving paragraph breaks as \\n\\n
+- word_count: approximate word count
+- has_image: boolean
+- has_form: boolean
+- has_list: boolean
+- css_identifier: the most unique class or id on this section's container (for matching later)
+
+Return JSON array: [{ "type": "...", "heading": "...", "text_content": "...", "word_count": N, "has_image": bool, "has_form": bool, "has_list": bool, "css_identifier": "..." }, ...]
+
+IMPORTANT:
+- Maintain the EXACT order sections appear on the page
+- Include ALL sections, even small ones (CTAs, banners)
+- For text_content: include everything — paragraphs, list items, button text
+- css_identifier should be the class/id most useful for finding this exact section in the DOM (e.g. "services-section", "about-us", "elementor-element-abc123")
+- If a section has no unique class/id, use the heading or first few words as identifier`,
+      messages: [{ role: 'user', content: `Analyse this page HTML and identify all visual sections:\n\n${contentHtml.slice(0, 30000)}` }]
+    });
+
+    const aiText = aiResp.content[0].text;
+    let sections;
+    try {
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      sections = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+    }
+
+    // Enrich with IDs and order
+    const pageSections = sections.map((s, i) => ({
+      id: `section_${i + 1}`,
+      order: i + 1,
+      type: s.type || 'content',
+      heading: s.heading || null,
+      original_text: s.text_content || '',
+      draft_text: null, // will be filled when AI generates per-section content
+      word_count: s.word_count || 0,
+      has_image: !!s.has_image,
+      has_form: !!s.has_form,
+      has_list: !!s.has_list,
+      css_identifier: s.css_identifier || `section-${i + 1}`,
+      locked: !!s.has_form, // forms are locked by default — don't rewrite
+    }));
+
+    // Save to DB
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(pageSections), id]);
+
+    console.log(`[parse-sections] Found ${pageSections.length} sections for "${item.page_title}"`);
+    res.json({ sections: pageSections, count: pageSections.length });
+  } catch (e) {
+    console.error('[parse-sections] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate draft content section-by-section — respects page structure
+app.post('/api/projects/:projectId/content-queue/:id/generate-sections', async (req, res) => {
+  req.setTimeout(120000);
+  res.setTimeout(120000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (!item.page_sections || !item.page_sections.length) return res.status(400).json({ error: 'No sections parsed — run Parse Sections first' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const sections = item.page_sections;
+    const targetKeywords = item.target_keywords || [];
+    const focusKw = item.current_focus_keyword || item.draft_focus_keyword || '';
+
+    // Build section descriptions for the AI
+    const sectionDescriptions = sections.map((s, i) => {
+      if (s.locked) return `Section ${i + 1} [${s.type.toUpperCase()} - LOCKED]: "${s.heading || 'No heading'}" — DO NOT REWRITE (has form/widget)`;
+      return `Section ${i + 1} [${s.type.toUpperCase()}]: "${s.heading || 'No heading'}" — ${s.word_count} words currently. ${s.has_image ? 'Has image.' : ''} ${s.has_list ? 'Has list.' : ''}
+Current text: ${(s.original_text || '').slice(0, 300)}${(s.original_text || '').length > 300 ? '...' : ''}`;
+    }).join('\n\n');
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
+
+You are rewriting page content SECTION BY SECTION. The page has ${sections.length} sections. You must write replacement text for each unlocked section that:
+1. Maintains the SAME structure (if section has a list, keep a list; if it has 3 paragraphs, write ~3 paragraphs)
+2. Keeps the same DESIGN intent (hero stays hero, CTA stays CTA, features stay features)
+3. Is SEO-optimized for the focus keyword
+4. Maintains natural keyword density
+5. Matches the approximate word count of the original (±20%)
+6. Does NOT add new design elements — only replaces TEXT content
+
+For LOCKED sections, return the original text unchanged.
+
+Return JSON array matching the section order:
+[
+  { "section_id": "section_1", "heading": "New/Same H2 heading", "content_html": "<p>new content</p>", "word_count": N, "changes_summary": "What changed and why" },
+  ...
+]
+
+Write in Australian English. Never use banned AI phrases.
+${buildCopywriterContext(project, item)}`;
+
+    const userPrompt = `Rewrite content for page: "${item.page_title}" (${item.page_url})
+Focus keyword: ${focusKw}
+${targetKeywords.length ? `Target keywords: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
+${item.brief ? `Brief: ${item.brief}` : ''}
+
+PAGE SECTIONS:
+${sectionDescriptions}
+
+Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's design structure exactly.`;
+
+    console.log(`[generate-sections] Generating for ${sections.length} sections`);
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }],
+      system: systemPrompt,
+    });
+
+    const aiText = aiResp.content[0].text;
+    let generated;
+    try {
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      generated = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+    }
+
+    // Merge generated content back into sections
+    const updatedSections = sections.map((s) => {
+      const gen = generated.find(g => g.section_id === s.id);
+      if (!gen || s.locked) return s;
+      return {
+        ...s,
+        draft_text: gen.content_html || gen.content || s.original_text,
+        draft_heading: gen.heading || s.heading,
+        draft_word_count: gen.word_count || s.word_count,
+        changes_summary: gen.changes_summary || '',
+      };
+    });
+
+    // Also build combined draft_content for the full-page editor (backwards compatible)
+    const combinedHtml = updatedSections.map(s => {
+      if (s.locked) return `<!-- LOCKED: ${s.type} -->\n${s.original_text}\n<!-- /LOCKED -->`;
+      const heading = s.draft_heading || s.heading;
+      const content = s.draft_text || s.original_text;
+      // If content already has heading, don't duplicate
+      const hasH = /<h[1-6]/i.test(content);
+      if (heading && !hasH) return `<h2>${heading}</h2>\n${content}`;
+      return content;
+    }).join('\n\n');
+
+    const plainText = combinedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+
+    // Save
+    await pool.query(
+      `UPDATE content_queue SET page_sections=$1, draft_content=$2, draft_word_count=$3, stage='drafts', updated_at=NOW() WHERE id=$4`,
+      [JSON.stringify(updatedSections), combinedHtml, wordCount, id]
+    );
+
+    // Also generate meta if not already done
+    if (!item.draft_meta_title) {
+      try {
+        const metaResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 300,
+          system: `Write SEO meta tags for "${project.business_name || project.name}" in ${project.location || ''}. Return JSON: {"meta_title":"<50-60 chars>","meta_description":"<140-155 chars>","focus_keyword":"<keyword>"}`,
+          messages: [{ role: 'user', content: `Page: ${item.page_title}\nFocus keyword: ${focusKw}\nContent summary: ${plainText.slice(0, 500)}` }]
+        });
+        const metaMatch = metaResp.content[0].text.match(/\{[\s\S]*\}/);
+        if (metaMatch) {
+          const meta = JSON.parse(metaMatch[0]);
+          await pool.query('UPDATE content_queue SET draft_meta_title=$1, draft_meta_desc=$2, draft_focus_keyword=$3 WHERE id=$4',
+            [meta.meta_title || '', meta.meta_description || '', meta.focus_keyword || focusKw, id]);
+        }
+      } catch (e) { console.log('[generate-sections] Meta generation failed:', e.message); }
+    }
+
+    console.log(`[generate-sections] Done: ${wordCount} words across ${updatedSections.length} sections`);
+    res.json({ sections: updatedSections, word_count: wordCount, combined_html: combinedHtml });
+  } catch (e) {
+    console.error('[generate-sections] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Suggest new sections based on SEO audit gaps
+app.post('/api/projects/:projectId/content-queue/:id/suggest-sections', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (!item.page_sections?.length) return res.status(400).json({ error: 'Parse sections first' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    // Get audit findings for this page
+    const findings = (await pool.query(
+      `SELECT title, description, category FROM audit_findings WHERE project_id=$1 AND status='approved' AND (title ILIKE $2 OR description ILIKE $2) LIMIT 10`,
+      [projectId, `%${(item.page_title || '').split(' ').slice(0, 3).join('%')}%`]
+    )).rows;
+
+    const currentSections = item.page_sections.map(s => `- ${s.type}: "${s.heading || 'no heading'}" (${s.word_count} words)`).join('\n');
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: `You are an SEO strategist. Given a page's current sections and SEO findings, suggest NEW sections that should be added to improve rankings and user experience.
+Only suggest sections that are genuinely missing and valuable. Don't suggest what already exists.
+Return JSON array: [{ "type": "<section type>", "heading": "<suggested H2>", "rationale": "<why this helps SEO>", "position": "<after which section_id, or 'start' or 'end'>", "estimated_words": N }]`,
+      messages: [{ role: 'user', content: `Page: ${item.page_title} (${item.page_url})
+Industry: ${project.industry || 'services'}
+Location: ${project.location || 'Australia'}
+Focus keyword: ${item.current_focus_keyword || item.draft_focus_keyword || ''}
+
+CURRENT SECTIONS:
+${currentSections}
+
+RELEVANT AUDIT FINDINGS:
+${findings.length ? findings.map(f => `- [${f.category}] ${f.title}: ${f.description}`).join('\n') : 'No specific findings for this page.'}
+
+COMMON SEO GAPS TO CHECK:
+- FAQ section (helps featured snippets)
+- Local suburb mentions
+- Trust signals (testimonials, certifications, guarantees)
+- Process/how-it-works steps
+- Comparison tables
+- Schema-worthy content (reviews, services list)` }]
+    });
+
+    const aiText = aiResp.content[0].text;
+    let suggestions;
+    try {
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      suggestions = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+    }
+
+    res.json({ suggestions });
+  } catch (e) {
+    console.error('[suggest-sections] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add a suggested section — inserts into page_sections and regenerates that section
+app.post('/api/projects/:projectId/content-queue/:id/add-section', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const { type, heading, position, estimated_words } = req.body;
+    if (!type || !heading) return res.status(400).json({ error: 'type and heading required' });
+
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const sections = item.page_sections || [];
+    const newSection = {
+      id: `section_${sections.length + 1}_new`,
+      order: sections.length + 1,
+      type: type,
+      heading: heading,
+      original_text: '',
+      draft_text: null,
+      word_count: estimated_words || 150,
+      has_image: false,
+      has_form: false,
+      has_list: type === 'faq' || type === 'features-list',
+      css_identifier: `new-${type}`,
+      locked: false,
+      is_new: true, // flag so preview knows this is an addition
+    };
+
+    // Insert at position
+    let insertIdx = sections.length;
+    if (position === 'start') insertIdx = 0;
+    else if (position === 'end') insertIdx = sections.length;
+    else if (position) {
+      const afterIdx = sections.findIndex(s => s.id === position);
+      if (afterIdx >= 0) insertIdx = afterIdx + 1;
+    }
+    sections.splice(insertIdx, 0, newSection);
+
+    // Re-number orders
+    sections.forEach((s, i) => { s.order = i + 1; });
+
+    // Generate content for the new section
+    const targetKeywords = item.target_keywords || [];
+    const focusKw = item.current_focus_keyword || item.draft_focus_keyword || '';
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      system: `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
+Write content for a NEW section being added to an existing page. Match the page's voice and style.
+Write in Australian English. Never use banned AI phrases (In today's, Whether you're, Look no further, etc).
+Return JSON: {"heading": "<H2 heading>", "content_html": "<p>...</p>", "word_count": N}
+${buildCopywriterContext(project, item)}`,
+      messages: [{ role: 'user', content: `Page: ${item.page_title}
+Focus keyword: ${focusKw}
+${targetKeywords.length ? `Target keywords: ${targetKeywords.join(', ')}` : ''}
+
+New section to write:
+- Type: ${type}
+- Heading: ${heading}
+- Target length: ~${estimated_words || 150} words
+- Position: after "${position ? sections[insertIdx - 1]?.heading || 'start' : 'last section'}"
+
+Existing sections on this page:
+${sections.filter(s => s.id !== newSection.id).map(s => `- ${s.heading || s.type}`).join('\n')}` }]
+    });
+
+    const aiText = aiResp.content[0].text;
+    try {
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      const gen = JSON.parse(jsonMatch[0]);
+      newSection.draft_text = gen.content_html || '';
+      newSection.draft_heading = gen.heading || heading;
+      newSection.draft_word_count = gen.word_count || estimated_words || 150;
+    } catch {
+      newSection.draft_text = `<p>[AI generation failed — write content for: ${heading}]</p>`;
+    }
+
+    // Save updated sections
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+
+    // Rebuild combined draft_content
+    const combinedHtml = sections.map(s => {
+      if (s.locked) return s.original_text;
+      const h = s.draft_heading || s.heading;
+      const c = s.draft_text || s.original_text;
+      const hasH = /<h[1-6]/i.test(c);
+      if (h && !hasH) return `<h2>${h}</h2>\n${c}`;
+      return c;
+    }).join('\n\n');
+    const wc = combinedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+    await pool.query('UPDATE content_queue SET draft_content=$1, draft_word_count=$2 WHERE id=$3', [combinedHtml, wc, id]);
+
+    res.json({ sections, new_section: newSection });
+  } catch (e) {
+    console.error('[add-section] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Section-aware preview — surgical content replacement in live page
+app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  const { projectId, id } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).send('Not found');
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const sections = item.page_sections || [];
+
+    let pageUrl = item.page_url || '';
+    if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
+    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (domClean && puClean === domClean) pageUrl = '';
+
+    if (!pageUrl || !sections.length) {
+      // Fallback to basic preview
+      const draftContent = item.draft_content || '';
+      const draftTitle = item.draft_meta_title || item.page_title || '';
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${draftTitle}</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:900px;margin:40px auto;padding:0 24px;line-height:1.8;color:#333}h1,h2,h3{color:#1a1a1a}img{max-width:100%;height:auto}</style>
+        </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
+    }
+
+    // Fetch live page
+    console.log(`[section-preview] Fetching: ${pageUrl}`);
+    let liveHtml = '';
+    try {
+      const resp = await fetch(pageUrl, {
+        signal: AbortSignal.timeout(12000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      if (resp.ok) liveHtml = await resp.text();
+    } catch (e) { console.log('[section-preview] Fetch failed:', e.message); }
+
+    if (!liveHtml) {
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><body><p>Could not fetch live page for preview.</p></body></html>`);
+    }
+
+    const baseUrl = new URL(pageUrl).origin;
+    liveHtml = liveHtml.replace(/<head([^>]*)>/i, `<head$1><base href="${baseUrl}/">`);
+
+    // Replace meta title
+    const draftTitle = item.draft_meta_title || item.page_title || '';
+    if (draftTitle) liveHtml = liveHtml.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
+
+    // For each section with draft_text, find it in the HTML by css_identifier and replace text content
+    // Strategy: use the css_identifier to locate the section container, then replace its inner text
+    // while preserving images, forms, and structural HTML
+    let replacementCount = 0;
+    for (const section of sections) {
+      if (section.locked || !section.draft_text) continue;
+      const cssId = section.css_identifier || '';
+      if (!cssId || cssId.startsWith('section-')) continue; // generic ID, can't match reliably
+
+      // Try to find the section by class or id
+      // Match: class="...cssId..." or id="cssId"
+      const escapedId = cssId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const classPattern = new RegExp(`(<(?:section|div|article|main)[^>]*(?:class="[^"]*${escapedId}[^"]*"|id="${escapedId}")[^>]*>)`, 'i');
+      const classMatch = liveHtml.match(classPattern);
+      if (!classMatch) continue;
+
+      const containerStart = classMatch.index + classMatch[0].length;
+      const tagName = classMatch[0].match(/^<(\w+)/)[1];
+
+      // Find the closing tag (handle nesting)
+      let depth = 1, pos = containerStart;
+      const openRe = new RegExp(`<${tagName}[\\s>]`, 'gi');
+      const closeRe = new RegExp(`</${tagName}>`, 'gi');
+      let containerEnd = -1;
+      while (depth > 0 && pos < liveHtml.length) {
+        openRe.lastIndex = pos; closeRe.lastIndex = pos;
+        const nO = openRe.exec(liveHtml);
+        const nC = closeRe.exec(liveHtml);
+        if (!nC) break;
+        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
+        else { depth--; if (depth === 0) { containerEnd = nC.index; break; } pos = nC.index + nC[0].length; }
+      }
+      if (containerEnd < 0) continue;
+
+      // Get the container's inner HTML
+      const containerInner = liveHtml.slice(containerStart, containerEnd);
+
+      // Build replacement: keep images and forms, replace text content
+      // Find all <img>, <form>, <iframe>, <video> tags and preserve them
+      const preserved = [];
+      containerInner.replace(/<(img|form|iframe|video|svg)[^>]*(?:\/>|>[\s\S]*?<\/\1>)/gi, (match) => {
+        preserved.push(match);
+        return match;
+      });
+
+      // Build new inner HTML with draft content + preserved elements
+      const draftContent = section.draft_text || '';
+      const heading = section.draft_heading || section.heading;
+      let newInner = '';
+      if (heading && !/<h[1-6]/i.test(draftContent)) {
+        newInner = `<h2>${heading}</h2>\n${draftContent}`;
+      } else {
+        newInner = draftContent;
+      }
+      // Append preserved images/forms at the positions they roughly were
+      if (preserved.length > 0) {
+        newInner += '\n' + preserved.join('\n');
+      }
+
+      // Replace in the live HTML
+      liveHtml = liveHtml.slice(0, containerStart) + '\n' + newInner + '\n' + liveHtml.slice(containerEnd);
+      replacementCount++;
+    }
+
+    // Handle NEW sections (is_new flag) — inject them at the appropriate position
+    const newSections = sections.filter(s => s.is_new && s.draft_text);
+    if (newSections.length > 0) {
+      // Find the main content area end (before footer) and inject new sections there
+      const footerPos = liveHtml.search(/<footer[\s>]/i);
+      if (footerPos > 0) {
+        const newSectionHtml = newSections.map(s => {
+          const h = s.draft_heading || s.heading;
+          return `<section class="seo-new-section" style="border-left:4px solid #22c55e;padding:24px;margin:32px auto;max-width:900px;background:#f0fdf4;border-radius:0 12px 12px 0;position:relative">
+            <div style="position:absolute;top:8px;right:12px;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;text-transform:uppercase">NEW SECTION</div>
+            ${h ? `<h2>${h}</h2>` : ''}
+            ${s.draft_text}
+          </section>`;
+        }).join('\n');
+        liveHtml = liveHtml.slice(0, footerPos) + newSectionHtml + '\n' + liveHtml.slice(footerPos);
+      }
+    }
+
+    // Add preview banner + styles
+    const previewStyles = `<style>
+.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
+.seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
+.seo-preview-bar .badge{background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:4px;font-size:11px}
+</style>`;
+    const previewBar = `<div class="seo-preview-bar">
+      <strong>SEO Room Section Preview</strong>
+      <span class="badge">${replacementCount} sections updated</span>
+      <span class="badge">${newSections.length} new sections</span>
+      <span>Design structure preserved — only text content changed</span>
+      <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open original →</a>
+    </div>`;
+    const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();}},true);</script>`;
+
+    liveHtml = liveHtml.replace('</head>', previewStyles + '</head>');
+    liveHtml = liveHtml.replace('</body>', previewBar + disableLinks + '</body>');
+
+    console.log(`[section-preview] Rendered: ${replacementCount} sections replaced, ${newSections.length} new sections added`);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(liveHtml);
+  } catch (e) {
+    console.error('[section-preview] Error:', e.message);
+    res.status(500).send('Preview error: ' + e.message);
   }
 });
 
