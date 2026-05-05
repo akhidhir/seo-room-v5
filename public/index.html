@@ -10511,8 +10511,6 @@
       const [editorKey, setEditorKey] = useState(0);
       const [importingTemplate, setImportingTemplate] = useState(false);
       const [importTemplateUrl, setImportTemplateUrl] = useState('');
-      const [urlChoices, setUrlChoices] = useState(null); // { items: [{id, title, candidates: [{url, slug, score}]}] }
-
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', staging: 'staging', published: 'published' };
       const stageLabels = {
@@ -11421,45 +11419,6 @@
             React.createElement('span', { style: { marginLeft: 6, fontSize: 11, opacity: 0.7 } }, '(' + counts[s.key] + ')')
           ))
         ),
-        // Auto-resolve URLs warning — show when items have homepage/missing URLs
-        (() => {
-          const domClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-          const badUrlCount = items.filter(i => {
-            const u = (i.page_url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-            if (i.page_id || (u && u !== domClean)) return false;
-            // Exclude "create new page" items — they have no URL by design
-            const t = (i.page_title || '').toLowerCase();
-            if (/\b(create|add|build|new)\b/.test(t) && /\b(landing|location|suburb|service)\s*(page|pages)?\b/.test(t)) return false;
-            return true;
-          }).length;
-          if (badUrlCount === 0) return null;
-          return React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, padding: '10px 16px', background: '#f59e0b15', borderRadius: 8, border: '1px solid #f59e0b40' } },
-            React.createElement('span', { style: { fontSize: 13, color: '#f59e0b' } },
-              React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { marginRight: 6 } }),
-              badUrlCount + ' item' + (badUrlCount > 1 ? 's' : '') + ' missing page URL'
-            ),
-            React.createElement('button', {
-              onClick: async () => {
-                try {
-                  const r = await api('/projects/' + pid + '/content-queue/auto-resolve-urls', { method: 'POST' });
-                  const msg = [];
-                  if (r.resolved > 0) msg.push(r.resolved + ' auto-resolved');
-                  if (r.unresolved > 0) msg.push(r.unresolved + ' no match');
-                  if (r.needs_choice > 0) msg.push(r.needs_choice + ' need your input');
-                  if (r.resolved > 0) loadItems();
-                  if (r.needs_choice_items?.length > 0) {
-                    setUrlChoices({ items: r.needs_choice_items });
-                  } else if (msg.length > 0) {
-                    alert(msg.join(', '));
-                  } else {
-                    alert('No items to resolve.');
-                  }
-                } catch (e) { alert('Error: ' + e.message); }
-              },
-              style: { padding: '6px 14px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
-            }, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 4 } }), 'Auto-resolve URLs')
-          );
-        })(),
         // Batch generate bar (queue only)
         stage === 'queue' && items.length > 0 && React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, padding: '10px 16px', background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
@@ -11493,58 +11452,6 @@
               },
               style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
             }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6 } }), 'Move ' + batchSelected.size + ' to CW New')
-          )
-        ),
-        // URL picker modal — shown when auto-resolve finds multiple candidates
-        urlChoices && React.createElement('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }, onClick: () => setUrlChoices(null) },
-          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 600, width: '90%', maxHeight: '80vh', overflowY: 'auto', border: '1px solid var(--border)' }, onClick: e => e.stopPropagation() },
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
-              React.createElement('h3', { style: { margin: 0, fontSize: 18 } }, 'Pick the correct page URL'),
-              React.createElement('button', { onClick: () => setUrlChoices(null), style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
-            ),
-            (urlChoices.items || []).map((item, idx) =>
-              React.createElement('div', { key: item.id, style: { marginBottom: idx < urlChoices.items.length - 1 ? 20 : 0, paddingBottom: 16, borderBottom: idx < urlChoices.items.length - 1 ? '1px solid var(--border)' : 'none' } },
-                React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 8 } }, item.title),
-                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                  (item.candidates || []).map((c, ci) =>
-                    React.createElement('button', {
-                      key: ci,
-                      onClick: async () => {
-                        try {
-                          await api('/projects/' + pid + '/content-queue/auto-resolve-urls', { method: 'POST', body: { item_id: item.id, chosen_url: c.url } });
-                          const remaining = urlChoices.items.filter(i => i.id !== item.id);
-                          if (remaining.length === 0) setUrlChoices(null);
-                          else setUrlChoices({ items: remaining });
-                          loadItems();
-                        } catch (e) { alert('Error: ' + e.message); }
-                      },
-                      style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', textAlign: 'left', width: '100%', transition: 'border-color 0.15s' },
-                      onMouseEnter: e => { e.currentTarget.style.borderColor = '#3b82f6'; },
-                      onMouseLeave: e => { e.currentTarget.style.borderColor = 'var(--border)'; }
-                    },
-                      React.createElement('i', { className: 'fa-solid fa-link', style: { color: '#3b82f6', fontSize: 12, flexShrink: 0 } }),
-                      React.createElement('span', { style: { fontSize: 13, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.url.replace(/^https?:\/\//, '')),
-                      React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)', flexShrink: 0, background: 'var(--card)', padding: '2px 6px', borderRadius: 4 } }, c.score + ' match')
-                    )
-                  ),
-                  React.createElement('button', {
-                    onClick: () => {
-                      const url = prompt('Enter the correct URL manually:');
-                      if (url && url.startsWith('http')) {
-                        api('/projects/' + pid + '/content-queue/auto-resolve-urls', { method: 'POST', body: { item_id: item.id, chosen_url: url } })
-                          .then(() => {
-                            const remaining = urlChoices.items.filter(i => i.id !== item.id);
-                            if (remaining.length === 0) setUrlChoices(null);
-                            else setUrlChoices({ items: remaining });
-                            loadItems();
-                          }).catch(e => alert('Error: ' + e.message));
-                      }
-                    },
-                    style: { padding: '6px 12px', background: 'none', border: '1px dashed var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text3)', textAlign: 'center' }
-                  }, React.createElement('i', { className: 'fa-solid fa-pen', style: { marginRight: 4 } }), 'Enter URL manually')
-                )
-              )
-            )
           )
         ),
         // Items list
