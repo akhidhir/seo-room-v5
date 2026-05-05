@@ -122,6 +122,23 @@
     .content-preview a {
       color: var(--accent) !important;
     }
+    .content-preview .new-section {
+      border-left: 4px solid #22c55e;
+      padding: 16px 16px 16px 20px;
+      margin: 24px 0;
+      background: rgba(34,197,94,0.08);
+      border-radius: 0 8px 8px 0;
+      position: relative;
+    }
+    .content-preview .new-section::before {
+      content: 'NEW SECTION';
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      color: #22c55e;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
 
     html, body, #root {
       height: 100%;
@@ -11555,10 +11572,20 @@
 
             // ── LEFT: Content preview ──
             React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', minWidth: 0 } },
-              // Hint bar
+              // Hint bar + Add Section button
               React.createElement('div', { style: { padding: '8px 20px', background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
                 React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)' } }),
-                'Highlight any text below, then tell the AI what to change'
+                'Highlight any text below, then tell the AI what to change',
+                React.createElement('button', {
+                  onClick: () => {
+                    const heading = prompt('New section heading (H2):');
+                    if (!heading || !heading.trim()) return;
+                    const newBlock = '<section class="new-section"><h2>' + heading.trim().replace(/</g, '&lt;') + '</h2><p>[Add your content here]</p></section>';
+                    const updatedHtml = (preview.proposed.content_html || '') + '\n' + newBlock;
+                    onUpdate({ ...preview, proposed: { ...preview.proposed, content_html: updatedHtml } });
+                  },
+                  style: { marginLeft: 'auto', padding: '4px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                }, React.createElement('i', { className: 'fa-solid fa-plus', style: { marginRight: 4 } }), 'Add Section')
               ),
               // Content
               React.createElement('div', {
@@ -11698,7 +11725,7 @@
                 ),
                 // Quick suggestions
                 React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
-                  ['Make it shorter', 'More conversational', 'Add a CTA', 'Stronger intro'].map(s =>
+                  ['Make it shorter', 'More conversational', 'Add a CTA', 'Stronger intro', 'Suggest new sections'].map(s =>
                     React.createElement('button', {
                       key: s, onClick: () => { setInput(s); },
                       style: { padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 16, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }
