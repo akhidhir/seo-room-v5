@@ -10833,25 +10833,14 @@
                 },
                 style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: importingCopy ? 0.6 : 1 }
               }, React.createElement('i', { className: importingCopy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-download', style: { marginRight: 6 } }), importingCopy ? 'Importing...' : 'Import Current Copy'),
-              // Re Analyse — re-fetch live content and recalculate score
+              // Re Analyse — force score recalculation without changing content
               React.createElement('button', {
                 disabled: reAnalysing,
                 onClick: async () => {
                   setReAnalysing(true);
-                  try {
-                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST', body: { force: true } });
-                    if (r.content) {
-                      const cleaned = cleanWpHtml(r.content);
-                      setEditContent(cleaned);
-                      setEditorKey(k => k + 1);
-                    }
-                    setEditMeta({
-                      meta_title: r.meta_title || editMeta.meta_title,
-                      meta_desc: r.meta_desc || editMeta.meta_desc,
-                      focus_keyword: r.focus_keyword || editMeta.focus_keyword
-                    });
-                  } catch(e) { alert('Re-analyse failed: ' + e.message); }
-                  setReAnalysing(false);
+                  // Bump editor key to force ContentScorePanel to recalculate
+                  setEditorKey(k => k + 1);
+                  setTimeout(() => setReAnalysing(false), 500);
                 },
                 style: { padding: '8px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: reAnalysing ? 0.6 : 1 }
               }, React.createElement('i', { className: reAnalysing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-rotate', style: { marginRight: 6 } }), reAnalysing ? 'Analysing...' : 'Re Analyse')
