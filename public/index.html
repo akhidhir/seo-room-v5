@@ -10543,8 +10543,8 @@
           if (!isSame) {
             // Inject orange highlight style
             const styleAttr = open.includes('style="')
-              ? open.replace('style="', 'style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;')
-              : open.replace('>', ' style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;">');
+              ? open.replace('style="', 'style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;')
+              : open.replace('>', ' style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;">');
             return styleAttr + content + close;
           }
           return match;
