@@ -10800,6 +10800,25 @@
                 );
               })()
             ),
+            // "This looks like a new page" banner — suggest moving to CW New
+            (() => {
+              const title = (selectedItem.page_title || '').toLowerCase();
+              const isNewPageAction = /\b(create|add|build|new)\b/.test(title) && /\b(landing|location|suburb|service)\s*(page|pages)?\b/.test(title);
+              if (!isNewPageAction) return null;
+              return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#a855f715', border: '1px solid #a855f740', borderRadius: 8, marginBottom: 12 } },
+                React.createElement('i', { className: 'fa-solid fa-info-circle', style: { color: '#a855f7', fontSize: 14 } }),
+                React.createElement('span', { style: { flex: 1, fontSize: 13, color: '#a855f7' } }, 'This looks like a new page — it belongs in Copywriter New, not the content queue.'),
+                React.createElement('button', {
+                  onClick: async () => {
+                    try {
+                      await api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: selectedItem.id, from: 'content_queue', to: 'site_pages' } });
+                      setSelectedItem(null); loadItems();
+                    } catch (e) { alert('Move failed: ' + e.message); }
+                  },
+                  style: { padding: '6px 14px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                }, 'Move to CW New →')
+              );
+            })(),
             React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
               // AI Optimise button
               !isPublished && hasDraft && React.createElement('button', {
@@ -11308,7 +11327,11 @@
           const domClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
           const badUrlCount = items.filter(i => {
             const u = (i.page_url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-            return !i.page_id && (!u || u === domClean);
+            if (i.page_id || (u && u !== domClean)) return false;
+            // Exclude "create new page" items — they have no URL by design
+            const t = (i.page_title || '').toLowerCase();
+            if (/\b(create|add|build|new)\b/.test(t) && /\b(landing|location|suburb|service)\s*(page|pages)?\b/.test(t)) return false;
+            return true;
           }).length;
           if (badUrlCount === 0) return null;
           return React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, padding: '10px 16px', background: '#f59e0b15', borderRadius: 8, border: '1px solid #f59e0b40' } },
