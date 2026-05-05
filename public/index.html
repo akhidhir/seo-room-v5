@@ -9728,15 +9728,26 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
-      // Strip sliders/carousels — they render as stacked images without JS
+      // Strip sliders/carousels — keep only first image as placeholder
       let cleaned = html;
-      // Remove common slider containers (Smart Slider, Revolution, Elementor, Swiper, Slick, MetaSlider, etc.)
-      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?:<\/div>\s*)*/gi, '');
-      // Remove standalone slider shortcode output wrappers
-      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>[\s\S]*?<\/div>\s*(?:<\/div>\s*)*/gi, '');
-      // Remove blocks of 3+ consecutive img tags (likely a slider dumped as images)
-      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, '');
-      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, '');
+      // Collapse slider containers to just their first image
+      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>\s*)*/gi, function(full, inner) {
+        const firstImg = inner.match(/<img[^>]*>/i);
+        return firstImg ? firstImg[0] : '';
+      });
+      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>\s*)*/gi, function(full, inner) {
+        const firstImg = inner.match(/<img[^>]*>/i);
+        return firstImg ? firstImg[0] : '';
+      });
+      // Collapse 3+ consecutive images to just the first one (slider dump)
+      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, function(full) {
+        const firstFig = full.match(/<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>/i);
+        return firstFig ? firstFig[0] : '';
+      });
+      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, function(full) {
+        const firstImg = full.match(/<img[^>]*>/i);
+        return firstImg ? firstImg[0] : '';
+      });
       return cleaned
         .replace(/<p>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/p>/gi, '')
         .replace(/<h[2-4]>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/h[2-4]>/gi, '')
