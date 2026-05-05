@@ -5180,8 +5180,8 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
           }
           // If no URL or no pageId yet, search WP by title keywords
           if (!pageId && action.title) {
-            const searchTerms = action.title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix)\s+/i, '')
-              .replace(/\s+(page|content|copy|text)(\s|$)/gi, ' ').trim();
+            const searchTerms = action.title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
+              .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
             if (searchTerms.length > 2) {
               for (const type of ['pages', 'posts']) {
                 const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
@@ -5403,8 +5403,8 @@ app.post('/api/projects/:projectId/content-queue/auto-resolve-urls', async (req,
     for (const item of items) {
       if (!item.page_title) { unresolved.push({ id: item.id, title: item.page_title, reason: 'No title' }); continue; }
       const searchTerms = item.page_title
-        .replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create\s+location\s+landing\s+pages?\s+for)\s*/i, '')
-        .replace(/\s+(page|content|copy|text)(\s|$)/gi, ' ').trim();
+        .replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
+        .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
       if (searchTerms.length < 3) { unresolved.push({ id: item.id, title: item.page_title, reason: 'Title too short' }); continue; }
 
       let found = false;
@@ -5657,7 +5657,8 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     if (isHomepage && !resolvedPageId && wpBase2 && item.page_title) {
       // Auto-resolve: search WP by title
       console.log('[import-current] No URL, searching WP for title:', item.page_title);
-      const searchTerms = item.page_title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create location landing pages for)\s*/i, '').trim();
+      const searchTerms = item.page_title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
+        .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
       if (searchTerms.length > 2) {
         for (const type of ['pages', 'posts']) {
           try {
