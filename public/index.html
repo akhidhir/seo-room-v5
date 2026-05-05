@@ -9728,26 +9728,21 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
-      // Strip sliders/carousels — keep only first image as placeholder
+      // Strip sliders/carousels — replace with sized placeholder
       let cleaned = html;
-      // Collapse slider containers to just their first image
-      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>\s*)*/gi, function(full, inner) {
-        const firstImg = inner.match(/<img[^>]*>/i);
-        return firstImg ? firstImg[0] : '';
-      });
-      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>\s*)*/gi, function(full, inner) {
-        const firstImg = inner.match(/<img[^>]*>/i);
-        return firstImg ? firstImg[0] : '';
-      });
-      // Collapse 3+ consecutive images to just the first one (slider dump)
-      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, function(full) {
-        const firstFig = full.match(/<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>/i);
-        return firstFig ? firstFig[0] : '';
-      });
-      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, function(full) {
-        const firstImg = full.match(/<img[^>]*>/i);
-        return firstImg ? firstImg[0] : '';
-      });
+      function sliderPlaceholder(block) {
+        const wMatch = block.match(/width[=:]\s*"?(\d+)/i);
+        const hMatch = block.match(/height[=:]\s*"?(\d+)/i);
+        const w = wMatch ? wMatch[1] + 'px' : '100%';
+        const h = hMatch ? hMatch[1] + 'px' : '400px';
+        return '<div style="width:' + w + ';height:' + h + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;">[— Slider —]</div>';
+      }
+      // Replace slider containers
+      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
+      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
+      // Collapse 3+ consecutive images (slider dump) to sized placeholder
+      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, sliderPlaceholder);
+      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, sliderPlaceholder);
       return cleaned
         .replace(/<p>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/p>/gi, '')
         .replace(/<h[2-4]>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/h[2-4]>/gi, '')
