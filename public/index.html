@@ -9732,37 +9732,26 @@
       var div = document.createElement('div');
       div.innerHTML = html;
 
-      // Helper: create a sized placeholder element
-      function makePlaceholder(el, label) {
-        var w = el.getAttribute('width') || el.style.width || '';
-        var h = el.getAttribute('height') || el.style.height || '';
-        var ph = document.createElement('div');
-        ph.style.cssText = 'width:' + (w ? w + (/^\d+$/.test(w) ? 'px' : '') : '100%') + ';height:' + (h ? h + (/^\d+$/.test(h) ? 'px' : '') : (label === 'Video' ? '315px' : '400px')) + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;';
-        ph.textContent = '[— ' + label + ' —]';
-        return ph;
-      }
-
-      // Replace video iframes (YouTube, Vimeo, etc.)
+      // Remove video iframes (YouTube, Vimeo, etc.)
       div.querySelectorAll('iframe[src*="youtube"], iframe[src*="vimeo"], iframe[src*="wistia"], iframe[src*="dailymotion"], iframe[src*="videopress"]').forEach(function(el) {
-        el.parentNode.replaceChild(makePlaceholder(el, 'Video'), el);
+        el.parentNode.removeChild(el);
       });
-      // Replace HTML5 video elements
+      // Remove HTML5 video elements
       div.querySelectorAll('video').forEach(function(el) {
-        el.parentNode.replaceChild(makePlaceholder(el, 'Video'), el);
+        el.parentNode.removeChild(el);
       });
 
-      // Detect slider/carousel containers by class or id keywords
+      // Remove slider/carousel containers by class or id keywords
       var sliderKeywords = /slider|carousel|swiper|slick|nivo|flexslider|n2-ss|rev_slider|metaslider|gallery-slideshow/i;
       div.querySelectorAll('div, section, aside').forEach(function(el) {
         var cls = (el.className || '') + ' ' + (el.id || '');
         if (sliderKeywords.test(cls)) {
-          el.parentNode.replaceChild(makePlaceholder(el, 'Slider'), el);
+          el.parentNode.removeChild(el);
         }
       });
 
-      // Detect consecutive image-only siblings (slider images each in own wrapper)
-      // Only collapse if 3+ consecutive AND each element is purely an image (no real text)
-      function collapseConsecutiveImages(container) {
+      // Remove consecutive image-only siblings (slider images dumped without wrapper)
+      function removeConsecutiveImages(container) {
         var children = Array.from(container.children);
         var i = 0;
         while (i < children.length) {
@@ -9771,7 +9760,6 @@
           while (j < children.length) {
             var child = children[j];
             var hasImg = child.querySelector('img') || child.tagName === 'IMG';
-            // Strip image alt text before measuring — only count real visible text
             var clone = child.cloneNode(true);
             clone.querySelectorAll('img').forEach(function(img) { img.remove(); });
             var textLen = (clone.textContent || '').replace(/\s+/g, ' ').trim().length;
@@ -9783,21 +9771,17 @@
             }
           }
           if (runs.length >= 3) {
-            var firstImg = runs[0].querySelector('img') || runs[0];
-            var ph = makePlaceholder(firstImg, 'Slider');
-            runs[0].parentNode.insertBefore(ph, runs[0]);
             runs.forEach(function(el) { el.parentNode.removeChild(el); });
             children = Array.from(container.children);
-            i++;
           } else {
             if (children[i] && children[i].children && children[i].children.length > 0) {
-              collapseConsecutiveImages(children[i]);
+              removeConsecutiveImages(children[i]);
             }
             i++;
           }
         }
       }
-      collapseConsecutiveImages(div);
+      removeConsecutiveImages(div);
 
       var cleaned = div.innerHTML;
       return cleaned
