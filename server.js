@@ -3286,6 +3286,25 @@ function getWpAuthHeaders(project) {
   return { 'Authorization': `Basic ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0 (WordPress Integration)' };
 }
 
+// Helper: clean action item title into WP search terms
+// "Optimize gaming PC repair page H1 and messaging" → "gaming PC repair"
+// "Expand laptop screen replacement page content" → "laptop screen replacement"
+function cleanTitleForWpSearch(title) {
+  if (!title) return '';
+  return title
+    // Strip leading action verbs
+    .replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new|write|enhance|revise|rework)\s+/i, '')
+    // Strip trailing noise like "page content", "H1 and messaging", "copy text"
+    .replace(/\s+(page|pages|content|copy|text|section|for)\b.*$/gi, '')
+    // Strip "H1", "H2", "meta title", "meta description" and everything after
+    .replace(/\s+H[1-6]\b.*$/gi, '')
+    .replace(/\s+meta\s+(title|description|desc)\b.*$/gi, '')
+    // Strip remaining noise words
+    .replace(/\b(and|the|with|from|into|about)\b/gi, '')
+    // Clean up whitespace
+    .replace(/\s+/g, ' ').trim();
+}
+
 // Helper: read current Yoast meta from WordPress for a page/post
 // Returns { type, title, yoast_wpseo_title, ..., wpId } — wpId is the resolved numeric ID
 async function readWpYoastMeta(wpBase, pageId, authHeaders) {
@@ -5180,8 +5199,7 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
           }
           // If no URL or no pageId yet, search WP by title keywords
           if (!pageId && action.title) {
-            const searchTerms = action.title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
-              .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
+            const searchTerms = cleanTitleForWpSearch(action.title);
             if (searchTerms.length > 2) {
               for (const type of ['pages', 'posts']) {
                 const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
@@ -5402,9 +5420,7 @@ app.post('/api/projects/:projectId/content-queue/auto-resolve-urls', async (req,
     const unresolved = [];
     for (const item of items) {
       if (!item.page_title) { unresolved.push({ id: item.id, title: item.page_title, reason: 'No title' }); continue; }
-      const searchTerms = item.page_title
-        .replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
-        .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
+      const searchTerms = cleanTitleForWpSearch(item.page_title);
       if (searchTerms.length < 3) { unresolved.push({ id: item.id, title: item.page_title, reason: 'Title too short' }); continue; }
 
       let found = false;
