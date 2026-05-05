@@ -8984,52 +8984,72 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
     });
     console.log('[SEO Room] Content headings (excluding forms/footer/nav): '+headingMap.length);
 
-    // For each section (not new), find its heading in the DOM
+    // For each section (not new), find its heading OR text in the DOM
     sections.forEach(function(section){
       if(section.is_new) return;
-      if(!section.heading && !section.original_heading){
-        console.log('[SEO Room] Section "'+section.type+'" has no heading — skipping');
-        return;
-      }
 
-      var searchHeading = norm(section.original_heading || section.heading);
-      if(searchHeading.length < 3) return;
+      var container = null;
+      var matchedHeadingEl = null;
 
-      // Find matching heading in DOM
-      var match = null;
-      for(var i=0;i<headingMap.length;i++){
-        var h = headingMap[i];
-        if(h.text === searchHeading){ match = h; break; }
-      }
-      // Fuzzy: check if one contains the other
-      if(!match){
+      var searchHeading = norm(section.original_heading || section.heading || '');
+
+      if(searchHeading.length >= 3){
+        // === HEADING-BASED MATCHING ===
+        var match = null;
         for(var i=0;i<headingMap.length;i++){
           var h = headingMap[i];
-          if(h.text.indexOf(searchHeading)!==-1 || searchHeading.indexOf(h.text)!==-1){ match = h; break; }
+          if(h.text === searchHeading){ match = h; break; }
         }
-      }
-      // Fuzzy: check first 20 chars
-      if(!match && searchHeading.length > 15){
-        var shortSearch = searchHeading.slice(0,20);
-        for(var i=0;i<headingMap.length;i++){
-          if(headingMap[i].text.indexOf(shortSearch)!==-1){ match = headingMap[i]; break; }
+        if(!match){
+          for(var i=0;i<headingMap.length;i++){
+            var h = headingMap[i];
+            if(h.text.indexOf(searchHeading)!==-1 || searchHeading.indexOf(h.text)!==-1){ match = h; break; }
+          }
+        }
+        if(!match && searchHeading.length > 15){
+          var shortSearch = searchHeading.slice(0,20);
+          for(var i=0;i<headingMap.length;i++){
+            if(headingMap[i].text.indexOf(shortSearch)!==-1){ match = headingMap[i]; break; }
+          }
+        }
+        if(match){
+          console.log('[SEO Room] Matched heading: "'+match.text+'" → replacing with draft');
+          container = findSectionContainer(match.el);
+          matchedHeadingEl = match.el;
+          headingMap = headingMap.filter(function(h){ return h !== match; });
+        } else {
+          console.log('[SEO Room] No heading match for: "'+searchHeading+'"');
         }
       }
 
-      if(!match){
-        console.log('[SEO Room] No heading match for: "'+searchHeading+'"');
+      // === TEXT-BASED FALLBACK for headingless sections ===
+      if(!container && section.original_text){
+        var origSnippet = norm(section.original_text.replace(/<[^>]+>/g, '')).slice(0,60);
+        if(origSnippet.length >= 20){
+          console.log('[SEO Room] Trying text match for "'+section.type+'": "'+origSnippet.slice(0,40)+'..."');
+          var allP = document.querySelectorAll('p, div.elementor-widget-text-editor, .elementor-text-editor');
+          for(var i=0;i<allP.length;i++){
+            var p = allP[i];
+            if(p.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) continue;
+            var pText = norm(p.textContent).slice(0,60);
+            if(pText.length >= 20 && (pText.indexOf(origSnippet.slice(0,30))!==-1 || origSnippet.indexOf(pText.slice(0,30))!==-1)){
+              container = findSectionContainer(p);
+              console.log('[SEO Room] Text-matched "'+section.type+'" via paragraph content');
+              break;
+            }
+          }
+        }
+      }
+
+      if(!container){
+        console.log('[SEO Room] No match for section "'+section.type+'" — skipped');
         return;
       }
 
-      console.log('[SEO Room] Matched heading: "'+match.text+'" → replacing with draft');
-
-      // Find the section container
-      var container = findSectionContainer(match.el);
-
       // Update heading text if changed
-      if(section.draft_heading && norm(section.draft_heading) !== norm(section.heading)){
-        match.el.textContent = section.draft_heading;
-        match.el.classList.add('seo-text-hl');
+      if(matchedHeadingEl && section.draft_heading && norm(section.draft_heading) !== norm(section.heading)){
+        matchedHeadingEl.textContent = section.draft_heading;
+        matchedHeadingEl.classList.add('seo-text-hl');
       }
 
       // Replace text content in the container
@@ -9044,8 +9064,7 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
         badge.textContent = 'UPDATED';
         container.appendChild(badge);
         matched++;
-        // Remove from headingMap so we don't match it again
-        headingMap = headingMap.filter(function(h){ return h !== match; });
+        // headingMap already filtered when heading was matched above
       }
     });
 
