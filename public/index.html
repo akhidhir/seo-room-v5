@@ -10519,6 +10519,27 @@
       const [addingSection, setAddingSection] = useState(null); // section being added
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
+
+      // Highlight changed sentences in draft by comparing with original
+      const highlightDraftChanges = (originalHtml, draftHtml) => {
+        if (!originalHtml || !draftHtml) return draftHtml || '';
+        const stripTags = (h) => h.replace(/<[^>]+>/g, '').trim();
+        const origSentences = stripTags(originalHtml).split(/(?<=[.!?])\s+/).map(s => s.trim().toLowerCase()).filter(s => s.length > 3);
+        // Wrap each block-level element's text — check if its content is new
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = draftHtml;
+        const els = wrapper.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td');
+        els.forEach(el => {
+          const txt = el.textContent.trim().toLowerCase();
+          if (txt.length < 5) return;
+          // Check if this text existed in original (fuzzy: any original sentence is a substring or vice versa)
+          const isOriginal = origSentences.some(os => txt.includes(os) || os.includes(txt));
+          if (!isOriginal) {
+            el.style.cssText = (el.style.cssText || '') + ';background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;margin:2px 0;';
+          }
+        });
+        return wrapper.innerHTML;
+      };
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', staging: 'staging', published: 'published' };
       const stageLabels = {
@@ -11459,7 +11480,7 @@
                       // Draft (orange highlighted)
                       React.createElement('div', null,
                         React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Updated Draft'),
-                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text)', lineHeight: 1.6, padding: 10, background: 'rgba(245,158,11,0.06)', borderRadius: 6, border: '2px solid rgba(245,158,11,0.4)', borderLeft: '4px solid #f59e0b', maxHeight: 200, overflow: 'auto' }, dangerouslySetInnerHTML: { __html: section.draft_text || '' } })
+                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text)', lineHeight: 1.6, padding: 10, background: 'rgba(245,158,11,0.06)', borderRadius: 6, border: '2px solid rgba(245,158,11,0.4)', borderLeft: '4px solid #f59e0b', maxHeight: 200, overflow: 'auto' }, dangerouslySetInnerHTML: { __html: highlightDraftChanges(section.original_text, section.draft_text) } })
                       )
                     ) : React.createElement('div', null,
                       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, section.draft_text ? 'Content' : 'Original Content'),

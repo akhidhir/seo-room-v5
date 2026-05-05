@@ -8835,9 +8835,9 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
 .seo-preview-bar button{background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s}
 .seo-preview-bar button:hover{background:rgba(255,255,255,0.3)}
 .seo-preview-bar button.active{background:#fff;color:#6366f1}
-.seo-changed{outline:3px solid #6366f1;outline-offset:4px;transition:outline-color 0.3s}
-.seo-changed-badge{position:absolute;top:-14px;right:8px;font-size:9px;font-weight:700;color:#fff;background:#6366f1;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;pointer-events:none}
-.seo-changed .seo-text-hl{background:rgba(245,158,11,0.15);border-left:3px solid #f59e0b;padding-left:8px;display:block;margin:2px 0;transition:background 0.3s}
+.seo-changed{outline:3px solid #f59e0b;outline-offset:4px;transition:outline-color 0.3s}
+.seo-changed-badge{position:absolute;top:-14px;right:8px;font-size:9px;font-weight:700;color:#fff;background:#f59e0b;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;pointer-events:none}
+.seo-changed .seo-text-hl{background:#fef3c7;border-left:4px solid #f59e0b;padding-left:10px;display:block;margin:2px 0;transition:background 0.3s}
 .seo-new-block{outline:3px solid #22c55e;outline-offset:4px}
 .seo-new-badge{position:absolute;top:-14px;right:8px;font-size:9px;font-weight:700;color:#fff;background:#22c55e;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;pointer-events:none}
 .seo-new-block .seo-text-hl{background:rgba(34,197,94,0.12);border-left:3px solid #22c55e;padding-left:8px;display:block;margin:2px 0}
