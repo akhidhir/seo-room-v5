@@ -10754,9 +10754,51 @@
                 React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
               ),
               React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
-              React.createElement('a', { href: (selectedItem.page_url || '').startsWith('http') ? selectedItem.page_url : ('https://' + (project?.domain || '') + selectedItem.page_url), target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
-                React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', selectedItem.page_url
-              )
+              (() => {
+                // Detect if page_url is just the homepage (domain root) — treat as "no URL"
+                const rawUrl = selectedItem.page_url || '';
+                const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+                const urlClean = rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                const isHomepage = !rawUrl || (domainClean && urlClean === domainClean);
+                if (isHomepage) {
+                  return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 } },
+                    React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { fontSize: 10, color: '#f59e0b' } }),
+                    React.createElement('input', {
+                      type: 'text', placeholder: 'Enter page URL (e.g. https://goldpc.net.au/computer-repairs-guilford/)',
+                      defaultValue: '',
+                      onKeyDown: async (e) => {
+                        if (e.key === 'Enter' && e.target.value.trim()) {
+                          const newUrl = e.target.value.trim();
+                          try {
+                            await api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PUT', body: { page_url: newUrl } });
+                            setSelectedItem(prev => ({ ...prev, page_url: newUrl }));
+                            loadItems();
+                          } catch (err) { alert('Failed to save URL: ' + err.message); }
+                        }
+                      },
+                      style: { flex: 1, maxWidth: 500, padding: '4px 8px', fontSize: 13, background: 'var(--bg)', color: 'var(--text)', border: '1px solid #f59e0b60', borderRadius: 6, outline: 'none' }
+                    }),
+                    React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'Press Enter to save')
+                  );
+                }
+                const fullUrl = rawUrl.startsWith('http') ? rawUrl : ('https://' + domainClean + rawUrl);
+                return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                  React.createElement('a', { href: fullUrl, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                    React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', rawUrl
+                  ),
+                  React.createElement('button', {
+                    onClick: () => {
+                      const newUrl = prompt('Edit page URL:', rawUrl);
+                      if (newUrl && newUrl !== rawUrl) {
+                        api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PUT', body: { page_url: newUrl } })
+                          .then(() => { setSelectedItem(prev => ({ ...prev, page_url: newUrl })); loadItems(); })
+                          .catch(err => alert('Failed: ' + err.message));
+                      }
+                    },
+                    style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 11, padding: '2px 4px' }
+                  }, React.createElement('i', { className: 'fa-solid fa-pen', style: { fontSize: 10 } }))
+                );
+              })()
             ),
             React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
               // AI Optimise button
@@ -11305,7 +11347,15 @@
               React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'start' } },
                 React.createElement('div', null,
                   React.createElement('div', { style: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, item.page_title),
-                  React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, item.page_url),
+                  (() => {
+                    const ru = item.page_url || '';
+                    const dc = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+                    const uc = ru.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                    const isHome = !ru || (dc && uc === dc);
+                    return React.createElement('div', { style: { fontSize: 12, color: isHome ? '#f59e0b' : 'var(--text3)' } },
+                      isHome ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { marginRight: 4, fontSize: 10 } }), 'No URL set') : ru
+                    );
+                  })(),
                   item.draft_word_count > 0 && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4 } },
                     React.createElement('i', { className: 'fas fa-file-word', style: { marginRight: 4 } }), item.draft_word_count, ' words'
                   )

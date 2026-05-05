@@ -5156,7 +5156,8 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
       const urlMatch = (action.description || '').match(/https?:\/\/[^\s,)]+/) ||
                        (action.current_value || '').match(/https?:\/\/[^\s,)]+/) ||
                        (action.page_url || '').match(/https?:\/\/[^\s,)]+/);
-      const pageUrl = urlMatch ? urlMatch[0].replace(/[.,;]+$/, '') : (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : '');
+      // Don't fall back to homepage — empty URL is better than wrong URL
+      const pageUrl = urlMatch ? urlMatch[0].replace(/[.,;]+$/, '') : '';
 
       // Try to resolve WP page_id from URL
       let pageId = null;
@@ -5324,7 +5325,8 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     const vals = [];
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
-                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime'];
+                           'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime',
+                           'page_url', 'page_id', 'page_title'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
@@ -5524,8 +5526,15 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
       });
     }
 
-    // Otherwise fetch live from WP
-    const pageUrl = (item.page_url || '').startsWith('http') ? item.page_url : ('https://' + (project?.domain || '') + item.page_url);
+    // Otherwise fetch live from WP — but skip if URL is homepage (domain root = wrong URL)
+    const rawPageUrl = item.page_url || '';
+    const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const urlClean = rawPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const isHomepage = !rawPageUrl || (domainClean && urlClean === domainClean);
+    if (isHomepage && !item.page_id) {
+      return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set — cannot import content. Set the correct page URL first.' });
+    }
+    const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);
     console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', item.page_id);
     const content = await fetchLivePageContent(pageUrl, project, item.page_id);
     console.log('[import-current] Got content length:', content ? content.length : 0, 'words:', content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0);
@@ -7409,11 +7418,15 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const draftTitle = item.draft_meta_title || item.page_title || '';
     const draftDesc = item.draft_meta_desc || '';
 
-    // Build the page URL
+    // Build the page URL — detect homepage URLs (domain root = wrong URL)
     let pageUrl = item.page_url || '';
     if (pageUrl && !pageUrl.startsWith('http')) {
       pageUrl = 'https://' + (project.domain || '') + pageUrl;
     }
+    // Treat homepage URL as "no URL"
+    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (domClean && puClean === domClean) pageUrl = '';
 
     if (!pageUrl) {
       // No live page — render standalone preview
