@@ -36,6 +36,7 @@ const DATAFORSEO_AUTH = DATAFORSEO_LOGIN && DATAFORSEO_PASSWORD ? 'Basic ' + Buf
 const LOCAL_FALCON_KEY = process.env.LOCAL_FALCON_KEY;
 const SERPAPI_KEY = process.env.SERPAPI_KEY;
 const LATE_API_KEY = process.env.LATE_API_KEY;
+const LATE_GBP_ACCOUNT_ID = process.env.LATE_GBP_ACCOUNT_ID;
 
 // Managed Agents (Claude API)
 const AGENT_IDS = {
@@ -14761,39 +14762,54 @@ app.delete('/api/gbp-posts/:id', async (req, res) => {
 
 // Publish a GBP post via Late.dev API
 app.post('/api/gbp-posts/:id/publish', async (req, res) => {
-  if (!LATE_API_KEY) return res.status(400).json({ error: 'LATE_API_KEY not configured' });
+  if (!LATE_API_KEY) return res.status(400).json({ error: 'LATE_API_KEY not configured. Add it in Railway env vars.' });
+  if (!LATE_GBP_ACCOUNT_ID) return res.status(400).json({ error: 'LATE_GBP_ACCOUNT_ID not configured. Add it in Railway env vars.' });
   try {
     const postResult = await pool.query('SELECT * FROM gbp_posts WHERE id=$1', [req.params.id]);
     if (postResult.rows.length === 0) return res.status(404).json({ error: 'Post not found' });
     const post = postResult.rows[0];
 
-    // Call Late.dev API to publish
-    const mediaUrls = post.image_url ? [post.image_url] : [];
-    const lateResponse = await fetch('https://api.getlate.dev/v1/post/create', {
+    // Build Late.dev API request body
+    const lateBody = {
+      content: post.body,
+      platforms: [{ platform: 'googlebusiness', accountId: LATE_GBP_ACCOUNT_ID }],
+      publishNow: true
+    };
+
+    // Add media if present
+    if (post.image_url) {
+      lateBody.mediaItems = [{ type: 'image', url: post.image_url }];
+    }
+
+    // Add CTA button if present
+    if (post.cta_type && post.cta_url) {
+      lateBody.googleBusinessOptions = {
+        actionType: post.cta_type,
+        actionUrl: post.cta_url
+      };
+    }
+
+    console.log(`[gbp-posts] Publishing post ${req.params.id} via Late.dev...`);
+    const lateResponse = await fetch('https://getlate.dev/api/v1/posts', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${LATE_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        text: post.body,
-        platforms: ['gbp'],
-        mediaUrls: mediaUrls
-      })
+      body: JSON.stringify(lateBody)
     });
 
     if (!lateResponse.ok) {
       const error = await lateResponse.text();
       console.error(`[gbp-posts] Late.dev API error: ${lateResponse.status} ${error}`);
-      // Update status to failed
       await pool.query('UPDATE gbp_posts SET status=$1 WHERE id=$2', ['failed', req.params.id]);
       return res.status(400).json({ error: `Late.dev API failed: ${error.substring(0, 200)}` });
     }
 
     const lateData = await lateResponse.json();
-    const latePostId = lateData.id || lateData.post_id;
+    const latePostId = lateData.id || lateData.postId || lateData.post_id;
+    console.log(`[gbp-posts] Published successfully. Late post ID: ${latePostId}`);
 
-    // Update post status and save Late post ID
     const updateResult = await pool.query(
       'UPDATE gbp_posts SET status=$1, late_post_id=$2, published_at=NOW(), updated_at=NOW() WHERE id=$3 RETURNING *',
       ['published', latePostId, req.params.id]

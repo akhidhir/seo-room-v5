@@ -14638,9 +14638,18 @@
         setError('');
         try {
           const data = await api(`/projects/${project.id}/gbp-posts`);
+          if (data.error) throw new Error(data.error);
           setPosts(data.posts || []);
         } catch (err) {
-          setError(err.message);
+          // Retry once after 2s (deploy might be in progress)
+          try {
+            await new Promise(r => setTimeout(r, 2000));
+            const data = await api(`/projects/${project.id}/gbp-posts`);
+            if (data.error) throw new Error(data.error);
+            setPosts(data.posts || []);
+          } catch (err2) {
+            setError(err2.message);
+          }
         } finally {
           setLoading(false);
         }

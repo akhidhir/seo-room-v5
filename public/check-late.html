@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head><title>Late.dev Account Finder</title></head>
+<body style="font-family:monospace;background:#1a1a2e;color:#e5e7eb;padding:40px">
+<h2>Late.dev - Find your GBP Account ID</h2>
+<p>Paste your Late.dev API key:</p>
+<input id="key" type="text" style="width:400px;padding:10px;font-size:14px;background:#16213e;color:#fff;border:1px solid #444;border-radius:6px" placeholder="Your LATE_API_KEY">
+<button onclick="go()" style="padding:10px 20px;margin-left:10px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">Fetch Accounts</button>
+<pre id="out" style="margin-top:20px;padding:20px;background:#16213e;border-radius:8px;overflow:auto;max-height:500px"></pre>
+<script>
+async function go() {
+  const key = document.getElementById('key').value.trim();
+  if (!key) return;
+  document.getElementById('out').textContent = 'Loading...';
+  try {
+    const r = await fetch('https://getlate.dev/api/v1/accounts', {
+      headers: { 'Authorization': 'Bearer ' + key }
+    });
+    const data = await r.json();
+    document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    document.getElementById('out').textContent = 'Error: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>
