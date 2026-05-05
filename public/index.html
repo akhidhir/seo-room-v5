@@ -10542,7 +10542,7 @@
           draftIdx++;
           // If no corresponding original OR text changed → highlight
           if (!origTxt || txt !== origTxt) {
-            const hl = 'background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;';
+            const hl = 'background:rgba(245,158,11,0.10);border-left:3px solid #f59e0b;padding-left:8px;';
             const styled = open.includes('style="')
               ? open.replace('style="', 'style="' + hl)
               : open.replace('>', ' style="' + hl + '">');
@@ -11446,8 +11446,8 @@
               'Set a page URL first to analyse the live page structure'
             ),
 
-            // Sections list (when parsed)
-            sectionView && selectedItem.page_sections?.length > 0 && React.createElement('div', { style: { marginTop: 8 } },
+            // Sections list (when parsed) — hidden in highlighted view, shown only in section edit mode
+            false && sectionView && selectedItem.page_sections?.length > 0 && React.createElement('div', { style: { marginTop: 8 } },
               selectedItem.page_sections.map((section, idx) => {
                 const isExpanded = expandedSections && expandedSections[section.id];
                 const hasChanges = !!(section.draft_text && section.original_text && section.draft_text !== section.original_text);
