@@ -8,6 +8,9 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 
+// Preload section-preview script for inlining (avoids external script loading issues)
+const SECTION_PREVIEW_JS = fs.readFileSync(path.join(__dirname, 'public', 'section-preview.js'), 'utf8');
+
 // ==================== 1. CONFIG ====================
 
 const app = express();
@@ -8831,8 +8834,9 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const safeJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--');
     const dataTag = `<script type="application/json" id="seo-section-data">${safeJson}</script>`;
 
-    // Build our own origin URL (base tag points to target site, so relative paths won't work)
-    const selfOrigin = `${req.protocol}://${req.get('host')}`;
+    // Script is inlined (loaded at startup) to avoid base-tag / mixed-content / CORS issues
+
+    const inlineScript = '<script>' + SECTION_PREVIEW_JS + '<\/script>';
 
     const injectedScript = dataTag + `
 <style>
@@ -8857,7 +8861,7 @@ body.hide-hl .seo-new-block{outline:none!important}
 body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;padding-left:0!important;color:inherit!important}
 body.hide-hl .seo-text-hl *{color:inherit!important}
 </style>
-<script src=”${selfOrigin}/section-preview.js”><\/script>
+` + inlineScript + `
 <div class=”seo-preview-bar”>
   <strong>SEO Room Preview</strong>
   <span class=”badge” id=”seo-match-count”>loading...</span>
