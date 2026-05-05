@@ -11174,22 +11174,22 @@
               ),
               React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
               (() => {
-                // Detect if page_url is just the homepage (domain root) — treat as "no URL"
+                // Detect if page_url is truly empty — "/" counts as valid (homepage)
                 const rawUrl = selectedItem.page_url || '';
-                const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-                const urlClean = rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-                const isHomepage = !rawUrl || (domainClean && urlClean === domainClean);
-                if (isHomepage) {
+                const hasUrl = rawUrl && rawUrl.trim().length > 0;
+                if (!hasUrl) {
                   return React.createElement(UrlPicker, {
                     projectId: pid,
                     itemId: selectedItem.id,
                     onPick: (url) => { setSelectedItem(prev => ({ ...prev, page_url: url })); loadItems(); }
                   });
                 }
+                const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
                 const fullUrl = rawUrl.startsWith('http') ? rawUrl : ('https://' + domainClean + rawUrl);
+                const displayUrl = rawUrl === '/' ? '/ (Homepage)' : rawUrl;
                 return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
                   React.createElement('a', { href: fullUrl, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
-                    React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', rawUrl
+                    React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', displayUrl
                   ),
                   React.createElement('button', {
                     onClick: () => {
@@ -11952,11 +11952,10 @@
                   React.createElement('div', { style: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, item.page_title),
                   (() => {
                     const ru = item.page_url || '';
-                    const dc = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-                    const uc = ru.replace(/^https?:\/\//, '').replace(/\/$/, '');
-                    const isHome = !ru || (dc && uc === dc);
-                    return React.createElement('div', { style: { fontSize: 12, color: isHome ? '#f59e0b' : 'var(--text3)' } },
-                      isHome ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { marginRight: 4, fontSize: 10 } }), 'No URL set') : ru
+                    const hasUrl = ru && ru.trim().length > 0;
+                    const displayUrl = ru === '/' ? '/ (Homepage)' : ru;
+                    return React.createElement('div', { style: { fontSize: 12, color: !hasUrl ? '#f59e0b' : 'var(--text3)' } },
+                      !hasUrl ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { marginRight: 4, fontSize: 10 } }), 'No URL set') : displayUrl
                     );
                   })(),
                   item.draft_word_count > 0 && React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 4 } },
