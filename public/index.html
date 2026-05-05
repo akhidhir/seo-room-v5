@@ -10155,6 +10155,46 @@
       const [competitorData, setCompetitorData] = useState(null);
       const [checkingCompetitors, setCheckingCompetitors] = useState(false);
 
+      // Load saved competitor analysis on mount
+      useEffect(() => {
+        if (!projectId || !itemId) return;
+        api('/projects/' + projectId + '/content-queue/' + itemId + '/competitor-analysis')
+          .then(r => {
+            if (r && r.competitor_analysis) {
+              const data = r.competitor_analysis;
+              // Migrate old format (plain arrays) to new format (objects with status)
+              if (data.topicGaps) {
+                if (data.topicGaps.missing_topics && !data.topicGaps.missingTopics) {
+                  data.topicGaps.missingTopics = data.topicGaps.missing_topics.map(t => typeof t === 'string' ? { text: t, status: 'pending' } : t);
+                  delete data.topicGaps.missing_topics;
+                }
+                if (data.topicGaps.missing_keywords && !data.topicGaps.missingKeywords) {
+                  data.topicGaps.missingKeywords = data.topicGaps.missing_keywords.map(k => typeof k === 'string' ? { text: k, status: 'pending' } : k);
+                  delete data.topicGaps.missing_keywords;
+                }
+              }
+              setCompetitorData(data);
+              if (data.summary && data.summary.recommended) setWordTarget(data.summary.recommended);
+            }
+          }).catch(() => {});
+      }, [projectId, itemId]);
+
+      const saveCompetitorAnalysis = (data) => {
+        if (!projectId || !itemId) return;
+        api('/projects/' + projectId + '/content-queue/' + itemId + '/save-competitor-analysis', {
+          method: 'POST', body: { competitor_analysis: data }
+        }).catch(e => console.error('Save competitor analysis failed:', e));
+      };
+
+      const updateTopicStatus = (type, index, status) => {
+        if (!projectId || !itemId) return;
+        api('/projects/' + projectId + '/content-queue/' + itemId + '/update-topic-status', {
+          method: 'POST', body: { type, index, status }
+        }).then(r => {
+          if (r && r.competitor_analysis) setCompetitorData(r.competitor_analysis);
+        }).catch(e => console.error('Update topic status failed:', e));
+      };
+
       const checkCompetitorWords = async () => {
         console.log('[ContentScore] Check competitors clicked', { focusKeyword, targetKeywords, pageTitle, projectId });
         const kw = focusKeyword || (targetKeywords && targetKeywords[0]) || pageTitle || '';
@@ -10167,8 +10207,16 @@
             method: 'POST', body: { keyword: kw, draft_content: content || '' }
           });
           if (r.summary) {
+            // Convert topic gap arrays to objects with status
+            if (r.topicGaps) {
+              if (r.topicGaps.missing_topics) r.topicGaps.missingTopics = r.topicGaps.missing_topics.map(t => ({ text: t, status: 'pending' }));
+              if (r.topicGaps.missing_keywords) r.topicGaps.missingKeywords = r.topicGaps.missing_keywords.map(k => ({ text: k, status: 'pending' }));
+              delete r.topicGaps.missing_topics;
+              delete r.topicGaps.missing_keywords;
+            }
             setCompetitorData(r);
             setWordTarget(r.summary.recommended || 1500);
+            saveCompetitorAnalysis(r);
           }
         } catch (e) { console.error('Competitor check failed:', e); }
         setCheckingCompetitors(false);
@@ -10337,23 +10385,57 @@
                 )
               )
             ),
-            // Topic gaps
+            // Topic gaps with accept/reject
             competitorData.topicGaps && React.createElement('div', { style: { marginBottom: 10 } },
-              // Missing topics
-              competitorData.topicGaps.missing_topics && competitorData.topicGaps.missing_topics.length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
+              // Missing topics (pending)
+              competitorData.topicGaps.missingTopics && competitorData.topicGaps.missingTopics.filter(t => t.status === 'pending').length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
                 React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Missing Topics'),
                 React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                  competitorData.topicGaps.missing_topics.map((t, i) =>
-                    React.createElement('span', { key: i, style: { fontSize: 13, padding: '4px 10px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, border: '1px solid rgba(239,68,68,0.2)' } }, t)
+                  competitorData.topicGaps.missingTopics.map((t, i) => t.status !== 'pending' ? null :
+                    React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, padding: '4px 6px 4px 10px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, border: '1px solid rgba(239,68,68,0.2)' } },
+                      t.text,
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingTopics', i, 'accepted'), style: { border: 'none', background: 'rgba(34,197,94,0.2)', color: '#22c55e', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 13, fontWeight: 700, lineHeight: '20px', padding: 0 } }, '+'),
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingTopics', i, 'rejected'), style: { border: 'none', background: 'rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 13, fontWeight: 700, lineHeight: '20px', padding: 0 } }, '×')
+                    )
                   )
                 )
               ),
-              // Missing keywords
-              competitorData.topicGaps.missing_keywords && competitorData.topicGaps.missing_keywords.length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
+              // Missing keywords (pending)
+              competitorData.topicGaps.missingKeywords && competitorData.topicGaps.missingKeywords.filter(k => k.status === 'pending').length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
                 React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Missing Keywords'),
                 React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                  competitorData.topicGaps.missing_keywords.map((k, i) =>
-                    React.createElement('span', { key: i, style: { fontSize: 13, padding: '4px 10px', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' } }, k)
+                  competitorData.topicGaps.missingKeywords.map((k, i) => k.status !== 'pending' ? null :
+                    React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, padding: '4px 6px 4px 10px', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' } },
+                      k.text,
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingKeywords', i, 'accepted'), style: { border: 'none', background: 'rgba(34,197,94,0.2)', color: '#22c55e', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 13, fontWeight: 700, lineHeight: '20px', padding: 0 } }, '+'),
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingKeywords', i, 'rejected'), style: { border: 'none', background: 'rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 13, fontWeight: 700, lineHeight: '20px', padding: 0 } }, '×')
+                    )
+                  )
+                )
+              ),
+              // Accepted topics (green)
+              competitorData.topicGaps.missingTopics && competitorData.topicGaps.missingTopics.filter(t => t.status === 'accepted').length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Accepted Topics'),
+                React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  competitorData.topicGaps.missingTopics.map((t, i) => t.status !== 'accepted' ? null :
+                    React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, padding: '4px 6px 4px 10px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, border: '1px solid rgba(34,197,94,0.2)' } },
+                      React.createElement('i', { className: 'fa-solid fa-check', style: { fontSize: 10 } }),
+                      t.text,
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingTopics', i, 'pending'), style: { border: 'none', background: 'rgba(148,163,184,0.2)', color: 'var(--text3)', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 11, lineHeight: '20px', padding: 0 } }, '↩')
+                    )
+                  )
+                )
+              ),
+              // Accepted keywords (green)
+              competitorData.topicGaps.missingKeywords && competitorData.topicGaps.missingKeywords.filter(k => k.status === 'accepted').length > 0 && React.createElement('div', { style: { marginBottom: 10 } },
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Accepted Keywords'),
+                React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  competitorData.topicGaps.missingKeywords.map((k, i) => k.status !== 'accepted' ? null :
+                    React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, padding: '4px 6px 4px 10px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, border: '1px solid rgba(34,197,94,0.2)' } },
+                      React.createElement('i', { className: 'fa-solid fa-check', style: { fontSize: 10 } }),
+                      k.text,
+                      React.createElement('button', { onClick: () => updateTopicStatus('missingKeywords', i, 'pending'), style: { border: 'none', background: 'rgba(148,163,184,0.2)', color: 'var(--text3)', borderRadius: 4, width: 20, height: 20, cursor: 'pointer', fontSize: 11, lineHeight: '20px', padding: 0 } }, '↩')
+                    )
                   )
                 )
               ),
@@ -10988,7 +11070,7 @@
                 top3: (compData.top3 || []).map(c => ({ position: c.position, domain: c.domain, title: c.title, words: c.words, h2Texts: c.h2Texts })),
                 summary: compData.summary
               } : null,
-              topic_gaps: compData?.topicGaps || null,
+              topic_gaps: compData?.topicGaps ? { missingTopics: (compData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missingKeywords: (compData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: compData.topicGaps.content_strengths, recommendation: compData.topicGaps.recommendation } : null,
               word_target: scoreData?.wordTarget || 1500
             }
           });
@@ -12018,7 +12100,7 @@
               tips: (scoreData?.tips || []).map(t => (t.type === 'warn' || t.type === 'error' ? '❌ ' : '✅ ') + (t.text || t.msg || '')),
               target_keywords: (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword),
               competitor_data: scoreData?.competitorData ? { keyword: scoreData.competitorData.keyword, top3_avg: scoreData.competitorData.summary?.top3_avg, avg: scoreData.competitorData.summary?.avg, recommended: scoreData.competitorData.summary?.recommended, competitors_checked: scoreData.competitorData.summary?.competitors_checked, results: (scoreData.competitorData.results || []).filter(r => r.words && !r.isOwn).slice(0, 7).map(r => ({ title: r.title?.slice(0, 60), words: r.words, position: r.position })), top3: (scoreData.competitorData.top3 || []).map(c => ({ position: c.position, domain: c.domain, title: c.title, words: c.words, h2Texts: c.h2Texts })) } : null,
-              topic_gaps: scoreData?.competitorData?.topicGaps || null,
+              topic_gaps: scoreData?.competitorData?.topicGaps ? { missingTopics: (scoreData.competitorData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missingKeywords: (scoreData.competitorData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: scoreData.competitorData.topicGaps.content_strengths, recommendation: scoreData.competitorData.topicGaps.recommendation } : null,
               word_target: scoreData?.wordTarget || 1500
             }
           });

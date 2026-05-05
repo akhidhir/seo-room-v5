@@ -519,6 +519,7 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS target_publish_date DATE`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_category TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_tags TEXT[]`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS competitor_analysis JSONB DEFAULT NULL`).catch(() => {});
 
     // GBP tasks are manual — no extension automation
     await client.query(`
@@ -7218,6 +7219,50 @@ Rules:
     });
   } catch (e) {
     console.error('[competitor-wordcount] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Save competitor analysis to DB
+app.post('/api/projects/:projectId/content-queue/:id/save-competitor-analysis', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { competitor_analysis } = req.body;
+  if (!competitor_analysis) return res.status(400).json({ error: 'Missing competitor_analysis' });
+  try {
+    await pool.query('UPDATE content_queue SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3', [JSON.stringify(competitor_analysis), id, projectId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Load competitor analysis from DB
+app.get('/api/projects/:projectId/content-queue/:id/competitor-analysis', async (req, res) => {
+  const { projectId, id } = req.params;
+  try {
+    const r = await pool.query('SELECT competitor_analysis FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ competitor_analysis: r.rows[0].competitor_analysis });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update topic gap item status (accept/reject)
+app.post('/api/projects/:projectId/content-queue/:id/update-topic-status', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { type, index, status } = req.body; // type: 'missingTopics'|'missingKeywords', status: 'accepted'|'rejected'
+  if (!type || index === undefined || !status) return res.status(400).json({ error: 'Missing type, index, or status' });
+  try {
+    const r = await pool.query('SELECT competitor_analysis FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId]);
+    if (!r.rows[0] || !r.rows[0].competitor_analysis) return res.status(404).json({ error: 'No analysis found' });
+    const analysis = r.rows[0].competitor_analysis;
+    if (analysis.topicGaps && analysis.topicGaps[type] && analysis.topicGaps[type][index]) {
+      analysis.topicGaps[type][index].status = status;
+    }
+    await pool.query('UPDATE content_queue SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3', [JSON.stringify(analysis), id, projectId]);
+    res.json({ ok: true, competitor_analysis: analysis });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
