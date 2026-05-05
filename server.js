@@ -5552,6 +5552,27 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Reset content queue item — wipe everything back to fresh
+app.post('/api/projects/:projectId/content-queue/:id/reset', async (req, res) => {
+  try {
+    const { id, projectId } = req.params;
+    const item = (await pool.query('SELECT id, page_title, page_url, page_id, content_type, source, priority FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    await pool.query(`UPDATE content_queue SET
+      current_content=NULL, current_word_count=NULL, current_meta_title=NULL, current_meta_desc=NULL, current_focus_keyword=NULL,
+      draft_content=NULL, draft_meta_title=NULL, draft_meta_desc=NULL, draft_focus_keyword=NULL, draft_word_count=NULL,
+      ai_notes=NULL, page_sections=NULL, page_wireframe=NULL, wireframe_image=NULL, wireframe_mime=NULL,
+      target_keywords='[]', competitor_analysis=NULL, schema_markup=NULL, comments='[]',
+      stage='queue', approved_by=NULL, approved_at=NULL, published_at=NULL,
+      wp_previous_status=NULL, wp_previous_content=NULL,
+      updated_at=NOW()
+      WHERE id=$1`, [id]);
+    console.log(`[reset] Item ${id} "${item.page_title}" reset to fresh state`);
+    const fresh = (await pool.query('SELECT * FROM content_queue WHERE id=$1', [id])).rows[0];
+    res.json(fresh);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete content queue item
 app.delete('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   try {

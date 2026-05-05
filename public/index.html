@@ -11442,32 +11442,15 @@
                 onClick: async () => {
                   if (!confirm('Reset this item? This will clear all draft content, meta, AI notes, sections, and move it back to Queue. This cannot be undone.')) return;
                   try {
-                    await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
-                      method: 'PUT',
-                      body: {
-                        draft_content: null,
-                        draft_meta_title: null,
-                        draft_meta_desc: null,
-                        draft_focus_keyword: null,
-                        draft_word_count: null,
-                        ai_notes: null,
-                        page_sections: null,
-                        page_wireframe: null,
-                        wireframe_image: null,
-                        target_keywords: [],
-                        competitor_analysis: null,
-                        schema_markup: null,
-                        stage: 'queue'
-                      }
-                    });
-                    const fresh = await api('/projects/' + pid + '/content-queue/' + selectedItem.id);
+                    const fresh = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/reset', { method: 'POST' });
                     if (fresh) {
                       setSelectedItem(fresh);
-                      setEditContent(cleanWpHtml(fresh.current_content) || '');
-                      setEditMeta({ meta_title: fresh.current_meta_title || '', meta_desc: fresh.current_meta_desc || '', focus_keyword: fresh.current_focus_keyword || '' });
+                      setEditContent('');
+                      setEditMeta({ meta_title: '', meta_desc: '', focus_keyword: '' });
                       setTargetKeywords([]);
                       setOptimisePreview(null);
                       setSectionView(false);
+                      setComments([]);
                       setEditorKey(k => k + 1);
                     }
                     loadItems();
