@@ -1384,14 +1384,16 @@
       const cat = (category || '').toLowerCase();
       const MANUAL = { type: 'manual', label: 'Manual', icon: 'fas fa-user', color: '#6b7280' };
       const AUTOMATED = { type: 'automated', label: 'Automated', icon: 'fas fa-robot', color: '#22c55e' };
-      const COPYWRITER = { type: 'copywriter', label: 'Copywriter', icon: 'fas fa-pen-fancy', color: '#8b5cf6' };
+      const COPYWRITER = { type: 'copywriter', label: 'Copywriter Current', icon: 'fas fa-pen-fancy', color: '#8b5cf6' };
+      const COPYWRITER_NEW = { type: 'copywriter_new', label: 'Copywriter New', icon: 'fas fa-file-circle-plus', color: '#a855f7' };
       const p = (pillar || '').toLowerCase();
 
       // --- GBP: Copywriter for content tasks, Manual for everything else ---
       if (p.includes('gbp')) {
         if (/\b(description|write|post|respond.*review|reply.*review|review.*response|create.*post|weekly.*post|content|caption|update.*description|expand.*description|business.*description)\b/.test(t)) return COPYWRITER;
         if (/\b(photo.*caption|add.*photo.*desc|service.*desc|product.*desc)\b/.test(t)) return COPYWRITER;
-        if (/\b(create.*page|add.*page|suburb.*page|service.*area.*page|landing.*page|keyword)\b/.test(t)) return COPYWRITER;
+        if (/\b(create.*page|add.*page|suburb.*page|service.*area.*page|landing.*page)\b/.test(t)) return COPYWRITER_NEW;
+        if (/\b(keyword)\b/.test(t)) return COPYWRITER;
         return MANUAL;
       }
 
@@ -1408,7 +1410,8 @@
       if (/\b(write|rewrite|craft|draft|create.*content|add.*content|expand.*content|improve.*content|update.*content)\b/.test(t)) return COPYWRITER;
       if (/\b(meta.?description|meta.?title|title.?tag|page.?title)\b/.test(t) && /\b(write|add|create|improve|optimis|missing|empty|duplicate|too short|too long)\b/.test(t)) return COPYWRITER;
       if (/\b(thin.?content|low.?word.?count|short.?content|content.?quality|content.?length|word.?count)\b/.test(t)) return COPYWRITER;
-      if (/\b(blog.?post|article|landing.?page.?copy|page.?copy|service.?page|suburb.?page)\b/.test(t) && /\b(create|write|add|missing|need)\b/.test(t)) return COPYWRITER;
+      if (/\b(service.?page|suburb.?page|landing.?page)\b/.test(t) && /\b(create|add|new|missing|need)\b/.test(t)) return COPYWRITER_NEW;
+      if (/\b(blog.?post|article|landing.?page.?copy|page.?copy|service.?page|suburb.?page)\b/.test(t) && /\b(write|rewrite|improve|optimis)\b/.test(t)) return COPYWRITER;
       if (/\b(gbp.?post|google.?post|business.?description|business.?profile.?description)\b/.test(t) && /\b(write|create|add|update|improve|missing)\b/.test(t)) return COPYWRITER;
       if (/\b(respond.*review|reply.*review|review.*response)\b/.test(t)) return COPYWRITER;
       if (/\b(faq|frequently.?asked|q\s*&\s*a)\b/.test(t) && /\b(add|create|write|missing)\b/.test(t)) return COPYWRITER;
@@ -1574,8 +1577,8 @@
       };
 
       // Assignee auto-mapping from exec type
-      const execAssignee = { extension: 'Automated', api: 'Automated', plugin: 'Automated', automated: 'Automated', copywriter: 'Copywriter', manual: 'Manual' };
-      const execAssigneeIcon = { extension: 'fas fa-robot', api: 'fas fa-robot', plugin: 'fas fa-robot', automated: 'fas fa-robot', copywriter: 'fas fa-pen-fancy', manual: 'fas fa-user' };
+      const execAssignee = { extension: 'Automated', api: 'Automated', plugin: 'Automated', automated: 'Automated', copywriter: 'Copywriter Current', copywriter_new: 'Copywriter New', manual: 'Manual' };
+      const execAssigneeIcon = { extension: 'fas fa-robot', api: 'fas fa-robot', plugin: 'fas fa-robot', automated: 'fas fa-robot', copywriter: 'fas fa-pen-fancy', copywriter_new: 'fas fa-file-circle-plus', manual: 'fas fa-user' };
 
       const renderActionCells = (row, ri) => {
         if (!hasActions) return null;
@@ -5841,13 +5844,13 @@
                                 </button>
                               );
                             }
-                            if (assigneeLabel === 'Copywriter') {
+                            if (assigneeLabel === 'Copywriter Current' || assigneeLabel === 'Copywriter New') {
                               if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
                               if (status === 'in-progress') return <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
                               return (
                                 <button onClick={() => handleStatusChange(item.id, 'in-progress')}
-                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-pen-fancy" style={{ marginRight: 5, fontSize: 13 }} />Send
+                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: assigneeLabel === 'Copywriter New' ? '#a855f7' : '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className={assigneeLabel === 'Copywriter New' ? 'fas fa-file-circle-plus' : 'fas fa-pen-fancy'} style={{ marginRight: 5, fontSize: 13 }} />Send
                                 </button>
                               );
                             }
@@ -6070,7 +6073,7 @@
       };
 
       const handleBulkSendToCopywriter = async () => {
-        const copywriterItems = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter') && (i.status || 'pending') === 'pending');
+        const copywriterItems = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter Current' || i._assigneeLabel === 'Copywriter New') && (i.status || 'pending') === 'pending');
         if (!copywriterItems.length) { setBulkResult({ error: 'No pending Copywriter items to send' }); return; }
         setBulkSending(true); setBulkResult(null);
         try {
@@ -6093,8 +6096,10 @@
       // Compute assignee label for each item (memoized) — DB override takes priority
       const itemsWithAssignee = useMemo(() => items.map(item => {
         const dbLabel = item.assignee_label;
-        if (dbLabel && ['Automated', 'Copywriter', 'Manual'].includes(dbLabel)) {
-          return { ...item, _assigneeLabel: dbLabel };
+        if (dbLabel && ['Automated', 'Copywriter', 'Copywriter Current', 'Copywriter New', 'Manual'].includes(dbLabel)) {
+          // Legacy "Copywriter" → "Copywriter Current"
+          const normalizedLabel = dbLabel === 'Copywriter' ? 'Copywriter Current' : dbLabel;
+          return { ...item, _assigneeLabel: normalizedLabel };
         }
         const execInfo = detectExecType(item.description || item.title, item._pillar || item.pillar, item._category || item.category);
         return { ...item, _assigneeLabel: execInfo.label };
@@ -6302,7 +6307,7 @@
 
           {/* Bulk Copywriter action */}
           {(() => {
-            const cwPending = itemsWithAssignee.filter(i => i._assigneeLabel === 'Copywriter' && (i.status || 'pending') === 'pending').length;
+            const cwPending = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter Current' || i._assigneeLabel === 'Copywriter New' || i._assigneeLabel === 'Copywriter') && (i.status || 'pending') === 'pending').length;
             if (cwPending === 0) return null;
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '10px 16px', background: '#8b5cf615', border: '1px solid #8b5cf630', borderRadius: 8 }}>
@@ -6318,7 +6323,7 @@
           {bulkResult && !bulkResult.error && (
             <div style={{ padding: 12, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, color: '#22c55e', fontSize: 13, marginBottom: 16 }}>
               <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
-              Sent {bulkResult.created} items to Copywriter{bulkResult.skipped > 0 ? ` (${bulkResult.skipped} skipped — already in queue)` : ''}
+              Sent {bulkResult.created} items to Copywriter{bulkResult.details?.created?.some(c => c.destination === 'new_website') ? ` (${bulkResult.details.created.filter(c => c.destination === 'new_website').length} → New Website)` : ''}{bulkResult.skipped > 0 ? ` (${bulkResult.skipped} skipped — already in queue)` : ''}
               <button onClick={() => setBulkResult(null)} style={{ float: 'right', background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times" /></button>
             </div>
           )}
@@ -6364,8 +6369,8 @@
                     const sev = (item.severity || 'medium').toLowerCase();
                     const sevColor = sevColors[sev] || '#f59e0b';
                     const assigneeLabel = item._assigneeLabel || 'Manual';
-                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : assigneeLabel === 'Copywriter' ? '#8b5cf6' : '#6b7280';
-                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : assigneeLabel === 'Copywriter' ? 'fas fa-pen-fancy' : 'fas fa-user';
+                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : assigneeLabel === 'Copywriter Current' ? '#8b5cf6' : assigneeLabel === 'Copywriter New' ? '#a855f7' : '#6b7280';
+                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : assigneeLabel === 'Copywriter Current' ? 'fas fa-pen-fancy' : assigneeLabel === 'Copywriter New' ? 'fas fa-file-circle-plus' : 'fas fa-user';
                     const itemPillar = item._pillar || item.pillar;
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -6415,21 +6420,22 @@
                         <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, whiteSpace: 'nowrap' }}>
                           <select value={assigneeLabel} onChange={async (e) => {
                             const newLabel = e.target.value;
-                            const execMap = { Automated: 'automated', Copywriter: 'copywriter', Manual: 'manual' };
+                            const execMap = { Automated: 'automated', 'Copywriter Current': 'copywriter', 'Copywriter New': 'copywriter_new', Manual: 'manual' };
                             try {
                               await api(`/action-items/${item.id}`, { method: 'PUT', body: { execution_type: execMap[newLabel], assignee_label: newLabel } });
                               setItems(prev => prev.map(i => i.id === item.id ? { ...i, execution_type: execMap[newLabel], assignee_label: newLabel } : i));
-                              // Auto-send to content queue when switching to Copywriter
-                              if (newLabel === 'Copywriter') {
+                              // Auto-send to appropriate queue when switching to Copywriter
+                              if (newLabel === 'Copywriter Current' || newLabel === 'Copywriter New') {
                                 try {
                                   await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                } catch(cqErr) { console.warn('Auto-send to content queue:', cqErr); }
+                                } catch(cqErr) { console.warn('Auto-send to copywriter:', cqErr); }
                               }
                             } catch(err) { console.error(err); }
                           }} style={{ fontSize: 16, padding: '6px 10px', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
                             onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
                             <option value="Automated" style={{ color: '#22c55e' }}>Automated</option>
-                            <option value="Copywriter" style={{ color: '#8b5cf6' }}>Copywriter</option>
+                            <option value="Copywriter Current" style={{ color: '#8b5cf6' }}>Copywriter Current</option>
+                            <option value="Copywriter New" style={{ color: '#a855f7' }}>Copywriter New</option>
                             <option value="Manual" style={{ color: '#6b7280' }}>Manual</option>
                           </select>
                         </td>
@@ -6448,8 +6454,8 @@
                                 </button>
                               );
                             }
-                            // COPYWRITER: Send button or status
-                            if (assigneeLabel === 'Copywriter') {
+                            // COPYWRITER CURRENT: Send to content queue
+                            if (assigneeLabel === 'Copywriter Current') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
                               if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 14 }} /> In Queue</span>;
                               return (
@@ -6461,6 +6467,22 @@
                                 }}
                                   style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                   <i className="fas fa-pen-fancy" style={{ marginRight: 5, fontSize: 13 }} />Send
+                                </button>
+                              );
+                            }
+                            // COPYWRITER NEW: Send to site_pages (new website)
+                            if (assigneeLabel === 'Copywriter New') {
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-file-circle-plus" style={{ fontSize: 14 }} /> In Queue</span>;
+                              return (
+                                <button onClick={async () => {
+                                  try {
+                                    await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
+                                  } catch(err) { console.error('Send to copywriter:', err); }
+                                }}
+                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-file-circle-plus" style={{ marginRight: 5, fontSize: 13 }} />Send
                                 </button>
                               );
                             }

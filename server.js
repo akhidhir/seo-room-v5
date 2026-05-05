@@ -5189,6 +5189,36 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
       if (desc.includes('meta title') || desc.includes('meta description') || desc.includes('meta tag')) contentType = 'meta_only';
       else if (desc.includes('thin content') || desc.includes('word count') || desc.includes('low content')) contentType = 'rewrite';
 
+      // Detect "create new page" actions — route to site_pages instead of content_queue
+      // Either: explicitly labelled as "Copywriter New", OR auto-detected from description
+      const isNewPage = (action.execution_type === 'copywriter_new') || (!pageId && (
+        /\b(create|add|build|new)\b/.test(desc) &&
+        /\b(suburb|location|service|landing)\s*(page|pages)\b/.test(desc)
+      ));
+
+      if (isNewPage) {
+        // Route to site_pages (New Website queue)
+        const pageType = /suburb|location/.test(desc) ? 'suburb' : 'service';
+        const pageName = action.title || 'New Page';
+        const slug = pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const brief = `[From Action Plan] ${action.title}\n\n${action.description || ''}\n\nTarget: ${action.new_value || 'N/A'}`;
+        // Extract focus keyword from action if available
+        const focusKw = action.new_value || '';
+
+        try {
+          const r = await pool.query(
+            `INSERT INTO site_pages (project_id, page_type, page_name, slug, focus_keyword, stage, keywords)
+             VALUES ($1,$2,$3,$4,$5,'draft',$6) RETURNING id`,
+            [projectId, pageType, pageName, slug, focusKw, JSON.stringify(focusKw ? [focusKw] : [])]
+          );
+          created.push({ action_id: action.id, site_page_id: r.rows[0].id, title: action.title, destination: 'new_website' });
+          await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['in-progress', action.id]);
+        } catch (e) {
+          skipped.push({ action_id: action.id, title: action.title, reason: e.message });
+        }
+        continue;
+      }
+
       // Build brief from action item data
       const brief = `[From Action Plan] ${action.title}\n\n${action.description || ''}\n\nCurrent: ${action.current_value || 'N/A'}\nTarget: ${action.new_value || 'N/A'}`;
 
@@ -5225,7 +5255,7 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
            action.severity || 'medium', brief, fetchedContent, fetchedWordCount,
            fetchedMetaTitle, fetchedMetaDesc, fetchedFocusKw]
         );
-        created.push({ action_id: action.id, content_queue_id: r.rows[0].id, title: action.title });
+        created.push({ action_id: action.id, content_queue_id: r.rows[0].id, title: action.title, destination: 'content_queue' });
 
         // Mark action item as in-progress
         await pool.query('UPDATE action_items SET status=$1 WHERE id=$2', ['in-progress', action.id]);
