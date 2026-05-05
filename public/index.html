@@ -11331,7 +11331,7 @@
               }, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Rollback'),
               // Preview — section-aware (when sections parsed) or basic content-swap
               !isPublished && hasDraft && React.createElement('button', {
-                onClick: () => {
+                onClick: async () => {
                   const hasSections = (selectedItem.page_sections && selectedItem.page_sections.length > 0) || selectedItem.sections_count > 0;
                   if (hasSections) {
                     // If we have sections_count but not page_sections loaded yet, fetch full item first
@@ -17000,8 +17000,13 @@
       };
 
       const handleProjectSwitch = (newProject) => {
-        setProject(newProject);
+        setProject(null); // unmount all pages to force clean re-render
+        setExtAuditReport('');
+        setWebsiteAuditReport('');
+        setGscAuditReport('');
         localStorage.setItem('currentProject', newProject.id);
+        // Re-set project after a tick so components fully unmount then remount
+        setTimeout(() => setProject(newProject), 50);
       };
 
       if (appLoading) {
@@ -17016,6 +17021,11 @@
       const pathMatch = window.location.pathname.match(/^\/blog-review\/([a-f0-9-]+)$/i);
       if (pathMatch) {
         return <BlogReviewPage token={pathMatch[1]} />;
+      }
+
+      // Show loading during project switch (project briefly set to null)
+      if (!project) {
+        return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span><span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>Loading project...</span></div>;
       }
 
       const renderPage = () => {
