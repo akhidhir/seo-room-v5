@@ -7425,78 +7425,138 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     }
 
     // === PREVIEW STRATEGY ===
-    // Iframe-based split view. Left = live page in iframe (fully working JS/CSS).
-    // Right = draft content rendered cleanly. 100% generic — any CMS/builder.
-    const escapedDraft = JSON.stringify(draftContent);
-    const escapedTitle = JSON.stringify(draftTitle || item.page_title || '');
-    const escapedDesc = JSON.stringify(draftDesc || '');
-    const escapedUrl = JSON.stringify(pageUrl);
+    // Fetch the live page, extract header/footer/styles, inject draft content.
+    // Falls back to standalone styled preview if fetch fails.
+    console.log(`[preview] Fetching live page: ${pageUrl}`);
+    let liveHtml = '';
+    try {
+      const resp = await fetch(pageUrl, {
+        signal: AbortSignal.timeout(12000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      if (resp.ok) liveHtml = await resp.text();
+    } catch (e) { console.log('[preview] Live fetch failed:', e.message); }
 
-    const splitHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Preview: ${(draftTitle || item.page_title || '').replace(/"/g, '&quot;')}</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-.split-container{display:flex;width:100vw;height:100vh}
-.panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.panel-left{border-right:3px solid #6366f1}
-.panel-label{padding:10px 20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;text-align:center;flex-shrink:0}
-.panel-left .panel-label{background:linear-gradient(135deg,#1e293b,#334155);color:#94a3b8}
-.panel-right .panel-label{background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff}
-.panel-left iframe{flex:1;width:100%;border:none}
-.panel-right-scroll{flex:1;overflow-y:auto;background:#fff}
-.dp-meta{background:#f8fafc;padding:16px 24px;border-bottom:1px solid #e2e8f0}
-.dp-meta-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;font-weight:700;margin-bottom:6px}
-.dp-meta-title{font-size:18px;color:#1e40af;font-weight:600;line-height:1.3;margin-bottom:4px}
-.dp-meta-url{font-size:13px;color:#16a34a;margin-bottom:6px}
-.dp-meta-desc{font-size:14px;color:#475569;line-height:1.5}
-.dp-content{padding:32px 40px;color:#1a1a1a;font-size:16px;line-height:1.8}
-.dp-content h1{font-size:28px;margin:0 0 16px;color:#111;font-weight:800}
-.dp-content h2{font-size:22px;margin:28px 0 12px;color:#1e293b;font-weight:700;border-bottom:2px solid #e2e8f0;padding-bottom:8px}
-.dp-content h3{font-size:18px;margin:22px 0 10px;color:#334155;font-weight:600}
-.dp-content p{margin:0 0 16px;color:#374151}
-.dp-content ul,.dp-content ol{margin:0 0 16px;padding-left:24px}
-.dp-content li{margin:0 0 6px;color:#374151}
-.dp-content a{color:#2563eb;text-decoration:underline}
-.dp-content img{max-width:100%;height:auto;border-radius:8px;margin:16px 0}
-.dp-content strong{color:#111}
-.dp-content .new-section{border-left:4px solid #22c55e;padding-left:16px;margin:24px 0;background:#f0fdf4;padding:16px 16px 16px 20px;border-radius:0 8px 8px 0}
-.dp-content .new-section::before{content:'NEW SECTION';display:block;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;margin-bottom:8px}
-</style>
-</head><body>
-<div class="split-container">
-  <div class="panel panel-left">
-    <div class="panel-label">Current Live Page</div>
-    <iframe src="${pageUrl.replace(/"/g, '&quot;')}" sandbox="allow-same-origin allow-scripts allow-popups" onerror="this.style.display='none';this.parentElement.querySelector('.iframe-fallback').style.display='flex'"></iframe>
-    <div class="iframe-fallback" style="display:none;flex:1;align-items:center;justify-content:center;flex-direction:column;padding:40px;text-align:center;color:#64748b">
-      <p style="font-size:16px;margin-bottom:12px">Live page cannot be embedded (site blocks iframes)</p>
-      <a href="${pageUrl.replace(/"/g, '&quot;')}" target="_blank" style="color:#6366f1;font-weight:600">Open live page in new tab</a>
-    </div>
-  </div>
-  <div class="panel panel-right">
-    <div class="panel-label">Proposed Draft</div>
-    <div class="panel-right-scroll">
-      <div class="dp-meta">
-        <div class="dp-meta-label">Google Search Preview</div>
-        <div class="dp-meta-title" id="meta-title"></div>
-        <div class="dp-meta-url" id="meta-url"></div>
-        <div class="dp-meta-desc" id="meta-desc"></div>
-      </div>
-      <div class="dp-content" id="dp-body"></div>
-    </div>
-  </div>
-</div>
-<script>
-document.getElementById('meta-title').textContent = ${escapedTitle};
-document.getElementById('meta-url').textContent = ${escapedUrl};
-document.getElementById('meta-desc').textContent = ${escapedDesc};
-document.getElementById('dp-body').innerHTML = ${escapedDraft};
-</script>
-</body></html>`;
+    // If we couldn't get the live page, try homepage as template
+    if (!liveHtml) {
+      try {
+        const homeUrl = 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '') + '/';
+        const resp2 = await fetch(homeUrl, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (resp2.ok) liveHtml = await resp2.text();
+      } catch (e) { /* fallback to standalone */ }
+    }
 
-    console.log(`[preview] Serving iframe split-view for "${item.page_title}"`);
+    const escapedDraft = draftContent.replace(/<script/gi, '&lt;script');
+    const escapedTitle = (draftTitle || item.page_title || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const escapedDesc = (draftDesc || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+    if (!liveHtml) {
+      // Standalone preview — no live page template
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapedTitle}</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:900px;margin:0 auto;padding:40px 24px;line-height:1.8;color:#333}
+        h1{font-size:28px;margin:0 0 8px}h2{font-size:22px;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px}h3{font-size:18px;margin:22px 0 10px}
+        img{max-width:100%;height:auto;border-radius:8px}a{color:#2563eb}
+        .new-section{border-left:4px solid #22c55e;padding:16px 16px 16px 20px;margin:24px 0;background:#f0fdf4;border-radius:0 8px 8px 0}
+        .new-section::before{content:'NEW SECTION';display:block;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;margin-bottom:8px}
+        .seo-preview-bar{position:sticky;top:0;z-index:100;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;margin:-40px -24px 24px}
+        </style></head><body>
+        <div class="seo-preview-bar"><strong>SEO Room Preview</strong> — ${escapedTitle} <a href="${pageUrl}" target="_blank" style="color:#e0e7ff;margin-left:auto">Open live page →</a></div>
+        <h1>${escapedTitle}</h1>${escapedDraft}</body></html>`);
+    }
+
+    // === We have the live page HTML — inject draft content ===
+    const baseUrl = new URL(pageUrl).origin;
+
+    // Add <base> for relative URLs
+    liveHtml = liveHtml.replace(/<head([^>]*)>/i, `<head$1><base href="${baseUrl}/">`);
+
+    // Replace <title>
+    if (draftTitle) liveHtml = liveHtml.replace(/<title>[^<]*<\/title>/i, `<title>${escapedTitle}</title>`);
+
+    // Find and replace main content area — try common containers
+    const contentSelectors = [
+      // WordPress content areas
+      { open: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: '</article>' },
+      { open: /<div[^>]*class="[^"]*page-content[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<div[^>]*class="[^"]*post-entry[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<div[^>]*class="[^"]*content-area[^"]*"[^>]*>/i, close: '</div>' },
+      // Generic
+      { open: /<main[^>]*>/i, close: '</main>' },
+      { open: /<article[^>]*>/i, close: '</article>' },
+    ];
+
+    let swapped = false;
+    for (const sel of contentSelectors) {
+      const openMatch = liveHtml.match(sel.open);
+      if (!openMatch) continue;
+      const startIdx = openMatch.index + openMatch[0].length;
+      // Find matching close tag (handle nesting)
+      const tagName = sel.close.replace(/<\/?(\w+)>/, '$1');
+      let depth = 1;
+      let searchIdx = startIdx;
+      let endIdx = -1;
+      const openRe = new RegExp('<' + tagName + '[\\s>]', 'gi');
+      const closeRe = new RegExp('</' + tagName + '>', 'gi');
+      while (depth > 0 && searchIdx < liveHtml.length) {
+        openRe.lastIndex = searchIdx;
+        closeRe.lastIndex = searchIdx;
+        const nextOpen = openRe.exec(liveHtml);
+        const nextClose = closeRe.exec(liveHtml);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          searchIdx = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          if (depth === 0) { endIdx = nextClose.index; break; }
+          searchIdx = nextClose.index + nextClose[0].length;
+        }
+      }
+      if (endIdx > 0) {
+        liveHtml = liveHtml.slice(0, startIdx) + '\n' + escapedDraft + '\n' + liveHtml.slice(endIdx);
+        swapped = true;
+        console.log(`[preview] Content swapped using selector: ${sel.open}`);
+        break;
+      }
+    }
+
+    if (!swapped) {
+      // Fallback: inject between </header> and <footer>
+      const headerEnd = liveHtml.search(/<\/header>/i);
+      const footerStart = liveHtml.search(/<footer[\s>]/i);
+      if (headerEnd > 0 && footerStart > headerEnd) {
+        const insertPoint = headerEnd + '</header>'.length;
+        const contentBlock = `<div style="max-width:900px;margin:40px auto;padding:0 24px;line-height:1.8">${escapedDraft}</div>`;
+        liveHtml = liveHtml.slice(0, insertPoint) + contentBlock + liveHtml.slice(footerStart);
+        swapped = true;
+        console.log('[preview] Content injected between header/footer');
+      }
+    }
+
+    // Add preview banner + new-section styles
+    const previewStyles = `<style>
+.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
+.seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
+.new-section{border-left:4px solid #22c55e!important;padding:16px 16px 16px 20px!important;margin:24px 0!important;background:#f0fdf4!important;border-radius:0 8px 8px 0!important;position:relative}
+.new-section::before{content:'NEW SECTION';display:block;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;margin-bottom:8px}
+</style>`;
+    const previewBar = `<div class="seo-preview-bar">
+      <strong>SEO Room Preview</strong>
+      <span>Viewing proposed changes for: ${escapedTitle}</span>
+      <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open live page →</a>
+    </div>`;
+
+    // Disable all links
+    const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();}},true);</script>`;
+
+    liveHtml = liveHtml.replace('</head>', previewStyles + '</head>');
+    liveHtml = liveHtml.replace('</body>', previewBar + disableLinks + '</body>');
+
+    console.log(`[preview] Serving preview for "${item.page_title}", swapped=${swapped}`);
     res.setHeader('Content-Type', 'text/html');
-    res.send(splitHtml);
+    res.send(liveHtml);
   } catch (e) {
     console.error('[preview] Error:', e.message);
     res.status(500).send('Preview error: ' + e.message);

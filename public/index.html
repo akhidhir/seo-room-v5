@@ -11366,6 +11366,45 @@
       const [metaTitle, setMetaTitle] = useState(preview.proposed.meta_title || '');
       const [metaDesc, setMetaDesc] = useState(preview.proposed.meta_description || '');
       const [showMeta, setShowMeta] = useState(false);
+      const [showAddSection, setShowAddSection] = useState(false);
+      const [newSectionHeading, setNewSectionHeading] = useState('');
+      const [insertAfterIdx, setInsertAfterIdx] = useState(-1); // -1 = end
+
+      // Parse existing H2s from content
+      const existingH2s = useMemo(() => {
+        const html = preview.proposed?.content_html || '';
+        const matches = [];
+        const regex = /<h2[^>]*>(.*?)<\/h2>/gi;
+        let m;
+        while ((m = regex.exec(html)) !== null) {
+          matches.push({ text: m[1].replace(/<[^>]+>/g, '').trim(), index: m.index });
+        }
+        return matches;
+      }, [preview.proposed?.content_html]);
+
+      function handleAddSection() {
+        const heading = newSectionHeading.trim();
+        if (!heading) return;
+        const newBlock = '\n<section class="new-section"><h2>' + heading.replace(/</g, '&lt;') + '</h2><p></p></section>';
+        const html = preview.proposed.content_html || '';
+
+        let updatedHtml;
+        if (insertAfterIdx === -1 || existingH2s.length === 0) {
+          // Insert at end
+          updatedHtml = html + newBlock;
+        } else {
+          // Find the end of the chosen H2's section (next H2 or end)
+          const chosenH2 = existingH2s[insertAfterIdx];
+          const nextH2 = existingH2s[insertAfterIdx + 1];
+          const insertPos = nextH2 ? nextH2.index : html.length;
+          updatedHtml = html.slice(0, insertPos) + newBlock + '\n' + html.slice(insertPos);
+        }
+
+        onUpdate({ ...preview, proposed: { ...preview.proposed, content_html: updatedHtml } });
+        setNewSectionHeading('');
+        setShowAddSection(false);
+        setInsertAfterIdx(-1);
+      }
       const chatEndRef = useRef(null);
       const contentRef = useRef(null);
       const pid = project ? project.id : null;
@@ -11594,20 +11633,52 @@
 
             // ── LEFT: Content preview ──
             React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', minWidth: 0 } },
-              // Hint bar + Add Section button
+              // Hint bar + Add Section toggle
               React.createElement('div', { style: { padding: '8px 20px', background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
                 React.createElement('i', { className: 'fa-solid fa-highlighter', style: { color: 'var(--accent)' } }),
-                'Highlight any text below, then tell the AI what to change',
+                'Highlight text → tell AI what to change',
                 React.createElement('button', {
-                  onClick: () => {
-                    const heading = prompt('New section heading (H2):');
-                    if (!heading || !heading.trim()) return;
-                    const newBlock = '<section class="new-section"><h2>' + heading.trim().replace(/</g, '&lt;') + '</h2><p>[Add your content here]</p></section>';
-                    const updatedHtml = (preview.proposed.content_html || '') + '\n' + newBlock;
-                    onUpdate({ ...preview, proposed: { ...preview.proposed, content_html: updatedHtml } });
+                  onClick: () => setShowAddSection(!showAddSection),
+                  style: { marginLeft: 'auto', padding: '4px 12px', background: showAddSection ? '#22c55e' : 'var(--bg)', color: showAddSection ? '#fff' : '#22c55e', border: '1px solid #22c55e40', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                }, React.createElement('i', { className: showAddSection ? 'fa-solid fa-times' : 'fa-solid fa-plus', style: { marginRight: 4 } }), showAddSection ? 'Cancel' : 'Add Section')
+              ),
+              // Add Section panel (collapsible)
+              showAddSection && React.createElement('div', { style: { padding: '12px 20px', background: 'rgba(34,197,94,0.06)', borderBottom: '1px solid #22c55e30', flexShrink: 0 } },
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#22c55e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Add New Section'),
+                // Section heading input
+                React.createElement('input', {
+                  value: newSectionHeading, onChange: e => setNewSectionHeading(e.target.value),
+                  placeholder: 'Section heading (H2)...',
+                  onKeyDown: e => { if (e.key === 'Enter') handleAddSection(); },
+                  style: { width: '100%', padding: '8px 12px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, marginBottom: 8 }
+                }),
+                // Insert position
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
+                  React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' } }, 'Insert:'),
+                  React.createElement('select', {
+                    value: insertAfterIdx, onChange: e => setInsertAfterIdx(parseInt(e.target.value)),
+                    style: { flex: 1, padding: '6px 8px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }
                   },
-                  style: { marginLeft: 'auto', padding: '4px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
-                }, React.createElement('i', { className: 'fa-solid fa-plus', style: { marginRight: 4 } }), 'Add Section')
+                    React.createElement('option', { value: -1 }, 'At the end'),
+                    existingH2s.map((h, i) =>
+                      React.createElement('option', { key: i, value: i }, 'After: ' + h.text.slice(0, 50))
+                    )
+                  ),
+                  React.createElement('button', {
+                    onClick: handleAddSection, disabled: !newSectionHeading.trim(),
+                    style: { padding: '6px 14px', background: newSectionHeading.trim() ? '#22c55e' : 'var(--bg3)', color: '#fff', border: 'none', borderRadius: 6, cursor: newSectionHeading.trim() ? 'pointer' : 'not-allowed', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                  }, React.createElement('i', { className: 'fa-solid fa-plus', style: { marginRight: 4 } }), 'Add')
+                ),
+                // Existing structure preview
+                existingH2s.length > 0 && React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } },
+                  React.createElement('span', { style: { fontWeight: 600 } }, 'Current structure: '),
+                  existingH2s.map((h, i) =>
+                    React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 2, margin: '2px 4px 2px 0', padding: '2px 8px', background: 'var(--bg)', borderRadius: 4, border: '1px solid var(--border)' } },
+                      React.createElement('i', { className: 'fa-solid fa-heading', style: { fontSize: 8, opacity: 0.5 } }),
+                      h.text.slice(0, 35) + (h.text.length > 35 ? '...' : '')
+                    )
+                  )
+                )
               ),
               // Content
               React.createElement('div', {
