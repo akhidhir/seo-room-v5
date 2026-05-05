@@ -9836,14 +9836,128 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
+      // Use DOM parser to extract semantic content from raw page HTML
+      // Quill only understands: p, h1-h6, ul, ol, li, blockquote, a, strong, em, br
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString('<div>' + html + '</div>', 'text/html');
+        const body = doc.body.firstChild;
+        // Remove script, style, nav, footer, header, form, iframe, svg, noscript
+        body.querySelectorAll('script,style,nav,footer,header,form,iframe,svg,noscript,button,input,select,textarea').forEach(el => el.remove());
+        // Remove hidden elements
+        body.querySelectorAll('[style*="display:none"],[style*="display: none"],[aria-hidden="true"],.sr-only,.screen-reader-text').forEach(el => el.remove());
+        // Remove image-only containers (no meaningful text)
+        body.querySelectorAll('figure,picture').forEach(el => {
+          const text = el.textContent.trim();
+          if (text.length < 10) el.remove();
+        });
+
+        // Walk DOM and build semantic HTML
+        const blocks = [];
+        function walkNode(node) {
+          if (node.nodeType === 3) { // Text node
+            const t = node.textContent.trim();
+            if (t) return t;
+            return '';
+          }
+          if (node.nodeType !== 1) return '';
+          const tag = node.tagName.toLowerCase();
+          // Skip invisible/layout-only
+          if (['script','style','nav','footer','header','form','iframe','svg','noscript','button','input','select','textarea','br'].includes(tag)) {
+            if (tag === 'br') return '<br>';
+            return '';
+          }
+          // Semantic tags — preserve them
+          if (/^h[1-6]$/.test(tag)) {
+            const text = node.textContent.trim();
+            if (text) blocks.push('<' + tag + '>' + escapeHtmlText(text) + '</' + tag + '>');
+            return '';
+          }
+          if (tag === 'p') {
+            const inner = processInline(node);
+            if (inner.trim()) blocks.push('<p>' + inner + '</p>');
+            return '';
+          }
+          if (tag === 'ul' || tag === 'ol') {
+            const items = Array.from(node.querySelectorAll(':scope > li')).map(li => {
+              const t = processInline(li);
+              return t.trim() ? '<li>' + t + '</li>' : '';
+            }).filter(Boolean);
+            if (items.length) blocks.push('<' + tag + '>' + items.join('') + '</' + tag + '>');
+            return '';
+          }
+          if (tag === 'li') {
+            const inner = processInline(node);
+            if (inner.trim()) blocks.push('<li>' + inner + '</li>');
+            return '';
+          }
+          if (tag === 'blockquote') {
+            const inner = processInline(node);
+            if (inner.trim()) blocks.push('<blockquote>' + inner + '</blockquote>');
+            return '';
+          }
+          // For divs and other containers, recurse into children
+          const children = Array.from(node.childNodes);
+          // If this div has only inline content (no block children), treat as paragraph
+          const hasBlockChild = children.some(c => c.nodeType === 1 && /^(div|p|h[1-6]|ul|ol|li|blockquote|section|article|main|aside|table)$/.test(c.tagName?.toLowerCase()));
+          if (!hasBlockChild) {
+            const inner = processInline(node);
+            if (inner.trim() && inner.trim().length > 1) blocks.push('<p>' + inner + '</p>');
+            return '';
+          }
+          // Has block children — recurse
+          children.forEach(c => walkNode(c));
+          return '';
+        }
+
+        function processInline(node) {
+          if (node.nodeType === 3) return node.textContent;
+          if (node.nodeType !== 1) return '';
+          const tag = node.tagName.toLowerCase();
+          if (['script','style','svg','iframe','noscript','button','input','select','textarea'].includes(tag)) return '';
+          if (tag === 'img') return ''; // skip images in text
+          if (tag === 'br') return '<br>';
+          const inner = Array.from(node.childNodes).map(c => processInline(c)).join('');
+          if (tag === 'a' && node.href) return '<a href="' + node.getAttribute('href') + '">' + inner + '</a>';
+          if (tag === 'strong' || tag === 'b') return '<strong>' + inner + '</strong>';
+          if (tag === 'em' || tag === 'i') return '<em>' + inner + '</em>';
+          if (tag === 'u') return '<u>' + inner + '</u>';
+          if (tag === 'span' || tag === 'div' || tag === 'font') return inner;
+          return inner;
+        }
+
+        function escapeHtmlText(text) {
+          return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        walkNode(body);
+        // Deduplicate consecutive identical blocks and filter empties
+        const result = blocks.filter((b, i) => {
+          if (!b.trim()) return false;
+          if (b === blocks[i - 1]) return false; // skip duplicates
+          // Skip blocks that are just whitespace or single characters
+          const textOnly = b.replace(/<[^>]+>/g, '').trim();
+          if (textOnly.length < 2) return false;
+          return true;
+        }).join('\n');
+        if (result.trim().length > 50) return result;
+        // Fallback: if DOM parsing yielded too little, use basic regex cleanup
+      } catch(e) {
+        console.warn('[cleanWpHtml] DOM parse failed, using regex fallback:', e.message);
+      }
+      // Regex fallback for simple WP content
       return html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+        .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+        .replace(/<header[\s\S]*?<\/header>/gi, '')
+        .replace(/<form[\s\S]*?<\/form>/gi, '')
+        .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
         .replace(/<p>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/p>/gi, '')
-        .replace(/<h[2-4]>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/h[2-4]>/gi, '')
         .replace(/<p>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '')
         .replace(/<h[2-4]>(\s|&nbsp;|<br\s*\/?>)*<\/h[2-4]>/gi, '')
         .replace(/(<br\s*\/?>[\s\n]*){2,}/gi, '<br>')
-        .replace(/(<[ph][^>]*>)\s*<br\s*\/?>/gi, '$1')
-        .replace(/<br\s*\/?>\s*(<\/[ph])/gi, '$1')
         .replace(/<li>\s*<\/li>/gi, '')
         .replace(/<[uo]l>\s*<\/[uo]l>/gi, '')
         .replace(/<p>\s*<\/p>/gi, '')
