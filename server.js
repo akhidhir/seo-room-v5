@@ -8837,6 +8837,10 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
         newInner += '\n' + preserved.join('\n');
       }
 
+      // Wrap in highlight container so user can see what was changed
+      const highlightClass = section.is_new ? 'seo-section-new' : 'seo-section-updated';
+      newInner = `<div class="${highlightClass}" data-section="${section.id}" data-type="${section.type}">${newInner}</div>`;
+
       // Replace in the live HTML
       liveHtml = liveHtml.slice(0, containerStart) + '\n' + newInner + '\n' + liveHtml.slice(containerEnd);
       replacementCount++;
@@ -8860,20 +8864,34 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
       }
     }
 
-    // Add preview banner + styles
+    // Add preview banner + highlight styles + toggle
     const previewStyles = `<style>
 .seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
 .seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
 .seo-preview-bar .badge{background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:4px;font-size:11px}
+.seo-preview-bar button{background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s}
+.seo-preview-bar button:hover{background:rgba(255,255,255,0.3)}
+.seo-preview-bar button.active{background:rgba(255,255,255,0.9);color:#6366f1}
+/* Section highlight styles */
+.seo-section-updated{position:relative;border-left:4px solid #6366f1;background:rgba(99,102,241,0.04);padding-left:12px;margin-left:-16px;transition:all 0.3s}
+.seo-section-updated::before{content:'UPDATED';position:absolute;top:-8px;left:4px;font-size:9px;font-weight:700;color:#6366f1;letter-spacing:1px;background:#fff;padding:0 6px;border-radius:3px;border:1px solid rgba(99,102,241,0.3);opacity:0.9}
+.seo-section-new{position:relative;border-left:4px solid #22c55e;background:rgba(34,197,94,0.06);padding:20px 20px 20px 16px;margin-left:-16px;border-radius:0 8px 8px 0;transition:all 0.3s}
+.seo-section-new::before{content:'NEW SECTION';position:absolute;top:-8px;left:4px;font-size:9px;font-weight:700;color:#16a34a;letter-spacing:1px;background:#fff;padding:0 6px;border-radius:3px;border:1px solid rgba(34,197,94,0.3);opacity:0.9}
+/* When highlights are hidden */
+body.hide-highlights .seo-section-updated,body.hide-highlights .seo-section-new{border-left:none;background:none;padding-left:0;margin-left:0}
+body.hide-highlights .seo-section-updated::before,body.hide-highlights .seo-section-new::before{display:none}
+body.hide-highlights .seo-new-section{border-left:none;background:none}
+body.hide-highlights .seo-new-section>div:first-child{display:none}
 </style>`;
     const previewBar = `<div class="seo-preview-bar">
       <strong>SEO Room Section Preview</strong>
       <span class="badge">${replacementCount} sections updated</span>
       <span class="badge">${newSections.length} new sections</span>
-      <span>Design structure preserved — only text content changed</span>
+      <button id="toggle-highlights" class="active" onclick="document.body.classList.toggle('hide-highlights');this.classList.toggle('active');this.textContent=this.classList.contains('active')?'Highlights ON':'Highlights OFF'">Highlights ON</button>
+      <span>Design preserved — only text changed</span>
       <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open original →</a>
     </div>`;
-    const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();}},true);</script>`;
+    const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-bar')){e.preventDefault();e.stopPropagation();}},true);</script>`;
 
     liveHtml = liveHtml.replace('</head>', previewStyles + '</head>');
     liveHtml = liveHtml.replace('</body>', previewBar + disableLinks + '</body>');
