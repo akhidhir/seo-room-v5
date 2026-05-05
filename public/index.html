@@ -11125,6 +11125,13 @@
             setOptimisePreview(null);
             setEditorKey(k => k + 1);
             await loadItems();
+            // Auto-parse sections if not already done
+            if (!r.page_sections?.length) {
+              try {
+                const sr = await api('/projects/' + pid + '/content-queue/' + (optimisePreview.item_id || selectedItem.id) + '/parse-sections', { method: 'POST' });
+                if (!sr.error && sr.sections) setSelectedItem(prev => ({ ...prev, page_sections: sr.sections }));
+              } catch (e) { /* silent */ }
+            }
           } else { alert(r?.error || 'Apply failed'); }
         } catch (e) { alert('Error: ' + e.message); }
         setApplyingOptimise(false);
@@ -11360,6 +11367,16 @@
                       meta_desc: r.meta_desc || editMeta.meta_desc,
                       focus_keyword: r.focus_keyword || editMeta.focus_keyword
                     });
+                    // Auto-parse sections for design-safe preview
+                    if (!selectedItem.page_sections?.length) {
+                      try {
+                        const sr = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/parse-sections', { method: 'POST' });
+                        if (!sr.error && sr.sections) {
+                          setSelectedItem(prev => ({ ...prev, page_sections: sr.sections }));
+                          console.log('[import-current] Auto-parsed', sr.sections.length, 'sections');
+                        }
+                      } catch (e) { console.log('[import-current] Auto-parse sections failed:', e.message); }
+                    }
                   } catch(e) { alert('Failed to import: ' + e.message); }
                   setImportingCopy(false);
                 },
