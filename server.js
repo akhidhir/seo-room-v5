@@ -7407,105 +7407,75 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // Smart swap: inject draft content via client-side script so the page renders
-    // fully (slider, services, forms all work), then only the text content area gets replaced.
-    // This preserves the full page layout and only changes the copywriter content.
+    // === PREVIEW STRATEGY ===
+    // Don't modify the live page at all — it breaks JS (sliders, carousels).
+    // Instead: load the full live page + add a slide-out draft panel.
+    // This is 100% generic — works with any CMS, page builder, theme.
     const escapedDraft = JSON.stringify(draftContent);
-    const swapScript = `
+    const escapedTitle = JSON.stringify(draftTitle || item.page_title || '');
+    const escapedDesc = JSON.stringify(draftDesc || '');
+
+    const previewPanel = `
+    <style>
+      .seo-draft-toggle { position:fixed;top:50%;right:0;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:14px 8px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:700;border-radius:8px 0 0 8px;cursor:pointer;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:1px;box-shadow:-2px 0 20px rgba(0,0,0,0.3);transition:all 0.3s;transform:translateY(-50%) }
+      .seo-draft-toggle:hover { padding:14px 12px }
+      .seo-draft-toggle.open { right:min(50vw,700px) }
+      .seo-draft-panel { position:fixed;top:0;right:0;width:min(50vw,700px);height:100vh;z-index:99998;background:#fff;box-shadow:-4px 0 30px rgba(0,0,0,0.2);transform:translateX(100%);transition:transform 0.3s ease;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif }
+      .seo-draft-panel.open { transform:translateX(0) }
+      .seo-draft-panel .dp-header { position:sticky;top:0;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:16px 24px;z-index:1 }
+      .seo-draft-panel .dp-header h3 { margin:0;font-size:16px;font-weight:700 }
+      .seo-draft-panel .dp-header .dp-sub { font-size:12px;opacity:0.8;margin-top:4px }
+      .seo-draft-panel .dp-meta { background:#f8fafc;padding:16px 24px;border-bottom:1px solid #e2e8f0 }
+      .seo-draft-panel .dp-meta-title { font-size:18px;color:#1e40af;font-weight:600;line-height:1.3;margin-bottom:4px }
+      .seo-draft-panel .dp-meta-url { font-size:13px;color:#16a34a;margin-bottom:6px }
+      .seo-draft-panel .dp-meta-desc { font-size:14px;color:#475569;line-height:1.5 }
+      .seo-draft-panel .dp-content { padding:24px;color:#1a1a1a;font-size:16px;line-height:1.8 }
+      .seo-draft-panel .dp-content h1 { font-size:28px;margin:0 0 16px;color:#111 }
+      .seo-draft-panel .dp-content h2 { font-size:22px;margin:24px 0 12px;color:#1e293b }
+      .seo-draft-panel .dp-content h3 { font-size:18px;margin:20px 0 10px;color:#334155 }
+      .seo-draft-panel .dp-content p { margin:0 0 14px;color:#374151 }
+      .seo-draft-panel .dp-content ul, .seo-draft-panel .dp-content ol { margin:0 0 14px;padding-left:24px }
+      .seo-draft-panel .dp-content li { margin:0 0 6px;color:#374151 }
+      .seo-draft-panel .dp-content a { color:#2563eb }
+      .seo-draft-panel .dp-content img { max-width:100%;height:auto;border-radius:8px;margin:12px 0 }
+      .seo-draft-panel .dp-content strong { color:#111 }
+      .seo-draft-panel .dp-label { font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;font-weight:700;margin-bottom:6px }
+    </style>
+    <div class="seo-draft-toggle" onclick="document.querySelector('.seo-draft-toggle').classList.toggle('open');document.querySelector('.seo-draft-panel').classList.toggle('open')">
+      DRAFT CONTENT
+    </div>
+    <div class="seo-draft-panel">
+      <div class="dp-header">
+        <h3>Draft Preview</h3>
+        <div class="dp-sub">Compare with the live page on the left</div>
+      </div>
+      <div class="dp-meta">
+        <div class="dp-label">Google Search Preview</div>
+        <div class="dp-meta-title" id="dp-mt"></div>
+        <div class="dp-meta-url" id="dp-mu"></div>
+        <div class="dp-meta-desc" id="dp-md"></div>
+      </div>
+      <div class="dp-content" id="dp-body"></div>
+    </div>
     <script>
     (function() {
-      // Wait for page to fully render
-      window.addEventListener('load', function() {
-        var draft = ${escapedDraft};
-
-        // Try specific WP/Elementor content selectors first
-        var selectors = [
-          '.entry-content',
-          '.post-content',
-          '.page-content',
-          'article .elementor-widget-theme-post-content .elementor-widget-container',
-          'article .elementor-text-editor',
-          '.elementor-widget-theme-post-content',
-          'article'
-        ];
-
-        var target = null;
-        for (var i = 0; i < selectors.length; i++) {
-          var el = document.querySelector(selectors[i]);
-          if (el) {
-            // Check it has substantial text (not just a wrapper)
-            var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (text.length > 100) {
-              target = el;
-              console.log('[SEO Preview] Found content area:', selectors[i], '(' + text.length + ' chars)');
-              break;
-            }
-          }
-        }
-
-        // Fallback: find the largest text block between header and footer
-        if (!target) {
-          var candidates = document.querySelectorAll('main > *, main > div > *, section, .elementor-section');
-          var best = null;
-          var bestLen = 0;
-          candidates.forEach(function(el) {
-            var t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
-            // Skip elements that are mostly images/nav (slider, services grid)
-            var imgs = el.querySelectorAll('img').length;
-            var textPerImg = imgs > 0 ? t.length / imgs : t.length;
-            if (t.length > 200 && textPerImg > 100 && t.length > bestLen) {
-              best = el;
-              bestLen = t.length;
-            }
-          });
-          if (best) {
-            target = best;
-            console.log('[SEO Preview] Fallback: largest text block (' + bestLen + ' chars)');
-          }
-        }
-
-        if (target) {
-          target.innerHTML = draft;
-          console.log('[SEO Preview] Content swapped successfully');
-        } else {
-          console.warn('[SEO Preview] Could not find content area to swap');
-        }
-      });
+      var mt = ${escapedTitle};
+      var md = ${escapedDesc};
+      var draft = ${escapedDraft};
+      var url = ${JSON.stringify(pageUrl)};
+      document.getElementById('dp-mt').textContent = mt;
+      document.getElementById('dp-mu').textContent = url;
+      document.getElementById('dp-md').textContent = md;
+      document.getElementById('dp-body').innerHTML = draft;
     })();
     </script>`;
 
-    // Inject the swap script before </body>
-    html = html.replace('</body>', swapScript + '</body>');
+    html = html.replace('</body>', previewPanel + '</body>');
     const swapped = true;
-    console.log('[preview] Using client-side content swap (preserves full page layout)');
+    console.log('[preview] Using slide-out draft panel (preserves full live page)');
 
-    // Add preview pill (bottom-right corner, doesn't block page)
-    const bannerHtml = `
-    <style>
-      .seo-preview-pill { position:fixed;bottom:20px;right:20px;z-index:99999;background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff;padding:10px 18px;font-family:-apple-system,sans-serif;font-size:13px;font-weight:600;border-radius:30px;box-shadow:0 4px 20px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;gap:8px;transition:all 0.3s }
-      .seo-preview-pill:hover { transform:scale(1.05) }
-      .seo-preview-pill .dot { width:10px;height:10px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite }
-      @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-      .seo-preview-meta { position:fixed;bottom:70px;right:20px;z-index:99998;background:#1e1b4b;color:#fff;padding:16px 20px;border-radius:12px;font-family:-apple-system,sans-serif;font-size:12px;box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:400px;display:none }
-      .seo-preview-meta.show { display:block }
-      .seo-preview-meta .mt { color:#a5b4fc;font-size:14px;font-weight:700;margin-bottom:4px }
-      .seo-preview-meta .md { color:rgba(255,255,255,0.7);font-size:11px;line-height:1.4 }
-      .seo-preview-meta .ml { font-size:10px;color:#818cf8;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px }
-    </style>
-    <div class="seo-preview-pill" onclick="document.querySelector('.seo-preview-meta').classList.toggle('show')">
-      <span class="dot"></span> REVIEW PREVIEW
-    </div>
-    <div class="seo-preview-meta">
-      <div class="ml">Google Search Preview</div>
-      <div class="mt">${(draftTitle || item.page_title || '').replace(/"/g, '&quot;').slice(0, 60)}</div>
-      <div class="md">${(draftDesc || '').replace(/"/g, '&quot;').slice(0, 160)}</div>
-    </div>`;
-
-    // Inject pill at end of body so it doesn't affect layout
-    html = html.replace('</body>', `${bannerHtml}</body>`);
-
-    // Disable all links so user doesn't accidentally navigate away
-    html = html.replace('</body>', `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-banner')){e.preventDefault();e.stopPropagation();}},true);</script></body>`);
+    // Disable page links so user doesn't navigate away (but allow draft panel links)
+    html = html.replace('</body>', `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-draft-panel')&&!a.closest('.seo-draft-toggle')){e.preventDefault();e.stopPropagation();}},true);</script></body>`);
 
     console.log(`[preview] Serving pixel-perfect preview for "${item.page_title}", swapped=${swapped}`);
     res.setHeader('Content-Type', 'text/html');
