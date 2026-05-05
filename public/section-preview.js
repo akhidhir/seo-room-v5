@@ -13,19 +13,13 @@
     return out.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  // Apply highlight inline styles directly (bypasses Elementor CSS specificity)
+  // Apply highlight inline styles — subtle orange accent, preserves original colors
   function applyHL(el){
-    el.style.setProperty('background','#fef3c7','important');
-    el.style.setProperty('border-left','4px solid #f59e0b','important');
+    el.style.setProperty('border-left','3px solid #f59e0b','important');
     el.style.setProperty('padding-left','10px','important');
-    el.style.setProperty('color','#1a1a1a','important');
+    el.style.setProperty('background','rgba(245,158,11,0.10)','important');
     el.style.setProperty('border-radius','3px','important');
     el.setAttribute('data-seo-hl','1');
-    // Force all children to black text
-    var kids = el.querySelectorAll('*');
-    for(var k=0;k<kids.length;k++){
-      kids[k].style.setProperty('color','#1a1a1a','important');
-    }
   }
 
   function run(){
