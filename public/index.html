@@ -6462,13 +6462,34 @@
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-cog fa-spin" style={{ fontSize: 11 }} /> Running</span>;
                               const canExec = canAutoExecute(item);
-                              if (!canExec) return <span style={{ fontSize: 15, color: 'var(--text3)' }}>Pending</span>;
-                              return (
+                              if (canExec) return (
                                 <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
                                   style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
                                   {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Run</>}
                                 </button>
+                              );
+                              // Non-executable automated items: send to copywriter or start manually
+                              return (
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <button onClick={async () => {
+                                    try {
+                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
+                                    } catch(err) { console.error('Send to copywriter:', err); }
+                                  }}
+                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send to Copy
+                                  </button>
+                                  <select value="not-started" onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
+                                    style={{ fontSize: 12, padding: '5px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)' }}>
+                                    <option value="not-started">Not Started</option>
+                                    <option value="in-progress">In Progress</option>
+                                    <option value="done">Done</option>
+                                    <option value="ignored">Ignore</option>
+                                  </select>
+                                </div>
                               );
                             }
                             // COPYWRITER CURRENT: Send to content queue
