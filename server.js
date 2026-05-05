@@ -7886,10 +7886,11 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
     if (pageUrl && !pageUrl.startsWith('http')) {
       pageUrl = 'https://' + (project.domain || '') + pageUrl;
     }
-    // Treat homepage URL as "no URL"
-    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (domClean && puClean === domClean) pageUrl = '';
+    // Home page: if page_url is just "/" or empty, use the domain as the URL
+    if (!pageUrl || pageUrl === '/') {
+      const dom = (project?.domain || '').replace(/\/$/, '');
+      if (dom) pageUrl = dom.startsWith('http') ? dom : 'https://' + dom;
+    }
 
     if (!pageUrl) {
       // No live page — render standalone preview
@@ -8498,9 +8499,11 @@ app.post('/api/projects/:projectId/content-queue/:id/parse-sections', async (req
     // Build page URL
     let pageUrl = item.page_url || '';
     if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
-    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (domClean && puClean === domClean) pageUrl = '';
+    // Home page: if page_url is just "/" or empty, use the domain as the URL
+    if (!pageUrl || pageUrl === '/') {
+      const dom = (project?.domain || '').replace(/\/$/, '');
+      if (dom) pageUrl = dom.startsWith('http') ? dom : 'https://' + dom;
+    }
     if (!pageUrl) return res.status(400).json({ error: 'No page URL set — pick a URL first' });
 
     console.log(`[parse-sections] Fetching: ${pageUrl}`);
@@ -8882,9 +8885,11 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
 
     let pageUrl = item.page_url || '';
     if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
-    const domClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const puClean = pageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (domClean && puClean === domClean) pageUrl = '';
+    // Home page: if page_url is just "/" or empty, use the domain as the URL
+    if (!pageUrl || pageUrl === '/') {
+      const dom = (project?.domain || '').replace(/\/$/, '');
+      if (dom) pageUrl = dom.startsWith('http') ? dom : 'https://' + dom;
+    }
 
     if (!pageUrl || !sections.length) {
       const draftContent = item.draft_content || '';
