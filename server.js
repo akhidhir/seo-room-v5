@@ -5268,6 +5268,44 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Move item between content_queue ↔ site_pages
+app.post('/api/projects/:projectId/copywriter-move', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { item_id, from, to } = req.body; // from/to: 'content_queue' or 'site_pages'
+    if (!item_id || !from || !to || from === to) return res.status(400).json({ error: 'Invalid move parameters' });
+
+    if (from === 'content_queue' && to === 'site_pages') {
+      const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [item_id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Item not found in content queue' });
+      const pageName = item.page_title || 'New Page';
+      const slug = pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const r = await pool.query(
+        `INSERT INTO site_pages (project_id, page_type, page_name, slug, focus_keyword, draft_content, meta_title, meta_description, stage)
+         VALUES ($1, 'service', $2, $3, $4, $5, $6, $7, 'draft') RETURNING id`,
+        [projectId, pageName, slug, item.current_focus_keyword || item.draft_focus_keyword || '',
+         item.draft_content || item.current_content || '', item.draft_meta_title || item.current_meta_title || '',
+         item.draft_meta_desc || item.current_meta_desc || '']
+      );
+      await pool.query('DELETE FROM content_queue WHERE id=$1', [item_id]);
+      res.json({ success: true, new_id: r.rows[0].id, destination: 'site_pages' });
+    } else if (from === 'site_pages' && to === 'content_queue') {
+      const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [item_id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Item not found in site pages' });
+      const r = await pool.query(
+        `INSERT INTO content_queue (project_id, page_title, content_type, source, priority, current_content, current_meta_title, current_meta_desc, current_focus_keyword, draft_content, draft_meta_title, draft_meta_desc, draft_focus_keyword)
+         VALUES ($1, $2, 'rewrite', 'moved', 'medium', $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [projectId, item.page_name, item.draft_content || '', item.meta_title || '', item.meta_description || '', item.focus_keyword || '',
+         item.draft_content || '', item.meta_title || '', item.meta_description || '', item.focus_keyword || '']
+      );
+      await pool.query('DELETE FROM site_pages WHERE id=$1', [item_id]);
+      res.json({ success: true, new_id: r.rows[0].id, destination: 'content_queue' });
+    } else {
+      return res.status(400).json({ error: 'Invalid from/to' });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Get single content queue item
 app.get('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   try {
@@ -10561,10 +10599,21 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
               [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
             );
             const findingId = fRes.rows[0].id;
+            // Auto-detect execution type: new page creation → copywriter_new, content tasks → copywriter, otherwise manual
+            const titleLower = (f.title || '').toLowerCase();
+            const descLower = (f.description || '').toLowerCase();
+            const combined = titleLower + ' ' + descLower;
+            let execType = 'manual';
+            let assigneeLabel = 'Manual';
+            if (/\b(create|add|build|new)\b/.test(combined) && /\b(suburb|location|service|landing)\s*(page|pages)\b/.test(combined)) {
+              execType = 'copywriter_new'; assigneeLabel = 'Copywriter New';
+            } else if (/\b(write|rewrite|expand|improve|update|optimis|thin.?content|low.?word|meta.?title|meta.?desc)\b/.test(combined)) {
+              execType = 'copywriter'; assigneeLabel = 'Copywriter Current';
+            }
             await pool.query(
-              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
-              [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
+              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+              [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity, execType, assigneeLabel]
             );
           }
           console.log(`[findings-extractor] Saved ${deduped.length} structured findings for ${pillar}`);
@@ -10791,10 +10840,18 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
         );
         const findingId = fRes.rows[0].id;
 
+        // Auto-detect execution type
+        const tl2 = (f.title || '').toLowerCase() + ' ' + (f.description || '').toLowerCase();
+        let et2 = 'manual', al2 = 'Manual';
+        if (/\b(create|add|build|new)\b/.test(tl2) && /\b(suburb|location|service|landing)\s*(page|pages)\b/.test(tl2)) {
+          et2 = 'copywriter_new'; al2 = 'Copywriter New';
+        } else if (/\b(write|rewrite|expand|improve|update|optimis|thin.?content|low.?word|meta.?title|meta.?desc)\b/.test(tl2)) {
+          et2 = 'copywriter'; al2 = 'Copywriter Current';
+        }
         await pool.query(
-          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
-          [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity]
+          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+          [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity, et2, al2]
         );
       }
       console.log(`[findings-extractor-deterministic] Saved ${deduped.length} findings + action items for ${pillar} (project ${projectId})`);
@@ -10875,10 +10932,18 @@ app.post('/api/projects/:projectId/audits/:pillar/sync-findings', async (req, re
         [projectId, auditId, dbPillar, f.category || 'Uncategorized', f.title, f.description || '', f.recommendation || '', f.severity || 'Medium', f.current_value || '', f.recommended_value || '']
       );
       const findingId = fRes.rows[0].id;
+      // Auto-detect execution type
+      const combined3 = ((f.title || '') + ' ' + (f.description || '') + ' ' + (f.recommendation || '')).toLowerCase();
+      let et3 = 'manual', al3 = 'Manual';
+      if (/\b(create|add|build|new)\b/.test(combined3) && /\b(suburb|location|service|landing)\s*(page|pages)\b/.test(combined3)) {
+        et3 = 'copywriter_new'; al3 = 'Copywriter New';
+      } else if (/\b(write|rewrite|expand|improve|update|optimis|thin.?content|low.?word|meta.?title|meta.?desc)\b/.test(combined3)) {
+        et3 = 'copywriter'; al3 = 'Copywriter Current';
+      }
       await pool.query(
-        `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 'manual')`,
-        [projectId, findingId, dbPillar, f.category || 'Uncategorized', f.category || 'Uncategorized', f.title, f.recommendation || f.description || '', f.current_value || '', f.recommended_value || '', f.severity || 'Medium']
+        `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+        [projectId, findingId, dbPillar, f.category || 'Uncategorized', f.category || 'Uncategorized', f.title, f.recommendation || f.description || '', f.current_value || '', f.recommended_value || '', f.severity || 'Medium', et3, al3]
       );
       saved++;
     }

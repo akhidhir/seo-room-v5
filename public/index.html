@@ -6370,8 +6370,8 @@
                       { key: 'title', label: 'ACTION', w: null, align: 'left' },
                       ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 100, align: 'left' }] : []),
                       { key: 'category', label: 'CATEGORY', w: 170, align: 'left' },
-                      { key: 'assignee', label: 'ASSIGNEE', w: 150, align: 'left' },
-                      { key: 'status', label: 'STATUS', w: 130, align: 'center' },
+                      { key: 'assignee', label: 'TYPE', w: 130, align: 'left' },
+                      { key: 'status', label: 'STATUS', w: 120, align: 'center' },
                     ].map(col => (
                       <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
                         style={{ padding: '16px 18px', textAlign: col.align, fontSize: 15, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
@@ -6434,7 +6434,7 @@
                           </td>
                         )}
                         <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, color: 'var(--text2)' }}>{item._category || item.category}</td>
-                        <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top', fontSize: 13, whiteSpace: 'nowrap' }}>
                           <select value={assigneeLabel} onChange={async (e) => {
                             const newLabel = e.target.value;
                             const execMap = { Automated: 'automated', 'Copywriter Current': 'copywriter', 'Copywriter New': 'copywriter_new', Manual: 'manual' };
@@ -6448,20 +6448,20 @@
                                 } catch(cqErr) { console.warn('Auto-send to copywriter:', cqErr); }
                               }
                             } catch(err) { console.error(err); }
-                          }} style={{ fontSize: 16, padding: '6px 10px', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: aColor, cursor: 'pointer', fontWeight: 600, appearance: 'none', WebkitAppearance: 'none' }}
+                          }} style={{ fontSize: 13, padding: '5px 8px', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: aColor, cursor: 'pointer', fontWeight: 600, minWidth: 0, maxWidth: 150 }}
                             onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
                             <option value="Automated" style={{ color: '#22c55e' }}>Automated</option>
-                            <option value="Copywriter Current" style={{ color: '#8b5cf6' }}>Copywriter Current</option>
-                            <option value="Copywriter New" style={{ color: '#a855f7' }}>Copywriter New</option>
+                            <option value="Copywriter Current" style={{ color: '#8b5cf6' }}>CW Current</option>
+                            <option value="Copywriter New" style={{ color: '#a855f7' }}>CW New</option>
                             <option value="Manual" style={{ color: '#6b7280' }}>Manual</option>
                           </select>
                         </td>
-                        <td style={{ padding: '14px', textAlign: 'center', verticalAlign: 'top' }}>
+                        <td style={{ padding: '10px 8px', textAlign: 'center', verticalAlign: 'top' }}>
                           {(() => {
                             const status = (item.status || 'pending').toLowerCase();
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
                               const canExec = canAutoExecute(item);
                               if (!canExec) return <span style={{ fontSize: 15, color: 'var(--text3)' }}>Pending</span>;
                               return (
@@ -6473,8 +6473,8 @@
                             }
                             // COPYWRITER CURRENT: Send to content queue
                             if (assigneeLabel === 'Copywriter Current') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 14 }} /> In Queue</span>;
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 11 }} /> Queued</span>;
                               return (
                                 <button onClick={async () => {
                                   try {
@@ -6482,15 +6482,15 @@
                                     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
                                   } catch(err) { console.error('Send to copywriter:', err); }
                                 }}
-                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-pen-fancy" style={{ marginRight: 5, fontSize: 13 }} />Send
+                                  style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
                                 </button>
                               );
                             }
                             // COPYWRITER NEW: Send to site_pages (new website)
                             if (assigneeLabel === 'Copywriter New') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-file-circle-plus" style={{ fontSize: 14 }} /> In Queue</span>;
+                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-file-circle-plus" style={{ fontSize: 11 }} /> Queued</span>;
                               return (
                                 <button onClick={async () => {
                                   try {
@@ -6498,8 +6498,8 @@
                                     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
                                   } catch(err) { console.error('Send to copywriter:', err); }
                                 }}
-                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-file-circle-plus" style={{ marginRight: 5, fontSize: 13 }} />Send
+                                  style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
                                 </button>
                               );
                             }
@@ -8076,6 +8076,16 @@
             !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
               React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
             ),
+            // Move to CW Current (content_queue)
+            !isPublished && React.createElement('button', {
+              onClick: function() {
+                if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current (Optimise Existing)?')) return;
+                api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: page.id, from: 'site_pages', to: 'content_queue' } })
+                  .then(function() { onBack(); })
+                  .catch(function(e) { alert('Move failed: ' + e.message); });
+              },
+              style: { padding: '8px 16px', background: '#8b5cf620', color: '#8b5cf6', border: '1px solid #8b5cf640', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+            }, React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 4 } }), 'Move to CW Current'),
             // Approve
             !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove, style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
             // Publish
@@ -10788,6 +10798,18 @@
               !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
                 React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
               ),
+              // Move to CW New (site_pages)
+              (selectedItem.stage === 'queue' || selectedItem.stage === 'drafts') && !isPublished && React.createElement('button', {
+                onClick: async () => {
+                  if (!confirm('Move "' + (selectedItem.page_title || 'this item') + '" to Copywriter New (New Website)?')) return;
+                  try {
+                    await api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: selectedItem.id, from: 'content_queue', to: 'site_pages' } });
+                    setSelectedItem(null);
+                    loadItems();
+                  } catch (e) { alert('Move failed: ' + e.message); }
+                },
+                style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 4 } }), 'Move to CW New'),
               // Approve
               (selectedItem.stage === 'drafts' || selectedItem.stage === 'queue') && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
               // Send Back to Drafts — for approved items
