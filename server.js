@@ -8825,7 +8825,7 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const newSections = sections.filter(s => s.is_new && s.draft_text);
     const updatedCount = sectionsForClient.filter(s => !s.is_new).length;
 
-    const sectionsJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--');
+    const sectionsJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 
     const injectedScript = `
 <style>
@@ -8851,11 +8851,18 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
 <script>
 (function(){
   function norm(s){
-    return (s||’’)
-      .replace(/<[^>]+>/g,’’)
-      .replace(/&amp;/g,’&’).replace(/&lt;/g,’<’).replace(/&gt;/g,’>’).replace(/&quot;/g,’”’).replace(/&#039;/g,”’”).replace(/&nbsp;/g,’ ‘).replace(/&mdash;/g,’-’).replace(/&ndash;/g,’-’).replace(/&rsquo;/g,”’”).replace(/&lsquo;/g,”’”).replace(/&rdquo;/g,’”’).replace(/&ldquo;/g,’”’)
-      .replace(/[\\u2018\\u2019\\u201A\\u201B]/g,”’”).replace(/[\\u201C\\u201D\\u201E\\u201F]/g,’”’).replace(/[\\u2013\\u2014]/g,’-’)
-      .replace(/\\s+/g,’ ‘).trim().toLowerCase();
+    var r = (s||’’).replace(/<[^>]+>/g,’’);
+    r = r.replace(/&amp;/g,’&’).replace(/&lt;/g,’<’).replace(/&gt;/g,’>’).replace(/&quot;/g,’”’).replace(/&#039;/g,”’”).replace(/&nbsp;/g,’ ‘).replace(/&mdash;/g,’-’).replace(/&ndash;/g,’-’).replace(/&rsquo;/g,”’”).replace(/&lsquo;/g,”’”).replace(/&rdquo;/g,’”’).replace(/&ldquo;/g,’”’);
+    // Normalize smart quotes and dashes to plain ASCII
+    var out = ‘’;
+    for(var i=0;i<r.length;i++){
+      var c = r.charCodeAt(i);
+      if(c===8216||c===8217||c===8218||c===8219) out += “’”;
+      else if(c===8220||c===8221||c===8222||c===8223) out += ‘”’;
+      else if(c===8211||c===8212) out += ‘-’;
+      else out += r[i];
+    }
+    return out.replace(/\\s+/g,’ ‘).trim().toLowerCase();
   }
 
   // === NEW APPROACH: Direct paragraph-by-paragraph matching ===
