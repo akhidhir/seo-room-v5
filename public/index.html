@@ -10520,32 +10520,33 @@
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
 
-      // Highlight changed paragraphs in draft by comparing with original (string-based, no DOM needed)
+      // Highlight changed paragraphs — POSITIONAL comparison (same logic as preview page)
+      // Compares draft blocks vs original blocks by position. If text differs → orange highlight.
       const highlightDraftChanges = (originalHtml, draftHtml) => {
         if (!originalHtml || !draftHtml) return draftHtml || '';
-        const stripTags = (h) => h.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const origText = stripTags(originalHtml);
-        // Split original into chunks (sentences or phrases 20+ chars)
-        const origChunks = origText.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 15);
-        // For each block element in draft, check if it's new content
-        return draftHtml.replace(/(<(?:p|li|h[1-6]|blockquote)[^>]*>)([\s\S]*?)(<\/(?:p|li|h[1-6]|blockquote)>)/gi, (match, open, content, close) => {
-          const txt = content.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-          if (txt.length < 10) return match;
-          // Check if substantially similar to any original chunk
-          const isSame = origChunks.some(oc => {
-            if (txt.includes(oc) || oc.includes(txt)) return true;
-            // Check word overlap > 60%
-            const tWords = txt.split(/\s+/);
-            const oWords = oc.split(/\s+/);
-            const overlap = tWords.filter(w => oWords.includes(w)).length;
-            return overlap / Math.max(tWords.length, 1) > 0.6;
-          });
-          if (!isSame) {
-            // Inject orange highlight style
-            const styleAttr = open.includes('style="')
-              ? open.replace('style="', 'style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;')
-              : open.replace('>', ' style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;">');
-            return styleAttr + content + close;
+        const norm = (s) => (s || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+        // Extract blocks from original by position
+        const blockRe = /<(p|li|h[1-6]|blockquote|td|th)[^>]*>([\s\S]*?)<\/\1>/gi;
+        const origBlocks = [];
+        let m;
+        while ((m = blockRe.exec(originalHtml)) !== null) {
+          const txt = norm(m[2]);
+          if (txt.length >= 3) origBlocks.push(txt);
+        }
+        // For each block in draft, compare with original at same position
+        let draftIdx = 0;
+        return draftHtml.replace(/(<(?:p|li|h[1-6]|blockquote|td|th)[^>]*>)([\s\S]*?)(<\/(?:p|li|h[1-6]|blockquote|td|th)>)/gi, (match, open, content, close) => {
+          const txt = norm(content);
+          if (txt.length < 3) return match;
+          const origTxt = draftIdx < origBlocks.length ? origBlocks[draftIdx] : '';
+          draftIdx++;
+          // If no corresponding original OR text changed → highlight
+          if (!origTxt || txt !== origTxt) {
+            const hl = 'background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;color:#1a1a1a;';
+            const styled = open.includes('style="')
+              ? open.replace('style="', 'style="' + hl)
+              : open.replace('>', ' style="' + hl + '">');
+            return styled + content + close;
           }
           return match;
         });

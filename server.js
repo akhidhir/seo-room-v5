@@ -8874,93 +8874,99 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
     return headingEl.parentElement?.parentElement || headingEl.parentElement || headingEl;
   }
 
-  function replaceTextInContainer(container, draftHtml){
-    // Parse draft HTML into elements
-    var temp = document.createElement('div');
-    temp.innerHTML = draftHtml;
+  function replaceTextInContainer(container, draftHtml, origText){
+    // STRATEGY: Find Elementor text-editor widgets inside this container
+    // and replace their innerHTML with the draft content.
+    // This preserves the widget wrapper styling while swapping the text inside.
 
-    // Collect draft text blocks (p, li, etc.)
-    var draftBlocks = [];
-    temp.childNodes.forEach(function(n){
-      if(n.nodeType===1){
-        // Element node
-        var tag = n.tagName.toLowerCase();
-        if(tag.match(/^(p|li|blockquote|td|th)$/)){
-          draftBlocks.push({tag:tag, html:n.innerHTML, isHeading:false});
-        } else if(tag.match(/^h[1-6]$/)){
-          draftBlocks.push({tag:tag, html:n.innerHTML, isHeading:true});
-        } else if(tag.match(/^(ul|ol)$/)){
-          // Expand list items
-          n.querySelectorAll('li').forEach(function(li){
-            draftBlocks.push({tag:'li', html:li.innerHTML, isHeading:false});
+    var oldFullText = norm(container.textContent);
+
+    // 1. Try: find .elementor-text-editor divs (where Elementor puts the actual text)
+    var textWidgets = container.querySelectorAll('.elementor-text-editor');
+    // Filter out form/footer/nav widgets
+    var contentWidgets = [];
+    textWidgets.forEach(function(w){
+      if(w.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) return;
+      if(w.textContent.trim().length >= 10) contentWidgets.push(w);
+    });
+
+    if(contentWidgets.length > 0){
+      // Replace the FIRST content widget with the full draft HTML
+      // Keep existing classes/styles on the widget div — only change innerHTML
+      var origWidgetText = norm(contentWidgets[0].textContent);
+      contentWidgets[0].innerHTML = draftHtml;
+      // Mark all paragraphs inside as highlighted
+      contentWidgets[0].querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
+        el.classList.add('seo-text-hl');
+      });
+      console.log('[SEO Room] Replaced via .elementor-text-editor ('+contentWidgets.length+' widgets found, used first)');
+
+      // If there are MORE content widgets (multi-column text), replace them too
+      // Split draft into chunks if we have multiple widgets
+      if(contentWidgets.length > 1 && origText){
+        // Parse draft into blocks to distribute across widgets
+        var temp = document.createElement('div');
+        temp.innerHTML = draftHtml;
+        var allBlocks = temp.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,ul,ol,blockquote');
+        if(allBlocks.length > contentWidgets.length){
+          var perWidget = Math.ceil(allBlocks.length / contentWidgets.length);
+          contentWidgets.forEach(function(cw, idx){
+            var start = idx * perWidget;
+            var end = Math.min(start + perWidget, allBlocks.length);
+            if(idx === 0) return; // already set above
+            var chunk = '';
+            for(var b=start;b<end;b++) chunk += allBlocks[b].outerHTML;
+            if(chunk){
+              cw.innerHTML = chunk;
+              cw.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
+                el.classList.add('seo-text-hl');
+              });
+            }
           });
-        } else {
-          // div or other — treat as paragraph content
-          var innerText = n.textContent.trim();
-          if(innerText.length > 5) draftBlocks.push({tag:'p', html:n.innerHTML, isHeading:false});
         }
       }
+      return true;
+    }
+
+    // 2. Fallback: find .elementor-widget-container divs with text
+    var widgetContainers = container.querySelectorAll('.elementor-widget-container');
+    var textContainers = [];
+    widgetContainers.forEach(function(wc){
+      if(wc.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) return;
+      var hasText = wc.querySelectorAll('p,h1,h2,h3,h4,h5,h6').length > 0;
+      if(hasText && wc.textContent.trim().length >= 10) textContainers.push(wc);
     });
 
-    if(draftBlocks.length===0) return false;
-
-    // Find ALL text-bearing elements in the container
-    var origEls = container.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th');
-    // Filter to only elements that actually have visible text (not empty, not just images)
-    var textEls = [];
-    origEls.forEach(function(el){
-      // Skip if element is inside header/nav/footer/form/sidebar
-      if(el.closest('header,nav,footer,form,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget')) return;
-      var txt = el.textContent.trim();
-      if(txt.length >= 3) textEls.push(el);
-    });
-
-    if(textEls.length===0) return false;
-
-    // Replace text 1-to-1 by position
-    var draftIdx = 0;
-    for(var i=0; i<textEls.length && draftIdx<draftBlocks.length; i++){
-      var el = textEls[i];
-      var elTag = el.tagName.toLowerCase();
-      var draft = draftBlocks[draftIdx];
-
-      // Skip heading-to-heading mismatch (handled separately)
-      if(elTag.match(/^h[1-6]$/) && !draft.isHeading){
-        continue; // don't consume a draft block for a heading
-      }
-      if(!elTag.match(/^h[1-6]$/) && draft.isHeading){
-        draftIdx++; // skip draft heading blocks when matching body text
-        if(draftIdx < draftBlocks.length) draft = draftBlocks[draftIdx];
-        else break;
-      }
-
-      var oldText = norm(el.textContent);
-      el.innerHTML = draft.html;
-      // Highlight if text actually changed
-      if(norm(el.textContent) !== oldText){
+    if(textContainers.length > 0){
+      textContainers[0].innerHTML = draftHtml;
+      textContainers[0].querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
         el.classList.add('seo-text-hl');
-      }
-      draftIdx++;
+      });
+      console.log('[SEO Room] Replaced via .elementor-widget-container fallback');
+      return true;
     }
 
-    // If we have extra draft blocks, append them after the last text element
-    if(draftIdx < draftBlocks.length && textEls.length > 0){
-      var lastEl = textEls[textEls.length-1];
-      for(var extra=draftIdx; extra<draftBlocks.length; extra++){
-        var db = draftBlocks[extra];
-        if(db.isHeading) continue; // don't insert extra headings
-        var newEl = document.createElement(db.tag==='li'?'p':db.tag);
-        newEl.innerHTML = db.html;
-        newEl.classList.add('seo-text-hl');
-        // Copy some styling from the last element
-        if(lastEl.className) newEl.className = lastEl.className + ' seo-text-hl';
-        if(lastEl.nextSibling) lastEl.parentNode.insertBefore(newEl, lastEl.nextSibling);
-        else lastEl.parentNode.appendChild(newEl);
-        lastEl = newEl;
-      }
+    // 3. Last fallback: find any div/section with p tags and replace
+    var pEls = container.querySelectorAll('p');
+    var contentPs = [];
+    pEls.forEach(function(p){
+      if(p.closest('form,footer,nav,header,.seo-preview-bar')) return;
+      if(p.textContent.trim().length >= 10) contentPs.push(p);
+    });
+    if(contentPs.length > 0){
+      // Find the common parent of all content paragraphs
+      var parent = contentPs[0].parentElement;
+      var oldParentText = norm(parent.textContent);
+      parent.innerHTML = draftHtml;
+      parent.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
+        el.classList.add('seo-text-hl');
+      });
+      console.log('[SEO Room] Replaced via paragraph parent fallback');
+      return true;
     }
 
-    return true;
+    console.log('[SEO Room] No text elements found in container to replace');
+    return false;
   }
 
   function run(){
