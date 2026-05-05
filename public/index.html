@@ -11014,7 +11014,7 @@
                 onClick: () => handleRollback(selectedItem),
                 style: { padding: '8px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
               }, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Rollback'),
-              // Preview — opens real page with draft content injected
+              // Preview — side-by-side (wireframe) or content-swap (no wireframe)
               !isPublished && hasDraft && React.createElement('button', {
                 onClick: () => {
                   const tkn = localStorage.getItem('token') || '';
@@ -11024,8 +11024,9 @@
                     window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
                   });
                 },
-                style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
+                title: selectedItem.wireframe_image ? 'Side-by-side: wireframe + draft content' : 'Live page with draft content injected',
+                style: { padding: '8px 16px', background: selectedItem.wireframe_image ? '#8b5cf6' : '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: selectedItem.wireframe_image ? 'fa-solid fa-columns' : 'fa-solid fa-eye', style: { marginRight: 6 } }), selectedItem.wireframe_image ? 'Preview (Side-by-Side)' : 'Preview'),
               // Import Current Copy — pull live WP content into the editor for scoring/optimising
               !isPublished && React.createElement('button', {
                 disabled: importingCopy,

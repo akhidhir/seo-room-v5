@@ -456,6 +456,11 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // Add wireframe columns to site_pages
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS wireframe_image TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+
     // Content settings — tone, style, word count per project
     await client.query(`
       CREATE TABLE IF NOT EXISTS content_settings (
@@ -5375,11 +5380,12 @@ app.post('/api/projects/:projectId/copywriter-move/bulk', async (req, res) => {
       const slug = pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const pageType = /suburb|location/i.test(pageName) ? 'suburb' : 'service';
       const r = await pool.query(
-        `INSERT INTO site_pages (project_id, page_type, page_name, slug, focus_keyword, draft_content, meta_title, meta_description, stage)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft') RETURNING id`,
+        `INSERT INTO site_pages (project_id, page_type, page_name, slug, focus_keyword, draft_content, meta_title, meta_description, stage, wireframe_image, wireframe_mime, page_wireframe)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11) RETURNING id`,
         [projectId, pageType, pageName, slug, item.current_focus_keyword || item.draft_focus_keyword || '',
          item.draft_content || item.current_content || '', item.draft_meta_title || item.current_meta_title || '',
-         item.draft_meta_desc || item.current_meta_desc || '']
+         item.draft_meta_desc || item.current_meta_desc || '',
+         item.wireframe_image || null, item.wireframe_mime || null, item.page_wireframe || null]
       );
       await pool.query('DELETE FROM content_queue WHERE id=$1', [id]);
       moved.push({ old_id: id, new_id: r.rows[0].id, title: pageName });
@@ -7637,6 +7643,83 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
     const draftTitle = item.draft_meta_title || item.page_title || '';
     const draftDesc = item.draft_meta_desc || '';
 
+    // === WIREFRAME SIDE-BY-SIDE PREVIEW ===
+    // If a wireframe image is uploaded, render side-by-side view instead of content-swap
+    if (item.wireframe_image && item.wireframe_mime) {
+      const mime = item.wireframe_mime || 'image/png';
+      const base64 = (item.wireframe_image || '').replace(/^data:[^;]+;base64,/, '');
+      const escapedTitle = (draftTitle || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const escapedDesc = (draftDesc || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const escapedDraft = draftContent.replace(/<script/gi, '&lt;script');
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview — ${escapedTitle}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;overflow:hidden}
+.preview-bar{position:fixed;top:0;left:0;right:0;z-index:100;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 4px 20px rgba(0,0,0,0.3)}
+.preview-bar strong{font-size:14px}
+.preview-bar .meta{opacity:0.85;font-size:12px}
+.split{display:flex;height:calc(100vh - 44px);margin-top:44px}
+.panel{flex:1;overflow-y:auto;padding:24px}
+.panel-wireframe{background:#111;border-right:2px solid #333;display:flex;flex-direction:column;align-items:center;padding:16px}
+.panel-wireframe img{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5)}
+.panel-wireframe .label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;font-weight:600}
+.panel-content{background:#fafafa;color:#333;max-width:100%}
+.panel-content .label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;font-weight:600;padding:0 0 8px;border-bottom:1px solid #e5e7eb}
+.panel-content .content-body{line-height:1.8;font-size:16px;max-width:720px}
+.panel-content .content-body h1{font-size:28px;margin:0 0 8px;color:#1a1a1a}
+.panel-content .content-body h2{font-size:22px;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;color:#1a1a1a}
+.panel-content .content-body h3{font-size:18px;margin:22px 0 10px;color:#1a1a1a}
+.panel-content .content-body p{margin:12px 0}
+.panel-content .content-body ul,.panel-content .content-body ol{margin:12px 0;padding-left:24px}
+.panel-content .content-body img{max-width:100%;height:auto;border-radius:8px}
+.panel-content .content-body a{color:#2563eb}
+.meta-box{background:#f0f4ff;border:1px solid #c7d2fe;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px}
+.meta-box .meta-label{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#6366f1;font-weight:700;margin-bottom:2px}
+.meta-box .meta-value{color:#1e1b4b;font-weight:500}
+.resize-handle{width:4px;background:#333;cursor:col-resize;flex-shrink:0;transition:background 0.2s}
+.resize-handle:hover{background:#6366f1}
+</style></head><body>
+<div class="preview-bar">
+  <strong>SEO Room Preview</strong>
+  <span>Side-by-Side: Wireframe + Draft Content</span>
+  <span class="meta">${escapedTitle}</span>
+</div>
+<div class="split" id="split">
+  <div class="panel panel-wireframe" id="left-panel">
+    <div class="label">Wireframe / Design Reference</div>
+    ${mime.startsWith('image/') ? `<img src="data:${mime};base64,${base64}" alt="Page wireframe" />` : `<div style="padding:40px;text-align:center;color:#888"><i>PDF wireframe uploaded — open separately to view</i></div>`}
+  </div>
+  <div class="resize-handle" id="resize-handle"></div>
+  <div class="panel panel-content" id="right-panel">
+    <div class="label">Draft Content</div>
+    <div class="meta-box">
+      <div><span class="meta-label">Meta Title</span><div class="meta-value">${escapedTitle}</div></div>
+      ${escapedDesc ? `<div style="margin-top:8px"><span class="meta-label">Meta Description</span><div class="meta-value">${escapedDesc}</div></div>` : ''}
+    </div>
+    <div class="content-body"><h1>${escapedTitle}</h1>${escapedDraft}</div>
+  </div>
+</div>
+<script>
+// Resizable split panels
+const handle = document.getElementById('resize-handle');
+const left = document.getElementById('left-panel');
+const right = document.getElementById('right-panel');
+let dragging = false;
+handle.addEventListener('mousedown', () => { dragging = true; document.body.style.cursor = 'col-resize'; });
+document.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const pct = (e.clientX / window.innerWidth) * 100;
+  if (pct < 20 || pct > 80) return;
+  left.style.flex = 'none';
+  left.style.width = pct + '%';
+  right.style.flex = '1';
+});
+document.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; });
+</script>
+</body></html>`);
+    }
+
     // Build the page URL — detect homepage URLs (domain root = wrong URL)
     let pageUrl = item.page_url || '';
     if (pageUrl && !pageUrl.startsWith('http')) {
@@ -7820,6 +7903,74 @@ app.get('/api/projects/:projectId/site-pages/:id/preview', async (req, res) => {
     const draftDesc = item.meta_description || '';
     const domain = project?.domain || '';
     const slug = item.slug || '';
+
+    // === WIREFRAME SIDE-BY-SIDE PREVIEW for site_pages ===
+    if (item.wireframe_image && item.wireframe_mime) {
+      const mime = item.wireframe_mime || 'image/png';
+      const base64 = (item.wireframe_image || '').replace(/^data:[^;]+;base64,/, '');
+      const escapedTitle = (draftTitle || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const escapedDesc = (draftDesc || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const escapedDraft = draftContent.replace(/<script/gi, '&lt;script');
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview — ${escapedTitle}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;overflow:hidden}
+.preview-bar{position:fixed;top:0;left:0;right:0;z-index:100;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 4px 20px rgba(0,0,0,0.3)}
+.preview-bar strong{font-size:14px}
+.split{display:flex;height:calc(100vh - 44px);margin-top:44px}
+.panel{flex:1;overflow-y:auto;padding:24px}
+.panel-wireframe{background:#111;border-right:2px solid #333;display:flex;flex-direction:column;align-items:center;padding:16px}
+.panel-wireframe img{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5)}
+.panel-wireframe .label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;font-weight:600}
+.panel-content{background:#fafafa;color:#333}
+.panel-content .label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;font-weight:600;padding:0 0 8px;border-bottom:1px solid #e5e7eb}
+.panel-content .content-body{line-height:1.8;font-size:16px;max-width:720px}
+.panel-content .content-body h1{font-size:28px;margin:0 0 8px;color:#1a1a1a}
+.panel-content .content-body h2{font-size:22px;margin:28px 0 12px;border-bottom:2px solid #e2e8f0;padding-bottom:8px;color:#1a1a1a}
+.panel-content .content-body h3{font-size:18px;margin:22px 0 10px;color:#1a1a1a}
+.panel-content .content-body p{margin:12px 0}
+.panel-content .content-body ul,.panel-content .content-body ol{margin:12px 0;padding-left:24px}
+.panel-content .content-body img{max-width:100%;height:auto;border-radius:8px}
+.panel-content .content-body a{color:#2563eb}
+.meta-box{background:#f0f4ff;border:1px solid #c7d2fe;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px}
+.meta-box .meta-label{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#6366f1;font-weight:700;margin-bottom:2px}
+.meta-box .meta-value{color:#1e1b4b;font-weight:500}
+.resize-handle{width:4px;background:#333;cursor:col-resize;flex-shrink:0;transition:background 0.2s}
+.resize-handle:hover{background:#6366f1}
+</style></head><body>
+<div class="preview-bar">
+  <strong>SEO Room Preview</strong>
+  <span>Side-by-Side: Wireframe + Draft Content</span>
+  <span style="opacity:0.7;font-size:12px">${escapedTitle}</span>
+</div>
+<div class="split" id="split">
+  <div class="panel panel-wireframe" id="left-panel">
+    <div class="label">Wireframe / Design Reference</div>
+    ${mime.startsWith('image/') ? `<img src="data:${mime};base64,${base64}" alt="Page wireframe" />` : `<div style="padding:40px;text-align:center;color:#888"><i>PDF wireframe uploaded</i></div>`}
+  </div>
+  <div class="resize-handle" id="resize-handle"></div>
+  <div class="panel panel-content" id="right-panel">
+    <div class="label">Draft Content</div>
+    <div class="meta-box">
+      <div><span class="meta-label">Meta Title</span><div class="meta-value">${escapedTitle}</div></div>
+      ${escapedDesc ? `<div style="margin-top:8px"><span class="meta-label">Meta Description</span><div class="meta-value">${escapedDesc}</div></div>` : ''}
+      <div style="margin-top:8px"><span class="meta-label">URL</span><div class="meta-value">${domain}/${slug}/</div></div>
+    </div>
+    <div class="content-body"><h1>${escapedTitle}</h1>${escapedDraft}</div>
+  </div>
+</div>
+<script>
+const handle = document.getElementById('resize-handle');
+const left = document.getElementById('left-panel');
+const right = document.getElementById('right-panel');
+let dragging = false;
+handle.addEventListener('mousedown', () => { dragging = true; document.body.style.cursor = 'col-resize'; });
+document.addEventListener('mousemove', (e) => { if (!dragging) return; const pct = (e.clientX / window.innerWidth) * 100; if (pct < 20 || pct > 80) return; left.style.flex = 'none'; left.style.width = pct + '%'; right.style.flex = '1'; });
+document.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; });
+</script>
+</body></html>`);
+    }
 
     // Try to fetch the live site for header/footer
     let headerBlock = '', footerBlock = '', headContent = '', bodyClasses = '', base = '';
