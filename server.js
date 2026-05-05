@@ -5157,21 +5157,56 @@ app.post('/api/projects/:projectId/content-queue/bulk-from-actions', async (req,
                        (action.current_value || '').match(/https?:\/\/[^\s,)]+/) ||
                        (action.page_url || '').match(/https?:\/\/[^\s,)]+/);
       // Don't fall back to homepage — empty URL is better than wrong URL
-      const pageUrl = urlMatch ? urlMatch[0].replace(/[.,;]+$/, '') : '';
+      let pageUrl = urlMatch ? urlMatch[0].replace(/[.,;]+$/, '') : '';
 
-      // Try to resolve WP page_id from URL
+      // Try to resolve WP page_id from URL or title
       let pageId = null;
-      if (wpBase && pageUrl) {
+      if (wpBase) {
         try {
-          const slug = pageUrl.replace(/\/$/, '').split('/').pop();
-          if (slug && slug !== project.domain?.replace(/^https?:\/\//, '').replace(/\/$/, '')) {
-            for (const type of ['pages', 'posts']) {
-              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, {
-                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-              });
-              if (wpRes.ok) {
-                const wpData = await wpRes.json();
-                if (wpData.length > 0) { pageId = wpData[0].id; break; }
+          if (pageUrl) {
+            // Resolve by slug from URL
+            const slug = pageUrl.replace(/\/$/, '').split('/').pop();
+            if (slug && slug !== project.domain?.replace(/^https?:\/\//, '').replace(/\/$/, '')) {
+              for (const type of ['pages', 'posts']) {
+                const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,link`, {
+                  headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+                });
+                if (wpRes.ok) {
+                  const wpData = await wpRes.json();
+                  if (wpData.length > 0) { pageId = wpData[0].id; if (!pageUrl && wpData[0].link) pageUrl = wpData[0].link; break; }
+                }
+              }
+            }
+          }
+          // If no URL or no pageId yet, search WP by title keywords
+          if (!pageId && action.title) {
+            const searchTerms = action.title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix)\s+/i, '')
+              .replace(/\s+(page|content|copy|text)(\s|$)/gi, ' ').trim();
+            if (searchTerms.length > 2) {
+              for (const type of ['pages', 'posts']) {
+                const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
+                  headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+                });
+                if (wpRes.ok) {
+                  const wpData = await wpRes.json();
+                  if (wpData.length === 1) {
+                    // Exact single match — use it
+                    pageId = wpData[0].id;
+                    if (!pageUrl) pageUrl = wpData[0].link || '';
+                    console.log(`[bulk-copywriter] Auto-resolved "${action.title}" → WP ${type}/${pageId} (${pageUrl})`);
+                    break;
+                  } else if (wpData.length > 1) {
+                    // Multiple matches — try to find best match by title similarity
+                    const titleLower = action.title.toLowerCase();
+                    const best = wpData.find(p => titleLower.includes((p.title?.rendered || '').toLowerCase().replace(/&amp;/g, '&').replace(/<[^>]+>/g, '')));
+                    if (best) {
+                      pageId = best.id;
+                      if (!pageUrl) pageUrl = best.link || '';
+                      console.log(`[bulk-copywriter] Auto-resolved "${action.title}" → WP ${type}/${pageId} via title match (${pageUrl})`);
+                      break;
+                    }
+                  }
+                }
               }
             }
           }
@@ -5313,6 +5348,62 @@ app.get('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     const row = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto-resolve URLs for content queue items with missing/homepage URLs
+app.post('/api/projects/:projectId/content-queue/auto-resolve-urls', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpBase) return res.status(400).json({ error: 'No WordPress URL configured' });
+    const authHeaders = getWpAuthHeaders(project);
+    const domainClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    // Find items with no URL, empty URL, or homepage URL
+    const items = (await pool.query(
+      `SELECT id, page_title, page_url, page_id FROM content_queue WHERE project_id=$1 AND stage != 'published'`, [projectId]
+    )).rows.filter(item => {
+      const url = (item.page_url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      return !item.page_id && (!url || url === domainClean);
+    });
+
+    const resolved = [];
+    const unresolved = [];
+    for (const item of items) {
+      if (!item.page_title) { unresolved.push({ id: item.id, title: item.page_title, reason: 'No title' }); continue; }
+      const searchTerms = item.page_title
+        .replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create\s+location\s+landing\s+pages?\s+for)\s*/i, '')
+        .replace(/\s+(page|content|copy|text)(\s|$)/gi, ' ').trim();
+      if (searchTerms.length < 3) { unresolved.push({ id: item.id, title: item.page_title, reason: 'Title too short' }); continue; }
+
+      let found = false;
+      for (const type of ['pages', 'posts']) {
+        try {
+          const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
+            headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+          });
+          if (!wpRes.ok) continue;
+          const wpData = await wpRes.json();
+          const titleLower = searchTerms.toLowerCase();
+          const best = wpData.length === 1 ? wpData[0] : wpData.find(p => {
+            const wpTitle = (p.title?.rendered || '').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').toLowerCase();
+            return titleLower.includes(wpTitle) || wpTitle.includes(titleLower);
+          });
+          if (best) {
+            await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [best.link || '', best.id, item.id]);
+            resolved.push({ id: item.id, title: item.page_title, wp_id: best.id, url: best.link });
+            found = true;
+            break;
+          }
+        } catch (e) { /* skip */ }
+      }
+      if (!found) unresolved.push({ id: item.id, title: item.page_title, reason: 'No WP match' });
+    }
+
+    res.json({ total: items.length, resolved: resolved.length, unresolved: unresolved.length, resolved_items: resolved, unresolved_items: unresolved });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5526,26 +5617,59 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
       });
     }
 
-    // Otherwise fetch live from WP — but skip if URL is homepage (domain root = wrong URL)
-    const rawPageUrl = item.page_url || '';
+    // Detect homepage URL (domain root = wrong URL) — try to auto-resolve from WP
+    let rawPageUrl = item.page_url || '';
     const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const urlClean = rawPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const isHomepage = !rawPageUrl || (domainClean && urlClean === domainClean);
-    if (isHomepage && !item.page_id) {
-      return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set — cannot import content. Set the correct page URL first.' });
+    let resolvedPageId = item.page_id;
+    const wpBase2 = (project?.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders2 = getWpAuthHeaders(project);
+
+    if (isHomepage && !resolvedPageId && wpBase2 && item.page_title) {
+      // Auto-resolve: search WP by title
+      console.log('[import-current] No URL, searching WP for title:', item.page_title);
+      const searchTerms = item.page_title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create location landing pages for)\s*/i, '').trim();
+      if (searchTerms.length > 2) {
+        for (const type of ['pages', 'posts']) {
+          try {
+            const wpRes = await fetch(`${wpBase2}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
+              headers: { ...(authHeaders2 || {}), 'Accept': 'application/json' }
+            });
+            if (wpRes.ok) {
+              const wpData = await wpRes.json();
+              const titleLower = searchTerms.toLowerCase();
+              const best = wpData.length === 1 ? wpData[0] : wpData.find(p => {
+                const wpTitle = (p.title?.rendered || '').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').toLowerCase();
+                return titleLower.includes(wpTitle) || wpTitle.includes(titleLower);
+              });
+              if (best) {
+                resolvedPageId = best.id;
+                rawPageUrl = best.link || '';
+                // Persist the resolved URL + page_id to DB
+                await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [rawPageUrl, resolvedPageId, item.id]);
+                console.log(`[import-current] Auto-resolved "${item.page_title}" → WP ${type}/${resolvedPageId} (${rawPageUrl})`);
+                break;
+              }
+            }
+          } catch (e) { /* skip */ }
+        }
+      }
+    }
+
+    if ((!rawPageUrl || (domainClean && rawPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') === domainClean)) && !resolvedPageId) {
+      return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set and could not auto-resolve from WordPress.' });
     }
     const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);
-    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', item.page_id);
-    const content = await fetchLivePageContent(pageUrl, project, item.page_id);
+    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId);
+    const content = await fetchLivePageContent(pageUrl, project, resolvedPageId);
     console.log('[import-current] Got content length:', content ? content.length : 0, 'words:', content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0);
 
     // Also try to get Yoast meta
     let meta = {};
-    const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
-    if (wpBase && item.page_id) {
-      const authHeaders = getWpAuthHeaders(project);
+    if (wpBase2 && resolvedPageId) {
       try {
-        const m = await readWpYoastMeta(wpBase, item.page_id, authHeaders);
+        const m = await readWpYoastMeta(wpBase2, resolvedPageId, authHeaders2);
         if (m) { meta = m; }
       } catch (e) { /* no meta */ }
     }
