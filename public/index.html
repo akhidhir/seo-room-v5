@@ -9760,37 +9760,36 @@
         }
       });
 
-      // Detect consecutive image-heavy siblings (slider images each in own wrapper)
+      // Detect consecutive image-only siblings (slider images each in own wrapper)
+      // Only collapse if 3+ consecutive AND each element is purely an image (no real text)
       function collapseConsecutiveImages(container) {
         var children = Array.from(container.children);
         var i = 0;
         while (i < children.length) {
-          // Check if this child is image-heavy (contains img, minimal text)
           var runs = [];
           var j = i;
           while (j < children.length) {
             var child = children[j];
             var hasImg = child.querySelector('img') || child.tagName === 'IMG';
-            var textLen = (child.textContent || '').replace(/\s+/g, ' ').trim().length;
-            if (hasImg && textLen < 30) {
+            // Strip image alt text before measuring — only count real visible text
+            var clone = child.cloneNode(true);
+            clone.querySelectorAll('img').forEach(function(img) { img.remove(); });
+            var textLen = (clone.textContent || '').replace(/\s+/g, ' ').trim().length;
+            if (hasImg && textLen < 5) {
               runs.push(child);
               j++;
             } else {
               break;
             }
           }
-          if (runs.length >= 2) {
-            // Found 2+ consecutive image elements — replace with placeholder
+          if (runs.length >= 3) {
             var firstImg = runs[0].querySelector('img') || runs[0];
             var ph = makePlaceholder(firstImg, 'Slider');
             runs[0].parentNode.insertBefore(ph, runs[0]);
             runs.forEach(function(el) { el.parentNode.removeChild(el); });
-            // Re-read children since DOM changed
             children = Array.from(container.children);
-            // Don't increment i — the placeholder is now at position i
             i++;
           } else {
-            // Recurse into this child's children
             if (children[i] && children[i].children && children[i].children.length > 0) {
               collapseConsecutiveImages(children[i]);
             }
