@@ -9728,15 +9728,23 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
-      // Strip sliders/carousels — replace with sized placeholder
+      // Strip sliders/carousels/videos — replace with sized placeholder
       let cleaned = html;
-      function sliderPlaceholder(block) {
+      function mediaPlaceholder(block, label) {
         const wMatch = block.match(/width[=:]\s*"?(\d+)/i);
         const hMatch = block.match(/height[=:]\s*"?(\d+)/i);
         const w = wMatch ? wMatch[1] + 'px' : '100%';
-        const h = hMatch ? hMatch[1] + 'px' : '400px';
-        return '<div style="width:' + w + ';height:' + h + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;">[— Slider —]</div>';
+        const h = hMatch ? hMatch[1] + 'px' : label === 'Video' ? '315px' : '400px';
+        return '<div style="width:' + w + ';height:' + h + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;">[— ' + label + ' —]</div>';
       }
+      function sliderPlaceholder(block) { return mediaPlaceholder(block, 'Slider'); }
+      function videoPlaceholder(block) { return mediaPlaceholder(block, 'Video'); }
+      // Replace video embeds (iframes: YouTube, Vimeo, etc.)
+      cleaned = cleaned.replace(/<iframe[^>]*src="[^"]*(?:youtube|vimeo|wistia|dailymotion|videopress)[^"]*"[^>]*>[\s\S]*?<\/iframe>/gi, videoPlaceholder);
+      // Replace HTML5 video elements
+      cleaned = cleaned.replace(/<video[^>]*>[\s\S]*?<\/video>/gi, videoPlaceholder);
+      // Replace video wrapper divs (wp-block-embed, elementor-video, etc.)
+      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:wp-block-embed|elementor-widget-video|video-container|video-wrapper|wp-video)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, videoPlaceholder);
       // Replace slider containers
       cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
       cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
