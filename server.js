@@ -10871,9 +10871,10 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         const results = data.local_results || [];
         console.log(`[gbp-audit] SerpAPI found ${results.length} results`);
 
-        // Match by website domain (most accurate)
+        // Match by website domain (most accurate), then by business name
+        const bnLower = businessName.toLowerCase().split(' ')[0];
         const match = results.find(r => r.website && r.website.includes(domain)) ||
-          results.find(r => r.title && r.title.toLowerCase().includes('houseworks')) ||
+          results.find(r => r.title && r.title.toLowerCase().includes(bnLower)) ||
           null;
 
         if (match) {
@@ -10934,6 +10935,32 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
                 console.log(`[gbp-audit] KG merge: description=${gbpData.profile.description ? 'YES' : 'NO'}, hours=${gbpData.profile.hoursSet}`);
               }
             } catch (e) { console.log(`[gbp-audit] Detail lookup error: ${e.message}`); }
+          }
+
+          // 1b-extra. SerpAPI Place Details — get EXACT review count, photos, full data
+          if (match.place_id || match.data_id) {
+            try {
+              const placeParams = { engine: 'google_maps', type: 'place', api_key: SERPAPI_KEY };
+              if (match.data_id) placeParams.data_id = match.data_id;
+              else placeParams.place_id = match.place_id;
+              console.log(`[gbp-audit] SerpAPI Place Details: ${match.data_id || match.place_id}`);
+              const placeData = await serpApiSearch(placeParams);
+              const pr = placeData.place_results || placeData;
+              if (pr) {
+                if (pr.reviews !== undefined) { gbpData.profile.reviewCount = pr.reviews; console.log(`[gbp-audit] Exact review count: ${pr.reviews}`); }
+                if (pr.rating !== undefined) gbpData.profile.rating = pr.rating;
+                if (pr.user_reviews?.most_relevant) gbpData.profile.sampleReviews = pr.user_reviews.most_relevant.slice(0, 10).map(r => ({ author: r.username, rating: r.rating, text: (r.description || r.snippet || '').slice(0, 300), date: r.date, response: r.response?.description || null }));
+                if (pr.photos_count || pr.images?.length) gbpData.profile.photoCount = pr.photos_count || pr.images?.length || gbpData.profile.photoCount;
+                if (pr.description) gbpData.profile.description = pr.description;
+                if (pr.hours) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = JSON.stringify(pr.hours); }
+                if (pr.address) gbpData.profile.address = pr.address;
+                if (pr.phone) gbpData.profile.phone = pr.phone;
+                if (pr.type) gbpData.profile.primaryType = pr.type;
+                if (pr.types || pr.subtypes) gbpData.profile.categories = pr.subtypes || pr.types || gbpData.profile.categories;
+                if (pr.extensions) gbpData.profile.serviceOptions = pr.extensions;
+                console.log(`[gbp-audit] Place Details enriched: reviews=${gbpData.profile.reviewCount}, rating=${gbpData.profile.rating}, photos=${gbpData.profile.photoCount}, categories=${(gbpData.profile.categories || []).length}`);
+              }
+            } catch (e) { console.log(`[gbp-audit] Place Details error: ${e.message}`); }
           }
 
           console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
