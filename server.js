@@ -5342,6 +5342,34 @@ app.post('/api/projects/:projectId/copywriter-move', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk move items from content_queue → site_pages
+app.post('/api/projects/:projectId/copywriter-move/bulk', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { item_ids, from, to } = req.body;
+    if (!item_ids?.length || from !== 'content_queue' || to !== 'site_pages') return res.status(400).json({ error: 'Invalid parameters' });
+
+    const moved = [];
+    for (const id of item_ids) {
+      const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+      if (!item) continue;
+      const pageName = item.page_title || 'New Page';
+      const slug = pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const pageType = /suburb|location/i.test(pageName) ? 'suburb' : 'service';
+      const r = await pool.query(
+        `INSERT INTO site_pages (project_id, page_type, page_name, slug, focus_keyword, draft_content, meta_title, meta_description, stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft') RETURNING id`,
+        [projectId, pageType, pageName, slug, item.current_focus_keyword || item.draft_focus_keyword || '',
+         item.draft_content || item.current_content || '', item.draft_meta_title || item.current_meta_title || '',
+         item.draft_meta_desc || item.current_meta_desc || '']
+      );
+      await pool.query('DELETE FROM content_queue WHERE id=$1', [id]);
+      moved.push({ old_id: id, new_id: r.rows[0].id, title: pageName });
+    }
+    res.json({ success: true, moved: moved.length, items: moved });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Get single content queue item
 app.get('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   try {

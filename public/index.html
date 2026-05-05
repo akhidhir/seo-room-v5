@@ -11400,12 +11400,26 @@
             ),
             batchSelected.size > 0 && React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, batchSelected.size + ' selected')
           ),
-          batchSelected.size > 0 && React.createElement('button', {
-            onClick: handleBatchGenerate, disabled: batchGenerating,
-            style: { padding: '8px 16px', background: batchGenerating ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: batchGenerating ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600 }
-          }, batchGenerating ?
-            React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Generating ' + batchProgress.done + '/' + batchProgress.total + '...') :
-            React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'Generate ' + batchSelected.size + ' Drafts')
+          batchSelected.size > 0 && React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('button', {
+              onClick: handleBatchGenerate, disabled: batchGenerating,
+              style: { padding: '8px 16px', background: batchGenerating ? 'var(--bg3)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: batchGenerating ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600 }
+            }, batchGenerating ?
+              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Generating ' + batchProgress.done + '/' + batchProgress.total + '...') :
+              React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'Generate ' + batchSelected.size + ' Drafts')
+            ),
+            React.createElement('button', {
+              onClick: async () => {
+                if (!confirm('Move ' + batchSelected.size + ' item(s) to Copywriter New?')) return;
+                try {
+                  const r = await api('/projects/' + pid + '/copywriter-move/bulk', { method: 'POST', body: { item_ids: [...batchSelected], from: 'content_queue', to: 'site_pages' } });
+                  setBatchSelected(new Set());
+                  loadItems();
+                  alert('Moved ' + (r.moved || 0) + ' item(s) to Copywriter New.');
+                } catch (e) { alert('Move failed: ' + e.message); }
+              },
+              style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+            }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6 } }), 'Move ' + batchSelected.size + ' to CW New')
           )
         ),
         // Items list
