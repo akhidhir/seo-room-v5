@@ -8831,6 +8831,9 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const safeJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--');
     const dataTag = `<script type="application/json" id="seo-section-data">${safeJson}</script>`;
 
+    // Build our own origin URL (base tag points to target site, so relative paths won't work)
+    const selfOrigin = `${req.protocol}://${req.get('host')}`;
+
     const injectedScript = dataTag + `
 <style>
 .seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,’Segoe UI’,sans-serif}
@@ -8854,7 +8857,7 @@ body.hide-hl .seo-new-block{outline:none!important}
 body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;padding-left:0!important;color:inherit!important}
 body.hide-hl .seo-text-hl *{color:inherit!important}
 </style>
-<script src=”/section-preview.js”><\/script>
+<script src=”${selfOrigin}/section-preview.js”><\/script>
 <div class=”seo-preview-bar”>
   <strong>SEO Room Preview</strong>
   <span class=”badge” id=”seo-match-count”>loading...</span>
