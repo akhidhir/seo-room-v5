@@ -5823,6 +5823,24 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     const wpBase2 = (project?.wordpress_url || '').replace(/\/$/, '');
     const authHeaders2 = getWpAuthHeaders(project);
 
+    // For homepage without page_id, try discoverPages first (sitemap + WP REST)
+    if (isHomepage && !resolvedPageId) {
+      console.log('[import-current] Homepage without page_id, trying discoverPages...');
+      try {
+        const discovered = await discoverPages('https://' + domainClean, wpBase2, authHeaders2);
+        // Find homepage: link matches domain root, or slug is 'home'/'homepage'
+        const homeEntry = discovered.find(p => {
+          const pUrl = (p.url || '').replace(/\/$/, '').replace(/^https?:\/\//, '');
+          return pUrl === domainClean;
+        }) || discovered.find(p => ['home', 'homepage', 'front-page'].includes(p.slug));
+        if (homeEntry && homeEntry.page_id && !isNaN(homeEntry.page_id)) {
+          resolvedPageId = parseInt(homeEntry.page_id);
+          await pool.query('UPDATE content_queue SET page_id=$1 WHERE id=$2', [resolvedPageId, item.id]);
+          console.log(`[import-current] Found homepage page_id via discoverPages: ${resolvedPageId}`);
+        }
+      } catch (e) { console.log('[import-current] discoverPages failed:', e.message); }
+    }
+
     if (isHomepage && !resolvedPageId && wpBase2 && item.page_title) {
       // Auto-resolve: search WP by title
       console.log('[import-current] No URL, searching WP for title:', item.page_title);
@@ -5863,9 +5881,21 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
       return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set and could not auto-resolve from WordPress.' });
     }
     const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);
-    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId);
+    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId, 'wpBase:', wpBase2);
     const fetchResult = await fetchLivePageContent(pageUrl, project, resolvedPageId);
-    const content = fetchResult.content || fetchResult; // backward compat
+    let content = fetchResult.content || fetchResult; // backward compat
+
+    // Quality check: if content looks like nav/menu garbage (very repetitive or too short), warn
+    if (content) {
+      const plainText = content.replace(/<[^>]+>/g, '').trim();
+      const words = plainText.split(/\s+/).filter(Boolean);
+      const uniqueWords = new Set(words.map(w => w.toLowerCase()));
+      const uniqueRatio = words.length > 0 ? uniqueWords.size / words.length : 0;
+      if (words.length < 50 || (words.length > 20 && uniqueRatio < 0.3)) {
+        console.log(`[import-current] Content quality poor: ${words.length} words, ${Math.round(uniqueRatio*100)}% unique — likely nav/menu text`);
+        content = ''; // discard garbage
+      }
+    }
     // If fetchLivePageContent discovered the page_id, persist it
     if (fetchResult.resolvedPageId && !resolvedPageId) {
       resolvedPageId = fetchResult.resolvedPageId;
