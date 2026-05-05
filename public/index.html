@@ -10805,7 +10805,17 @@
           const full = await api('/projects/' + pid + '/content-queue/' + item.id);
           if (full && full.id) {
             setSelectedItem(full);
-            if (full.page_sections?.length) setSectionView(true);
+            if (full.page_sections?.length) {
+              setSectionView(true);
+            } else if (full.page_url) {
+              // Auto-parse sections so Design-Safe preview is always available
+              try {
+                const sr = await api('/projects/' + pid + '/content-queue/' + full.id + '/parse-sections', { method: 'POST' });
+                if (!sr.error && sr.sections?.length) {
+                  setSelectedItem(prev => ({ ...prev, page_sections: sr.sections }));
+                }
+              } catch (e2) { /* silent — page may not be reachable */ }
+            }
           }
         } catch (e) { /* use list data */ }
       };
