@@ -8850,7 +8850,13 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
 </style>
 <script>
 (function(){
-  function norm(s){ return (s||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
+  function norm(s){
+    return (s||'')
+      .replace(/<[^>]+>/g,'')
+      .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#039;/g,"'").replace(/&nbsp;/g,' ').replace(/&mdash;/g,'-').replace(/&ndash;/g,'-').replace(/&rsquo;/g,"'").replace(/&lsquo;/g,"'").replace(/&rdquo;/g,'"').replace(/&ldquo;/g,'"')
+      .replace(/[‘’‚‛]/g,"'").replace(/[“”„‟]/g,'"').replace(/[–—]/g,'-')
+      .replace(/\\s+/g,' ').trim().toLowerCase();
+  }
 
   // === NEW APPROACH: Direct paragraph-by-paragraph matching ===
   // For each section, extract original paragraphs as plain text,
@@ -9017,6 +9023,63 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
     var countBadge = document.getElementById('seo-match-count');
     if(countBadge) countBadge.textContent = matched + ' of ' + total + ' sections, ' + totalReplacements + ' changes';
     console.log('[SEO Room] Done: '+matched+'/'+total+' sections, '+totalReplacements+' text replacements');
+
+    // === DEBUG PANEL ===
+    var debugDiv = document.createElement('div');
+    debugDiv.id = 'seo-debug-panel';
+    debugDiv.style.cssText = 'display:none;position:fixed;top:0;left:0;right:0;bottom:60px;z-index:999998;background:rgba(0,0,0,0.95);color:#e5e7eb;overflow:auto;padding:20px;font-family:monospace;font-size:12px';
+    var debugHtml = '<h3 style="color:#f59e0b;margin:0 0 12px">SEO Room Debug — Paragraph Matching</h3>';
+
+    // Show all page paragraphs
+    debugHtml += '<h4 style="color:#22c55e;margin:12px 0 6px">Page paragraphs found (first 50 chars):</h4>';
+    var pagePs = document.querySelectorAll('p');
+    var pagePCount = 0;
+    pagePs.forEach(function(p){
+      if(p.closest('form,footer,nav,header,.seo-preview-bar,.seo-debug-panel,#seo-debug-panel')) return;
+      var t = p.textContent.trim();
+      if(t.length < 10) return;
+      pagePCount++;
+      var normT = norm(t);
+      debugHtml += '<div style="margin:2px 0;padding:2px 4px;border-left:2px solid #22c55e">['+p.tagName+'] "' + normT.slice(0,80) + '..."</div>';
+    });
+    debugHtml += '<div style="color:#22c55e;margin:4px 0">Total: '+pagePCount+' paragraphs</div>';
+
+    // Show what we searched for
+    sections.forEach(function(section){
+      if(section.is_new) return;
+      debugHtml += '<h4 style="color:#f59e0b;margin:16px 0 6px">Section: ' + (section.heading||section.type||'?').slice(0,40) + '</h4>';
+      if(!section.original_text){
+        debugHtml += '<div style="color:#ef4444">No original_text!</div>';
+        return;
+      }
+      var origTemp2 = document.createElement('div');
+      origTemp2.innerHTML = section.original_text;
+      origTemp2.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
+        var t = el.textContent.trim();
+        if(t.length < 10) return;
+        var n = norm(t);
+        // Check if this exists on the page
+        var found = false;
+        pagePs.forEach(function(pp){
+          if(pp.closest('form,footer,nav,header,.seo-preview-bar')) return;
+          if(norm(pp.textContent) === n) found = true;
+        });
+        var color = found ? '#22c55e' : '#ef4444';
+        var label = found ? 'FOUND' : 'NOT FOUND';
+        debugHtml += '<div style="margin:2px 0;padding:2px 4px;border-left:2px solid '+color+'">['+label+'] "' + n.slice(0,80) + '..."</div>';
+      });
+    });
+
+    debugDiv.innerHTML = debugHtml;
+    document.body.appendChild(debugDiv);
+
+    // Add debug button to preview bar
+    var debugBtn = document.createElement('button');
+    debugBtn.textContent = 'Debug';
+    debugBtn.style.cssText = 'background:rgba(239,68,68,0.3);color:#fff;border:1px solid rgba(239,68,68,0.6);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600';
+    debugBtn.onclick = function(){ var d = document.getElementById('seo-debug-panel'); d.style.display = d.style.display==='none'?'block':'none'; };
+    var bar = document.querySelector('.seo-preview-bar');
+    if(bar) bar.appendChild(debugBtn);
   }
 
   // Run after full page load (Elementor needs time to render)
