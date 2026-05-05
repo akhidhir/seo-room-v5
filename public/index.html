@@ -10403,6 +10403,82 @@
       );
     }
 
+    // URL Picker — searchable dropdown of all site pages
+    function UrlPicker({ projectId, itemId, onPick }) {
+      const [pages, setPages] = useState(null); // null = not loaded, [] = loaded empty
+      const [search, setSearch] = useState('');
+      const [open, setOpen] = useState(false);
+
+      const loadPages = async () => {
+        if (pages !== null) { setOpen(true); return; } // already loaded
+        try {
+          const data = await api('/projects/' + projectId + '/discover-pages');
+          setPages(Array.isArray(data) ? data : []);
+          setOpen(true);
+        } catch (e) { alert('Failed to load pages: ' + e.message); }
+      };
+
+      const filtered = (pages || []).filter(p => {
+        if (!search) return true;
+        const s = search.toLowerCase();
+        return (p.url || '').toLowerCase().includes(s) || (p.title || '').toLowerCase().includes(s) || (p.slug || '').toLowerCase().includes(s);
+      });
+
+      const handlePick = async (url) => {
+        try {
+          await api('/projects/' + projectId + '/content-queue/' + itemId, { method: 'PUT', body: { page_url: url } });
+          setOpen(false);
+          onPick(url);
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      return React.createElement('div', { style: { position: 'relative', marginTop: 2 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+          React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { fontSize: 10, color: '#f59e0b' } }),
+          React.createElement('button', {
+            onClick: loadPages,
+            style: { padding: '4px 12px', fontSize: 13, background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-link', style: { marginRight: 4 } }), pages === null ? 'Pick Page URL' : 'Change URL'),
+          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'No URL set')
+        ),
+        open && React.createElement('div', { style: { position: 'absolute', top: '100%', left: 0, zIndex: 999, width: 500, maxHeight: 350, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.3)', marginTop: 6, display: 'flex', flexDirection: 'column' } },
+          React.createElement('div', { style: { padding: '8px 12px', borderBottom: '1px solid var(--border)' } },
+            React.createElement('input', {
+              type: 'text', placeholder: 'Search pages...', autoFocus: true, value: search,
+              onChange: e => setSearch(e.target.value),
+              style: { width: '100%', padding: '6px 10px', fontSize: 13, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, outline: 'none' }
+            })
+          ),
+          React.createElement('div', { style: { flex: 1, overflowY: 'auto', padding: 4 } },
+            filtered.length === 0
+              ? React.createElement('div', { style: { padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, pages === null ? 'Loading...' : 'No pages found')
+              : filtered.map((p, i) =>
+                  React.createElement('button', {
+                    key: i,
+                    onClick: () => handlePick(p.url),
+                    style: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
+                    onMouseEnter: e => { e.currentTarget.style.background = 'var(--bg)'; },
+                    onMouseLeave: e => { e.currentTarget.style.background = 'transparent'; }
+                  },
+                    React.createElement('div', { style: { fontWeight: 600, marginBottom: 2 } }, p.title || p.slug),
+                    React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.url.replace(/^https?:\/\//, ''))
+                  )
+                )
+          ),
+          React.createElement('div', { style: { padding: '6px 12px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' } },
+            React.createElement('button', {
+              onClick: () => {
+                const url = prompt('Enter URL manually:');
+                if (url) handlePick(url);
+              },
+              style: { fontSize: 11, color: 'var(--text3)', background: 'none', border: 'none', cursor: 'pointer' }
+            }, React.createElement('i', { className: 'fa-solid fa-pen', style: { marginRight: 4 } }), 'Enter manually'),
+            React.createElement('button', { onClick: () => setOpen(false), style: { fontSize: 11, color: 'var(--text3)', background: 'none', border: 'none', cursor: 'pointer' } }, 'Cancel')
+          )
+        )
+      );
+    }
+
     function CopywriterPage({ stage, project, setPage }) {
       const [items, setItems] = useState([]);
       const [allItems, setAllItems] = useState([]);
@@ -10798,25 +10874,11 @@
                 const urlClean = rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
                 const isHomepage = !rawUrl || (domainClean && urlClean === domainClean);
                 if (isHomepage) {
-                  return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 } },
-                    React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { fontSize: 10, color: '#f59e0b' } }),
-                    React.createElement('input', {
-                      type: 'text', placeholder: 'Enter page URL (e.g. https://goldpc.net.au/computer-repairs-guilford/)',
-                      defaultValue: '',
-                      onKeyDown: async (e) => {
-                        if (e.key === 'Enter' && e.target.value.trim()) {
-                          const newUrl = e.target.value.trim();
-                          try {
-                            await api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PUT', body: { page_url: newUrl } });
-                            setSelectedItem(prev => ({ ...prev, page_url: newUrl }));
-                            loadItems();
-                          } catch (err) { alert('Failed to save URL: ' + err.message); }
-                        }
-                      },
-                      style: { flex: 1, maxWidth: 500, padding: '4px 8px', fontSize: 13, background: 'var(--bg)', color: 'var(--text)', border: '1px solid #f59e0b60', borderRadius: 6, outline: 'none' }
-                    }),
-                    React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'Press Enter to save')
-                  );
+                  return React.createElement(UrlPicker, {
+                    projectId: pid,
+                    itemId: selectedItem.id,
+                    onPick: (url) => { setSelectedItem(prev => ({ ...prev, page_url: url })); loadItems(); }
+                  });
                 }
                 const fullUrl = rawUrl.startsWith('http') ? rawUrl : ('https://' + domainClean + rawUrl);
                 return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },

@@ -7795,6 +7795,19 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
   }
 });
 
+// List all discoverable page URLs from sitemap — for URL picker dropdown
+app.get('/api/projects/:projectId/discover-pages', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domainClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    const pages = await discoverPages('https://' + domainClean, wpBase, authHeaders);
+    res.json(pages);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Preview for site_pages (New Website) — standalone preview since no live URL
 app.get('/api/projects/:projectId/site-pages/:id/preview', async (req, res) => {
   try {
