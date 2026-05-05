@@ -8825,9 +8825,13 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const newSections = sections.filter(s => s.is_new && s.draft_text);
     const updatedCount = sectionsForClient.filter(s => !s.is_new).length;
 
-    const sectionsJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+    // sectionsJson moved to safeJson / dataTag below
 
-    const injectedScript = `
+    // Embed section data as safe JSON in a non-executable script tag (avoids template literal issues)
+    const safeJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--');
+    const dataTag = `<script type="application/json" id="seo-section-data">${safeJson}</script>`;
+
+    const injectedScript = dataTag + `
 <style>
 .seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
 .seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
@@ -8872,7 +8876,7 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
   // No container logic needed — works regardless of Elementor nesting.
 
   function run(){
-    var sections = ${sectionsJson};
+    var sections = JSON.parse(document.getElementById('seo-section-data').textContent);
     var matched = 0;
     var totalReplacements = 0;
     var total = sections.filter(function(s){return !s.is_new;}).length;
