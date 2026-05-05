@@ -8845,233 +8845,149 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
 body.hide-hl .seo-changed{outline:none!important}
 body.hide-hl .seo-changed-badge,body.hide-hl .seo-new-badge{display:none!important}
 body.hide-hl .seo-new-block{outline:none!important}
-body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;padding-left:0!important}
+body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;padding-left:0!important;color:inherit!important}
+body.hide-hl .seo-text-hl *{color:inherit!important}
 </style>
 <script>
 (function(){
   function norm(s){ return (s||'').replace(/\\s+/g,' ').trim().toLowerCase(); }
 
-  function findSectionContainer(headingEl){
-    // From a heading element, walk UP the DOM to find the Elementor section/widget container
-    // These are the wrappers that hold the visual "block" on the page
-    var el = headingEl.parentElement;
-    for(var i=0;i<12;i++){
-      if(!el||el===document.body) break;
-      var cls = (el.className||'').toString();
-      var tag = el.tagName.toLowerCase();
-      // Elementor section-level containers
-      if(cls.match(/elementor-section(?!-)|e-con(?!-)|elementor-top-section|wpb_row|vc_row|wp-block-group|et_pb_section/i)) return el;
-      // Generic section/article
-      if(tag==='section'||tag==='article') return el;
-      // Elementor widget wrap — go one more level up to get the full section
-      if(cls.match(/elementor-widget-wrap|e-con-inner/i)){
-        if(el.parentElement) return el.parentElement;
-        return el;
-      }
-      el=el.parentElement;
-    }
-    // Fallback: return the heading's grandparent or parent
-    return headingEl.parentElement?.parentElement || headingEl.parentElement || headingEl;
-  }
-
-  function replaceTextInContainer(container, draftHtml, origText){
-    // STRATEGY: Find Elementor text-editor widgets inside this container
-    // and replace their innerHTML with the draft content.
-    // This preserves the widget wrapper styling while swapping the text inside.
-
-    var oldFullText = norm(container.textContent);
-
-    // 1. Try: find .elementor-text-editor divs (where Elementor puts the actual text)
-    var textWidgets = container.querySelectorAll('.elementor-text-editor');
-    // Filter out form/footer/nav widgets
-    var contentWidgets = [];
-    textWidgets.forEach(function(w){
-      if(w.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) return;
-      if(w.textContent.trim().length >= 10) contentWidgets.push(w);
-    });
-
-    if(contentWidgets.length > 0){
-      // Replace the FIRST content widget with the full draft HTML
-      // Keep existing classes/styles on the widget div — only change innerHTML
-      var origWidgetText = norm(contentWidgets[0].textContent);
-      contentWidgets[0].innerHTML = draftHtml;
-      // Mark all paragraphs inside as highlighted
-      contentWidgets[0].querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
-        el.classList.add('seo-text-hl');
-      });
-      console.log('[SEO Room] Replaced via .elementor-text-editor ('+contentWidgets.length+' widgets found, used first)');
-
-      // If there are MORE content widgets (multi-column text), replace them too
-      // Split draft into chunks if we have multiple widgets
-      if(contentWidgets.length > 1 && origText){
-        // Parse draft into blocks to distribute across widgets
-        var temp = document.createElement('div');
-        temp.innerHTML = draftHtml;
-        var allBlocks = temp.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,ul,ol,blockquote');
-        if(allBlocks.length > contentWidgets.length){
-          var perWidget = Math.ceil(allBlocks.length / contentWidgets.length);
-          contentWidgets.forEach(function(cw, idx){
-            var start = idx * perWidget;
-            var end = Math.min(start + perWidget, allBlocks.length);
-            if(idx === 0) return; // already set above
-            var chunk = '';
-            for(var b=start;b<end;b++) chunk += allBlocks[b].outerHTML;
-            if(chunk){
-              cw.innerHTML = chunk;
-              cw.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
-                el.classList.add('seo-text-hl');
-              });
-            }
-          });
-        }
-      }
-      return true;
-    }
-
-    // 2. Fallback: find .elementor-widget-container divs with text
-    var widgetContainers = container.querySelectorAll('.elementor-widget-container');
-    var textContainers = [];
-    widgetContainers.forEach(function(wc){
-      if(wc.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) return;
-      var hasText = wc.querySelectorAll('p,h1,h2,h3,h4,h5,h6').length > 0;
-      if(hasText && wc.textContent.trim().length >= 10) textContainers.push(wc);
-    });
-
-    if(textContainers.length > 0){
-      textContainers[0].innerHTML = draftHtml;
-      textContainers[0].querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
-        el.classList.add('seo-text-hl');
-      });
-      console.log('[SEO Room] Replaced via .elementor-widget-container fallback');
-      return true;
-    }
-
-    // 3. Last fallback: find any div/section with p tags and replace
-    var pEls = container.querySelectorAll('p');
-    var contentPs = [];
-    pEls.forEach(function(p){
-      if(p.closest('form,footer,nav,header,.seo-preview-bar')) return;
-      if(p.textContent.trim().length >= 10) contentPs.push(p);
-    });
-    if(contentPs.length > 0){
-      // Find the common parent of all content paragraphs
-      var parent = contentPs[0].parentElement;
-      var oldParentText = norm(parent.textContent);
-      parent.innerHTML = draftHtml;
-      parent.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
-        el.classList.add('seo-text-hl');
-      });
-      console.log('[SEO Room] Replaced via paragraph parent fallback');
-      return true;
-    }
-
-    console.log('[SEO Room] No text elements found in container to replace');
-    return false;
-  }
+  // === NEW APPROACH: Direct paragraph-by-paragraph matching ===
+  // For each section, extract original paragraphs as plain text,
+  // find the EXACT DOM element on the page with that text,
+  // and replace it with the corresponding draft paragraph.
+  // No container logic needed — works regardless of Elementor nesting.
 
   function run(){
     var sections = ${sectionsJson};
     var matched = 0;
+    var totalReplacements = 0;
     var total = sections.filter(function(s){return !s.is_new;}).length;
 
-    console.log('[SEO Room] Starting preview replacement for '+sections.length+' sections');
+    console.log('[SEO Room] Starting DIRECT paragraph matching for '+sections.length+' sections');
 
-    // Collect headings ONLY from main content area (skip forms, footer, nav, sidebar, widgets)
-    var allHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    console.log('[SEO Room] Found '+allHeadings.length+' total headings on page');
+    // Build a set of all replaceable elements on the page (p, h, li)
+    // Exclude form/footer/nav/header/sidebar elements
+    var skipSelector = 'form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget,.elementor-location-footer';
 
-    // Build a map of normalised heading text → DOM element (content headings only)
-    var headingMap = [];
-    allHeadings.forEach(function(h){
-      // Skip headings inside forms, footer, nav, sidebar, widget areas
-      if(h.closest('form, footer, nav, .widget, .sidebar, .elementor-widget-form, .elementor-form, .wpcf7, .wpforms-container, .gform_wrapper, .site-footer, .footer-widget, .menu-item, .elementor-location-footer')) return;
-      var t = norm(h.textContent);
-      if(t.length >= 3) headingMap.push({text:t, el:h});
-    });
-    console.log('[SEO Room] Content headings (excluding forms/footer/nav): '+headingMap.length);
+    // Track which DOM elements we've already replaced (prevent double-matching)
+    var replacedEls = new Set();
 
-    // For each section (not new), find its heading OR text in the DOM
     sections.forEach(function(section){
       if(section.is_new) return;
+      if(!section.draft_text || !section.original_text) return;
 
-      var container = null;
-      var matchedHeadingEl = null;
+      // Parse original into paragraphs (plain text)
+      var origTemp = document.createElement('div');
+      origTemp.innerHTML = section.original_text;
+      var origParas = [];
+      origTemp.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function(el){
+        var t = el.textContent.trim();
+        if(t.length >= 10) origParas.push({text: t, normText: norm(t), tag: el.tagName.toLowerCase()});
+      });
 
-      var searchHeading = norm(section.original_heading || section.heading || '');
+      // Parse draft into paragraphs (HTML)
+      var draftTemp = document.createElement('div');
+      draftTemp.innerHTML = section.draft_text;
+      var draftParas = [];
+      draftTemp.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function(el){
+        draftParas.push({html: el.innerHTML, tag: el.tagName.toLowerCase(), text: el.textContent.trim()});
+      });
 
-      if(searchHeading.length >= 3){
-        // === HEADING-BASED MATCHING ===
-        var match = null;
-        for(var i=0;i<headingMap.length;i++){
-          var h = headingMap[i];
-          if(h.text === searchHeading){ match = h; break; }
-        }
-        if(!match){
-          for(var i=0;i<headingMap.length;i++){
-            var h = headingMap[i];
-            if(h.text.indexOf(searchHeading)!==-1 || searchHeading.indexOf(h.text)!==-1){ match = h; break; }
-          }
-        }
-        if(!match && searchHeading.length > 15){
-          var shortSearch = searchHeading.slice(0,20);
-          for(var i=0;i<headingMap.length;i++){
-            if(headingMap[i].text.indexOf(shortSearch)!==-1){ match = headingMap[i]; break; }
-          }
-        }
-        if(match){
-          console.log('[SEO Room] Matched heading: "'+match.text+'" → replacing with draft');
-          container = findSectionContainer(match.el);
-          matchedHeadingEl = match.el;
-          headingMap = headingMap.filter(function(h){ return h !== match; });
-        } else {
-          console.log('[SEO Room] No heading match for: "'+searchHeading+'"');
-        }
-      }
+      var sectionMatched = 0;
 
-      // === TEXT-BASED FALLBACK for headingless sections ===
-      if(!container && section.original_text){
-        var origSnippet = norm(section.original_text.replace(/<[^>]+>/g, '')).slice(0,60);
-        if(origSnippet.length >= 20){
-          console.log('[SEO Room] Trying text match for "'+section.type+'": "'+origSnippet.slice(0,40)+'..."');
-          var allP = document.querySelectorAll('p, div.elementor-widget-text-editor, .elementor-text-editor');
-          for(var i=0;i<allP.length;i++){
-            var p = allP[i];
-            if(p.closest('form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form')) continue;
-            var pText = norm(p.textContent).slice(0,60);
-            if(pText.length >= 20 && (pText.indexOf(origSnippet.slice(0,30))!==-1 || origSnippet.indexOf(pText.slice(0,30))!==-1)){
-              container = findSectionContainer(p);
-              console.log('[SEO Room] Text-matched "'+section.type+'" via paragraph content');
-              break;
+      // For each original paragraph, find matching DOM element and replace
+      origParas.forEach(function(orig, idx){
+        if(idx >= draftParas.length) return;
+        var draft = draftParas[idx];
+
+        // Search all matching tag elements on the page
+        var candidates = document.querySelectorAll(orig.tag);
+        var found = null;
+
+        for(var i=0; i<candidates.length; i++){
+          var el = candidates[i];
+          if(replacedEls.has(el)) continue;
+          if(el.closest(skipSelector)) continue;
+          var elNorm = norm(el.textContent);
+          // Exact match
+          if(elNorm === orig.normText){ found = el; break; }
+        }
+
+        // Fuzzy: first 40 chars match
+        if(!found){
+          var short = orig.normText.slice(0,40);
+          if(short.length >= 15){
+            for(var i=0; i<candidates.length; i++){
+              var el = candidates[i];
+              if(replacedEls.has(el)) continue;
+              if(el.closest(skipSelector)) continue;
+              var elNorm = norm(el.textContent);
+              if(elNorm.slice(0,40) === short){ found = el; break; }
             }
           }
         }
+
+        if(found){
+          var oldText = norm(found.textContent);
+          found.innerHTML = draft.html;
+          replacedEls.add(found);
+          // Highlight if text actually changed
+          if(norm(found.textContent) !== oldText){
+            found.classList.add('seo-text-hl');
+            totalReplacements++;
+          }
+          sectionMatched++;
+        } else {
+          console.log('[SEO Room] No DOM match for: "'+orig.normText.slice(0,50)+'..."');
+        }
+      });
+
+      // Handle extra draft paragraphs (more content than original)
+      if(draftParas.length > origParas.length && sectionMatched > 0){
+        // Find the last replaced element to append after
+        var lastReplaced = null;
+        replacedEls.forEach(function(el){ lastReplaced = el; });
+        if(lastReplaced){
+          for(var extra = origParas.length; extra < draftParas.length; extra++){
+            var dp = draftParas[extra];
+            var newEl = document.createElement(dp.tag === 'li' ? 'p' : dp.tag);
+            newEl.innerHTML = dp.html;
+            newEl.classList.add('seo-text-hl');
+            // Copy classes from the last element for consistent styling
+            if(lastReplaced.className){
+              var origClasses = lastReplaced.className.replace(/seo-text-hl/g,'').trim();
+              if(origClasses) newEl.className = origClasses + ' seo-text-hl';
+            }
+            if(lastReplaced.nextSibling) lastReplaced.parentNode.insertBefore(newEl, lastReplaced.nextSibling);
+            else lastReplaced.parentNode.appendChild(newEl);
+            lastReplaced = newEl;
+            totalReplacements++;
+          }
+        }
       }
 
-      if(!container){
-        console.log('[SEO Room] No match for section "'+section.type+'" — skipped');
-        return;
+      // Also replace heading if changed
+      if(section.original_heading && section.draft_heading){
+        var headingNorm = norm(section.original_heading);
+        var allH = document.querySelectorAll('h1,h2,h3,h4,h5,h6');
+        for(var i=0;i<allH.length;i++){
+          if(replacedEls.has(allH[i])) continue;
+          if(allH[i].closest(skipSelector)) continue;
+          if(norm(allH[i].textContent) === headingNorm){
+            if(norm(section.draft_heading) !== headingNorm){
+              allH[i].textContent = section.draft_heading;
+              allH[i].classList.add('seo-text-hl');
+              totalReplacements++;
+            }
+            replacedEls.add(allH[i]);
+            break;
+          }
+        }
       }
 
-      // Update heading text if changed
-      if(matchedHeadingEl && section.draft_heading && norm(section.draft_heading) !== norm(section.heading)){
-        matchedHeadingEl.textContent = section.draft_heading;
-        matchedHeadingEl.classList.add('seo-text-hl');
-      }
-
-      // Replace text content in the container
-      var replaced = replaceTextInContainer(container, section.draft_text);
-
-      if(replaced){
-        // Add highlight
-        container.style.position = 'relative';
-        container.classList.add('seo-changed');
-        var badge = document.createElement('div');
-        badge.className = 'seo-changed-badge';
-        badge.textContent = 'UPDATED';
-        container.appendChild(badge);
-        matched++;
-        // headingMap already filtered when heading was matched above
-      }
+      if(sectionMatched > 0) matched++;
+      console.log('[SEO Room] Section "'+section.type+'" ('+(section.heading||'no heading').slice(0,30)+'): '+sectionMatched+'/'+origParas.length+' paragraphs matched');
     });
 
     // Handle NEW sections
@@ -9099,13 +9015,13 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
 
     // Update badge
     var countBadge = document.getElementById('seo-match-count');
-    if(countBadge) countBadge.textContent = matched + ' of ' + (total+newSections.length) + ' applied';
-    console.log('[SEO Room] Done: '+matched+'/'+(total+newSections.length)+' sections replaced');
+    if(countBadge) countBadge.textContent = matched + ' of ' + total + ' sections, ' + totalReplacements + ' changes';
+    console.log('[SEO Room] Done: '+matched+'/'+total+' sections, '+totalReplacements+' text replacements');
   }
 
   // Run after full page load (Elementor needs time to render)
-  if(document.readyState==='complete') setTimeout(run,800);
-  else window.addEventListener('load',function(){ setTimeout(run,800); });
+  if(document.readyState==='complete') setTimeout(run,1200);
+  else window.addEventListener('load',function(){ setTimeout(run,1200); });
 
   // Disable link clicks
   document.addEventListener('click',function(e){
