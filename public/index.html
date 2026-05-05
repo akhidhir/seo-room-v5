@@ -11381,7 +11381,7 @@
                 onClick: async () => {
                   setImportingCopy(true);
                   try {
-                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST' });
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/import-current', { method: 'POST', body: { force: true } });
                     console.log('[import-current] Response:', { hasContent: !!r.content, contentLen: r.content ? r.content.length : 0, meta_title: r.meta_title, preview: r.content ? r.content.substring(0, 200) : 'EMPTY' });
                     if (r.content) {
                       const cleaned = cleanWpHtml(r.content);
