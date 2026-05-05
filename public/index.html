@@ -6165,7 +6165,9 @@
           const order = { critical: 0, high: 1, medium: 2, low: 3 };
           return (order[a] ?? 9) - (order[b] ?? 9);
         });
-        const assignees = [...new Set(itemsWithAssignee.map(i => i._assigneeLabel).filter(Boolean))].sort();
+        const assigneesFromItems = [...new Set(itemsWithAssignee.map(i => i._assigneeLabel).filter(Boolean))];
+        const allAssignees = ['Automated', 'Copywriter Current', 'Copywriter New', 'Manual'];
+        const assignees = allAssignees.filter(a => assigneesFromItems.includes(a) || allAssignees.includes(a));
         return { categories, severities, assignees };
       }, [itemsWithAssignee, activePillar]);
 
