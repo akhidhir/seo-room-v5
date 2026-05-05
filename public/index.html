@@ -11450,55 +11450,47 @@
               selectedItem.page_sections.map((section, idx) => {
                 const isExpanded = expandedSections && expandedSections[section.id];
                 const hasChanges = !!(section.draft_text && section.original_text && section.draft_text !== section.original_text);
-                return React.createElement('div', { key: section.id, style: { marginBottom: 6, borderRadius: 8, border: '1px solid ' + (section.is_new ? 'rgba(34,197,94,0.3)' : hasChanges ? 'rgba(245,158,11,0.4)' : section.draft_text ? 'rgba(99,102,241,0.2)' : 'var(--border)'), overflow: 'hidden' } },
-                  // Card header — clickable
-                  React.createElement('div', { onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
-                    style: { display: 'flex', gap: 12, padding: '10px 12px', background: section.locked ? 'rgba(107,114,128,0.05)' : section.is_new ? 'rgba(34,197,94,0.08)' : hasChanges ? 'rgba(245,158,11,0.06)' : section.draft_text ? 'rgba(99,102,241,0.05)' : 'var(--bg)', cursor: 'pointer', alignItems: 'center' } },
+                const displayHtml = hasChanges ? highlightDraftChanges(section.original_text, section.draft_text) : (section.draft_text || section.original_text || '');
+                return React.createElement('div', { key: section.id, style: { marginBottom: 10, borderRadius: 8, border: '1px solid ' + (section.is_new ? 'rgba(34,197,94,0.3)' : hasChanges ? 'rgba(245,158,11,0.4)' : section.draft_text ? 'rgba(99,102,241,0.2)' : 'var(--border)'), overflow: 'hidden' } },
+                  // Card header — clickable to toggle original
+                  React.createElement('div', { style: { display: 'flex', gap: 12, padding: '10px 12px', background: section.locked ? 'rgba(107,114,128,0.05)' : section.is_new ? 'rgba(34,197,94,0.08)' : hasChanges ? 'rgba(245,158,11,0.06)' : section.draft_text ? 'rgba(99,102,241,0.05)' : 'var(--bg)', alignItems: 'center' } },
                     // Section number + type badge
                     React.createElement('div', { style: { minWidth: 70, textAlign: 'center' } },
                       React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#fff', background: section.locked ? '#6b7280' : section.is_new ? '#22c55e' : hasChanges ? '#f59e0b' : section.draft_text ? '#6366f1' : '#94a3b8', padding: '2px 6px', borderRadius: 4, marginBottom: 4 } }, section.type.toUpperCase()),
                       React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, section.word_count + ' words')
                     ),
-                    // Section heading + preview
+                    // Section heading
                     React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                      React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 2 } },
+                      React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)' } },
                         section.draft_heading || section.heading || '(No heading)',
                         section.locked && React.createElement('span', { style: { marginLeft: 8, fontSize: 10, color: '#6b7280', fontWeight: 400 } }, '🔒 Locked'),
                         section.is_new && React.createElement('span', { style: { marginLeft: 8, fontSize: 10, color: '#22c55e', fontWeight: 600 } }, '✨ NEW'),
                         hasChanges && React.createElement('span', { style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '1px 5px', borderRadius: 3, verticalAlign: 'middle' } }, 'UPDATED')
-                      ),
-                      !isExpanded && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', lineHeight: 1.4, maxHeight: 20, overflow: 'hidden' } },
-                        (section.draft_text || section.original_text || '').replace(/<[^>]+>/g, '').slice(0, 100) + '...'
                       )
                     ),
-                    // Expand chevron + status
+                    // Status + expand toggle for original
                     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                       section.draft_text ? React.createElement('i', { className: 'fas fa-check-circle', style: { color: '#22c55e', fontSize: 14 } })
                         : section.locked ? React.createElement('i', { className: 'fas fa-lock', style: { color: '#6b7280', fontSize: 14 } })
                         : React.createElement('i', { className: 'fas fa-minus-circle', style: { color: '#d1d5db', fontSize: 14 } }),
-                      React.createElement('i', { className: isExpanded ? 'fas fa-chevron-up' : 'fas fa-chevron-down', style: { color: 'var(--text3)', fontSize: 11 } })
+                      hasChanges && React.createElement('button', { onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
+                        style: { fontSize: 10, padding: '2px 8px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }
+                      }, isExpanded ? 'Hide Original' : 'Show Original')
                     )
                   ),
-                  // Expanded panel — original vs draft side-by-side
-                  isExpanded && React.createElement('div', { style: { padding: '12px', background: 'var(--bg)', borderTop: '1px solid var(--border)' } },
-                    hasChanges ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
-                      // Original
-                      React.createElement('div', null,
-                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Original'),
-                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, padding: 10, background: 'rgba(239,68,68,0.04)', borderRadius: 6, border: '1px solid rgba(239,68,68,0.15)', maxHeight: 200, overflow: 'auto' }, dangerouslySetInnerHTML: { __html: section.original_text || '' } })
-                      ),
-                      // Draft (orange highlighted)
-                      React.createElement('div', null,
-                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Updated Draft'),
-                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text)', lineHeight: 1.6, padding: 10, background: 'rgba(245,158,11,0.06)', borderRadius: 6, border: '2px solid rgba(245,158,11,0.4)', borderLeft: '4px solid #f59e0b', maxHeight: 200, overflow: 'auto' }, dangerouslySetInnerHTML: { __html: highlightDraftChanges(section.original_text, section.draft_text) } })
-                      )
-                    ) : React.createElement('div', null,
-                      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, section.draft_text ? 'Content' : 'Original Content'),
-                      React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, padding: 10, background: 'var(--card)', borderRadius: 6, border: '1px solid var(--border)', maxHeight: 200, overflow: 'auto' }, dangerouslySetInnerHTML: { __html: section.draft_text || section.original_text || 'No content' } })
-                    ),
-                    section.changes_summary && React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 8, fontStyle: 'italic' } },
-                      React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
-                    )
+                  // Draft content with orange highlights — ALWAYS visible
+                  !section.locked && section.draft_text && React.createElement('div', {
+                    style: { padding: '10px 14px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, borderTop: '1px solid var(--border)' },
+                    dangerouslySetInnerHTML: { __html: displayHtml }
+                  }),
+                  // Original content — only when expanded (toggled via "Show Original")
+                  isExpanded && hasChanges && React.createElement('div', { style: { padding: '10px 14px', borderTop: '1px dashed rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.04)' } },
+                    React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Original Content'),
+                    React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', lineHeight: 1.6 }, dangerouslySetInnerHTML: { __html: section.original_text || '' } })
+                  ),
+                  // Changes summary
+                  section.changes_summary && React.createElement('div', { style: { padding: '6px 14px 10px', fontSize: 11, color: '#f59e0b', fontStyle: 'italic' } },
+                    React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
                   )
                 );
               }),
