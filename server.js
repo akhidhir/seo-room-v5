@@ -5777,7 +5777,11 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
       }
     }
 
-    if ((!rawPageUrl || (domainClean && rawPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') === domainClean)) && !resolvedPageId) {
+    // Home page: if page_url is "/" or empty, use the domain
+    if ((!rawPageUrl || rawPageUrl === '/') && domainClean) {
+      rawPageUrl = '/';
+    }
+    if (!rawPageUrl && !resolvedPageId) {
       return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set and could not auto-resolve from WordPress.' });
     }
     const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);

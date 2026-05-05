@@ -11367,12 +11367,18 @@
               }, React.createElement('i', { className: importingCopy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-download', style: { marginRight: 6 } }), importingCopy ? 'Importing...' : 'Import Current Copy'),
               // Re Analyse — just visual feedback, score is already live
               React.createElement('button', {
-                disabled: reAnalysing,
-                onClick: () => {
+                disabled: reAnalysing || parsingSections,
+                onClick: async () => {
                   setReAnalysing(true);
-                  setTimeout(() => setReAnalysing(false), 400);
+                  try {
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/parse-sections', { method: 'POST' });
+                    if (!r.error && r.sections) {
+                      setSelectedItem(prev => ({ ...prev, page_sections: r.sections }));
+                    }
+                  } catch (e) { console.error('Re-analyse error:', e); }
+                  setReAnalysing(false);
                 },
-                style: { padding: '8px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: reAnalysing ? 0.6 : 1 }
+                style: { padding: '8px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: (reAnalysing || parsingSections) ? 0.6 : 1 }
               }, React.createElement('i', { className: reAnalysing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-rotate', style: { marginRight: 6 } }), reAnalysing ? 'Analysing...' : 'Re Analyse')
             )
           ),
