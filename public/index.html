@@ -11501,6 +11501,7 @@
                       const cleaned = cleanWpHtml(r.content);
                       console.log('[import-current] Cleaned length:', cleaned.length, 'preview:', cleaned.substring(0, 200));
                       setEditContent(cleaned);
+                      setSectionView(false); // switch to editor so imported content is visible
                       setEditorKey(k => k + 1);
                     } else {
                       alert('No content found — the page may use Elementor or have no text body. Try checking the live page.');
