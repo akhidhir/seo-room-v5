@@ -8820,13 +8820,16 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
 .seo-preview-bar button{background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s}
 .seo-preview-bar button:hover{background:rgba(255,255,255,0.3)}
 .seo-preview-bar button.active{background:#fff;color:#6366f1}
-.seo-changed{outline:2px solid #6366f1;outline-offset:4px;transition:outline-color 0.3s}
+.seo-changed{outline:3px solid #6366f1;outline-offset:4px;transition:outline-color 0.3s}
 .seo-changed-badge{position:absolute;top:-14px;right:8px;font-size:9px;font-weight:700;color:#fff;background:#6366f1;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;pointer-events:none}
-.seo-new-block{outline:2px solid #22c55e;outline-offset:4px}
+.seo-changed .seo-text-hl{background:rgba(99,102,241,0.12);border-left:3px solid #6366f1;padding-left:8px;display:block;margin:2px 0;transition:background 0.3s}
+.seo-new-block{outline:3px solid #22c55e;outline-offset:4px}
 .seo-new-badge{position:absolute;top:-14px;right:8px;font-size:9px;font-weight:700;color:#fff;background:#22c55e;padding:2px 6px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;pointer-events:none}
+.seo-new-block .seo-text-hl{background:rgba(34,197,94,0.12);border-left:3px solid #22c55e;padding-left:8px;display:block;margin:2px 0}
 body.hide-hl .seo-changed{outline:none!important}
 body.hide-hl .seo-changed-badge,body.hide-hl .seo-new-badge{display:none!important}
 body.hide-hl .seo-new-block{outline:none!important}
+body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;padding-left:0!important}
 </style>
 <script>
 (function(){
@@ -8915,7 +8918,12 @@ body.hide-hl .seo-new-block{outline:none!important}
         else break;
       }
 
+      var oldText = norm(el.textContent);
       el.innerHTML = draft.html;
+      // Highlight if text actually changed
+      if(norm(el.textContent) !== oldText){
+        el.classList.add('seo-text-hl');
+      }
       draftIdx++;
     }
 
@@ -8927,8 +8935,9 @@ body.hide-hl .seo-new-block{outline:none!important}
         if(db.isHeading) continue; // don't insert extra headings
         var newEl = document.createElement(db.tag==='li'?'p':db.tag);
         newEl.innerHTML = db.html;
+        newEl.classList.add('seo-text-hl');
         // Copy some styling from the last element
-        if(lastEl.className) newEl.className = lastEl.className;
+        if(lastEl.className) newEl.className = lastEl.className + ' seo-text-hl';
         if(lastEl.nextSibling) lastEl.parentNode.insertBefore(newEl, lastEl.nextSibling);
         else lastEl.parentNode.appendChild(newEl);
         lastEl = newEl;
@@ -9001,6 +9010,7 @@ body.hide-hl .seo-new-block{outline:none!important}
       // Update heading text if changed
       if(section.draft_heading && norm(section.draft_heading) !== norm(section.heading)){
         match.el.textContent = section.draft_heading;
+        match.el.classList.add('seo-text-hl');
       }
 
       // Replace text content in the container
