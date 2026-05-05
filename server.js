@@ -8795,6 +8795,18 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
         order: s.order || 0,
       }));
 
+    // If no sections have draft content, show a warning overlay on the live page
+    if (sectionsForClient.length === 0) {
+      const warningScript = `<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f59e0b;color:#000;padding:16px 24px;font-family:-apple-system,sans-serif;font-size:14px;text-align:center;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.2)">
+        ⚠️ No draft content found. Click <strong>"Rewrite Sections"</strong> in the Copywriter panel first, then preview again.
+        <br><span style="font-weight:400;font-size:12px">${sections.length} sections parsed, ${sections.filter(s=>s.locked).length} locked, ${sections.filter(s=>!!s.draft_text).length} with drafts</span>
+      </div>`;
+      liveHtml = liveHtml.replace('</body>', warningScript + '</body>');
+      console.log(`[section-preview] No draft content — ${sections.length} sections parsed, 0 with draft_text`);
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(liveHtml);
+    }
+
     const newSections = sections.filter(s => s.is_new && s.draft_text);
     const updatedCount = sectionsForClient.filter(s => !s.is_new).length;
 
