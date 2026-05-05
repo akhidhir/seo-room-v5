@@ -9728,29 +9728,52 @@
     // ============ COPYWRITER v4 COMPONENTS ============
     function cleanWpHtml(html) {
       if (!html) return '';
-      // Strip sliders/carousels/videos — replace with sized placeholder
-      let cleaned = html;
-      function mediaPlaceholder(block, label) {
-        const wMatch = block.match(/width[=:]\s*"?(\d+)/i);
-        const hMatch = block.match(/height[=:]\s*"?(\d+)/i);
-        const w = wMatch ? wMatch[1] + 'px' : '100%';
-        const h = hMatch ? hMatch[1] + 'px' : label === 'Video' ? '315px' : '400px';
-        return '<div style="width:' + w + ';height:' + h + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;">[— ' + label + ' —]</div>';
+      // Use DOM to strip sliders/videos — much more reliable than regex
+      var div = document.createElement('div');
+      div.innerHTML = html;
+
+      // Helper: create a sized placeholder element
+      function makePlaceholder(el, label) {
+        var w = el.getAttribute('width') || el.style.width || '';
+        var h = el.getAttribute('height') || el.style.height || '';
+        var ph = document.createElement('div');
+        ph.style.cssText = 'width:' + (w ? w + (/^\d+$/.test(w) ? 'px' : '') : '100%') + ';height:' + (h ? h + (/^\d+$/.test(h) ? 'px' : '') : (label === 'Video' ? '315px' : '400px')) + ';background:#1e293b;border:2px dashed #475569;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;margin:0 auto 16px;';
+        ph.textContent = '[— ' + label + ' —]';
+        return ph;
       }
-      function sliderPlaceholder(block) { return mediaPlaceholder(block, 'Slider'); }
-      function videoPlaceholder(block) { return mediaPlaceholder(block, 'Video'); }
-      // Replace video embeds (iframes: YouTube, Vimeo, etc.)
-      cleaned = cleaned.replace(/<iframe[^>]*src="[^"]*(?:youtube|vimeo|wistia|dailymotion|videopress)[^"]*"[^>]*>[\s\S]*?<\/iframe>/gi, videoPlaceholder);
+
+      // Replace video iframes (YouTube, Vimeo, etc.)
+      div.querySelectorAll('iframe[src*="youtube"], iframe[src*="vimeo"], iframe[src*="wistia"], iframe[src*="dailymotion"], iframe[src*="videopress"]').forEach(function(el) {
+        el.parentNode.replaceChild(makePlaceholder(el, 'Video'), el);
+      });
       // Replace HTML5 video elements
-      cleaned = cleaned.replace(/<video[^>]*>[\s\S]*?<\/video>/gi, videoPlaceholder);
-      // Replace video wrapper divs (wp-block-embed, elementor-video, etc.)
-      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:wp-block-embed|elementor-widget-video|video-container|video-wrapper|wp-video)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, videoPlaceholder);
-      // Replace slider containers
-      cleaned = cleaned.replace(/<div[^>]*class="[^"]*(?:n2-ss|rev_slider|elementor-slides|elementor-widget-slides|swiper-container|slick-slider|slider-wrapper|metaslider|carousel|nivo-slider|flexslider)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
-      cleaned = cleaned.replace(/<div[^>]*(?:id|class)="[^"]*(?:smartslider|revolution-slider|ls-wp-container)[^"]*"[^>]*>[\s\S]*?<\/div>(\s*<\/div>)*/gi, sliderPlaceholder);
-      // Collapse 3+ consecutive images (slider dump) to sized placeholder
-      cleaned = cleaned.replace(/(<figure[^>]*>\s*<img[^>]*>\s*(?:<figcaption[^>]*>[\s\S]*?<\/figcaption>\s*)?<\/figure>\s*){3,}/gi, sliderPlaceholder);
-      cleaned = cleaned.replace(/(<img[^>]*(?:width|height)="[^"]*"[^>]*>\s*){3,}/gi, sliderPlaceholder);
+      div.querySelectorAll('video').forEach(function(el) {
+        el.parentNode.replaceChild(makePlaceholder(el, 'Video'), el);
+      });
+
+      // Detect slider/carousel containers by class or id keywords
+      var sliderKeywords = /slider|carousel|swiper|slick|nivo|flexslider|n2-ss|rev_slider|metaslider|gallery-slideshow/i;
+      div.querySelectorAll('div, section, aside').forEach(function(el) {
+        var cls = (el.className || '') + ' ' + (el.id || '');
+        if (sliderKeywords.test(cls)) {
+          el.parentNode.replaceChild(makePlaceholder(el, 'Slider'), el);
+        }
+      });
+
+      // Detect image-only containers: any element with 2+ direct img children and no meaningful text
+      div.querySelectorAll('div, section, figure, ul').forEach(function(el) {
+        var imgs = el.querySelectorAll(':scope > img, :scope > li > img, :scope > div > img, :scope > figure > img, :scope > a > img');
+        if (imgs.length < 2) return;
+        var textLen = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+        // If mostly images with little text, it's a gallery/slider
+        if (textLen < 50) {
+          var firstImg = imgs[0];
+          var ph = makePlaceholder(firstImg, 'Slider');
+          el.parentNode.replaceChild(ph, el);
+        }
+      });
+
+      var cleaned = div.innerHTML;
       return cleaned
         .replace(/<p>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/p>/gi, '')
         .replace(/<h[2-4]>\s*<a[^>]*>[A-Z\s&;]{2,50}<\/a>\s*<\/h[2-4]>/gi, '')
