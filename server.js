@@ -6527,7 +6527,7 @@ CRITICAL REMINDERS:
 - After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
 ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? '- SKELETON MODE: Fill in the skeleton placeholders. Do NOT rewrite or restructure. Keep ALL HTML tags, divs, classes, and section comments exactly as provided.' : '- Rewrite the FULL content fixing ALL numbered issues above.'}`;
 
-    console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix`);
+    console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix, competitor_data: ${competitor_data ? 'YES (' + (competitor_data.top3?.length || 0) + ' top3)' : 'NONE'}, topic_gaps: ${topic_gaps ? 'YES (' + (topic_gaps.missing_topics?.length || 0) + ' topics, ' + (topic_gaps.missing_keywords?.length || 0) + ' keywords)' : 'NONE'}, word_target: ${word_target || 'default'}`);
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -7228,7 +7228,7 @@ app.post('/api/projects/:projectId/content-queue/:id/re-optimise', async (req, r
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, word_target } = req.body;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, topic_gaps, word_target } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
@@ -7299,7 +7299,14 @@ COMPETITOR ANALYSIS (from "${competitor_data.keyword}" SERP):
 - All competitors average: ${competitor_data.avg || 'N/A'}
 - Recommended word target: ${competitor_data.recommended || 'N/A'}
 ${(competitor_data.results || []).map((r, i) => `  #${r.position || i+1}: ${r.title} — ${r.words} words`).join('\n')}
+${(competitor_data.top3 || []).map((c, i) => `  Top ${i+1} H2s: ${(c.h2Texts || []).slice(0, 5).join(' | ') || 'none'}`).join('\n')}
 ` : 'COMPETITOR ANALYSIS: Not yet checked — user should click "Check Competitors" in the score panel.'}
+
+${topic_gaps ? `TOPIC GAP ANALYSIS (what competitors cover that this page DOESN'T):
+- Missing topics: ${(topic_gaps.missing_topics || []).join(', ') || 'none'}
+- Missing keywords: ${(topic_gaps.missing_keywords || []).join(', ') || 'none'}
+- Strengths to keep: ${(topic_gaps.content_strengths || []).join(', ') || 'none'}
+- Recommendation: ${topic_gaps.recommendation || 'none'}` : ''}
 
 SEO SCORE TIPS:
 ${tipsStr || 'No tips available'}
@@ -7450,7 +7457,7 @@ app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res)
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, word_target } = req.body;
+  const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, topic_gaps, word_target } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
@@ -7517,7 +7524,14 @@ COMPETITOR ANALYSIS (from "${competitor_data.keyword}" SERP):
 - All competitors average: ${competitor_data.avg || 'N/A'}
 - Recommended word target: ${competitor_data.recommended || 'N/A'}
 ${(competitor_data.results || []).map((r, i) => `  #${r.position || i+1}: ${r.title} — ${r.words} words`).join('\n')}
+${(competitor_data.top3 || []).map((c, i) => `  Top ${i+1} H2s: ${(c.h2Texts || []).slice(0, 5).join(' | ') || 'none'}`).join('\n')}
 ` : 'COMPETITOR ANALYSIS: Not yet checked — user should click "Check Competitors" in the score panel.'}
+
+${topic_gaps ? `TOPIC GAP ANALYSIS (what competitors cover that this page DOESN'T):
+- Missing topics: ${(topic_gaps.missing_topics || []).join(', ') || 'none'}
+- Missing keywords: ${(topic_gaps.missing_keywords || []).join(', ') || 'none'}
+- Strengths to keep: ${(topic_gaps.content_strengths || []).join(', ') || 'none'}
+- Recommendation: ${topic_gaps.recommendation || 'none'}` : ''}
 
 SEO SCORE TIPS:
 ${tipsStr || 'No tips available'}
