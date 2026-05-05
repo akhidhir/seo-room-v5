@@ -8851,11 +8851,11 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
 <script>
 (function(){
   function norm(s){
-    return (s||'')
-      .replace(/<[^>]+>/g,'')
-      .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#039;/g,"'").replace(/&nbsp;/g,' ').replace(/&mdash;/g,'-').replace(/&ndash;/g,'-').replace(/&rsquo;/g,"'").replace(/&lsquo;/g,"'").replace(/&rdquo;/g,'"').replace(/&ldquo;/g,'"')
-      .replace(/[‘’‚‛]/g,"'").replace(/[“”„‟]/g,'"').replace(/[–—]/g,'-')
-      .replace(/\\s+/g,' ').trim().toLowerCase();
+    return (s||’’)
+      .replace(/<[^>]+>/g,’’)
+      .replace(/&amp;/g,’&’).replace(/&lt;/g,’<’).replace(/&gt;/g,’>’).replace(/&quot;/g,’”’).replace(/&#039;/g,”’”).replace(/&nbsp;/g,’ ‘).replace(/&mdash;/g,’-’).replace(/&ndash;/g,’-’).replace(/&rsquo;/g,”’”).replace(/&lsquo;/g,”’”).replace(/&rdquo;/g,’”’).replace(/&ldquo;/g,’”’)
+      .replace(/[\\u2018\\u2019\\u201A\\u201B]/g,”’”).replace(/[\\u201C\\u201D\\u201E\\u201F]/g,’”’).replace(/[\\u2013\\u2014]/g,’-’)
+      .replace(/\\s+/g,’ ‘).trim().toLowerCase();
   }
 
   // === NEW APPROACH: Direct paragraph-by-paragraph matching ===
