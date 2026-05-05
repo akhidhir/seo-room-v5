@@ -8778,117 +8778,106 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const draftTitle = item.draft_meta_title || item.page_title || '';
     if (draftTitle) liveHtml = liveHtml.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
 
-    // For each section with draft_text, find it in the HTML by css_identifier and replace text content
-    // Strategy: use the css_identifier to locate the section container, then replace its inner text
-    // while preserving images, forms, and structural HTML
-    let replacementCount = 0;
-    for (const section of sections) {
-      if (section.locked || !section.draft_text) continue;
-      const cssId = section.css_identifier || '';
-      if (!cssId || cssId.startsWith('section-')) continue; // generic ID, can't match reliably
+    // === STRATEGY: Find main content area, replace entirely with assembled section content ===
+    // This is more reliable than per-section CSS matching (which often fails)
 
-      // Try to find the section by class or id
-      // Match: class="...cssId..." or id="cssId"
-      const escapedId = cssId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const classPattern = new RegExp(`(<(?:section|div|article|main)[^>]*(?:class="[^"]*${escapedId}[^"]*"|id="${escapedId}")[^>]*>)`, 'i');
-      const classMatch = liveHtml.match(classPattern);
-      if (!classMatch) continue;
+    // Build the new content from all sections, with highlights showing what changed
+    const updatedSections = sections.filter(s => !s.locked && s.draft_text);
+    const newSections = sections.filter(s => s.is_new && s.draft_text);
 
-      const containerStart = classMatch.index + classMatch[0].length;
-      const tagName = classMatch[0].match(/^<(\w+)/)[1];
-
-      // Find the closing tag (handle nesting)
-      let depth = 1, pos = containerStart;
-      const openRe = new RegExp(`<${tagName}[\\s>]`, 'gi');
-      const closeRe = new RegExp(`</${tagName}>`, 'gi');
-      let containerEnd = -1;
-      while (depth > 0 && pos < liveHtml.length) {
-        openRe.lastIndex = pos; closeRe.lastIndex = pos;
-        const nO = openRe.exec(liveHtml);
-        const nC = closeRe.exec(liveHtml);
-        if (!nC) break;
-        if (nO && nO.index < nC.index) { depth++; pos = nO.index + nO[0].length; }
-        else { depth--; if (depth === 0) { containerEnd = nC.index; break; } pos = nC.index + nC[0].length; }
+    // Assemble full replacement content from sections in order
+    const assembledContent = sections.map(s => {
+      if (s.locked) {
+        // Locked sections: show original text, no highlight
+        return s.original_text || '';
       }
-      if (containerEnd < 0) continue;
-
-      // Get the container's inner HTML
-      const containerInner = liveHtml.slice(containerStart, containerEnd);
-
-      // Build replacement: keep images and forms, replace text content
-      // Find all <img>, <form>, <iframe>, <video> tags and preserve them
-      const preserved = [];
-      containerInner.replace(/<(img|form|iframe|video|svg)[^>]*(?:\/>|>[\s\S]*?<\/\1>)/gi, (match) => {
-        preserved.push(match);
-        return match;
-      });
-
-      // Build new inner HTML with draft content + preserved elements
-      const draftContent = section.draft_text || '';
-      const heading = section.draft_heading || section.heading;
-      let newInner = '';
-      if (heading && !/<h[1-6]/i.test(draftContent)) {
-        newInner = `<h2>${heading}</h2>\n${draftContent}`;
+      const content = s.draft_text || s.original_text || '';
+      const heading = s.draft_heading || s.heading;
+      let sectionHtml = '';
+      if (heading && !/<h[1-6]/i.test(content)) {
+        sectionHtml = `<h2>${heading}</h2>\n${content}`;
       } else {
-        newInner = draftContent;
-      }
-      // Append preserved images/forms at the positions they roughly were
-      if (preserved.length > 0) {
-        newInner += '\n' + preserved.join('\n');
+        sectionHtml = content;
       }
 
-      // Wrap in highlight container so user can see what was changed
-      const highlightClass = section.is_new ? 'seo-section-new' : 'seo-section-updated';
-      newInner = `<div class="${highlightClass}" data-section="${section.id}" data-type="${section.type}">${newInner}</div>`;
+      if (s.draft_text) {
+        // This section has new copy — wrap with highlight
+        const highlightColor = s.is_new ? '#22c55e' : '#6366f1';
+        const label = s.is_new ? 'NEW' : 'UPDATED';
+        return `<div class="seo-highlight" style="position:relative;border-left:3px solid ${highlightColor};padding-left:16px;margin:24px 0;transition:all 0.3s">
+          <div class="seo-highlight-badge" style="position:absolute;top:-10px;left:8px;font-size:9px;font-weight:700;color:${highlightColor};letter-spacing:1px;background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${highlightColor}40">${label}</div>
+          ${sectionHtml}
+        </div>`;
+      }
+      return sectionHtml;
+    }).join('\n');
 
-      // Replace in the live HTML
-      liveHtml = liveHtml.slice(0, containerStart) + '\n' + newInner + '\n' + liveHtml.slice(containerEnd);
-      replacementCount++;
+    // Find and replace main content area (same selectors as old preview)
+    const contentSelectors = [
+      { open: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: '</article>' },
+      { open: /<div[^>]*class="[^"]*page-content[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<div[^>]*class="[^"]*post-entry[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<div[^>]*class="[^"]*content-area[^"]*"[^>]*>/i, close: '</div>' },
+      { open: /<main[^>]*>/i, close: '</main>' },
+      { open: /<article[^>]*>/i, close: '</article>' },
+    ];
+
+    let swapped = false;
+    for (const sel of contentSelectors) {
+      const openMatch = liveHtml.match(sel.open);
+      if (!openMatch) continue;
+      const startIdx = openMatch.index + openMatch[0].length;
+      const tagName = sel.close.replace(/<\/?(\w+)>/, '$1');
+      let depth = 1, searchIdx = startIdx, endIdx = -1;
+      const openRe = new RegExp('<' + tagName + '[\\s>]', 'gi');
+      const closeRe = new RegExp('</' + tagName + '>', 'gi');
+      while (depth > 0 && searchIdx < liveHtml.length) {
+        openRe.lastIndex = searchIdx; closeRe.lastIndex = searchIdx;
+        const nextOpen = openRe.exec(liveHtml);
+        const nextClose = closeRe.exec(liveHtml);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) { depth++; searchIdx = nextOpen.index + nextOpen[0].length; }
+        else { depth--; if (depth === 0) { endIdx = nextClose.index; break; } searchIdx = nextClose.index + nextClose[0].length; }
+      }
+      if (endIdx > 0) {
+        liveHtml = liveHtml.slice(0, startIdx) + '\n' + assembledContent + '\n' + liveHtml.slice(endIdx);
+        swapped = true;
+        console.log(`[section-preview] Content swapped using: ${sel.open}`);
+        break;
+      }
     }
 
-    // Handle NEW sections (is_new flag) — inject them at the appropriate position
-    const newSections = sections.filter(s => s.is_new && s.draft_text);
-    if (newSections.length > 0) {
-      // Find the main content area end (before footer) and inject new sections there
-      const footerPos = liveHtml.search(/<footer[\s>]/i);
-      if (footerPos > 0) {
-        const newSectionHtml = newSections.map(s => {
-          const h = s.draft_heading || s.heading;
-          return `<section class="seo-new-section" style="border-left:4px solid #22c55e;padding:24px;margin:32px auto;max-width:900px;background:#f0fdf4;border-radius:0 12px 12px 0;position:relative">
-            <div style="position:absolute;top:8px;right:12px;font-size:10px;font-weight:700;color:#16a34a;letter-spacing:1px;text-transform:uppercase">NEW SECTION</div>
-            ${h ? `<h2>${h}</h2>` : ''}
-            ${s.draft_text}
-          </section>`;
-        }).join('\n');
-        liveHtml = liveHtml.slice(0, footerPos) + newSectionHtml + '\n' + liveHtml.slice(footerPos);
+    if (!swapped) {
+      // Fallback: inject between </header> and <footer>
+      const headerEnd = liveHtml.search(/<\/header>/i);
+      const footerStart = liveHtml.search(/<footer[\s>]/i);
+      if (headerEnd > 0 && footerStart > headerEnd) {
+        const insertPoint = headerEnd + '</header>'.length;
+        liveHtml = liveHtml.slice(0, insertPoint) + `<div style="max-width:900px;margin:40px auto;padding:0 24px;line-height:1.8">${assembledContent}</div>` + liveHtml.slice(footerStart);
+        swapped = true;
+        console.log('[section-preview] Fallback: injected between header/footer');
       }
     }
 
     // Add preview banner + highlight styles + toggle
     const previewStyles = `<style>
-.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:10px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
+.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
 .seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
 .seo-preview-bar .badge{background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:4px;font-size:11px}
 .seo-preview-bar button{background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s}
 .seo-preview-bar button:hover{background:rgba(255,255,255,0.3)}
-.seo-preview-bar button.active{background:rgba(255,255,255,0.9);color:#6366f1}
-/* Section highlight styles */
-.seo-section-updated{position:relative;border-left:4px solid #6366f1;background:rgba(99,102,241,0.04);padding-left:12px;margin-left:-16px;transition:all 0.3s}
-.seo-section-updated::before{content:'UPDATED';position:absolute;top:-8px;left:4px;font-size:9px;font-weight:700;color:#6366f1;letter-spacing:1px;background:#fff;padding:0 6px;border-radius:3px;border:1px solid rgba(99,102,241,0.3);opacity:0.9}
-.seo-section-new{position:relative;border-left:4px solid #22c55e;background:rgba(34,197,94,0.06);padding:20px 20px 20px 16px;margin-left:-16px;border-radius:0 8px 8px 0;transition:all 0.3s}
-.seo-section-new::before{content:'NEW SECTION';position:absolute;top:-8px;left:4px;font-size:9px;font-weight:700;color:#16a34a;letter-spacing:1px;background:#fff;padding:0 6px;border-radius:3px;border:1px solid rgba(34,197,94,0.3);opacity:0.9}
-/* When highlights are hidden */
-body.hide-highlights .seo-section-updated,body.hide-highlights .seo-section-new{border-left:none;background:none;padding-left:0;margin-left:0}
-body.hide-highlights .seo-section-updated::before,body.hide-highlights .seo-section-new::before{display:none}
-body.hide-highlights .seo-new-section{border-left:none;background:none}
-body.hide-highlights .seo-new-section>div:first-child{display:none}
+.seo-preview-bar button.active{background:#fff;color:#6366f1}
+/* Hide highlights when toggled off */
+body.hide-hl .seo-highlight{border-left:none!important;padding-left:0!important}
+body.hide-hl .seo-highlight-badge{display:none!important}
 </style>`;
     const previewBar = `<div class="seo-preview-bar">
-      <strong>SEO Room Section Preview</strong>
-      <span class="badge">${replacementCount} sections updated</span>
-      <span class="badge">${newSections.length} new sections</span>
-      <button id="toggle-highlights" class="active" onclick="document.body.classList.toggle('hide-highlights');this.classList.toggle('active');this.textContent=this.classList.contains('active')?'Highlights ON':'Highlights OFF'">Highlights ON</button>
-      <span>Design preserved — only text changed</span>
+      <strong>SEO Room Preview</strong>
+      <span class="badge">${updatedSections.length} updated</span>
+      ${newSections.length ? `<span class="badge">${newSections.length} new</span>` : ''}
+      <button id="hl-toggle" class="active" onclick="document.body.classList.toggle('hide-hl');var b=this;b.classList.toggle('active');b.textContent=b.classList.contains('active')?'Highlights ON':'Highlights OFF'">Highlights ON</button>
+      <span style="opacity:0.8">Design preserved</span>
       <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open original →</a>
     </div>`;
     const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-bar')){e.preventDefault();e.stopPropagation();}},true);</script>`;
@@ -8896,7 +8885,7 @@ body.hide-highlights .seo-new-section>div:first-child{display:none}
     liveHtml = liveHtml.replace('</head>', previewStyles + '</head>');
     liveHtml = liveHtml.replace('</body>', previewBar + disableLinks + '</body>');
 
-    console.log(`[section-preview] Rendered: ${replacementCount} sections replaced, ${newSections.length} new sections added`);
+    console.log(`[section-preview] Rendered: ${updatedSections.length} sections updated, ${newSections.length} new, swapped=${swapped}`);
     res.setHeader('Content-Type', 'text/html');
     res.send(liveHtml);
   } catch (e) {
