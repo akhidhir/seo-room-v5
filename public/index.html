@@ -11405,6 +11405,80 @@
         { label: 'H3s', before: (currentContent.match(/<h3/gi) || []).length, after: preview.stats?.proposed?.h3s || 0 },
       ];
 
+      // Compute content score for proposed content
+      const proposedScore = useMemo(() => {
+        const html = preview.proposed?.content_html || '';
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        const text = div.textContent || '';
+        const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+        const h1s = div.querySelectorAll('h1').length;
+        const h2s = div.querySelectorAll('h2').length;
+        const h3s = div.querySelectorAll('h3').length;
+        const links = div.querySelectorAll('a').length;
+        const imgs = div.querySelectorAll('img').length;
+
+        const focusKw = (preview.proposed?.focus_keyword || item?.draft_focus_keyword || item?.current_focus_keyword || '').toLowerCase().trim();
+        let focusCount = 0;
+        if (focusKw && text) {
+          const lower = text.toLowerCase();
+          let pos = 0;
+          while ((pos = lower.indexOf(focusKw, pos)) !== -1) { focusCount++; pos += focusKw.length; }
+        }
+
+        const wt = scoreData?.wordTarget || 1500;
+        let s = 0;
+        const tips = [];
+
+        // Words (20 pts)
+        if (words >= wt) { s += 20; tips.push({ type: 'success', msg: 'Content length: ' + words + ' words (target: ' + wt + ')' }); }
+        else if (words >= wt * 0.5) { s += 12; tips.push({ type: 'warn', msg: 'Add ' + (wt - words) + ' more words (target: ' + wt.toLocaleString() + ')' }); }
+        else { tips.push({ type: 'error', msg: 'Too short: ' + words + ' words (need ' + wt.toLocaleString() + ')' }); }
+
+        // H2 (8 pts)
+        if (h2s >= 3) { s += 8; tips.push({ type: 'success', msg: h2s + ' H2 headings' }); }
+        else if (h2s >= 1) { s += 4; tips.push({ type: 'warn', msg: 'Add ' + (3 - h2s) + ' more H2 headings' }); }
+        else { tips.push({ type: 'error', msg: 'No H2 headings' }); }
+
+        // H3 (2 pts)
+        if (h3s >= 2) { s += 2; tips.push({ type: 'success', msg: h3s + ' H3 subheadings' }); }
+        else { tips.push({ type: 'warn', msg: 'Add H3 subheadings' }); }
+
+        // H1 (5 pts)
+        if (h1s === 1) { s += 5; tips.push({ type: 'success', msg: 'Single H1 tag' }); }
+        else if (h1s > 1) { tips.push({ type: 'error', msg: h1s + ' H1 tags — should be 1' }); }
+        else { tips.push({ type: 'error', msg: 'Missing H1 tag' }); }
+
+        // Links (8 pts)
+        if (links >= 3) { s += 8; tips.push({ type: 'success', msg: links + ' internal links' }); }
+        else if (links >= 1) { s += 4; tips.push({ type: 'warn', msg: 'Add ' + (3 - links) + ' more links' }); }
+        else { tips.push({ type: 'error', msg: 'No links found' }); }
+
+        // Images (2 pts)
+        if (imgs >= 1) { s += 2; tips.push({ type: 'success', msg: imgs + ' image' + (imgs > 1 ? 's' : '') }); }
+        else { tips.push({ type: 'warn', msg: 'Add at least 1 image' }); }
+
+        // Focus keyword (15 pts)
+        if (focusCount >= 3 && focusCount <= 8) { s += 15; tips.push({ type: 'success', msg: 'Focus keyword ' + focusCount + 'x (ideal: 3-8)' }); }
+        else if (focusCount > 8) { s += 10; tips.push({ type: 'warn', msg: 'Focus keyword overused (' + focusCount + 'x)' }); }
+        else if (focusCount >= 1) { s += 7; tips.push({ type: 'warn', msg: 'Focus keyword ' + focusCount + 'x (need 3-8)' }); }
+        else if (focusKw) { tips.push({ type: 'error', msg: 'Focus keyword "' + focusKw + '" not found' }); }
+
+        // Meta title (10 pts)
+        const mt = (metaTitle || '').trim();
+        if (mt.length >= 50 && mt.length <= 60) { s += 10; tips.push({ type: 'success', msg: 'Meta title ' + mt.length + ' chars' }); }
+        else if (mt.length > 0) { s += 5; tips.push({ type: 'warn', msg: 'Meta title ' + mt.length + ' chars (need 50-60)' }); }
+        else { tips.push({ type: 'error', msg: 'Missing meta title' }); }
+
+        // Meta desc (10 pts)
+        const md = (metaDesc || '').trim();
+        if (md.length >= 120 && md.length <= 155) { s += 10; tips.push({ type: 'success', msg: 'Meta desc ' + md.length + ' chars' }); }
+        else if (md.length > 0) { s += 5; tips.push({ type: 'warn', msg: 'Meta desc ' + md.length + ' chars (need 120-155)' }); }
+        else { tips.push({ type: 'error', msg: 'Missing meta description' }); }
+
+        return { score: Math.min(100, s), tips };
+      }, [preview.proposed?.content_html, metaTitle, metaDesc, item, scoreData]);
+
       return React.createElement('div', {
         onClick: onReject,
         style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }
@@ -11487,6 +11561,36 @@
                 React.createElement('i', { className: 'fa-solid fa-comments', style: { color: '#f59e0b', fontSize: 16 } }),
                 React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: 'var(--text)' } }, 'Chat with AI'),
                 React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 'auto' } }, 'Iterate until perfect')
+              ),
+
+              // Score card
+              React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--card)', flexShrink: 0 } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 } },
+                  React.createElement('div', { style: { position: 'relative', width: 48, height: 48, flexShrink: 0 } },
+                    React.createElement('svg', { width: 48, height: 48, viewBox: '0 0 48 48' },
+                      React.createElement('circle', { cx: 24, cy: 24, r: 20, fill: 'none', stroke: 'var(--border)', strokeWidth: 4 }),
+                      React.createElement('circle', { cx: 24, cy: 24, r: 20, fill: 'none', stroke: proposedScore.score >= 75 ? '#22c55e' : proposedScore.score >= 50 ? '#f59e0b' : '#ef4444', strokeWidth: 4,
+                        strokeDasharray: (proposedScore.score / 100 * 126) + ' 126', strokeLinecap: 'round', transform: 'rotate(-90 24 24)' })
+                    ),
+                    React.createElement('div', { style: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', fontSize: 14, fontWeight: 800, color: proposedScore.score >= 75 ? '#22c55e' : proposedScore.score >= 50 ? '#f59e0b' : '#ef4444' } }, proposedScore.score)
+                  ),
+                  React.createElement('div', null,
+                    React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text)' } }, 'Content Score'),
+                    React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)' } },
+                      proposedScore.tips.filter(t => t.type === 'success').length + '/' + proposedScore.tips.length + ' checks passed'
+                    )
+                  )
+                ),
+                React.createElement('div', { style: { maxHeight: 140, overflowY: 'auto' } },
+                  proposedScore.tips.map((tip, i) => {
+                    const icon = tip.type === 'success' ? 'fa-check-circle' : tip.type === 'error' ? 'fa-times-circle' : 'fa-exclamation-circle';
+                    const color = tip.type === 'success' ? '#22c55e' : tip.type === 'error' ? '#ef4444' : '#f59e0b';
+                    return React.createElement('div', { key: i, style: { display: 'flex', gap: 6, alignItems: 'flex-start', padding: '3px 0', fontSize: 11, lineHeight: 1.3 } },
+                      React.createElement('i', { className: 'fa-solid ' + icon, style: { color, marginTop: 1, fontSize: 10, minWidth: 12 } }),
+                      React.createElement('span', { style: { color: 'var(--text2)' } }, tip.msg)
+                    );
+                  })
+                )
               ),
 
               // Messages area
