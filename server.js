@@ -5397,16 +5397,49 @@ app.get('/api/projects/:projectId/content-queue/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Auto-resolve URLs for content queue items with missing/homepage URLs
+// Auto-resolve URLs for content queue items — uses sitemap + fuzzy slug matching
 app.post('/api/projects/:projectId/content-queue/auto-resolve-urls', async (req, res) => {
   try {
     const { projectId } = req.params;
+    const { item_id, chosen_url } = req.body || {}; // optional: resolve a single item with a chosen URL
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
-    if (!wpBase) return res.status(400).json({ error: 'No WordPress URL configured' });
-    const authHeaders = getWpAuthHeaders(project);
     const domainClean = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const projectUrl = 'https://' + domainClean;
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+
+    // If user picked a URL for a specific item, just save it
+    if (item_id && chosen_url) {
+      // Try to resolve WP page_id from URL
+      let wpId = null;
+      if (wpBase) {
+        const slug = chosen_url.replace(/\/$/, '').split('/').pop();
+        if (slug) {
+          for (const type of ['pages', 'posts']) {
+            try {
+              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: { ...(authHeaders || {}), 'Accept': 'application/json' } });
+              if (wpRes.ok) { const d = await wpRes.json(); if (d.length > 0) { wpId = d[0].id; break; } }
+            } catch (e) { /* skip */ }
+          }
+        }
+      }
+      await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [chosen_url, wpId, item_id]);
+      return res.json({ success: true, resolved: 1 });
+    }
+
+    // Discover all site pages from sitemap
+    console.log('[auto-resolve] Discovering pages from sitemap...');
+    const sitePages = await discoverPages(projectUrl, wpBase, authHeaders);
+    console.log(`[auto-resolve] Found ${sitePages.length} pages from sitemap`);
+
+    // Build search index: slug words → page
+    const pageIndex = sitePages.map(p => ({
+      url: p.url,
+      slug: p.slug || '',
+      words: (p.slug || '').split('-').filter(w => w.length > 1),
+      title: (p.title || '').toLowerCase()
+    }));
 
     // Find items with no URL, empty URL, or homepage URL
     const items = (await pool.query(
@@ -5417,37 +5450,54 @@ app.post('/api/projects/:projectId/content-queue/auto-resolve-urls', async (req,
     });
 
     const resolved = [];
+    const needsChoice = []; // items with multiple candidates
     const unresolved = [];
+
     for (const item of items) {
       if (!item.page_title) { unresolved.push({ id: item.id, title: item.page_title, reason: 'No title' }); continue; }
       const searchTerms = cleanTitleForWpSearch(item.page_title);
       if (searchTerms.length < 3) { unresolved.push({ id: item.id, title: item.page_title, reason: 'Title too short' }); continue; }
 
-      let found = false;
-      for (const type of ['pages', 'posts']) {
-        try {
-          const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
-            headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-          });
-          if (!wpRes.ok) continue;
-          const wpData = await wpRes.json();
-          const titleLower = searchTerms.toLowerCase();
-          const best = wpData.length === 1 ? wpData[0] : wpData.find(p => {
-            const wpTitle = (p.title?.rendered || '').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').toLowerCase();
-            return titleLower.includes(wpTitle) || wpTitle.includes(titleLower);
-          });
-          if (best) {
-            await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [best.link || '', best.id, item.id]);
-            resolved.push({ id: item.id, title: item.page_title, wp_id: best.id, url: best.link });
-            found = true;
-            break;
+      // Score each sitemap page by keyword overlap
+      const searchWords = searchTerms.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const scored = pageIndex.map(p => {
+        let score = 0;
+        for (const sw of searchWords) {
+          if (p.words.some(pw => pw.includes(sw) || sw.includes(pw))) score += 2;
+          if (p.title.includes(sw)) score += 1;
+        }
+        return { ...p, score };
+      }).filter(p => p.score > 0).sort((a, b) => b.score - a.score);
+
+      if (scored.length === 0) {
+        unresolved.push({ id: item.id, title: item.page_title, reason: 'No matching page in sitemap' });
+      } else if (scored.length === 1 || (scored[0].score > scored[1].score * 1.5)) {
+        // Clear winner — auto-resolve
+        const best = scored[0];
+        let wpId = null;
+        if (wpBase) {
+          const slug = best.url.replace(/\/$/, '').split('/').pop();
+          for (const type of ['pages', 'posts']) {
+            try {
+              const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: { ...(authHeaders || {}), 'Accept': 'application/json' } });
+              if (wpRes.ok) { const d = await wpRes.json(); if (d.length > 0) { wpId = d[0].id; break; } }
+            } catch (e) { /* skip */ }
           }
-        } catch (e) { /* skip */ }
+        }
+        await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [best.url, wpId, item.id]);
+        resolved.push({ id: item.id, title: item.page_title, url: best.url });
+      } else {
+        // Multiple candidates — user needs to pick
+        needsChoice.push({
+          id: item.id,
+          title: item.page_title,
+          candidates: scored.slice(0, 8).map(c => ({ url: c.url, slug: c.slug, score: c.score }))
+        });
       }
-      if (!found) unresolved.push({ id: item.id, title: item.page_title, reason: 'No WP match' });
     }
 
-    res.json({ total: items.length, resolved: resolved.length, unresolved: unresolved.length, resolved_items: resolved, unresolved_items: unresolved });
+    res.json({ total: items.length, resolved: resolved.length, needs_choice: needsChoice.length, unresolved: unresolved.length,
+      resolved_items: resolved, needs_choice_items: needsChoice, unresolved_items: unresolved });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
