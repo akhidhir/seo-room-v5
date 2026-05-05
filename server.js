@@ -5661,6 +5661,46 @@ function buildUserContent(textPrompt, item) {
 async function fetchLivePageContent(pageUrl, project, pageId) {
   let content = '';
   const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+  // For homepage without page_id, try to find the front page ID from WP settings
+  if (wpBase && !pageId) {
+    const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const urlClean = (pageUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const isHome = !pageUrl || pageUrl === '/' || (domainClean && urlClean === domainClean);
+    if (isHome) {
+      try {
+        const authHeaders = getWpAuthHeaders(project);
+        // Try WP front page setting
+        const fpRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=home&_fields=id,title&per_page=5`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (fpRes.ok) {
+          const fpPages = await fpRes.json();
+          if (fpPages.length > 0) { pageId = fpPages[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', pageId); }
+        }
+        // If no "home" slug, try fetching front page via options or search common slugs
+        if (!pageId) {
+          for (const slug of ['homepage', 'front-page', 'home-page']) {
+            const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${slug}&_fields=id&per_page=1`, {
+              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+            });
+            if (sRes.ok) { const d = await sRes.json(); if (d.length > 0) { pageId = d[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', slug, pageId); break; } }
+          }
+        }
+        // Last resort: find page with title matching business/site name
+        if (!pageId && project?.name) {
+          const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?search=${encodeURIComponent(project.name)}&_fields=id,title,link&per_page=5`, {
+            headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+          });
+          if (sRes.ok) {
+            const pages = await sRes.json();
+            // Pick the one whose link is the domain root
+            const homePage = pages.find(p => p.link && p.link.replace(/\/$/, '').replace(/^https?:\/\//, '') === domainClean);
+            if (homePage) { pageId = homePage.id; console.log('[fetchLivePageContent] Found home page ID via link match:', pageId); }
+          }
+        }
+      } catch (e) { console.log('[fetchLivePageContent] Home page ID lookup failed:', e.message); }
+    }
+  }
   // Try WP REST API first
   if (wpBase && pageId) {
     const authHeaders = getWpAuthHeaders(project);
@@ -5692,16 +5732,25 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
         let extracted = mainMatch ? mainMatch[1] : '';
         // Fallback for Elementor: extract body, strip non-content elements
         if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
-          const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-          if (bodyMatch) {
-            extracted = bodyMatch[1]
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-              .replace(/<header[\s\S]*?<\/header>/gi, '')
-              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-              .replace(/<!--[\s\S]*?-->/g, '');
+          // Try Elementor-specific content areas first
+          const elMatch = liveHtml.match(/<div[^>]*class="[^"]*elementor-widget-wrap[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i) ||
+                          liveHtml.match(/<div[^>]*data-elementor-type="wp-page"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
+          if (elMatch) {
+            extracted = elMatch[0];
+          }
+          if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
+            const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+            if (bodyMatch) {
+              extracted = bodyMatch[1]
+                .replace(/<script[\s\S]*?<\/script>/gi, '')
+                .replace(/<style[\s\S]*?<\/style>/gi, '')
+                .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+                .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+                .replace(/<header[\s\S]*?<\/header>/gi, '')
+                .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, ''); // strip preloader
+            }
           }
         }
         if (extracted) {
