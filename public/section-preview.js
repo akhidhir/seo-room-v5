@@ -13,6 +13,21 @@
     return out.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
+  // Apply highlight inline styles directly (bypasses Elementor CSS specificity)
+  function applyHL(el){
+    el.style.setProperty('background','#fef3c7','important');
+    el.style.setProperty('border-left','4px solid #f59e0b','important');
+    el.style.setProperty('padding-left','10px','important');
+    el.style.setProperty('color','#1a1a1a','important');
+    el.style.setProperty('border-radius','3px','important');
+    el.setAttribute('data-seo-hl','1');
+    // Force all children to black text
+    var kids = el.querySelectorAll('*');
+    for(var k=0;k<kids.length;k++){
+      kids[k].style.setProperty('color','#1a1a1a','important');
+    }
+  }
+
   function run(){
     var dataEl = document.getElementById('seo-section-data');
     if(!dataEl){ console.log('[SEO Room] No section data found'); return; }
@@ -106,7 +121,7 @@
           found.innerHTML = draft.html;
           replacedEls.add(found);
           if(norm(found.textContent) !== oldText){
-            found.classList.add('seo-text-hl');
+            applyHL(found);
             totalReplacements++;
           }
           sectionMatched++;
@@ -124,10 +139,10 @@
             var dp = draftParas[extra];
             var newEl = document.createElement(dp.tag === 'li' ? 'p' : dp.tag);
             newEl.innerHTML = dp.html;
-            newEl.classList.add('seo-text-hl');
+            applyHL(newEl);
             if(lastReplaced.className){
               var origClasses = lastReplaced.className.replace(/seo-text-hl/g,'').trim();
-              if(origClasses) newEl.className = origClasses + ' seo-text-hl';
+              if(origClasses) newEl.className = origClasses;
             }
             if(lastReplaced.nextSibling) lastReplaced.parentNode.insertBefore(newEl, lastReplaced.nextSibling);
             else lastReplaced.parentNode.appendChild(newEl);
@@ -147,7 +162,7 @@
           if(norm(allH[i].textContent) === headingNorm){
             if(norm(section.draft_heading) !== headingNorm){
               allH[i].textContent = section.draft_heading;
-              allH[i].classList.add('seo-text-hl');
+              applyHL(allH[i]);
               totalReplacements++;
             }
             replacedEls.add(allH[i]);

@@ -8861,7 +8861,7 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
 <div class=”seo-preview-bar”>
   <strong>SEO Room Preview</strong>
   <span class=”badge” id=”seo-match-count”>loading...</span>
-  <button id=”hl-toggle” class=”active” onclick=”document.body.classList.toggle(‘hide-hl’);var b=this;b.classList.toggle(‘active’);b.textContent=b.classList.contains(‘active’)?’Highlights ON’:’Highlights OFF’”>Highlights ON</button>
+  <button id=”hl-toggle” class=”active” onclick=”var on=this.classList.toggle(‘active’);this.textContent=on?’Highlights ON’:’Highlights OFF’;document.querySelectorAll(‘[data-seo-hl]’).forEach(function(el){if(on){el.style.setProperty(‘background’,’#fef3c7’,’important’);el.style.setProperty(‘border-left’,’4px solid #f59e0b’,’important’);el.style.setProperty(‘padding-left’,’10px’,’important’);el.style.setProperty(‘color’,’#1a1a1a’,’important’);el.querySelectorAll(‘*’).forEach(function(k){k.style.setProperty(‘color’,’#1a1a1a’,’important’)})}else{el.style.removeProperty(‘background’);el.style.removeProperty(‘border-left’);el.style.removeProperty(‘padding-left’);el.style.removeProperty(‘color’);el.querySelectorAll(‘*’).forEach(function(k){k.style.removeProperty(‘color’)})}})”>Highlights ON</button>
   <span style=”opacity:0.8”>Design preserved</span>
   <a href=”${pageUrl}” target=”_blank” style=”margin-left:auto”>Open original &#8594;</a>
 </div>`;
