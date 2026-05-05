@@ -11169,7 +11169,7 @@
 
       if (selectedItem) {
         const isPublished = selectedItem.stage === 'published' || selectedItem.stage === 'staging';
-        const hasDraft = !!(selectedItem.draft_content);
+        const hasDraft = !!(selectedItem.draft_content || editContent || selectedItem.current_content);
 
         // Detail view: editor with score panel, chat, optimise
         return React.createElement('div', null,
@@ -11332,7 +11332,20 @@
               // Preview — section-aware (when sections parsed) or basic content-swap
               !isPublished && hasDraft && React.createElement('button', {
                 onClick: () => {
-                  if (selectedItem.page_sections && selectedItem.page_sections.length > 0) {
+                  const hasSections = (selectedItem.page_sections && selectedItem.page_sections.length > 0) || selectedItem.sections_count > 0;
+                  if (hasSections) {
+                    // If we have sections_count but not page_sections loaded yet, fetch full item first
+                    if (!selectedItem.page_sections?.length && selectedItem.sections_count > 0) {
+                      try {
+                        const full = await api('/projects/' + pid + '/content-queue/' + selectedItem.id);
+                        if (full && full.page_sections?.length) {
+                          setSelectedItem(prev => ({ ...prev, page_sections: full.page_sections }));
+                          // Small delay to let state update then open preview
+                          setTimeout(() => handleSectionPreview(), 100);
+                          return;
+                        }
+                      } catch (e) { /* fall through to basic preview */ }
+                    }
                     handleSectionPreview();
                   } else {
                     const tkn = localStorage.getItem('token') || '';
@@ -11343,9 +11356,9 @@
                     });
                   }
                 },
-                title: selectedItem.page_sections?.length ? 'Section-aware preview — preserves page design' : 'Live page with draft content injected',
-                style: { padding: '8px 16px', background: selectedItem.page_sections?.length ? '#059669' : '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), selectedItem.page_sections?.length ? 'Preview (Design-Safe)' : 'Preview'),
+                title: (selectedItem.page_sections?.length || selectedItem.sections_count > 0) ? 'Section-aware preview — preserves page design' : 'Live page with draft content injected',
+                style: { padding: '8px 16px', background: (selectedItem.page_sections?.length || selectedItem.sections_count > 0) ? '#059669' : '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), (selectedItem.page_sections?.length || selectedItem.sections_count > 0) ? 'Preview (Design-Safe)' : 'Preview'),
               // Import Current Copy — pull live WP content into the editor for scoring/optimising
               !isPublished && React.createElement('button', {
                 disabled: importingCopy,
