@@ -10156,12 +10156,15 @@
       const [checkingCompetitors, setCheckingCompetitors] = useState(false);
 
       const checkCompetitorWords = async () => {
+        console.log('[ContentScore] Check competitors clicked', { focusKeyword, targetKeywords, pageTitle, projectId });
         const kw = focusKeyword || (targetKeywords && targetKeywords[0]) || pageTitle || '';
-        if (!kw || !projectId || checkingCompetitors) return;
+        if (!kw) { console.log('[ContentScore] No keyword found'); return; }
+        if (!projectId) { console.log('[ContentScore] No projectId'); return; }
+        if (checkingCompetitors) { console.log('[ContentScore] Already checking'); return; }
         setCheckingCompetitors(true);
         try {
           const r = await api('/projects/' + projectId + '/competitor-wordcount', {
-            method: 'POST', body: { keyword: kw, draft_content: draftContent || '' }
+            method: 'POST', body: { keyword: kw, draft_content: content || '' }
           });
           if (r.summary) {
             setCompetitorData(r);
@@ -10294,7 +10297,7 @@
               React.createElement('i', { className: 'fa-solid fa-crosshairs', style: { marginRight: 4 } }), 'Word Target: ', wt.toLocaleString()
             ),
             React.createElement('button', {
-              onClick: checkCompetitorWords, disabled: checkingCompetitors || (!focusKeyword && (!targetKeywords || !targetKeywords.length) && !pageTitle),
+              onClick: checkCompetitorWords,
               style: { padding: '4px 10px', fontSize: 11, background: 'var(--card)', border: '1px solid #ef4444', borderRadius: 6, color: '#ef4444', cursor: 'pointer', fontWeight: 700 }
             }, checkingCompetitors ?
               React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 4 } }), 'Checking...') :
