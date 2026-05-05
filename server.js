@@ -8757,17 +8757,32 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     // Fetch live page — serve it COMPLETELY UNCHANGED
     console.log(`[section-preview] Fetching: ${pageUrl}`);
     let liveHtml = '';
-    try {
-      const resp = await fetch(pageUrl, {
-        signal: AbortSignal.timeout(12000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-      });
-      if (resp.ok) liveHtml = await resp.text();
-    } catch (e) { console.log('[section-preview] Fetch failed:', e.message); }
+    let fetchErr = '';
+    for (let attempt = 0; attempt < 2 && !liveHtml; attempt++) {
+      try {
+        const resp = await fetch(pageUrl, {
+          signal: AbortSignal.timeout(20000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          redirect: 'follow'
+        });
+        console.log(`[section-preview] Attempt ${attempt+1}: status=${resp.status}`);
+        if (resp.ok) liveHtml = await resp.text();
+        else fetchErr = `HTTP ${resp.status}`;
+      } catch (e) {
+        fetchErr = e.message;
+        console.log(`[section-preview] Attempt ${attempt+1} failed:`, e.message);
+        if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
+      }
+    }
 
     if (!liveHtml) {
       res.setHeader('Content-Type', 'text/html');
-      return res.send(`<!DOCTYPE html><html><body><p>Could not fetch live page for preview.</p></body></html>`);
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;max-width:600px;margin:80px auto;text-align:center;color:#333}code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:13px}</style></head><body>
+        <h2>Could not fetch live page</h2>
+        <p>URL: <code>${pageUrl}</code></p>
+        <p>Error: <code>${fetchErr}</code></p>
+        <p style="color:#6b7280;font-size:14px">The site may be blocking server-side requests. Try refreshing.</p>
+      </body></html>`);
     }
 
     const baseUrl = new URL(pageUrl).origin;
