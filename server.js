@@ -8746,7 +8746,6 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     if (domClean && puClean === domClean) pageUrl = '';
 
     if (!pageUrl || !sections.length) {
-      // Fallback to basic preview
       const draftContent = item.draft_content || '';
       const draftTitle = item.draft_meta_title || item.page_title || '';
       res.setHeader('Content-Type', 'text/html');
@@ -8755,7 +8754,7 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
         </head><body><h1>${draftTitle}</h1>${draftContent}</body></html>`);
     }
 
-    // Fetch live page
+    // Fetch live page — serve it COMPLETELY UNCHANGED
     console.log(`[section-preview] Fetching: ${pageUrl}`);
     let liveHtml = '';
     try {
@@ -8774,118 +8773,229 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
     const baseUrl = new URL(pageUrl).origin;
     liveHtml = liveHtml.replace(/<head([^>]*)>/i, `<head$1><base href="${baseUrl}/">`);
 
-    // Replace meta title
+    // Replace meta title only
     const draftTitle = item.draft_meta_title || item.page_title || '';
     if (draftTitle) liveHtml = liveHtml.replace(/<title>[^<]*<\/title>/i, `<title>${draftTitle}</title>`);
 
-    // === STRATEGY: Find main content area, replace entirely with assembled section content ===
-    // This is more reliable than per-section CSS matching (which often fails)
+    // === CLIENT-SIDE TEXT REPLACEMENT ===
+    // Instead of modifying the HTML server-side (which breaks page builder styling),
+    // inject a script that runs AFTER the page renders and swaps text content
+    // inside existing DOM elements. This preserves ALL design structure.
 
-    // Build the new content from all sections, with highlights showing what changed
-    const updatedSections = sections.filter(s => !s.locked && s.draft_text);
+    // Build sections data for the client script
+    const sectionsForClient = sections
+      .filter(s => !s.locked && s.draft_text)
+      .map(s => ({
+        original_text: (s.original_text || '').replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim(),
+        draft_text: s.draft_text || '',
+        draft_heading: s.draft_heading || null,
+        heading: s.heading || null,
+        type: s.type,
+        is_new: !!s.is_new,
+      }));
+
     const newSections = sections.filter(s => s.is_new && s.draft_text);
+    const updatedCount = sectionsForClient.filter(s => !s.is_new).length;
 
-    // Assemble full replacement content from sections in order
-    const assembledContent = sections.map(s => {
-      if (s.locked) {
-        // Locked sections: show original text, no highlight
-        return s.original_text || '';
-      }
-      const content = s.draft_text || s.original_text || '';
-      const heading = s.draft_heading || s.heading;
-      let sectionHtml = '';
-      if (heading && !/<h[1-6]/i.test(content)) {
-        sectionHtml = `<h2>${heading}</h2>\n${content}`;
-      } else {
-        sectionHtml = content;
-      }
+    // Escape for embedding in script tag
+    const sectionsJson = JSON.stringify(sectionsForClient).replace(/<\//g, '<\\/').replace(/<!--/g, '<\\!--');
 
-      if (s.draft_text) {
-        // This section has new copy — wrap with highlight
-        const highlightColor = s.is_new ? '#22c55e' : '#6366f1';
-        const label = s.is_new ? 'NEW' : 'UPDATED';
-        return `<div class="seo-highlight" style="position:relative;border-left:3px solid ${highlightColor};padding-left:16px;margin:24px 0;transition:all 0.3s">
-          <div class="seo-highlight-badge" style="position:absolute;top:-10px;left:8px;font-size:9px;font-weight:700;color:${highlightColor};letter-spacing:1px;background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${highlightColor}40">${label}</div>
-          ${sectionHtml}
-        </div>`;
-      }
-      return sectionHtml;
-    }).join('\n');
-
-    // Find and replace main content area (same selectors as old preview)
-    const contentSelectors = [
-      { open: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>/i, close: '</div>' },
-      { open: /<article[^>]*class="[^"]*post-content[^"]*"[^>]*>/i, close: '</article>' },
-      { open: /<div[^>]*class="[^"]*page-content[^"]*"[^>]*>/i, close: '</div>' },
-      { open: /<div[^>]*class="[^"]*post-entry[^"]*"[^>]*>/i, close: '</div>' },
-      { open: /<div[^>]*class="[^"]*content-area[^"]*"[^>]*>/i, close: '</div>' },
-      { open: /<main[^>]*>/i, close: '</main>' },
-      { open: /<article[^>]*>/i, close: '</article>' },
-    ];
-
-    let swapped = false;
-    for (const sel of contentSelectors) {
-      const openMatch = liveHtml.match(sel.open);
-      if (!openMatch) continue;
-      const startIdx = openMatch.index + openMatch[0].length;
-      const tagName = sel.close.replace(/<\/?(\w+)>/, '$1');
-      let depth = 1, searchIdx = startIdx, endIdx = -1;
-      const openRe = new RegExp('<' + tagName + '[\\s>]', 'gi');
-      const closeRe = new RegExp('</' + tagName + '>', 'gi');
-      while (depth > 0 && searchIdx < liveHtml.length) {
-        openRe.lastIndex = searchIdx; closeRe.lastIndex = searchIdx;
-        const nextOpen = openRe.exec(liveHtml);
-        const nextClose = closeRe.exec(liveHtml);
-        if (!nextClose) break;
-        if (nextOpen && nextOpen.index < nextClose.index) { depth++; searchIdx = nextOpen.index + nextOpen[0].length; }
-        else { depth--; if (depth === 0) { endIdx = nextClose.index; break; } searchIdx = nextClose.index + nextClose[0].length; }
-      }
-      if (endIdx > 0) {
-        liveHtml = liveHtml.slice(0, startIdx) + '\n' + assembledContent + '\n' + liveHtml.slice(endIdx);
-        swapped = true;
-        console.log(`[section-preview] Content swapped using: ${sel.open}`);
-        break;
-      }
-    }
-
-    if (!swapped) {
-      // Fallback: inject between </header> and <footer>
-      const headerEnd = liveHtml.search(/<\/header>/i);
-      const footerStart = liveHtml.search(/<footer[\s>]/i);
-      if (headerEnd > 0 && footerStart > headerEnd) {
-        const insertPoint = headerEnd + '</header>'.length;
-        liveHtml = liveHtml.slice(0, insertPoint) + `<div style="max-width:900px;margin:40px auto;padding:0 24px;line-height:1.8">${assembledContent}</div>` + liveHtml.slice(footerStart);
-        swapped = true;
-        console.log('[section-preview] Fallback: injected between header/footer');
-      }
-    }
-
-    // Add preview banner + highlight styles + toggle
-    const previewStyles = `<style>
-.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3)}
+    const injectedScript = `
+<style>
+.seo-preview-bar{position:fixed;bottom:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:12px 24px;font-size:13px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
 .seo-preview-bar a{color:#e0e7ff;text-decoration:underline}
 .seo-preview-bar .badge{background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:4px;font-size:11px}
 .seo-preview-bar button{background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s}
 .seo-preview-bar button:hover{background:rgba(255,255,255,0.3)}
 .seo-preview-bar button.active{background:#fff;color:#6366f1}
-/* Hide highlights when toggled off */
-body.hide-hl .seo-highlight{border-left:none!important;padding-left:0!important}
-body.hide-hl .seo-highlight-badge{display:none!important}
-</style>`;
-    const previewBar = `<div class="seo-preview-bar">
-      <strong>SEO Room Preview</strong>
-      <span class="badge">${updatedSections.length} updated</span>
-      ${newSections.length ? `<span class="badge">${newSections.length} new</span>` : ''}
-      <button id="hl-toggle" class="active" onclick="document.body.classList.toggle('hide-hl');var b=this;b.classList.toggle('active');b.textContent=b.classList.contains('active')?'Highlights ON':'Highlights OFF'">Highlights ON</button>
-      <span style="opacity:0.8">Design preserved</span>
-      <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open original →</a>
-    </div>`;
-    const disableLinks = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a&&!a.closest('.seo-preview-bar')){e.preventDefault();e.stopPropagation();}},true);</script>`;
+.seo-changed{outline:2px solid #6366f1;outline-offset:2px;position:relative;transition:outline-color 0.3s}
+.seo-changed::after{content:'UPDATED';position:absolute;top:-12px;right:4px;font-size:8px;font-weight:700;color:#fff;background:#6366f1;padding:1px 5px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;line-height:1.4}
+.seo-new-block{outline:2px solid #22c55e;outline-offset:2px;position:relative}
+.seo-new-block::after{content:'NEW';position:absolute;top:-12px;right:4px;font-size:8px;font-weight:700;color:#fff;background:#22c55e;padding:1px 5px;border-radius:3px;letter-spacing:0.5px;z-index:10;font-family:-apple-system,sans-serif;line-height:1.4}
+body.hide-hl .seo-changed,body.hide-hl .seo-new-block{outline:none!important}
+body.hide-hl .seo-changed::after,body.hide-hl .seo-new-block::after{display:none!important}
+</style>
+<script>
+(function(){
+  // Wait for page to fully render (including Elementor)
+  function run(){
+    var sections = ${sectionsJson};
+    var matched = 0;
 
-    liveHtml = liveHtml.replace('</head>', previewStyles + '</head>');
-    liveHtml = liveHtml.replace('</body>', previewBar + disableLinks + '</body>');
+    // Get all text-containing elements in the main content area
+    var contentArea = document.querySelector('.entry-content, .page-content, .post-content, article, main, #content, .site-content');
+    if (!contentArea) contentArea = document.body;
 
-    console.log(`[section-preview] Rendered: ${updatedSections.length} sections updated, ${newSections.length} new, swapped=${swapped}`);
+    // For each section, find matching text in the DOM and replace it
+    sections.forEach(function(section){
+      if (section.is_new) return; // new sections added separately
+
+      // Get first 60 chars of original text as search key (normalised)
+      var searchText = section.original_text.slice(0, 80).trim();
+      if (!searchText || searchText.length < 15) return;
+
+      // Find all text-heavy elements
+      var candidates = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, span, div, blockquote');
+      var matchedEls = [];
+
+      // Find the element whose text starts with or contains the search key
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var elText = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (elText.length < 10) continue;
+
+        // Check if this element's text matches the start of the section
+        if (elText.length >= 15 && searchText.indexOf(elText.slice(0, 30)) !== -1) {
+          matchedEls.push(el);
+        } else if (elText.length >= 30 && section.original_text.indexOf(elText.slice(0, 40).replace(/\\s+/g, ' ')) !== -1) {
+          matchedEls.push(el);
+        }
+      }
+
+      // Also try matching by heading
+      if (section.heading && matchedEls.length === 0) {
+        var headingNorm = section.heading.toLowerCase().trim();
+        var headings = contentArea.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        for (var h = 0; h < headings.length; h++) {
+          var hText = (headings[h].textContent || '').toLowerCase().trim();
+          if (hText === headingNorm || hText.indexOf(headingNorm) !== -1 || headingNorm.indexOf(hText) !== -1) {
+            // Found the heading — get its parent section container
+            var container = headings[h].parentElement;
+            // Walk up to find a meaningful container (section, div with some size)
+            for (var up = 0; up < 5; up++) {
+              if (!container || container === contentArea || container === document.body) break;
+              var cText = (container.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (cText.length > 50) { matchedEls = [container]; break; }
+              container = container.parentElement;
+            }
+            if (matchedEls.length > 0) break;
+          }
+        }
+      }
+
+      if (matchedEls.length === 0) return;
+
+      // Find the best container — the highest element that contains most of this section's text
+      var bestEl = matchedEls[0];
+      // Walk up to find the section-level container
+      var container = bestEl;
+      for (var up = 0; up < 8; up++) {
+        var parent = container.parentElement;
+        if (!parent || parent === contentArea || parent === document.body) break;
+        var parentTag = parent.tagName.toLowerCase();
+        // Stop at section/article boundaries or major layout divs
+        if (parentTag === 'section' || parentTag === 'article') { container = parent; break; }
+        // Check if parent has a class suggesting it's a section wrapper
+        var cls = (parent.className || '').toLowerCase();
+        if (cls.match(/section|block|row|wrapper|widget|elementor-element/)) { container = parent; break; }
+        // If parent's text is much larger, it's probably the section container
+        var parentText = (parent.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (parentText.length > container.textContent.length * 1.3) {
+          container = parent;
+        }
+      }
+
+      // Now replace text inside this container
+      // Strategy: find all p, h1-h6, li, span (leaf text nodes) and replace their innerHTML
+      var textEls = container.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, blockquote');
+      if (textEls.length === 0) textEls = [container];
+
+      // Parse draft text into chunks (split by paragraphs / headings)
+      var temp = document.createElement('div');
+      temp.innerHTML = section.draft_text;
+      var draftEls = temp.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, blockquote');
+      if (draftEls.length === 0) draftEls = [temp];
+
+      // Replace text elements 1-to-1 (matching by position)
+      var replaceCount = Math.min(textEls.length, draftEls.length);
+      for (var r = 0; r < replaceCount; r++) {
+        var origTag = textEls[r].tagName.toLowerCase();
+        var draftTag = draftEls[r].tagName.toLowerCase();
+        // Only replace if same-ish type (don't put heading text in a p)
+        if (origTag.match(/^h\\d/) && !draftTag.match(/^h\\d/)) continue;
+        textEls[r].innerHTML = draftEls[r].innerHTML;
+      }
+
+      // If draft has more elements than original, append extras
+      if (draftEls.length > textEls.length) {
+        var lastEl = textEls[textEls.length - 1] || container;
+        for (var extra = textEls.length; extra < draftEls.length; extra++) {
+          var newEl = document.createElement(draftEls[extra].tagName);
+          newEl.innerHTML = draftEls[extra].innerHTML;
+          newEl.className = lastEl.className || '';
+          lastEl.parentNode.insertBefore(newEl, lastEl.nextSibling);
+          lastEl = newEl;
+        }
+      }
+
+      // Update heading if changed
+      if (section.draft_heading && section.heading && section.draft_heading !== section.heading) {
+        var headings2 = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        for (var hh = 0; hh < headings2.length; hh++) {
+          if (headings2[hh].textContent.trim().toLowerCase() === section.heading.toLowerCase().trim()) {
+            headings2[hh].textContent = section.draft_heading;
+            break;
+          }
+        }
+      }
+
+      // Add highlight
+      container.classList.add('seo-changed');
+      container.style.position = container.style.position || 'relative';
+      matched++;
+    });
+
+    // Handle NEW sections — append before footer or at end of content area
+    var newSections = sections.filter(function(s){ return s.is_new; });
+    if (newSections.length > 0) {
+      var footer = document.querySelector('footer');
+      var insertPoint = footer || contentArea;
+      newSections.forEach(function(ns) {
+        var block = document.createElement('div');
+        block.className = 'seo-new-block';
+        block.style.position = 'relative';
+        block.style.padding = '24px';
+        block.style.margin = '32px 0';
+        var heading = ns.draft_heading || ns.heading;
+        block.innerHTML = (heading ? '<h2>' + heading + '</h2>' : '') + ns.draft_text;
+        if (footer) {
+          footer.parentNode.insertBefore(block, footer);
+        } else {
+          contentArea.appendChild(block);
+        }
+        matched++;
+      });
+    }
+
+    // Update badge count
+    var badge = document.getElementById('seo-match-count');
+    if (badge) badge.textContent = matched + ' of ' + sections.length + ' matched';
+    console.log('[SEO Room Preview] Matched and replaced: ' + matched + '/' + sections.length + ' sections');
+  }
+
+  // Run after page fully loads (Elementor needs time)
+  if (document.readyState === 'complete') { setTimeout(run, 500); }
+  else { window.addEventListener('load', function(){ setTimeout(run, 500); }); }
+
+  // Disable link clicks
+  document.addEventListener('click', function(e){
+    var a = e.target.closest('a');
+    if (a && !a.closest('.seo-preview-bar')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+})();
+</script>
+<div class="seo-preview-bar">
+  <strong>SEO Room Preview</strong>
+  <span class="badge" id="seo-match-count">${updatedCount + newSections.length} sections</span>
+  <button id="hl-toggle" class="active" onclick="document.body.classList.toggle('hide-hl');var b=this;b.classList.toggle('active');b.textContent=b.classList.contains('active')?'Highlights ON':'Highlights OFF'">Highlights ON</button>
+  <span style="opacity:0.8">Design preserved — text only</span>
+  <a href="${pageUrl}" target="_blank" style="margin-left:auto">Open original →</a>
+</div>`;
+
+    // Inject before </body> — page structure stays 100% untouched
+    liveHtml = liveHtml.replace('</body>', injectedScript + '</body>');
+
+    console.log(`[section-preview] Serving client-side preview: ${sectionsForClient.length} sections, ${newSections.length} new`);
     res.setHeader('Content-Type', 'text/html');
     res.send(liveHtml);
   } catch (e) {
