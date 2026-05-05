@@ -8908,8 +8908,8 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
     // Filter to only elements that actually have visible text (not empty, not just images)
     var textEls = [];
     origEls.forEach(function(el){
-      // Skip if element is inside header/nav/footer
-      if(el.closest('header,nav,footer,.seo-preview-bar')) return;
+      // Skip if element is inside header/nav/footer/form/sidebar
+      if(el.closest('header,nav,footer,form,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget')) return;
       var txt = el.textContent.trim();
       if(txt.length >= 3) textEls.push(el);
     });
@@ -8969,16 +8969,19 @@ body.hide-hl .seo-text-hl{background:none!important;border-left:none!important;p
 
     console.log('[SEO Room] Starting preview replacement for '+sections.length+' sections');
 
-    // Collect all headings on the page
+    // Collect headings ONLY from main content area (skip forms, footer, nav, sidebar, widgets)
     var allHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    console.log('[SEO Room] Found '+allHeadings.length+' headings on page');
+    console.log('[SEO Room] Found '+allHeadings.length+' total headings on page');
 
-    // Build a map of normalised heading text → DOM element
+    // Build a map of normalised heading text → DOM element (content headings only)
     var headingMap = [];
     allHeadings.forEach(function(h){
+      // Skip headings inside forms, footer, nav, sidebar, widget areas
+      if(h.closest('form, footer, nav, .widget, .sidebar, .elementor-widget-form, .elementor-form, .wpcf7, .wpforms-container, .gform_wrapper, .site-footer, .footer-widget, .menu-item, .elementor-location-footer')) return;
       var t = norm(h.textContent);
       if(t.length >= 3) headingMap.push({text:t, el:h});
     });
+    console.log('[SEO Room] Content headings (excluding forms/footer/nav): '+headingMap.length);
 
     // For each section (not new), find its heading in the DOM
     sections.forEach(function(section){

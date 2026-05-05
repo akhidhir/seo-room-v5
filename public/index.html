@@ -10520,25 +10520,35 @@
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
 
-      // Highlight changed sentences in draft by comparing with original
+      // Highlight changed paragraphs in draft by comparing with original (string-based, no DOM needed)
       const highlightDraftChanges = (originalHtml, draftHtml) => {
         if (!originalHtml || !draftHtml) return draftHtml || '';
-        const stripTags = (h) => h.replace(/<[^>]+>/g, '').trim();
-        const origSentences = stripTags(originalHtml).split(/(?<=[.!?])\s+/).map(s => s.trim().toLowerCase()).filter(s => s.length > 3);
-        // Wrap each block-level element's text — check if its content is new
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = draftHtml;
-        const els = wrapper.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td');
-        els.forEach(el => {
-          const txt = el.textContent.trim().toLowerCase();
-          if (txt.length < 5) return;
-          // Check if this text existed in original (fuzzy: any original sentence is a substring or vice versa)
-          const isOriginal = origSentences.some(os => txt.includes(os) || os.includes(txt));
-          if (!isOriginal) {
-            el.style.cssText = (el.style.cssText || '') + ';background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;margin:2px 0;';
+        const stripTags = (h) => h.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const origText = stripTags(originalHtml);
+        // Split original into chunks (sentences or phrases 20+ chars)
+        const origChunks = origText.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 15);
+        // For each block element in draft, check if it's new content
+        return draftHtml.replace(/(<(?:p|li|h[1-6]|blockquote)[^>]*>)([\s\S]*?)(<\/(?:p|li|h[1-6]|blockquote)>)/gi, (match, open, content, close) => {
+          const txt = content.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+          if (txt.length < 10) return match;
+          // Check if substantially similar to any original chunk
+          const isSame = origChunks.some(oc => {
+            if (txt.includes(oc) || oc.includes(txt)) return true;
+            // Check word overlap > 60%
+            const tWords = txt.split(/\s+/);
+            const oWords = oc.split(/\s+/);
+            const overlap = tWords.filter(w => oWords.includes(w)).length;
+            return overlap / Math.max(tWords.length, 1) > 0.6;
+          });
+          if (!isSame) {
+            // Inject orange highlight style
+            const styleAttr = open.includes('style="')
+              ? open.replace('style="', 'style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;')
+              : open.replace('>', ' style="background:#fef3c7;border-left:4px solid #f59e0b;padding-left:8px;">');
+            return styleAttr + content + close;
           }
+          return match;
         });
-        return wrapper.innerHTML;
       };
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', staging: 'staging', published: 'published' };
