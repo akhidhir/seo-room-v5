@@ -5559,6 +5559,7 @@ app.post('/api/projects/:projectId/content-queue/:id/reset', async (req, res) =>
     const item = (await pool.query('SELECT id, page_title, page_url, page_id, content_type, source, priority FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
     await pool.query(`UPDATE content_queue SET
+      page_id=NULL, page_url=NULL,
       current_content=NULL, current_word_count=NULL, current_meta_title=NULL, current_meta_desc=NULL, current_focus_keyword=NULL,
       draft_content=NULL, draft_meta_title=NULL, draft_meta_desc=NULL, draft_focus_keyword=NULL, draft_word_count=NULL,
       ai_notes=NULL, page_sections=NULL, page_wireframe=NULL, wireframe_image=NULL, wireframe_mime=NULL,

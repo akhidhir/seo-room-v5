@@ -10576,23 +10576,21 @@
         return (p.url || '').toLowerCase().includes(s) || (p.title || '').toLowerCase().includes(s) || (p.slug || '').toLowerCase().includes(s);
       });
 
-      const handlePick = async (url) => {
+      const handlePick = async (url, pageId) => {
         try {
-          await api('/projects/' + projectId + '/content-queue/' + itemId, { method: 'PUT', body: { page_url: url } });
+          const body = { page_url: url };
+          if (pageId && !isNaN(pageId)) body.page_id = parseInt(pageId);
+          await api('/projects/' + projectId + '/content-queue/' + itemId, { method: 'PUT', body });
           setOpen(false);
-          onPick(url);
+          onPick(url, pageId);
         } catch (e) { alert('Failed: ' + e.message); }
       };
 
-      return React.createElement('div', { style: { position: 'relative', marginTop: 2 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-          React.createElement('i', { className: 'fa-solid fa-triangle-exclamation', style: { fontSize: 10, color: '#f59e0b' } }),
-          React.createElement('button', {
-            onClick: loadPages,
-            style: { padding: '4px 12px', fontSize: 13, background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
-          }, React.createElement('i', { className: 'fa-solid fa-link', style: { marginRight: 4 } }), pages === null ? 'Pick Page URL' : 'Change URL'),
-          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'No URL set')
-        ),
+      return React.createElement('div', { style: { position: 'relative' } },
+        React.createElement('button', {
+          onClick: loadPages,
+          style: { padding: '3px 10px', fontSize: 12, background: 'none', color: 'var(--accent)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 }
+        }, React.createElement('i', { className: 'fa-solid fa-sitemap', style: { fontSize: 10 } }), 'Discover URL'),
         open && React.createElement('div', { style: { position: 'absolute', top: '100%', left: 0, zIndex: 999, width: 500, maxHeight: 350, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.3)', marginTop: 6, display: 'flex', flexDirection: 'column' } },
           React.createElement('div', { style: { padding: '8px 12px', borderBottom: '1px solid var(--border)' } },
             React.createElement('input', {
@@ -10607,7 +10605,7 @@
               : filtered.map((p, i) =>
                   React.createElement('button', {
                     key: i,
-                    onClick: () => handlePick(p.url),
+                    onClick: () => handlePick(p.url, p.page_id),
                     style: { display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
                     onMouseEnter: e => { e.currentTarget.style.background = 'var(--bg)'; },
                     onMouseLeave: e => { e.currentTarget.style.background = 'transparent'; }
@@ -11191,34 +11189,25 @@
               ),
               React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, selectedItem.page_title),
               (() => {
-                // Detect if page_url is truly empty — "/" counts as valid (homepage)
                 const rawUrl = selectedItem.page_url || '';
                 const hasUrl = rawUrl && rawUrl.trim().length > 0;
-                if (!hasUrl) {
-                  return React.createElement(UrlPicker, {
+                const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+                return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                  // Show current URL if set
+                  hasUrl && React.createElement('a', {
+                    href: rawUrl.startsWith('http') ? rawUrl : ('https://' + domainClean + rawUrl),
+                    target: '_blank', rel: 'noopener noreferrer',
+                    style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }
+                  }, React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', rawUrl === '/' ? '/ (Homepage)' : rawUrl),
+                  // Always show UrlPicker (discover from sitemap)
+                  React.createElement(UrlPicker, {
                     projectId: pid,
                     itemId: selectedItem.id,
-                    onPick: (url) => { setSelectedItem(prev => ({ ...prev, page_url: url })); loadItems(); }
-                  });
-                }
-                const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-                const fullUrl = rawUrl.startsWith('http') ? rawUrl : ('https://' + domainClean + rawUrl);
-                const displayUrl = rawUrl === '/' ? '/ (Homepage)' : rawUrl;
-                return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                  React.createElement('a', { href: fullUrl, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
-                    React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' ', displayUrl
-                  ),
-                  React.createElement('button', {
-                    onClick: () => {
-                      const newUrl = prompt('Edit page URL:', rawUrl);
-                      if (newUrl && newUrl !== rawUrl) {
-                        api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PUT', body: { page_url: newUrl } })
-                          .then(() => { setSelectedItem(prev => ({ ...prev, page_url: newUrl })); loadItems(); })
-                          .catch(err => alert('Failed: ' + err.message));
-                      }
-                    },
-                    style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 11, padding: '2px 4px' }
-                  }, React.createElement('i', { className: 'fa-solid fa-pen', style: { fontSize: 10 } }))
+                    onPick: (url, pageId) => {
+                      setSelectedItem(prev => ({ ...prev, page_url: url, page_id: pageId || prev.page_id }));
+                      loadItems();
+                    }
+                  })
                 );
               })()
             ),
