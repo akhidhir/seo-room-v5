@@ -8801,7 +8801,7 @@ app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req
       .filter(s => !s.locked && s.draft_text)
       .map(s => ({
         original_heading: (s.heading || '').trim(),
-        original_text: (s.original_text || '').replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim(),
+        original_text: (s.original_text || '').trim(),
         draft_text: s.draft_text || '',
         draft_heading: s.draft_heading || null,
         heading: s.heading || null,
@@ -8883,14 +8883,20 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
       if(section.is_new) return;
       if(!section.draft_text || !section.original_text) return;
 
-      // Parse original into paragraphs (plain text)
-      var origTemp = document.createElement('div');
-      origTemp.innerHTML = section.original_text;
+      // Parse original into paragraphs — original_text is PLAIN TEXT with \n\n breaks
       var origParas = [];
-      origTemp.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function(el){
-        var t = el.textContent.trim();
-        if(t.length >= 10) origParas.push({text: t, normText: norm(t), tag: el.tagName.toLowerCase()});
+      (section.original_text || '').split(/\n\n+/).forEach(function(para){
+        var t = para.trim();
+        if(t.length >= 10) origParas.push({text: t, normText: norm(t), tag: 'p'});
       });
+      // If no \n\n breaks, try single \n
+      if(origParas.length <= 1 && section.original_text && section.original_text.length > 50){
+        origParas = [];
+        section.original_text.split(/\n/).forEach(function(para){
+          var t = para.trim();
+          if(t.length >= 10) origParas.push({text: t, normText: norm(t), tag: 'p'});
+        });
+      }
 
       // Parse draft into paragraphs (HTML)
       var draftTemp = document.createElement('div');
@@ -8907,30 +8913,46 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
         if(idx >= draftParas.length) return;
         var draft = draftParas[idx];
 
-        // Search all matching tag elements on the page
-        var candidates = document.querySelectorAll(orig.tag);
+        // Search ALL text elements on the page (p, li, h1-h6, span, div with text)
+        var candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, span, div');
         var found = null;
 
+        // Exact match on normalized text
         for(var i=0; i<candidates.length; i++){
           var el = candidates[i];
           if(replacedEls.has(el)) continue;
           if(el.closest(skipSelector)) continue;
+          // Skip elements that have child block elements (we want leaf-level text holders)
+          if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
           var elNorm = norm(el.textContent);
-          // Exact match
           if(elNorm === orig.normText){ found = el; break; }
         }
 
-        // Fuzzy: first 40 chars match
+        // Fuzzy: first 50 chars match
         if(!found){
-          var short = orig.normText.slice(0,40);
+          var short = orig.normText.slice(0,50);
           if(short.length >= 15){
             for(var i=0; i<candidates.length; i++){
               var el = candidates[i];
               if(replacedEls.has(el)) continue;
               if(el.closest(skipSelector)) continue;
+              if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
               var elNorm = norm(el.textContent);
-              if(elNorm.slice(0,40) === short){ found = el; break; }
+              if(elNorm.length >= 15 && elNorm.slice(0,50) === short){ found = el; break; }
             }
+          }
+        }
+
+        // Fuzzy: contains match (original text is a substring of element text or vice versa)
+        if(!found && orig.normText.length >= 30){
+          var snippet = orig.normText.slice(0,60);
+          for(var i=0; i<candidates.length; i++){
+            var el = candidates[i];
+            if(replacedEls.has(el)) continue;
+            if(el.closest(skipSelector)) continue;
+            if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+            var elNorm = norm(el.textContent);
+            if(elNorm.length >= 20 && elNorm.indexOf(snippet) !== -1){ found = el; break; }
           }
         }
 
@@ -9052,17 +9074,22 @@ body.hide-hl .seo-text-hl *{color:inherit!important}
         debugHtml += '<div style="color:#ef4444">No original_text!</div>';
         return;
       }
-      var origTemp2 = document.createElement('div');
-      origTemp2.innerHTML = section.original_text;
-      origTemp2.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6').forEach(function(el){
-        var t = el.textContent.trim();
-        if(t.length < 10) return;
+      var debugParas = (section.original_text||'').split(/\n\n+/).filter(function(p){return p.trim().length>=10;});
+      if(debugParas.length<=1 && section.original_text && section.original_text.length>50){
+        debugParas = (section.original_text||'').split(/\n/).filter(function(p){return p.trim().length>=10;});
+      }
+      debugParas.forEach(function(para){
+        var t = para.trim();
         var n = norm(t);
-        // Check if this exists on the page
+        // Check if this exists on the page (search all text elements)
         var found = false;
-        pagePs.forEach(function(pp){
-          if(pp.closest('form,footer,nav,header,.seo-preview-bar')) return;
-          if(norm(pp.textContent) === n) found = true;
+        var allTextEls = document.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,span,div,blockquote');
+        allTextEls.forEach(function(pp){
+          if(pp.closest('form,footer,nav,header,.seo-preview-bar,#seo-debug-panel')) return;
+          var ppN = norm(pp.textContent);
+          if(ppN === n) found = true;
+          // Also check fuzzy (first 50 chars)
+          if(!found && n.length >= 30 && ppN.length >= 30 && ppN.slice(0,50) === n.slice(0,50)) found = true;
         });
         var color = found ? '#22c55e' : '#ef4444';
         var label = found ? 'FOUND' : 'NOT FOUND';
