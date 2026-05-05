@@ -6347,7 +6347,7 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { tips, missing_keywords, target_keywords, content_score, stats, current_meta } = req.body;
+  const { tips, missing_keywords, target_keywords, content_score, stats, current_meta, competitor_data, topic_gaps, word_target } = req.body;
 
   try {
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
@@ -6476,7 +6476,7 @@ META TITLE HAS FOCUS KW: ${curFocusKw && curMetaTitle.toLowerCase().includes(cur
 META DESC HAS FOCUS KW: ${curFocusKw && curMetaDesc.toLowerCase().includes(curFocusKw.toLowerCase()) ? 'YES' : 'NO — MUST add it'}
 
 CURRENT STATS:
-- Words: ${actualWords} (target: 1500+)
+- Words: ${actualWords} (target: ${word_target || 1500}+)
 - H2 headings: ${stats?.h2s || 0} (target: 3+)
 - H3 subheadings: ${stats?.h3s || 0} (target: 2+)
 - Internal links: ${stats?.links || 0} (target: 3+)
@@ -6490,6 +6490,18 @@ ${(target_keywords || []).map(k => `- "${typeof k === 'string' ? k : k.keyword |
 
 MISSING KEYWORDS (MUST add naturally):
 ${allMissing.length > 0 ? allMissing.map(k => `- "${k}"`).join('\n') : '- All keywords present'}
+
+${competitor_data ? `COMPETITOR ANALYSIS (for "${competitor_data.keyword}"):
+- Top 3 avg word count: ${competitor_data.summary?.top3_avg || 'N/A'} | All avg: ${competitor_data.summary?.avg || 'N/A'} | Recommended: ${competitor_data.summary?.recommended || 'N/A'}
+${(competitor_data.top3 || []).map((c, i) => `  #${c.position}: ${c.domain} — ${c.words} words, H2s: ${(c.h2Texts || []).slice(0, 5).join(' | ') || 'none'}`).join('\n')}` : ''}
+
+${topic_gaps ? `TOPIC GAP ANALYSIS (competitors cover these, you DON'T — MUST address):
+- Missing topics to add as H2/H3 sections: ${(topic_gaps.missing_topics || []).join(', ') || 'none'}
+- Missing keywords to weave in naturally: ${(topic_gaps.missing_keywords || []).join(', ') || 'none'}
+- Your strengths to keep: ${(topic_gaps.content_strengths || []).join(', ') || 'none'}
+- Summary: ${topic_gaps.recommendation || 'none'}
+
+IMPORTANT: Address the missing topics by adding new H2/H3 sections. Weave missing keywords throughout the content. This is how you beat competitors.` : ''}
 
 PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
 ${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
