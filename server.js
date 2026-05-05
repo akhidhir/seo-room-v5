@@ -5531,7 +5531,7 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
                            'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime',
-                           'page_url', 'page_id', 'page_title', 'page_sections'];
+                           'page_url', 'page_id', 'page_title', 'page_sections', 'ai_notes', 'target_keywords', 'competitor_analysis', 'schema_markup'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
@@ -5669,34 +5669,42 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
     if (isHome) {
       try {
         const authHeaders = getWpAuthHeaders(project);
-        // Try WP front page setting
-        const fpRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=home&_fields=id,title&per_page=5`, {
-          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-        });
-        if (fpRes.ok) {
-          const fpPages = await fpRes.json();
-          if (fpPages.length > 0) { pageId = fpPages[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', pageId); }
-        }
-        // If no "home" slug, try fetching front page via options or search common slugs
-        if (!pageId) {
-          for (const slug of ['homepage', 'front-page', 'home-page']) {
-            const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${slug}&_fields=id&per_page=1`, {
-              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-            });
-            if (sRes.ok) { const d = await sRes.json(); if (d.length > 0) { pageId = d[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', slug, pageId); break; } }
-          }
-        }
-        // Last resort: find page with title matching business/site name
-        if (!pageId && project?.name) {
-          const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?search=${encodeURIComponent(project.name)}&_fields=id,title,link&per_page=5`, {
+        // Method 1: WP settings endpoint (requires auth) — directly gives front page ID
+        try {
+          const settingsRes = await fetch(`${wpBase}/wp-json/wp/v2/settings`, {
             headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
           });
-          if (sRes.ok) {
-            const pages = await sRes.json();
-            // Pick the one whose link is the domain root
-            const homePage = pages.find(p => p.link && p.link.replace(/\/$/, '').replace(/^https?:\/\//, '') === domainClean);
-            if (homePage) { pageId = homePage.id; console.log('[fetchLivePageContent] Found home page ID via link match:', pageId); }
+          if (settingsRes.ok) {
+            const settings = await settingsRes.json();
+            if (settings.page_on_front) { pageId = settings.page_on_front; console.log('[fetchLivePageContent] Found front page ID from WP settings:', pageId); }
           }
+        } catch (e) { /* settings may require admin auth */ }
+        // Method 2: search by common homepage slugs
+        if (!pageId) {
+          for (const slug of ['home', 'homepage', 'front-page', 'home-page']) {
+            try {
+              const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${slug}&_fields=id,link&per_page=1`, {
+                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+              });
+              if (sRes.ok) { const d = await sRes.json(); if (d.length > 0) { pageId = d[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', slug, pageId); break; } }
+            } catch (e) { /* try next */ }
+          }
+        }
+        // Method 3: fetch all pages and find the one whose link matches domain root
+        if (!pageId) {
+          try {
+            const allRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?_fields=id,link&per_page=100`, {
+              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+            });
+            if (allRes.ok) {
+              const allPages = await allRes.json();
+              const homePage = allPages.find(p => {
+                const pLink = (p.link || '').replace(/\/$/, '').replace(/^https?:\/\//, '');
+                return pLink === domainClean;
+              });
+              if (homePage) { pageId = homePage.id; console.log('[fetchLivePageContent] Found home page ID via link match:', pageId); }
+            }
+          } catch (e) { /* silent */ }
         }
       } catch (e) { console.log('[fetchLivePageContent] Home page ID lookup failed:', e.message); }
     }
@@ -5762,7 +5770,7 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
       }
     } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
   }
-  return content;
+  return { content, resolvedPageId: pageId };
 }
 
 // Import current copy — fetch live WP content + meta for a content queue item
@@ -5835,7 +5843,14 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     }
     const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);
     console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId);
-    const content = await fetchLivePageContent(pageUrl, project, resolvedPageId);
+    const fetchResult = await fetchLivePageContent(pageUrl, project, resolvedPageId);
+    const content = fetchResult.content || fetchResult; // backward compat
+    // If fetchLivePageContent discovered the page_id, persist it
+    if (fetchResult.resolvedPageId && !resolvedPageId) {
+      resolvedPageId = fetchResult.resolvedPageId;
+      await pool.query('UPDATE content_queue SET page_id=$1 WHERE id=$2', [resolvedPageId, req.params.id]);
+      console.log('[import-current] Persisted discovered page_id:', resolvedPageId);
+    }
     console.log('[import-current] Got content length:', content ? content.length : 0, 'words:', content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0);
 
     // Also try to get Yoast meta
@@ -5887,7 +5902,8 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req
     const currentWc = currentPlain ? currentPlain.split(/\s+/).length : 0;
     if (currentWc < 50 && item.page_url) {
       console.log(`[generate-draft] Content thin (${currentWc} words), fetching live content for ${item.page_url}`);
-      currentContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const fetchRes2 = await fetchLivePageContent(item.page_url, project, item.page_id);
+      currentContent = fetchRes2.content || fetchRes2;
       const newWc = currentContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
       if (newWc > currentWc) {
         // Update stored content
@@ -6416,7 +6432,8 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
     const contentWc = contentPlain ? contentPlain.split(/\s+/).length : 0;
     if (contentWc < 50 && item.page_url) {
       console.log(`[optimise] Content thin (${contentWc} words), fetching live content`);
-      const liveContent = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const fetchRes3 = await fetchLivePageContent(item.page_url, project, item.page_id);
+      const liveContent = fetchRes3.content || fetchRes3;
       const liveWc = liveContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
       if (liveWc > contentWc) {
         contentToOptimise = liveContent;
