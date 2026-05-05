@@ -5747,47 +5747,61 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
       } catch (e) { /* try next */ }
     }
   }
-  // If content is thin (Elementor), fetch live HTML
+  // Always try live HTML fetch too — WP REST may not have the real rendered content (ACF, theme builders, shortcodes)
   const plainText = content.replace(/<[^>]+>/g, '').trim();
   const wc = plainText ? plainText.split(/\s+/).length : 0;
-  if (wc < 50 && pageUrl) {
+  console.log(`[fetchLivePageContent] WP REST got ${wc} words, now trying live fetch: ${pageUrl}`);
+  if (pageUrl) {
     try {
       const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000) });
       if (liveRes.ok) {
         const liveHtml = await liveRes.text();
-        // Try structured content areas first
-        const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
-                          liveHtml.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
-                          liveHtml.match(/<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-        let extracted = mainMatch ? mainMatch[1] : '';
-        // Fallback for Elementor: extract body, strip non-content elements
+        // Extract content between header and footer (most reliable for any theme)
+        const headerEnd = liveHtml.search(/<\/header>/i);
+        const footerStart = liveHtml.search(/<footer[\s>]/i);
+        let extracted = '';
+        if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
+          extracted = liveHtml.slice(headerEnd + '</header>'.length, footerStart)
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+            .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+        }
+        // Fallback: try main/article tags
         if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
-          // Try Elementor-specific content areas first
-          const elMatch = liveHtml.match(/<div[^>]*class="[^"]*elementor-widget-wrap[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i) ||
-                          liveHtml.match(/<div[^>]*data-elementor-type="wp-page"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
-          if (elMatch) {
-            extracted = elMatch[0];
-          }
-          if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
-            const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-            if (bodyMatch) {
-              extracted = bodyMatch[1]
-                .replace(/<script[\s\S]*?<\/script>/gi, '')
-                .replace(/<style[\s\S]*?<\/style>/gi, '')
-                .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-                .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-                .replace(/<header[\s\S]*?<\/header>/gi, '')
-                .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-                .replace(/<!--[\s\S]*?-->/g, '')
-                .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, ''); // strip preloader
-            }
+          const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*)<\/main>/i) ||
+                            liveHtml.match(/<article[^>]*>([\s\S]*)<\/article>/i);
+          if (mainMatch) extracted = mainMatch[1];
+        }
+        // Last fallback: extract full body, strip chrome
+        if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
+          const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+          if (bodyMatch) {
+            extracted = bodyMatch[1]
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+              .replace(/<header[\s\S]*?<\/header>/gi, '')
+              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
           }
         }
         if (extracted) {
           const liveText = extracted.replace(/<[^>]+>/g, '').trim();
-          if (liveText.split(/\s+/).length > wc) {
+          const liveWc = liveText.split(/\s+/).length;
+          console.log(`[fetchLivePageContent] Live fetch extracted ${liveWc} words (WP had ${wc})`);
+          if (liveWc > wc) {
             content = extracted;
+            console.log('[fetchLivePageContent] Using live content (more words)');
+          } else {
+            console.log('[fetchLivePageContent] Keeping WP content (more or equal words)');
           }
+        } else {
+          console.log('[fetchLivePageContent] Live fetch: no content extracted');
         }
       }
     } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
@@ -5886,17 +5900,7 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     const fetchResult = await fetchLivePageContent(pageUrl, project, resolvedPageId);
     let content = fetchResult.content || fetchResult; // backward compat
 
-    // Quality check: if content looks like nav/menu garbage (very repetitive or too short), warn
-    if (content) {
-      const plainText = content.replace(/<[^>]+>/g, '').trim();
-      const words = plainText.split(/\s+/).filter(Boolean);
-      const uniqueWords = new Set(words.map(w => w.toLowerCase()));
-      const uniqueRatio = words.length > 0 ? uniqueWords.size / words.length : 0;
-      if (words.length < 50 || (words.length > 20 && uniqueRatio < 0.3)) {
-        console.log(`[import-current] Content quality poor: ${words.length} words, ${Math.round(uniqueRatio*100)}% unique — likely nav/menu text`);
-        content = ''; // discard garbage
-      }
-    }
+    console.log('[import-current] Content result:', content ? `${content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length} words` : 'EMPTY');
     // If fetchLivePageContent discovered the page_id, persist it
     if (fetchResult.resolvedPageId && !resolvedPageId) {
       resolvedPageId = fetchResult.resolvedPageId;
