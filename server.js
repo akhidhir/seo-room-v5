@@ -7407,39 +7407,77 @@ app.get('/api/projects/:projectId/content-queue/:id/preview', async (req, res) =
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/i, `<meta name="description" content="${draftDesc.replace(/"/g, '&quot;')}">`);
     }
 
-    // Nuclear swap: replace EVERYTHING between </header> and <footer> with draft content
-    // This works for any theme — page builders scatter content across multiple sections
-    const headerEndMatch = html.match(/<\/header>/i);
-    const footerStartMatch = html.match(/<footer/i);
-    let swapped = false;
+    // Smart swap: inject draft content via client-side script so the page renders
+    // fully (slider, services, forms all work), then only the text content area gets replaced.
+    // This preserves the full page layout and only changes the copywriter content.
+    const escapedDraft = JSON.stringify(draftContent);
+    const swapScript = `
+    <script>
+    (function() {
+      // Wait for page to fully render
+      window.addEventListener('load', function() {
+        var draft = ${escapedDraft};
 
-    if (headerEndMatch && footerStartMatch) {
-      const headerEndPos = headerEndMatch.index + headerEndMatch[0].length;
-      const footerStartPos = footerStartMatch.index;
+        // Try specific WP/Elementor content selectors first
+        var selectors = [
+          '.entry-content',
+          '.post-content',
+          '.page-content',
+          'article .elementor-widget-theme-post-content .elementor-widget-container',
+          'article .elementor-text-editor',
+          '.elementor-widget-theme-post-content',
+          'article'
+        ];
 
-      if (footerStartPos > headerEndPos) {
-        const contentWrapper = `
-        <div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.8;color:#333">
-          ${draftContent}
-        </div>`;
-        html = html.slice(0, headerEndPos) + contentWrapper + html.slice(footerStartPos);
-        swapped = true;
-        console.log(`[preview] Content replaced between </header> and <footer> (${footerStartPos - headerEndPos} chars removed)`);
-      }
-    }
-
-    // Fallback if no header/footer structure
-    if (!swapped) {
-      const bodyMatch = html.match(/<body[^>]*>/i);
-      if (bodyMatch) {
-        const bodyEnd = bodyMatch.index + bodyMatch[0].length;
-        const bodyClose = html.indexOf('</body>');
-        if (bodyClose > bodyEnd) {
-          html = html.slice(0, bodyEnd) + `<div style="max-width:900px;margin:40px auto;padding:40px 30px;font-size:16px;line-height:1.8">${draftContent}</div>` + html.slice(bodyClose);
-          swapped = true;
+        var target = null;
+        for (var i = 0; i < selectors.length; i++) {
+          var el = document.querySelector(selectors[i]);
+          if (el) {
+            // Check it has substantial text (not just a wrapper)
+            var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (text.length > 100) {
+              target = el;
+              console.log('[SEO Preview] Found content area:', selectors[i], '(' + text.length + ' chars)');
+              break;
+            }
+          }
         }
-      }
-    }
+
+        // Fallback: find the largest text block between header and footer
+        if (!target) {
+          var candidates = document.querySelectorAll('main > *, main > div > *, section, .elementor-section');
+          var best = null;
+          var bestLen = 0;
+          candidates.forEach(function(el) {
+            var t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+            // Skip elements that are mostly images/nav (slider, services grid)
+            var imgs = el.querySelectorAll('img').length;
+            var textPerImg = imgs > 0 ? t.length / imgs : t.length;
+            if (t.length > 200 && textPerImg > 100 && t.length > bestLen) {
+              best = el;
+              bestLen = t.length;
+            }
+          });
+          if (best) {
+            target = best;
+            console.log('[SEO Preview] Fallback: largest text block (' + bestLen + ' chars)');
+          }
+        }
+
+        if (target) {
+          target.innerHTML = draft;
+          console.log('[SEO Preview] Content swapped successfully');
+        } else {
+          console.warn('[SEO Preview] Could not find content area to swap');
+        }
+      });
+    })();
+    </script>`;
+
+    // Inject the swap script before </body>
+    html = html.replace('</body>', swapScript + '</body>');
+    const swapped = true;
+    console.log('[preview] Using client-side content swap (preserves full page layout)');
 
     // Add preview pill (bottom-right corner, doesn't block page)
     const bannerHtml = `
