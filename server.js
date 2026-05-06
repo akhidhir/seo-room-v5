@@ -6670,8 +6670,24 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
       if (!jsonMatch) throw new Error('No JSON object found');
       parsed = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      console.error('[optimise] JSON parse failed:', e.message, 'text preview:', text.slice(0, 500));
-      return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+      console.log('[optimise] First parse failed, attempting repair:', e.message);
+      // Try to extract content_html directly with regex since JSON structure is simple
+      try {
+        const htmlMatch = text.match(/"content_html"\s*:\s*"([\s\S]*?)"\s*,\s*"(?:changes_summary|meta_title|word_count)/);
+        const changesMatch = text.match(/"changes_summary"\s*:\s*"([\s\S]*?)"\s*[,}]/);
+        if (htmlMatch) {
+          parsed = {
+            content_html: htmlMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+            changes_summary: changesMatch ? changesMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') : 'AI optimised content'
+          };
+          console.log('[optimise] Regex extraction succeeded, content length:', parsed.content_html.length);
+        } else {
+          throw new Error('Regex extraction also failed');
+        }
+      } catch (e2) {
+        console.error('[optimise] All parse attempts failed:', e2.message, 'text preview:', text.slice(0, 500));
+        return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
+      }
     }
 
     // Post-process: enforce focus keyword count (3-8 range, target 5)
