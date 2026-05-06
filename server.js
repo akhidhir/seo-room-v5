@@ -440,6 +440,11 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_status TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS wp_previous_content TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS page_sections JSONB`).catch(() => {});
+    // Client share link for approval workflow
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS share_token TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_comments JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS revision_requested_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_approved_at TIMESTAMPTZ`).catch(() => {});
 
     // Content keywords — for new project keyword workflow
     await client.query(`
@@ -5365,6 +5370,7 @@ app.get('/api/projects/:projectId/content-queue', async (req, res) => {
              draft_content, draft_meta_title, draft_meta_desc, draft_focus_keyword, draft_word_count,
              stage, approved_by, approved_at, published_at, created_at, updated_at, target_keywords,
              ai_notes, comments, schema_markup, page_wireframe, wireframe_mime,
+             share_token, client_comments, revision_requested_at, client_approved_at,
              CASE WHEN page_sections IS NOT NULL THEN jsonb_array_length(page_sections) ELSE 0 END AS sections_count,
              CASE WHEN wireframe_image IS NOT NULL AND wireframe_image != '' THEN true ELSE false END AS has_wireframe
              FROM content_queue WHERE project_id=$1`;
@@ -6721,6 +6727,183 @@ app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (r
     }
     console.log(`[copywriter] Emergency restore: page ${pageId} set back to publish`);
     res.json({ success: true, message: `Page ${pageId} restored to published` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== CLIENT SHARE LINK — APPROVAL WORKFLOW ====================
+
+// Generate share link for a content queue item
+app.post('/api/projects/:projectId/content-queue/:id/share', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    // Generate token if not already set
+    let token = item.share_token;
+    if (!token) {
+      token = crypto.randomBytes(24).toString('hex');
+      await pool.query('UPDATE content_queue SET share_token=$1 WHERE id=$2', [token, id]);
+    }
+
+    const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : `${req.protocol}://${req.get('host')}`;
+
+    res.json({ token, url: `${baseUrl}/client/review/${token}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Client review page — serves stripped-down HTML (no auth required)
+app.get('/client/review/:token', async (req, res) => {
+  try {
+    const item = (await pool.query(
+      `SELECT cq.*, p.name as project_name, p.business_name, p.domain
+       FROM content_queue cq JOIN projects p ON p.id = cq.project_id
+       WHERE cq.share_token = $1`, [req.params.token]
+    )).rows[0];
+    if (!item) return res.status(404).send('<h1>Link expired or invalid</h1>');
+
+    res.send(`<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review: ${(item.page_title || 'Page').replace(/"/g, '&quot;')}</title>
+<style>
+  :root { --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e4e4e7; --text3: #71717a; --accent: #6366f1; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 24px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .subtitle { color: var(--text3); font-size: 13px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .meta-value { font-size: 14px; padding: 8px 12px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); }
+  .content-area { font-size: 15px; line-height: 1.7; }
+  .content-area h1, .content-area h2, .content-area h3 { margin: 16px 0 8px; }
+  .content-area p { margin-bottom: 12px; }
+  .content-area ul, .content-area ol { margin: 8px 0 12px 24px; }
+  .btn { padding: 10px 24px; border-radius: 8px; border: none; font-weight: 700; font-size: 14px; cursor: pointer; }
+  .btn-approve { background: #22c55e; color: #fff; }
+  .btn-revision { background: #f59e0b; color: #fff; }
+  .btn:hover { opacity: 0.9; }
+  textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; resize: vertical; min-height: 80px; margin-top: 8px; }
+  .comment { padding: 10px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 0 8px 8px 0; margin-bottom: 8px; font-size: 13px; }
+  .comment .author { font-weight: 600; font-size: 12px; color: var(--accent); }
+  .comment .time { font-size: 11px; color: var(--text3); margin-left: 8px; }
+  .badge { display: inline-block; font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 600; text-transform: uppercase; }
+  .status-msg { padding: 16px; border-radius: 8px; text-align: center; font-size: 15px; font-weight: 600; margin: 16px 0; }
+</style>
+</head><body>
+<h1>${(item.page_title || 'Page Review').replace(/</g, '&lt;')}</h1>
+<div class="subtitle">${(item.business_name || item.project_name || '').replace(/</g, '&lt;')} &bull; ${(item.page_url || item.domain || '').replace(/</g, '&lt;')}</div>
+
+<div class="card">
+  <div class="label">Meta Title</div>
+  <div class="meta-value">${(item.draft_meta_title || item.current_meta_title || '').replace(/</g, '&lt;')}</div>
+  <div class="label" style="margin-top:12px">Meta Description</div>
+  <div class="meta-value">${(item.draft_meta_desc || item.current_meta_desc || '').replace(/</g, '&lt;')}</div>
+</div>
+
+<div class="card">
+  <div class="label">Content</div>
+  <div class="content-area">${item.draft_content || item.current_content || '<p style="color:var(--text3)">No content yet</p>'}</div>
+</div>
+
+<div class="card" id="comments-section">
+  <div class="label">Comments</div>
+  <div id="comments-list"></div>
+  <textarea id="new-comment" placeholder="Add a comment or revision note..."></textarea>
+  <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end">
+    <button class="btn btn-revision" onclick="submitAction('revision')">Request Revision</button>
+    <button class="btn btn-approve" onclick="submitAction('approve')">Approve</button>
+  </div>
+  <div id="status-msg" style="display:none"></div>
+</div>
+
+<script>
+var token = '${item.share_token}';
+var comments = ${JSON.stringify(item.client_comments || [])};
+function renderComments() {
+  var html = '';
+  comments.forEach(function(c) {
+    html += '<div class="comment"><span class="author">' + (c.author || 'Client') + '</span><span class="time">' + new Date(c.timestamp).toLocaleString() + '</span><div style="margin-top:4px">' + c.text + '</div></div>';
+  });
+  document.getElementById('comments-list').innerHTML = html || '<div style="color:var(--text3);font-size:12px;padding:8px 0">No comments yet</div>';
+}
+renderComments();
+
+function submitAction(action) {
+  var comment = document.getElementById('new-comment').value.trim();
+  var body = { action: action };
+  if (comment) body.comment = comment;
+
+  fetch('/api/client/review/' + token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { alert(data.error); return; }
+    var msg = document.getElementById('status-msg');
+    msg.style.display = 'block';
+    if (action === 'approve') {
+      msg.className = 'status-msg';
+      msg.style.background = '#22c55e20';
+      msg.style.color = '#22c55e';
+      msg.textContent = 'Content approved! It will be published shortly.';
+      document.querySelector('.btn-approve').disabled = true;
+      document.querySelector('.btn-revision').disabled = true;
+    } else {
+      msg.className = 'status-msg';
+      msg.style.background = '#f59e0b20';
+      msg.style.color = '#f59e0b';
+      msg.textContent = 'Revision requested. The team will update the content.';
+    }
+    if (data.comments) { comments = data.comments; renderComments(); }
+    document.getElementById('new-comment').value = '';
+  })
+  .catch(function(e) { alert('Error: ' + e.message); });
+}
+</script>
+</body></html>`);
+  } catch (e) {
+    console.error('[client-review] Error:', e.message);
+    res.status(500).send('<h1>Something went wrong</h1>');
+  }
+});
+
+// Client review action — approve or request revision (no auth)
+app.post('/api/client/review/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { action, comment } = req.body;
+
+    const item = (await pool.query('SELECT * FROM content_queue WHERE share_token=$1', [token])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Invalid link' });
+
+    // Add comment if provided
+    let comments = item.client_comments || [];
+    if (comment) {
+      comments.push({ author: 'Client', text: comment, timestamp: new Date().toISOString(), action: action });
+    }
+
+    if (action === 'approve') {
+      // Move to Publishing stage (DB: staging)
+      await pool.query(
+        `UPDATE content_queue SET stage='staging', client_approved_at=NOW(), client_comments=$1, updated_at=NOW() WHERE id=$2`,
+        [JSON.stringify(comments), item.id]
+      );
+      console.log(`[client-review] Item ${item.id} approved by client → moved to publishing`);
+    } else if (action === 'revision') {
+      // Send back to Draft stage (DB: drafts)
+      await pool.query(
+        `UPDATE content_queue SET stage='drafts', revision_requested_at=NOW(), client_comments=$1, updated_at=NOW() WHERE id=$2`,
+        [JSON.stringify(comments), item.id]
+      );
+      console.log(`[client-review] Item ${item.id} revision requested → moved to drafts`);
+    }
+
+    res.json({ success: true, comments });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

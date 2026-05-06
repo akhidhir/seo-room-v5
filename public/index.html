@@ -11461,11 +11461,11 @@
       const pid = project ? project.id : null;
       const stageMap = { queue: 'queue', drafts: 'drafts', approved: 'approved', staging: 'staging', published: 'published' };
       const stageLabels = {
-        queue: { title: 'Content Queue', icon: 'fas fa-inbox', desc: 'Pages sent from On-Page Audit waiting to be drafted' },
-        drafts: { title: 'Drafts', icon: 'fas fa-pen', desc: 'AI-generated content ready for editing and review' },
-        approved: { title: 'Approved', icon: 'fas fa-check-circle', desc: 'Content approved and ready to push to WordPress' },
-        staging: { title: 'Staging', icon: 'fas fa-eye', desc: 'Review proposed changes below — Go Live pushes to WordPress, Revert goes back to Approved' },
-        published: { title: 'Published', icon: 'fas fa-paper-plane', desc: 'Live content with rollback capability via Change History' },
+        queue: { title: 'Queue', icon: 'fas fa-inbox', desc: 'Pages waiting for AI content generation' },
+        drafts: { title: 'Draft', icon: 'fas fa-pen', desc: 'AI-generated content ready for internal review and editing' },
+        approved: { title: 'Approval', icon: 'fas fa-user-check', desc: 'Client reviews, requests revisions, or approves content' },
+        staging: { title: 'Publishing', icon: 'fas fa-rocket', desc: 'Approved content ready to be published to WordPress' },
+        published: { title: 'Published', icon: 'fas fa-check-double', desc: 'Live on WordPress with rollback capability' },
       };
 
       const loadItems = async () => {
@@ -11636,7 +11636,7 @@
           alert('WordPress credentials not configured.\n\nGo to Settings → Project Settings → WordPress Auth and enter your WP Username + Application Password, then click Save.');
           return;
         }
-        if (!confirm('Move to Staging?\n\nYou can review the proposed changes in the dashboard, then Go Live to push to WordPress.')) return;
+        if (!confirm('Move to Publishing stage?\n\nFrom there you can publish to WordPress.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/publish', { method: 'POST' });
           if (data && !data.error) {
@@ -11653,7 +11653,7 @@
           alert('WordPress credentials not configured.\n\nGo to Settings → Project Settings → WordPress Auth and enter your WP Username + Application Password, then click Save.');
           return;
         }
-        if (!confirm('Go Live? This will push the changes to WordPress immediately.')) return;
+        if (!confirm('Publish to WordPress? This will push the content live immediately.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/go-live', { method: 'POST' });
           if (data && !data.error) { await loadItems(); alert('Page is now live!'); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
@@ -11662,7 +11662,7 @@
       };
 
       const handleRevertStaging = async (item) => {
-        if (!pid || !confirm('Revert to Approved? No changes were made to WordPress.')) return;
+        if (!pid || !confirm('Send back to Approval stage? No changes were made to WordPress.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/revert-staging', { method: 'POST' });
           if (data && !data.error) { await loadItems(); if (selectedItem && selectedItem.id === item.id) setSelectedItem(null); }
@@ -11672,7 +11672,7 @@
 
       const handleRollback = async (item) => {
         if (!pid) return;
-        if (!confirm('Rollback this page?\n\nThis will restore the ORIGINAL content on WordPress and move the item back to Approved.\n\nThe live page will revert to what it was before Go Live.')) return;
+        if (!confirm('Rollback this page?\n\nThis will restore the ORIGINAL content on WordPress and move the item back to Draft.\n\nThe live page will revert to what it was before publishing.')) return;
         try {
           const data = await api('/projects/' + pid + '/content-queue/' + item.id + '/rollback', { method: 'POST' });
           if (data && !data.error) {
@@ -12138,34 +12138,36 @@
                 },
                 style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
               }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 4 } }), 'Move to CW New'),
-              // Approve
-              (selectedItem.stage === 'drafts' || selectedItem.stage === 'queue') && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
-              // Send Back to Drafts — for approved items
+              // Draft stage: Send for Approval
+              selectedItem.stage === 'drafts' && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
+                React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }), 'Send for Approval'),
+              // Approval stage: Request Revision (back to Draft) + Approve (move to Publishing)
               selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handleSendBackToDrafts(selectedItem), style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13 } },
-                React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back to Drafts'),
-              // Move to Staging for review
-              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } },
-                React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6 } }), 'Move to Staging'),
-              // Staging — Review Page, Revert, Go Live
-              selectedItem.stage === 'staging' && React.createElement('button', {
-                onClick: () => {
-                  const tkn = localStorage.getItem('token') || '';
-                  handleSaveEdit().then(() => {
-                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
-                  }).catch(() => {
-                    window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
-                  });
+                React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Request Revision'),
+              selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
+                React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'Approve'),
+              // Share Link — generate client review link for Approval stage
+              selectedItem.stage === 'approved' && React.createElement('button', {
+                onClick: async () => {
+                  try {
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/share', { method: 'POST' });
+                    if (r.url) {
+                      await navigator.clipboard.writeText(r.url);
+                      alert('Client review link copied to clipboard!\n\n' + r.url);
+                    }
+                  } catch (e) { alert('Failed to generate share link: ' + e.message); }
                 },
-                style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6 } }), 'Review Page'),
+                style: { padding: '8px 16px', background: '#6366f120', color: '#6366f1', border: '1px solid #6366f140', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Share Link'),
+              // Publishing stage: Back to Approval, Publish to WordPress
               selectedItem.stage === 'staging' && React.createElement('button', { onClick: () => handleRevertStaging(selectedItem), style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13 } },
-                React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Revert to Approved'),
+                React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back to Approval'),
               selectedItem.stage === 'staging' && React.createElement('button', { onClick: () => handleGoLive(selectedItem), style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
-                React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), 'Go Live'),
+                React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), 'Publish to WordPress'),
               // Revise — move published back to drafts for re-editing
               isPublished && React.createElement('button', {
                 onClick: async () => {
-                  if (!confirm('Move this page back to Drafts for revision? You can re-optimise and re-publish.')) return;
+                  if (!confirm('Move this page back to Draft for revision? You can re-edit and re-publish.')) return;
                   try {
                     await api(`/projects/${pid}/content-queue/${selectedItem.id}`, { method: 'PUT', body: { stage: 'drafts' } });
                     const fresh = await api(`/projects/${pid}/content-queue/${selectedItem.id}`);
@@ -12297,6 +12299,20 @@
             )
           ),
 
+
+          // Client Feedback — show client comments from share link reviews
+          selectedItem && selectedItem.client_comments && selectedItem.client_comments.length > 0 && React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid #6366f140' } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 } },
+              React.createElement('i', { className: 'fas fa-comments', style: { marginRight: 6 } }),
+              'Client Feedback',
+              selectedItem.client_approved_at && React.createElement('span', { style: { marginLeft: 10, background: '#22c55e20', color: '#22c55e', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Client Approved'),
+              selectedItem.revision_requested_at && !selectedItem.client_approved_at && React.createElement('span', { style: { marginLeft: 10, background: '#f59e0b20', color: '#f59e0b', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Revision Requested')
+            ),
+            selectedItem.client_comments.map((c, i) => React.createElement('div', { key: i, style: { padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 6, fontSize: 13, color: 'var(--text2)', borderLeft: '3px solid #6366f1' } },
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 4 } }, c.date ? new Date(c.date).toLocaleString() : '', c.action ? ' — ' + c.action : ''),
+              c.comment || c.text || ''
+            ))
+          ),
 
           // Optimise preview modal
           optimisePreview && React.createElement(OptimisePreviewModal, {
@@ -12773,10 +12789,10 @@
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 2, marginBottom: 24, borderRadius: 8, overflow: 'hidden' } },
           [
             { key: 'queue', label: 'Queue', icon: 'fas fa-inbox' },
-            { key: 'drafts', label: 'Drafts', icon: 'fas fa-pen' },
-            { key: 'approved', label: 'Approved', icon: 'fas fa-check-circle' },
-            { key: 'staging', label: 'Staging', icon: 'fas fa-eye' },
-            { key: 'published', label: 'Published', icon: 'fas fa-paper-plane' },
+            { key: 'drafts', label: 'Draft', icon: 'fas fa-pen' },
+            { key: 'approved', label: 'Approval', icon: 'fas fa-user-check' },
+            { key: 'staging', label: 'Publishing', icon: 'fas fa-rocket' },
+            { key: 'published', label: 'Published', icon: 'fas fa-check-double' },
           ].map(s => React.createElement('div', { key: s.key, onClick: () => setPage && setPage('ow-' + s.key), style: {
             padding: '12px 16px', textAlign: 'center',
             background: stage === s.key ? 'var(--accent)' : 'var(--card)',
@@ -18089,11 +18105,11 @@ case 'action-plan':
           { id: 'ow-project', label: 'Optimise Website Copy', icon: 'fas fa-wand-magic-sparkles', expandable: true, children: [
             { id: 'ow-sitemap', label: 'Site Map', icon: 'fas fa-project-diagram' },
             { id: 'ow-issues', label: 'Issues', icon: 'fas fa-exclamation-triangle' },
-            { id: 'ow-queue', label: 'Content Queue', icon: 'fas fa-inbox' },
-            { id: 'ow-drafts', label: 'Drafts', icon: 'fas fa-pen' },
-            { id: 'ow-approved', label: 'Approved', icon: 'fas fa-check-circle' },
-            { id: 'ow-staging', label: 'Staging', icon: 'fas fa-eye' },
-            { id: 'ow-published', label: 'Published', icon: 'fas fa-paper-plane' },
+            { id: 'ow-queue', label: 'Queue', icon: 'fas fa-inbox' },
+            { id: 'ow-drafts', label: 'Draft', icon: 'fas fa-pen' },
+            { id: 'ow-approved', label: 'Approval', icon: 'fas fa-user-check' },
+            { id: 'ow-staging', label: 'Publishing', icon: 'fas fa-rocket' },
+            { id: 'ow-published', label: 'Published', icon: 'fas fa-check-double' },
           ]},
         ]},
         { section: 'REPORTS', items: [
