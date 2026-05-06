@@ -8734,11 +8734,21 @@ You are rewriting page content SECTION BY SECTION. The page has ${sections.lengt
 5. Matches the approximate word count of the original (±20%)
 6. Does NOT add new design elements — only replaces TEXT content
 
+CRITICAL HTML FORMATTING RULES:
+- content_html MUST use proper HTML: <h2>, <h3>, <p>, <ul>/<ol>/<li>, <strong>, <em>, <a>
+- EVERY paragraph must be wrapped in <p> tags — NEVER write raw text without tags
+- Keep paragraphs SHORT: 2-4 sentences each, max 60 words per paragraph
+- Use <h2> for main section headings, <h3> for sub-headings within sections
+- Include internal links as <a href="/relevant-page">anchor text</a> where natural
+- Use <strong> for key phrases (1-2 per paragraph max)
+- Break up long content with sub-headings (<h3>) every 150-200 words
+- Use bullet lists (<ul><li>) for features, benefits, or service lists
+
 For LOCKED sections, return the original text unchanged.
 
-Return JSON array matching the section order:
+Return ONLY a JSON array matching the section order:
 [
-  { "section_id": "section_1", "heading": "New/Same H2 heading", "content_html": "<p>new content</p>", "word_count": N, "changes_summary": "What changed and why" },
+  { "section_id": "section_1", "heading": "New/Same H2 heading", "content_html": "<p>new content</p><p>more content</p>", "word_count": N, "changes_summary": "What changed and why" },
   ...
 ]
 
