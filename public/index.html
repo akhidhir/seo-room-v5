@@ -8328,31 +8328,6 @@
               pageTemplates.map(function(t) { return React.createElement('option', { key: t.id, value: t.id }, t.name + ' (' + t.page_type + ')'); })
             )
           ),
-          // Inline template import when no templates exist
-          pageTemplates.length === 0 && React.createElement('div', {
-            style: { background: '#fef3c7', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12 }
-          },
-            React.createElement('div', { style: { fontWeight: 600, marginBottom: 6, color: '#92400e' } },
-              React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 6 } }),
-              'No templates yet — import from a live page URL'
-            ),
-            React.createElement('div', { style: { display: 'flex', gap: 6 } },
-              React.createElement('input', {
-                type: 'text', className: 'form-input',
-                placeholder: 'https://example.com/services/plumbing',
-                value: importTemplateUrl,
-                onChange: function(e) { setImportTemplateUrl(e.target.value); },
-                onKeyDown: function(e) { if (e.key === 'Enter') handleImportTemplate(); },
-                style: { flex: 1, fontSize: 12, padding: '4px 8px', height: 30 }
-              }),
-              React.createElement('button', {
-                className: 'btn btn-primary btn-small',
-                onClick: handleImportTemplate,
-                disabled: importingTemplate || !importTemplateUrl.trim(),
-                style: { fontSize: 11, whiteSpace: 'nowrap', height: 30 }
-              }, importingTemplate ? 'Importing...' : 'Import')
-            )
-          ),
           // Wireframe image preview
           page.wireframe_image && React.createElement('div', { style: { marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', maxHeight: 200 } },
             page.wireframe_mime && page.wireframe_mime.startsWith('image/')
@@ -8544,6 +8519,30 @@
       var [viewMode, setViewMode] = React.useState('graph'); // 'graph' | 'list'
       var svgRef = React.useRef(null);
       var containerRef = React.useRef(null);
+      var [linkMode, setLinkMode] = React.useState(null); // { sourceId, sourceName } when linking
+
+      var handleToggleLink = async function(sourceId, targetId) {
+        // Check if link already exists
+        var sourcePage = pages.find(function(p) { return p.id === sourceId; });
+        var existing = (sourcePage.internal_links || []).find(function(l) { return l.target_page_id === targetId; });
+        if (existing) {
+          // Unlink
+          var newLinks = (sourcePage.internal_links || []).filter(function(l) { return l.target_page_id !== targetId; });
+          try {
+            await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
+            await loadPages();
+          } catch (e) { alert('Error: ' + e.message); }
+        } else {
+          // Link
+          var targetPage = pages.find(function(p) { return p.id === targetId; });
+          var newLinks2 = (sourcePage.internal_links || []).concat([{ target_page_id: targetId, target_page_name: targetPage.page_name, anchor_text: targetPage.page_name }]);
+          try {
+            await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks2 } });
+            await loadPages();
+          } catch (e) { alert('Error: ' + e.message); }
+        }
+        setLinkMode(null);
+      };
 
       var loadPages = async function() {
         if (!pid) return;
@@ -12525,31 +12524,6 @@
               )
             ),
             // Inline template import when no templates exist
-            pageTemplates.length === 0 && React.createElement('div', {
-              style: { background: '#fef3c7', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12 }
-            },
-              React.createElement('div', { style: { fontWeight: 600, marginBottom: 6, color: '#92400e' } },
-                React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 6 } }),
-                'No templates yet — import from a live page URL'
-              ),
-              React.createElement('div', { style: { display: 'flex', gap: 6 } },
-                React.createElement('input', {
-                  type: 'text', className: 'form-input',
-                  placeholder: 'https://example.com/services/plumbing',
-                  value: importTemplateUrl,
-                  onChange: (e) => setImportTemplateUrl(e.target.value),
-                  onKeyDown: (e) => { if (e.key === 'Enter') handleImportTemplate(); },
-                  style: { flex: 1, fontSize: 12, padding: '4px 8px', height: 30 }
-                }),
-                React.createElement('button', {
-                  className: 'btn btn-primary btn-small',
-                  onClick: handleImportTemplate,
-                  disabled: importingTemplate || !importTemplateUrl.trim(),
-                  style: { fontSize: 11, whiteSpace: 'nowrap', height: 30 }
-                }, importingTemplate ? 'Importing...' : 'Import')
-              )
-            ),
-
             // Wireframe image preview
             selectedItem.wireframe_image && React.createElement('div', { style: { marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', maxHeight: 200 } },
               selectedItem.wireframe_mime && selectedItem.wireframe_mime.startsWith('image/')
