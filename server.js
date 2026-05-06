@@ -780,6 +780,29 @@ app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Delete a site page (build or project scoped)
+app.delete(['/api/builds/:buildId/site-pages/:pageId', '/api/projects/:projectId/site-pages/:pageId'], async (req, res) => {
+  try {
+    const pageId = req.params.pageId;
+    // Also clean up internal_links referencing this page from other pages
+    const buildId = req.params.buildId;
+    const projectId = req.params.projectId;
+    const scopeCol = buildId ? 'build_id' : 'project_id';
+    const scopeVal = buildId || projectId;
+    // Remove links to this page from siblings
+    await pool.query(
+      `UPDATE site_pages SET internal_links = (
+        SELECT COALESCE(jsonb_agg(link), '[]'::jsonb)
+        FROM jsonb_array_elements(COALESCE(internal_links, '[]'::jsonb)) AS link
+        WHERE (link->>'target_page_id')::int != $1
+      ) WHERE ${scopeCol}=$2 AND internal_links IS NOT NULL`,
+      [pageId, scopeVal]
+    );
+    await pool.query('DELETE FROM site_pages WHERE id=$1', [pageId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/builds/:buildId/content-keywords', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM content_keywords WHERE build_id=$1 ORDER BY keyword', [req.params.buildId]);

@@ -8517,6 +8517,10 @@
       var [generatingContent, setGeneratingContent] = React.useState(null); // page id being generated
       var [publishing, setPublishing] = React.useState(null);
       var [viewMode, setViewMode] = React.useState('graph'); // 'graph' | 'list'
+      var [editingPage, setEditingPage] = React.useState(null); // full editor mode
+      var [showAddPage, setShowAddPage] = React.useState(false);
+      var [newPageName, setNewPageName] = React.useState('');
+      var [newPageType, setNewPageType] = React.useState('service');
       var svgRef = React.useRef(null);
       var containerRef = React.useRef(null);
       // n8n-style drag-to-connect state
@@ -8541,8 +8545,15 @@
         if (!sourcePage) return;
         var newLinks = (sourcePage.internal_links || []).filter(function(l) { return l.target_page_id !== targetId; });
         try {
-          await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
+          var updated = await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
           await loadPages();
+          // Refresh selected page panel if it's the source
+          if (selectedPage && selectedPage.id === sourceId && updated) {
+            setSelectedPage(Object.assign({}, updated));
+          } else if (selectedPage) {
+            // Re-fetch selected page to update inbound links display
+            setSelectedPage(function(prev) { return prev ? Object.assign({}, prev) : null; });
+          }
         } catch (e) { alert('Error: ' + e.message); }
       };
 
@@ -8591,6 +8602,33 @@
         setPublishing(null);
       };
 
+      // Add a new page
+      var handleAddPage = async function() {
+        if (!newPageName.trim()) return;
+        try {
+          var slug = '/' + newPageName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '/';
+          var data = await api(apiPrefix + '/site-pages', {
+            method: 'POST',
+            body: { page_name: newPageName.trim(), page_type: newPageType, slug: slug, stage: 'draft' }
+          });
+          if (data && data.id) {
+            await loadPages();
+            setNewPageName('');
+            setShowAddPage(false);
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      // Delete a page
+      var handleDeletePage = async function(pageId) {
+        if (!confirm('Delete this page? This cannot be undone.')) return;
+        try {
+          await api(apiPrefix + '/site-pages/' + pageId, { method: 'DELETE' });
+          setPages(function(prev) { return prev.filter(function(p) { return p.id !== pageId; }); });
+          if (selectedPage && selectedPage.id === pageId) setSelectedPage(null);
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
       var stageColors = { draft: '#6b7280', written: '#3b82f6', reviewed: '#f59e0b', published: '#22c55e' };
       var typeColors = { home: '#6366f1', service: '#22c55e', suburb: '#f59e0b', blog: '#3b82f6' };
 
@@ -8634,6 +8672,7 @@
           g.attr('transform', event.transform);
         });
         svg.call(zoom);
+        svg.on('click', function() { setSelectedPage(null); }); // click background to deselect
 
         // Arrow marker
         var defs = svg.append('defs');
@@ -8684,7 +8723,12 @@
           .on('click', function(event, d) {
             event.stopPropagation();
             var page = pages.find(function(p) { return p.id === d.id; });
-            setSelectedPage(page);
+            setSelectedPage(page); // single click = select (detail panel)
+          })
+          .on('dblclick', function(event, d) {
+            event.stopPropagation();
+            var page = pages.find(function(p) { return p.id === d.id; });
+            setEditingPage(page); // double click = open full editor
           })
           .call(d3.drag()
             .filter(function(event) { return !event.button && !event.target.classList.contains('conn-handle'); })
@@ -8885,114 +8929,117 @@
         return function() { simulation.stop(); };
       }, [pages, viewMode]);
 
-      // Detail panel for selected page
+      // Detail panel for selected page (overlay on graph — NOT full editor)
       var renderDetailPanel = function() {
         if (!selectedPage) return null;
         var sp = selectedPage;
+        var btnS = { padding: '6px 14px', borderRadius: 6, border: 'none', fontWeight: 600, fontSize: 12, cursor: 'pointer' };
+        var linkBtnS = { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, padding: '2px 4px', marginLeft: 6 };
         return React.createElement('div', {
-          style: { position: 'fixed', top: 0, right: 0, width: 450, height: '100vh', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 999, overflowY: 'auto', padding: 24, boxShadow: '-4px 0 20px rgba(0,0,0,0.3)' }
+          style: { position: 'fixed', top: 0, right: 0, width: 380, height: '100vh', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 999, overflowY: 'auto', padding: 20, boxShadow: '-4px 0 20px rgba(0,0,0,0.3)' }
         },
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
-            React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 700 } }, sp.page_name),
+          // Header with close
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            React.createElement('h3', { style: { margin: 0, fontSize: 16, fontWeight: 700 } }, sp.page_name),
             React.createElement('button', { onClick: function() { setSelectedPage(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
           ),
-          // Status badge
-          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' } },
-            React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
-            sp.is_cornerstone && React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone'),
-            React.createElement('span', { style: { fontSize: 11, padding: '3px 10px', borderRadius: 12, background: (typeColors[sp.page_type] || '#6366f1') + '20', color: typeColors[sp.page_type] || '#6366f1', fontWeight: 600 } }, sp.page_type)
+          // Badges
+          React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' } },
+            React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
+            sp.is_cornerstone && React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone'),
+            React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (typeColors[sp.page_type] || '#6366f1') + '20', color: typeColors[sp.page_type] || '#6366f1', fontWeight: 600 } }, sp.page_type)
           ),
-          // Meta info
-          React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4 } }, 'SLUG'),
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)', fontFamily: 'monospace', padding: '4px 8px', background: 'var(--bg)', borderRadius: 4 } }, sp.slug || '/'),
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'META TITLE'),
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, sp.meta_title || '—'),
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'META DESCRIPTION'),
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--text)' } }, sp.meta_description || '—'),
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4, marginTop: 12 } }, 'FOCUS KEYWORD'),
-            React.createElement('div', { style: { fontSize: 13, color: '#22c55e', fontWeight: 600 } }, sp.focus_keyword || '—')
+          // Primary actions — Edit + Delete
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+            React.createElement('button', {
+              onClick: function() { setEditingPage(sp); },
+              style: Object.assign({}, btnS, { background: 'var(--accent)', color: '#fff', flex: 1 })
+            }, React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 6 } }), 'Edit Page'),
+            React.createElement('button', {
+              onClick: function() { handleDeletePage(sp.id); },
+              style: Object.assign({}, btnS, { background: '#ef444420', color: '#ef4444' })
+            }, React.createElement('i', { className: 'fas fa-trash' }))
+          ),
+          // Quick info
+          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4 } }, 'SLUG'),
+          React.createElement('div', { style: { fontSize: 12, color: 'var(--text)', fontFamily: 'monospace', padding: '3px 6px', background: 'var(--bg)', borderRadius: 4, marginBottom: 10 } }, sp.slug || '/'),
+          sp.focus_keyword && React.createElement('div', { style: { marginBottom: 10 } },
+            React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' } }, 'Focus: '),
+            React.createElement('span', { style: { fontSize: 12, color: '#22c55e', fontWeight: 600 } }, sp.focus_keyword)
+          ),
+          sp.meta_title && React.createElement('div', { style: { marginBottom: 10 } },
+            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'Meta Title'),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text)' } }, sp.meta_title)
           ),
           // Keywords
-          React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'KEYWORDS'),
-            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+          (sp.keywords || []).length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Keywords'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 3 } },
               (sp.keywords || []).map(function(kw, i) {
-                return React.createElement('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' } },
+                return React.createElement('span', { key: i, style: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' } },
                   kw.keyword + (kw.volume ? ' (' + kw.volume + ')' : '')
                 );
               })
             )
           ),
-          // Internal links
-          React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'LINKS TO'),
+          // Outbound links with remove buttons
+          React.createElement('div', { style: { marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } },
+              'Links To (' + (sp.internal_links || []).length + ')'
+            ),
             (sp.internal_links || []).length > 0
               ? (sp.internal_links || []).map(function(link, i) {
-                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)' } },
-                    React.createElement('span', { style: { color: '#3b82f6' } }, link.target_page_name || 'Page'),
-                    React.createElement('span', { style: { color: 'var(--text3)', margin: '0 6px' } }, '→'),
-                    React.createElement('span', { style: { color: 'var(--text)', fontStyle: 'italic' } }, '"' + link.anchor_text + '"')
+                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '3px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' } },
+                    React.createElement('span', null,
+                      React.createElement('span', { style: { color: '#3b82f6' } }, link.target_page_name || 'Page')
+                    ),
+                    React.createElement('button', {
+                      onClick: function() { handleRemoveLink(sp.id, link.target_page_id); },
+                      title: 'Remove link',
+                      style: linkBtnS
+                    }, '×')
                   );
                 })
-              : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } }, 'No outbound links')
+              : React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' } }, 'No outbound links — drag from bottom handle to connect')
           ),
           // Inbound links
-          React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'LINKED FROM'),
-            (sp.inbound_links || []).length > 0
-              ? (sp.inbound_links || []).map(function(link, i) {
-                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '4px 0' } },
-                    React.createElement('span', { style: { color: '#f59e0b' } }, link.source_page_name),
-                    React.createElement('span', { style: { color: 'var(--text3)', margin: '0 6px' } }, '→'),
-                    React.createElement('span', { style: { fontStyle: 'italic', color: 'var(--text)' } }, '"' + link.anchor_text + '"')
-                  );
-                })
-              : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } }, 'No inbound links')
-          ),
-          // Content preview
-          sp.draft_content && React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 6 } }, 'CONTENT PREVIEW (' + (sp.word_count || 0) + ' words)'),
-            React.createElement('div', {
-              style: { fontSize: 12, lineHeight: 1.6, color: 'var(--text)', maxHeight: 300, overflowY: 'auto', padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' },
-              dangerouslySetInnerHTML: { __html: sp.draft_content }
-            })
-          ),
-          // Actions
-          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-            sp.stage !== 'published' && !sp.draft_content && React.createElement('button', {
-              onClick: function() { handleGenerateContent(sp.id); },
-              disabled: generatingContent === sp.id,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
-            }, generatingContent === sp.id ? 'Writing...' : 'Write Content'),
-            sp.stage !== 'published' && sp.draft_content && React.createElement('button', {
-              onClick: function() { handleGenerateContent(sp.id); },
-              disabled: generatingContent === sp.id,
-              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #3b82f6', background: 'transparent', color: '#3b82f6', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
-            }, generatingContent === sp.id ? 'Rewriting...' : 'Rewrite'),
-            sp.draft_content && sp.stage !== 'published' && React.createElement('button', {
-              onClick: function() { handlePublish(sp.id); },
-              disabled: publishing === sp.id,
-              style: { padding: '8px 16px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }
-            }, publishing === sp.id ? 'Publishing...' : 'Publish to WP'),
-            sp.published_url && React.createElement('a', {
-              href: sp.published_url, target: '_blank',
-              style: { padding: '8px 16px', borderRadius: 8, border: '1px solid #22c55e', color: '#22c55e', fontWeight: 600, fontSize: 12, textDecoration: 'none' }
-            }, 'View Live')
+          (function() {
+            var inbound = pages.filter(function(p) { return (p.internal_links || []).some(function(l) { return l.target_page_id === sp.id; }); });
+            return React.createElement('div', { style: { marginBottom: 12 } },
+              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } },
+                'Linked From (' + inbound.length + ')'
+              ),
+              inbound.length > 0
+                ? inbound.map(function(p) {
+                    return React.createElement('div', { key: p.id, style: { fontSize: 12, padding: '3px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' } },
+                      React.createElement('span', { style: { color: '#f59e0b' } }, p.page_name),
+                      React.createElement('button', {
+                        onClick: function() { handleRemoveLink(p.id, sp.id); },
+                        title: 'Remove link',
+                        style: linkBtnS
+                      }, '×')
+                    );
+                  })
+                : React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' } }, 'No inbound links')
+            );
+          })(),
+          // Word count / content status
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 8 } },
+            sp.draft_content ? (sp.word_count || 0) + ' words written' : 'No content yet'
           )
         );
       };
 
       if (!project) return React.createElement('div', null, 'Select a project');
 
-      // If a page is selected, show the full editor (v4-style Copywriter)
-      if (selectedPage) {
+      // If editing a page, show the full editor (double-click or Edit button)
+      if (editingPage) {
         return React.createElement(SitePageEditor, {
-          page: selectedPage,
+          page: editingPage,
           project: project,
-          onBack: function() { setSelectedPage(null); loadPages(); },
+          onBack: function() { setEditingPage(null); setSelectedPage(null); loadPages(); },
           onUpdate: function(updated) {
-            setSelectedPage(updated);
+            setEditingPage(updated);
             setPages(function(prev) { return prev.map(function(p) { return p.id === updated.id ? updated : p; }); });
           }
         });
@@ -9020,11 +9067,48 @@
                 style: { padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'var(--card)', color: viewMode === 'list' ? '#fff' : 'var(--text3)' }
               }, React.createElement('i', { className: 'fas fa-list', style: { marginRight: 4 } }), 'List')
             ),
+            pages.length > 0 && React.createElement('button', {
+              onClick: function() { setShowAddPage(!showAddPage); },
+              style: { padding: '8px 14px', borderRadius: 8, border: '1px solid var(--accent)', background: showAddPage ? 'var(--accent)' : 'transparent', color: showAddPage ? '#fff' : 'var(--accent)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
+            }, React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'Add Page'),
             React.createElement('button', {
               onClick: handleGenerate, disabled: generating,
               style: { padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: generating ? 'wait' : 'pointer' }
             }, generating ? 'Generating...' : (pages.length > 0 ? 'Regenerate' : 'Generate Site Map'))
           )
+        ),
+
+        // Add Page form
+        showAddPage && React.createElement('div', {
+          style: { display: 'flex', gap: 8, marginBottom: 16, padding: '12px 16px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, alignItems: 'center' }
+        },
+          React.createElement('input', {
+            value: newPageName,
+            onChange: function(e) { setNewPageName(e.target.value); },
+            onKeyDown: function(e) { if (e.key === 'Enter') handleAddPage(); },
+            placeholder: 'Page name...',
+            autoFocus: true,
+            style: { flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, outline: 'none' }
+          }),
+          React.createElement('select', {
+            value: newPageType,
+            onChange: function(e) { setNewPageType(e.target.value); },
+            style: { padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12 }
+          },
+            React.createElement('option', { value: 'home' }, 'Home'),
+            React.createElement('option', { value: 'service' }, 'Service'),
+            React.createElement('option', { value: 'suburb' }, 'Suburb'),
+            React.createElement('option', { value: 'blog' }, 'Blog')
+          ),
+          React.createElement('button', {
+            onClick: handleAddPage,
+            disabled: !newPageName.trim(),
+            style: { padding: '8px 16px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: newPageName.trim() ? 1 : 0.5 }
+          }, 'Add'),
+          React.createElement('button', {
+            onClick: function() { setShowAddPage(false); setNewPageName(''); },
+            style: { padding: '8px 10px', borderRadius: 6, border: 'none', background: 'var(--bg)', color: 'var(--text3)', cursor: 'pointer', fontSize: 13 }
+          }, '×')
         ),
 
         // Legend
@@ -9054,7 +9138,7 @@
         },
           React.createElement('svg', { ref: svgRef, style: { width: '100%', height: 600 } }),
           React.createElement('div', { style: { position: 'absolute', bottom: 12, right: 12, fontSize: 11, color: 'var(--text3)', background: 'var(--card)', padding: '4px 10px', borderRadius: 6 } },
-            'Scroll to zoom • Drag nodes • Drag handle to link • Right-click link to remove'
+            'Scroll to zoom • Drag nodes • Click to select • Double-click to edit • Drag handle to link'
           )
         ),
 
@@ -9080,7 +9164,15 @@
                   React.createElement('i', { className: 'fas fa-link', style: { marginRight: 3, opacity: 0.5 } }),
                   (sp.internal_links || []).length + ' links'
                 ),
-                React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage)
+                React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
+                React.createElement('button', {
+                  onClick: function(e) { e.stopPropagation(); setEditingPage(sp); },
+                  style: { fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 3 } }), 'Edit'),
+                React.createElement('button', {
+                  onClick: function(e) { e.stopPropagation(); handleDeletePage(sp.id); },
+                  style: { fontSize: 10, padding: '3px 6px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer' }
+                }, React.createElement('i', { className: 'fas fa-trash' }))
               )
             );
           })
@@ -9102,7 +9194,8 @@
           React.createElement('div', { style: { marginTop: 12, color: 'var(--text3)' } }, 'Loading site map...')
         ),
 
-        // Detail panel removed — full-page SitePageEditor is used instead
+        // Detail panel (slide-in from right when a page is selected)
+        renderDetailPanel()
       );
     }
 
