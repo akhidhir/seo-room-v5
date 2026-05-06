@@ -5925,8 +5925,8 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
     } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
   }
 
-  // ── Step 2: WP REST API fallback (only if live fetch got nothing) ──
-  if (!liveContent && wpBase && pageId) {
+  // ── Step 2: WP REST API — always try (gives clean content without sidebar) ──
+  if (wpBase && pageId) {
     const authHeaders = getWpAuthHeaders(project);
     for (const type of ['pages', 'posts']) {
       try {
@@ -5945,9 +5945,23 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
     }
   }
 
-  // ── Pick result: live content wins, WP REST is fallback only ──
-  content = liveContent || wpContent;
-  console.log(`[fetchLivePageContent] Final: ${content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0} words (source: ${liveContent ? 'live URL' : wpContent ? 'WP REST fallback' : 'none'})`);
+  // ── Pick result: compare both, prefer cleaner source ──
+  // WP REST returns clean page body (no sidebar/nav/widget content)
+  // Live HTML may include sidebar junk but captures ACF/page-builder content WP REST misses
+  const liveWc = liveContent ? liveContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length : 0;
+  const wpWc = wpContent ? wpContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length : 0;
+  if (wpWc >= 50 && liveWc <= wpWc * 1.5) {
+    // WP REST has substantial content and live isn't dramatically more — use WP (cleaner)
+    content = wpContent;
+    console.log(`[fetchLivePageContent] Final: ${wpWc} words (source: WP REST — cleaner, no sidebar). Live had ${liveWc} words.`);
+  } else if (liveWc > wpWc) {
+    // Live fetch has significantly more content — likely ACF/builder content WP REST missed
+    content = liveContent;
+    console.log(`[fetchLivePageContent] Final: ${liveWc} words (source: live URL — more content than WP REST ${wpWc})`);
+  } else {
+    content = liveContent || wpContent;
+    console.log(`[fetchLivePageContent] Final: ${content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0} words (source: ${liveContent ? 'live URL' : wpContent ? 'WP REST' : 'none'})`);
+  }
   return { content, resolvedPageId: pageId };
 }
 
