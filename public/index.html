@@ -8505,57 +8505,16 @@
       );
     }
 
-    // ============ NEW WEBSITE — SITE STAGING (Visual Site Map) ============
+    // ============ NEW WEBSITE — SITE STAGING (Hierarchical Site Structure) ============
     function SiteStagingPage({ project }) {
       var pid = project ? project.id : null;
       var apiPrefix = project?.build_id ? '/builds/' + project.build_id : '/projects/' + pid;
       var [pages, setPages] = React.useState([]);
-      var [clusters, setClusters] = React.useState([]);
       var [loading, setLoading] = React.useState(false);
       var [generating, setGenerating] = React.useState(false);
-      var [selectedPage, setSelectedPage] = React.useState(null);
-      var [generatingContent, setGeneratingContent] = React.useState(null); // page id being generated
-      var [publishing, setPublishing] = React.useState(null);
-      var [viewMode, setViewMode] = React.useState('graph'); // 'graph' | 'list'
-      var [editingPage, setEditingPage] = React.useState(null); // full editor mode
-      var [showAddPage, setShowAddPage] = React.useState(false);
+      var [editingPage, setEditingPage] = React.useState(null);
+      var [addingType, setAddingType] = React.useState(null); // which section's inline form is open
       var [newPageName, setNewPageName] = React.useState('');
-      var [newPageType, setNewPageType] = React.useState('service');
-      var svgRef = React.useRef(null);
-      var containerRef = React.useRef(null);
-      // n8n-style drag-to-connect state
-      var dragLineRef = React.useRef(null); // { sourceId, sourceName, line (SVG element) }
-
-      var handleCreateLink = async function(sourceId, targetId) {
-        var sourcePage = pages.find(function(p) { return p.id === sourceId; });
-        if (!sourcePage) return;
-        // Don't duplicate
-        var existing = (sourcePage.internal_links || []).find(function(l) { return l.target_page_id === targetId; });
-        if (existing) return;
-        var targetPage = pages.find(function(p) { return p.id === targetId; });
-        var newLinks = (sourcePage.internal_links || []).concat([{ target_page_id: targetId, target_page_name: targetPage.page_name, anchor_text: targetPage.page_name }]);
-        try {
-          await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
-          await loadPages();
-        } catch (e) { alert('Error: ' + e.message); }
-      };
-
-      var handleRemoveLink = async function(sourceId, targetId) {
-        var sourcePage = pages.find(function(p) { return p.id === sourceId; });
-        if (!sourcePage) return;
-        var newLinks = (sourcePage.internal_links || []).filter(function(l) { return l.target_page_id !== targetId; });
-        try {
-          var updated = await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
-          await loadPages();
-          // Refresh selected page panel if it's the source
-          if (selectedPage && selectedPage.id === sourceId && updated) {
-            setSelectedPage(Object.assign({}, updated));
-          } else if (selectedPage) {
-            // Re-fetch selected page to update inbound links display
-            setSelectedPage(function(prev) { return prev ? Object.assign({}, prev) : null; });
-          }
-        } catch (e) { alert('Error: ' + e.message); }
-      };
 
       var loadPages = async function() {
         if (!pid) return;
@@ -8573,463 +8532,124 @@
         try {
           var data = await api(apiPrefix + '/site-pages/generate', { method: 'POST' });
           if (data.pages) setPages(data.pages);
-          if (data.clusters) setClusters(data.clusters);
         } catch (e) { alert('Error: ' + e.message); }
         setGenerating(false);
       };
 
-      var handleGenerateContent = async function(pageId) {
-        setGeneratingContent(pageId);
-        try {
-          var data = await api(apiPrefix + '/site-pages/' + pageId + '/generate-content', { method: 'POST' });
-          if (data.content) {
-            setPages(function(prev) { return prev.map(function(p) { return p.id === pageId ? Object.assign({}, p, { draft_content: data.content, word_count: data.word_count, stage: 'written' }) : p; }); });
-          }
-        } catch (e) { alert('Error: ' + e.message); }
-        setGeneratingContent(null);
-      };
-
-      var handlePublish = async function(pageId) {
-        if (!confirm('Publish this page to WordPress?')) return;
-        setPublishing(pageId);
-        try {
-          var data = await api(apiPrefix + '/site-pages/' + pageId + '/publish', { method: 'POST' });
-          if (data.success) {
-            setPages(function(prev) { return prev.map(function(p) { return p.id === pageId ? Object.assign({}, p, { stage: 'published', published_url: data.url }) : p; }); });
-            alert('Published! ' + data.url);
-          }
-        } catch (e) { alert('Error: ' + e.message); }
-        setPublishing(null);
-      };
-
-      // Add a new page
-      var handleAddPage = async function() {
+      var handleAddPage = async function(type) {
         if (!newPageName.trim()) return;
         try {
           var slug = '/' + newPageName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '/';
           var data = await api(apiPrefix + '/site-pages', {
             method: 'POST',
-            body: { page_name: newPageName.trim(), page_type: newPageType, slug: slug, stage: 'draft' }
+            body: { page_name: newPageName.trim(), page_type: type, slug: slug, stage: 'draft' }
           });
           if (data && data.id) {
             await loadPages();
             setNewPageName('');
-            setShowAddPage(false);
+            setAddingType(null);
           }
         } catch (e) { alert('Error: ' + e.message); }
       };
 
-      // Delete a page
-      var handleDeletePage = async function(pageId) {
-        if (!confirm('Delete this page? This cannot be undone.')) return;
+      var handleDeletePage = async function(pageId, e) {
+        if (e) e.stopPropagation();
+        if (!confirm('Delete this page?')) return;
         try {
           await api(apiPrefix + '/site-pages/' + pageId, { method: 'DELETE' });
           setPages(function(prev) { return prev.filter(function(p) { return p.id !== pageId; }); });
-          if (selectedPage && selectedPage.id === pageId) setSelectedPage(null);
-        } catch (e) { alert('Error: ' + e.message); }
+        } catch (e2) { alert('Error: ' + e2.message); }
       };
 
       var stageColors = { draft: '#6b7280', written: '#3b82f6', reviewed: '#f59e0b', published: '#22c55e' };
       var typeColors = { home: '#6366f1', service: '#22c55e', suburb: '#f59e0b', blog: '#3b82f6' };
+      var typeIcons = { home: 'fas fa-home', service: 'fas fa-briefcase', suburb: 'fas fa-map-marker-alt', blog: 'fas fa-blog' };
 
-      // D3 force graph
-      React.useEffect(function() {
-        if (viewMode !== 'graph' || pages.length === 0 || !svgRef.current) return;
+      var homePages = pages.filter(function(p) { return p.page_type === 'home'; });
+      var servicePages = pages.filter(function(p) { return p.page_type === 'service'; });
+      var suburbPages = pages.filter(function(p) { return p.page_type === 'suburb'; });
+      var blogPages = pages.filter(function(p) { return p.page_type === 'blog'; });
 
-        var svg = d3.select(svgRef.current);
-        svg.selectAll('*').remove();
-
-        var width = containerRef.current ? containerRef.current.clientWidth : 900;
-        var height = 600;
-        svg.attr('viewBox', '0 0 ' + width + ' ' + height);
-
-        // Build nodes and links
-        var nodes = pages.map(function(p, i) {
-          return {
-            id: p.id, index: i, name: p.page_name, type: p.page_type,
-            cornerstone: p.is_cornerstone, cluster: p.cluster_id,
-            stage: p.stage, wordCount: p.word_count || 0,
-            keywords: p.keywords || [], slug: p.slug,
-            x: width / 2 + (Math.random() - 0.5) * 200,
-            y: height / 2 + (Math.random() - 0.5) * 200
-          };
-        });
-
-        var links = [];
-        pages.forEach(function(p) {
-          (p.internal_links || []).forEach(function(link) {
-            var sourceIdx = nodes.findIndex(function(n) { return n.id === p.id; });
-            var targetIdx = nodes.findIndex(function(n) { return n.id === link.target_page_id; });
-            if (sourceIdx >= 0 && targetIdx >= 0) {
-              links.push({ source: sourceIdx, target: targetIdx, anchor: link.anchor_text });
-            }
-          });
-        });
-
-        // Zoom behavior
-        var g = svg.append('g');
-        var zoom = d3.zoom().scaleExtent([0.3, 3]).on('zoom', function(event) {
-          g.attr('transform', event.transform);
-        });
-        svg.call(zoom);
-        svg.on('click', function() { setSelectedPage(null); }); // click background to deselect
-
-        // Arrow marker
-        var defs = svg.append('defs');
-        defs.append('marker')
-          .attr('id', 'arrowhead').attr('viewBox', '0 -5 10 10')
-          .attr('refX', 10).attr('refY', 0)
-          .attr('markerWidth', 6).attr('markerHeight', 6)
-          .attr('orient', 'auto')
-          .append('path').attr('d', 'M0,-5L10,0L0,5')
-          .attr('fill', '#6b728080');
-
-        // Node dimensions
-        var nodeW = 120, nodeH = 50, cornerW = 140, cornerH = 60;
-
-        // Force simulation
-        var simulation = d3.forceSimulation(nodes)
-          .force('link', d3.forceLink(links).distance(180).strength(0.4))
-          .force('charge', d3.forceManyBody().strength(-500))
-          .force('center', d3.forceCenter(width / 2, height / 2))
-          .force('collision', d3.forceCollide(80));
-
-        // Links
-        var linkG = g.append('g').selectAll('line').data(links).enter().append('line')
-          .attr('stroke', '#6b728060').attr('stroke-width', 1.5)
-          .attr('marker-end', 'url(#arrowhead)');
-
-        // Temp drag line for n8n-style connecting
-        var tempLine = g.append('line')
-          .attr('stroke', '#3b82f6').attr('stroke-width', 2)
-          .attr('stroke-dasharray', '6,3')
-          .style('display', 'none');
-
-        // Blue drag arrow marker
-        defs.append('marker')
-          .attr('id', 'arrowhead-drag').attr('viewBox', '0 -5 10 10')
-          .attr('refX', 8).attr('refY', 0)
-          .attr('markerWidth', 6).attr('markerHeight', 6)
-          .attr('orient', 'auto')
-          .append('path').attr('d', 'M0,-5L10,0L0,5')
-          .attr('fill', '#3b82f6');
-        tempLine.attr('marker-end', 'url(#arrowhead-drag)');
-
-        var handleR = 6;
-
-        // Nodes
-        var nodeG = g.append('g').selectAll('g').data(nodes).enter().append('g')
-          .style('cursor', 'pointer')
-          .on('click', function(event, d) {
-            event.stopPropagation();
-            var page = pages.find(function(p) { return p.id === d.id; });
-            setSelectedPage(page); // single click = select (detail panel)
-          })
-          .on('dblclick', function(event, d) {
-            event.stopPropagation();
-            var page = pages.find(function(p) { return p.id === d.id; });
-            setEditingPage(page); // double click = open full editor
-          })
-          .call(d3.drag()
-            .filter(function(event) { return !event.button && !event.target.classList.contains('conn-handle'); })
-            .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-            .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
-            .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
-          );
-
-        // Node rectangles (rounded)
-        nodeG.append('rect')
-          .attr('width', function(d) { return d.cornerstone ? cornerW : nodeW; })
-          .attr('height', function(d) { return d.cornerstone ? cornerH : nodeH; })
-          .attr('x', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
-          .attr('y', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
-          .attr('rx', 8).attr('ry', 8)
-          .attr('fill', function(d) { return (typeColors[d.type] || '#6366f1') + '18'; })
-          .attr('stroke', function(d) { return typeColors[d.type] || '#6366f1'; })
-          .attr('stroke-width', function(d) { return d.cornerstone ? 2.5 : 1.5; });
-
-        // Type color bar at top of rectangle
-        nodeG.append('rect')
-          .attr('width', function(d) { return d.cornerstone ? cornerW : nodeW; })
-          .attr('height', 4)
-          .attr('x', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
-          .attr('y', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
-          .attr('rx', 8).attr('ry', 8)
-          .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; });
-
-        // Stage indicator dot
-        nodeG.append('circle')
-          .attr('r', 5)
-          .attr('cx', function(d) { return (d.cornerstone ? cornerW : nodeW) / 2 - 4; })
-          .attr('cy', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2 - 4; })
-          .attr('fill', function(d) { return stageColors[d.stage] || '#6b7280'; });
-
-        // Cornerstone star
-        nodeG.filter(function(d) { return d.cornerstone; }).append('text')
-          .text('★').attr('text-anchor', 'middle')
-          .attr('x', function(d) { return -(cornerW / 2) + 12; })
-          .attr('dy', 4).attr('font-size', 12)
-          .attr('fill', '#f59e0b');
-
-        // Page name label
-        nodeG.append('text')
-          .text(function(d) { return d.name.length > 16 ? d.name.substring(0, 14) + '...' : d.name; })
-          .attr('text-anchor', 'middle').attr('dy', 2)
-          .attr('font-size', 11).attr('font-weight', 600)
-          .attr('fill', 'var(--text)');
-
-        // Page type label below name
-        nodeG.append('text')
-          .text(function(d) { return d.type; })
-          .attr('text-anchor', 'middle').attr('dy', 16)
-          .attr('font-size', 9).attr('font-weight', 400)
-          .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; })
-          .attr('opacity', 0.7);
-
-        // === n8n-style connection handles: bottom (output) + top (input) ===
-
-        // Output handle — bottom-middle (drag FROM here)
-        nodeG.append('circle')
-          .attr('class', 'conn-handle conn-output')
-          .attr('r', handleR)
-          .attr('cx', 0)
-          .attr('cy', function(d) { return (d.cornerstone ? cornerH : nodeH) / 2; })
-          .attr('fill', '#3b82f6').attr('stroke', '#fff').attr('stroke-width', 2)
-          .style('cursor', 'crosshair')
-          .style('opacity', 0);
-
-        // Input handle — top-middle (drop TO here)
-        nodeG.append('circle')
-          .attr('class', 'conn-handle conn-input')
-          .attr('r', handleR)
-          .attr('cx', 0)
-          .attr('cy', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
-          .attr('fill', '#22c55e').attr('stroke', '#fff').attr('stroke-width', 2)
-          .style('cursor', 'crosshair')
-          .style('opacity', 0);
-
-        // Show handles on node hover
-        nodeG.on('mouseenter.handles', function() {
-          d3.select(this).selectAll('.conn-handle').style('opacity', 1);
-        }).on('mouseleave.handles', function() {
-          if (!dragLineRef.current) {
-            d3.select(this).selectAll('.conn-handle').style('opacity', 0);
-          }
-        });
-
-        // Drag behavior on output handles
-        nodeG.selectAll('.conn-output').call(
-          d3.drag()
-            .on('start', function(event, d) {
-              event.sourceEvent.stopPropagation();
-              var h = d.cornerstone ? cornerH : nodeH;
-              dragLineRef.current = { sourceId: d.id, sourceName: d.name };
-              tempLine
-                .attr('x1', d.x).attr('y1', d.y + h / 2)
-                .attr('x2', d.x).attr('y2', d.y + h / 2)
-                .style('display', null);
-              // Show all input handles (top-middle green dots)
-              g.selectAll('.conn-input').style('opacity', 0.6);
-            })
-            .on('drag', function(event, d) {
-              if (!dragLineRef.current) return;
-              var transform = d3.zoomTransform(svg.node());
-              var mouseX = (event.sourceEvent.offsetX - transform.x) / transform.k;
-              var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
-              tempLine.attr('x2', mouseX).attr('y2', mouseY);
-              // Highlight nearby nodes' top handles
-              g.selectAll('.conn-input').each(function(nd) {
-                var h2 = nd.cornerstone ? cornerH : nodeH;
-                var hx = nd.x;
-                var hy = nd.y - h2 / 2;
-                var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
-                d3.select(this)
-                  .attr('r', dist < 25 ? handleR + 3 : handleR)
-                  .style('opacity', dist < 25 ? 1 : 0.6);
-              });
-            })
-            .on('end', function(event, d) {
-              tempLine.style('display', 'none');
-              g.selectAll('.conn-handle').style('opacity', 0).attr('r', handleR);
-              if (!dragLineRef.current) return;
-              var sourceId = dragLineRef.current.sourceId;
-              dragLineRef.current = null;
-
-              // Find target by proximity to input handle
-              var transform = d3.zoomTransform(svg.node());
-              var mouseX = (event.sourceEvent.offsetX - transform.x) / transform.k;
-              var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
-
-              var targetNode = null;
-              var minDist = 35;
-              nodes.forEach(function(n) {
-                if (n.id === sourceId) return;
-                var h2 = n.cornerstone ? cornerH : nodeH;
-                var hx = n.x;
-                var hy = n.y - h2 / 2; // top-middle of target
-                var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
-                if (dist < minDist) { minDist = dist; targetNode = n; }
-              });
-
-              if (targetNode) {
-                handleCreateLink(sourceId, targetNode.id);
-              }
-            })
-        );
-
-        // Right-click on link lines to remove
-        linkG.style('cursor', 'pointer')
-          .on('contextmenu', function(event, d) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (confirm('Remove link from "' + d.source.name + '" to "' + d.target.name + '"?')) {
-              handleRemoveLink(d.source.id, d.target.id);
-            }
-          })
-          .on('mouseenter', function() {
-            d3.select(this).attr('stroke', '#ef4444').attr('stroke-width', 3);
-          })
-          .on('mouseleave', function() {
-            d3.select(this).attr('stroke', '#6b728060').attr('stroke-width', 1.5);
-          });
-
-        // old link icon removed — replaced by n8n handles above
-        if (false) nodeG.append('text')
-          .text('') // fa-link unicode
-          .attr('font-family', '"Font Awesome 5 Free"')
-          .attr('font-weight', 900)
-          .attr('font-size', 10)
-          .attr('x', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2 + 8; })
-          .attr('y', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2 + 14; })
-          .attr('fill', 'var(--text3)')
-          .attr('cursor', 'pointer')
-          .attr('opacity', 0.5)
-          .on('mouseenter', function() { d3.select(this).attr('opacity', 1).attr('fill', '#3b82f6'); })
-          .on('mouseleave', function() { d3.select(this).attr('opacity', 0.5).attr('fill', 'var(--text3)'); })
-          .on('click', function(event, d) {
-            event.stopPropagation();
-            setLinkMode({ sourceId: d.id, sourceName: d.name });
-          });
-
-        simulation.on('tick', function() {
-          // Link lines: bottom-middle of source → top-middle of target
-          linkG
-            .attr('x1', function(d) { return d.source.x; })
-            .attr('y1', function(d) { var h = d.source.cornerstone ? cornerH : nodeH; return d.source.y + h / 2; })
-            .attr('x2', function(d) { return d.target.x; })
-            .attr('y2', function(d) { var h = d.target.cornerstone ? cornerH : nodeH; return d.target.y - h / 2; });
-          nodeG.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
-        });
-
-        // Zoom to fit
-        setTimeout(function() {
-          svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(0, 0).scale(0.85));
-        }, 500);
-
-        return function() { simulation.stop(); };
-      }, [pages, viewMode]);
-
-      // Detail panel for selected page (overlay on graph — NOT full editor)
-      var renderDetailPanel = function() {
-        if (!selectedPage) return null;
-        var sp = selectedPage;
-        var btnS = { padding: '6px 14px', borderRadius: 6, border: 'none', fontWeight: 600, fontSize: 12, cursor: 'pointer' };
-        var linkBtnS = { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, padding: '2px 4px', marginLeft: 6 };
+      // Render a page card
+      var renderPageCard = function(p) {
+        var color = typeColors[p.page_type] || '#6366f1';
         return React.createElement('div', {
-          style: { position: 'fixed', top: 0, right: 0, width: 380, height: '100vh', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 999, overflowY: 'auto', padding: 20, boxShadow: '-4px 0 20px rgba(0,0,0,0.3)' }
+          key: p.id,
+          onClick: function() { setEditingPage(p); },
+          style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, cursor: 'pointer', transition: 'border-color 0.15s', minWidth: 0 }
         },
-          // Header with close
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
-            React.createElement('h3', { style: { margin: 0, fontSize: 16, fontWeight: 700 } }, sp.page_name),
-            React.createElement('button', { onClick: function() { setSelectedPage(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
+          React.createElement('div', { style: { width: 32, height: 32, borderRadius: '50%', background: color + '18', border: '2px solid ' + color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 } },
+            React.createElement('i', { className: typeIcons[p.page_type] || 'fas fa-file', style: { color: color } })
           ),
-          // Badges
-          React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' } },
-            React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
-            sp.is_cornerstone && React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: '#f59e0b20', color: '#f59e0b', fontWeight: 600 } }, '★ Cornerstone'),
-            React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (typeColors[sp.page_type] || '#6366f1') + '20', color: typeColors[sp.page_type] || '#6366f1', fontWeight: 600 } }, sp.page_type)
-          ),
-          // Primary actions — Edit + Delete
-          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
-            React.createElement('button', {
-              onClick: function() { setEditingPage(sp); },
-              style: Object.assign({}, btnS, { background: 'var(--accent)', color: '#fff', flex: 1 })
-            }, React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 6 } }), 'Edit Page'),
-            React.createElement('button', {
-              onClick: function() { handleDeletePage(sp.id); },
-              style: Object.assign({}, btnS, { background: '#ef444420', color: '#ef4444' })
-            }, React.createElement('i', { className: 'fas fa-trash' }))
-          ),
-          // Quick info
-          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4 } }, 'SLUG'),
-          React.createElement('div', { style: { fontSize: 12, color: 'var(--text)', fontFamily: 'monospace', padding: '3px 6px', background: 'var(--bg)', borderRadius: 4, marginBottom: 10 } }, sp.slug || '/'),
-          sp.focus_keyword && React.createElement('div', { style: { marginBottom: 10 } },
-            React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' } }, 'Focus: '),
-            React.createElement('span', { style: { fontSize: 12, color: '#22c55e', fontWeight: 600 } }, sp.focus_keyword)
-          ),
-          sp.meta_title && React.createElement('div', { style: { marginBottom: 10 } },
-            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'Meta Title'),
-            React.createElement('div', { style: { fontSize: 12, color: 'var(--text)' } }, sp.meta_title)
-          ),
-          // Keywords
-          (sp.keywords || []).length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
-            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Keywords'),
-            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 3 } },
-              (sp.keywords || []).map(function(kw, i) {
-                return React.createElement('span', { key: i, style: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' } },
-                  kw.keyword + (kw.volume ? ' (' + kw.volume + ')' : '')
-                );
-              })
+          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+            React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.page_name),
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+              (p.slug || '/') + (p.focus_keyword ? ' • ' + p.focus_keyword : '') + (p.word_count ? ' • ' + p.word_count + 'w' : '')
             )
           ),
-          // Outbound links with remove buttons
-          React.createElement('div', { style: { marginBottom: 12 } },
-            React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } },
-              'Links To (' + (sp.internal_links || []).length + ')'
-            ),
-            (sp.internal_links || []).length > 0
-              ? (sp.internal_links || []).map(function(link, i) {
-                  return React.createElement('div', { key: i, style: { fontSize: 12, padding: '3px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' } },
-                    React.createElement('span', null,
-                      React.createElement('span', { style: { color: '#3b82f6' } }, link.target_page_name || 'Page')
-                    ),
-                    React.createElement('button', {
-                      onClick: function() { handleRemoveLink(sp.id, link.target_page_id); },
-                      title: 'Remove link',
-                      style: linkBtnS
-                    }, '×')
-                  );
-                })
-              : React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' } }, 'No outbound links — drag from bottom handle to connect')
-          ),
-          // Inbound links
-          (function() {
-            var inbound = pages.filter(function(p) { return (p.internal_links || []).some(function(l) { return l.target_page_id === sp.id; }); });
-            return React.createElement('div', { style: { marginBottom: 12 } },
-              React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } },
-                'Linked From (' + inbound.length + ')'
-              ),
-              inbound.length > 0
-                ? inbound.map(function(p) {
-                    return React.createElement('div', { key: p.id, style: { fontSize: 12, padding: '3px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' } },
-                      React.createElement('span', { style: { color: '#f59e0b' } }, p.page_name),
-                      React.createElement('button', {
-                        onClick: function() { handleRemoveLink(p.id, sp.id); },
-                        title: 'Remove link',
-                        style: linkBtnS
-                      }, '×')
-                    );
-                  })
-                : React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' } }, 'No inbound links')
-            );
-          })(),
-          // Word count / content status
-          React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 8 } },
-            sp.draft_content ? (sp.word_count || 0) + ' words written' : 'No content yet'
-          )
+          React.createElement('span', { style: { fontSize: 9, padding: '2px 7px', borderRadius: 10, background: (stageColors[p.stage] || '#6b7280') + '20', color: stageColors[p.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase', flexShrink: 0 } }, p.stage || 'draft'),
+          React.createElement('button', {
+            onClick: function(e) { handleDeletePage(p.id, e); },
+            style: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '4px 6px', opacity: 0.5, flexShrink: 0 },
+            title: 'Delete page'
+          }, React.createElement('i', { className: 'fas fa-trash-alt' }))
         );
       };
 
+      // Render a section (Home, Service, Suburb, Blog)
+      var renderSection = function(title, type, sectionPages, color, icon) {
+        return React.createElement('div', { style: { marginBottom: 0 } },
+          // Section header
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: color + '12', borderRadius: 10, marginBottom: 8 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              React.createElement('i', { className: icon, style: { color: color, fontSize: 14 } }),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } }, title),
+              React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', fontWeight: 400 } }, '(' + sectionPages.length + ')')
+            ),
+            React.createElement('button', {
+              onClick: function() { setAddingType(addingType === type ? null : type); setNewPageName(''); },
+              style: { padding: '4px 12px', borderRadius: 6, border: '1px dashed ' + color, background: addingType === type ? color + '18' : 'transparent', color: color, fontWeight: 600, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }
+            }, React.createElement('i', { className: 'fas fa-plus', style: { fontSize: 10 } }), 'Add ' + title.replace(/s$/, ''))
+          ),
+          // Inline add form
+          addingType === type && React.createElement('div', {
+            style: { display: 'flex', gap: 8, marginBottom: 8, padding: '8px 12px', background: 'var(--card)', border: '1px solid ' + color + '40', borderRadius: 8, alignItems: 'center' }
+          },
+            React.createElement('input', {
+              value: newPageName,
+              onChange: function(e) { setNewPageName(e.target.value); },
+              onKeyDown: function(e) { if (e.key === 'Enter') handleAddPage(type); if (e.key === 'Escape') { setAddingType(null); setNewPageName(''); } },
+              placeholder: title.replace(/s$/, '') + ' name...',
+              autoFocus: true,
+              style: { flex: 1, padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12, outline: 'none' }
+            }),
+            React.createElement('button', {
+              onClick: function() { handleAddPage(type); },
+              disabled: !newPageName.trim(),
+              style: { padding: '7px 14px', borderRadius: 6, border: 'none', background: color, color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: newPageName.trim() ? 1 : 0.5 }
+            }, 'Add'),
+            React.createElement('button', {
+              onClick: function() { setAddingType(null); setNewPageName(''); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }
+            }, String.fromCharCode(215))
+          ),
+          // Page cards grid
+          sectionPages.length > 0
+            ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 } },
+                sectionPages.map(renderPageCard)
+              )
+            : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 16px' } },
+                'No ' + title.toLowerCase() + ' yet. Click "+ Add" above.'
+              )
+        );
+      };
+
+      // Vertical connector between sections
+      var connector = React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: '4px 0' } },
+        React.createElement('div', { style: { width: 2, height: 20, background: 'var(--border)', borderRadius: 1 } })
+      );
+
+      /* D3 force graph removed — replaced with hierarchical layout */
       if (!project) return React.createElement('div', null, 'Select a project');
 
       // If editing a page, show the full editor (double-click or Edit button)
@@ -9037,7 +8657,7 @@
         return React.createElement(SitePageEditor, {
           page: editingPage,
           project: project,
-          onBack: function() { setEditingPage(null); setSelectedPage(null); loadPages(); },
+          onBack: function() { setEditingPage(null); loadPages(); },
           onUpdate: function(updated) {
             setEditingPage(updated);
             setPages(function(prev) { return prev.map(function(p) { return p.id === updated.id ? updated : p; }); });
@@ -9045,157 +8665,66 @@
         });
       }
 
-      return React.createElement('div', { style: { padding: '24px 32px' } },
-        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
+      return React.createElement('div', { style: { padding: '24px 32px', maxWidth: 1100 } },
+        // Header
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
           React.createElement('div', null,
             React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 } },
-              React.createElement('i', { className: 'fas fa-project-diagram', style: { color: 'var(--accent)' } }),
-              'Site Staging'
+              React.createElement('i', { className: 'fas fa-sitemap', style: { color: 'var(--accent)' } }),
+              'Site Structure'
             ),
             React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 4 } },
-              pages.length > 0 ? pages.length + ' pages • ' + pages.filter(function(p) { return p.is_cornerstone; }).length + ' cornerstones • ' + pages.filter(function(p) { return p.stage === 'published'; }).length + ' published' : 'Generate your site map from Page Setup to get started.'
+              pages.length > 0
+                ? pages.length + ' pages • ' + servicePages.length + ' services • ' + suburbPages.length + ' suburbs • ' + blogPages.length + ' blog posts'
+                : 'Build your website structure from top to bottom.'
             )
           ),
-          React.createElement('div', { style: { display: 'flex', gap: 8 } },
-            pages.length > 0 && React.createElement('div', { style: { display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' } },
-              React.createElement('button', {
-                onClick: function() { setViewMode('graph'); },
-                style: { padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'graph' ? 'var(--accent)' : 'var(--card)', color: viewMode === 'graph' ? '#fff' : 'var(--text3)' }
-              }, React.createElement('i', { className: 'fas fa-project-diagram', style: { marginRight: 4 } }), 'Graph'),
-              React.createElement('button', {
-                onClick: function() { setViewMode('list'); },
-                style: { padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'var(--card)', color: viewMode === 'list' ? '#fff' : 'var(--text3)' }
-              }, React.createElement('i', { className: 'fas fa-list', style: { marginRight: 4 } }), 'List')
-            ),
-            pages.length > 0 && React.createElement('button', {
-              onClick: function() { setShowAddPage(!showAddPage); },
-              style: { padding: '8px 14px', borderRadius: 8, border: '1px solid var(--accent)', background: showAddPage ? 'var(--accent)' : 'transparent', color: showAddPage ? '#fff' : 'var(--accent)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }
-            }, React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'Add Page'),
-            React.createElement('button', {
-              onClick: handleGenerate, disabled: generating,
-              style: { padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: generating ? 'wait' : 'pointer' }
-            }, generating ? 'Generating...' : (pages.length > 0 ? 'Regenerate' : 'Generate Site Map'))
-          )
-        ),
-
-        // Add Page form
-        showAddPage && React.createElement('div', {
-          style: { display: 'flex', gap: 8, marginBottom: 16, padding: '12px 16px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, alignItems: 'center' }
-        },
-          React.createElement('input', {
-            value: newPageName,
-            onChange: function(e) { setNewPageName(e.target.value); },
-            onKeyDown: function(e) { if (e.key === 'Enter') handleAddPage(); },
-            placeholder: 'Page name...',
-            autoFocus: true,
-            style: { flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, outline: 'none' }
-          }),
-          React.createElement('select', {
-            value: newPageType,
-            onChange: function(e) { setNewPageType(e.target.value); },
-            style: { padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12 }
+          React.createElement('button', {
+            onClick: handleGenerate, disabled: generating,
+            style: { padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: generating ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }
           },
-            React.createElement('option', { value: 'home' }, 'Home'),
-            React.createElement('option', { value: 'service' }, 'Service'),
-            React.createElement('option', { value: 'suburb' }, 'Suburb'),
-            React.createElement('option', { value: 'blog' }, 'Blog')
-          ),
-          React.createElement('button', {
-            onClick: handleAddPage,
-            disabled: !newPageName.trim(),
-            style: { padding: '8px 16px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: newPageName.trim() ? 1 : 0.5 }
-          }, 'Add'),
-          React.createElement('button', {
-            onClick: function() { setShowAddPage(false); setNewPageName(''); },
-            style: { padding: '8px 10px', borderRadius: 6, border: 'none', background: 'var(--bg)', color: 'var(--text3)', cursor: 'pointer', fontSize: 13 }
-          }, '×')
-        ),
-
-        // Legend
-        pages.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
-          [{ label: 'Home', color: typeColors.home }, { label: 'Service', color: typeColors.service }, { label: 'Suburb', color: typeColors.suburb }, { label: 'Blog', color: typeColors.blog }].map(function(item) {
-            return React.createElement('div', { key: item.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
-              React.createElement('div', { style: { width: 12, height: 8, borderRadius: 2, background: item.color } }),
-              item.label
-            );
-          }),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
-            React.createElement('div', { style: { width: 14, height: 10, borderRadius: 2, border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7 } }, '★'),
-            'Cornerstone'
-          ),
-          [{ label: 'Draft', color: stageColors.draft }, { label: 'Written', color: stageColors.written }, { label: 'Published', color: stageColors.published }].map(function(item) {
-            return React.createElement('div', { key: item.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
-              React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: item.color } }),
-              item.label
-            );
-          })
-        ),
-
-        // Graph view
-        viewMode === 'graph' && pages.length > 0 && React.createElement('div', {
-          ref: containerRef,
-          style: { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', position: 'relative' }
-        },
-          React.createElement('svg', { ref: svgRef, style: { width: '100%', height: 600 } }),
-          React.createElement('div', { style: { position: 'absolute', bottom: 12, right: 12, fontSize: 11, color: 'var(--text3)', background: 'var(--card)', padding: '4px 10px', borderRadius: 6 } },
-            'Scroll to zoom • Drag nodes • Click to select • Double-click to edit • Drag handle to link'
+            React.createElement('i', { className: generating ? 'fas fa-spinner fa-spin' : 'fas fa-magic' }),
+            generating ? 'Generating...' : (pages.length > 0 ? 'AI Regenerate' : 'AI Generate Site Map')
           )
         ),
 
-        // List view
-        viewMode === 'list' && pages.length > 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-          pages.map(function(sp) {
-            return React.createElement('div', {
-              key: sp.id,
-              onClick: function() { setSelectedPage(sp); },
-              style: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, cursor: 'pointer', transition: 'border-color 0.15s' }
-            },
-              React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', background: (typeColors[sp.page_type] || '#6366f1') + '20', border: '2px solid ' + (typeColors[sp.page_type] || '#6366f1'), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 } },
-                sp.is_cornerstone ? '★' : React.createElement('i', { className: sp.page_type === 'home' ? 'fas fa-home' : sp.page_type === 'service' ? 'fas fa-briefcase' : sp.page_type === 'suburb' ? 'fas fa-map-marker-alt' : 'fas fa-blog', style: { color: typeColors[sp.page_type] } })
-              ),
-              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } }, sp.page_name),
-                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2 } },
-                  sp.slug + ' • ' + (sp.keywords || []).length + ' keywords' + (sp.word_count ? ' • ' + sp.word_count + ' words' : '')
-                )
-              ),
-              React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } },
-                  React.createElement('i', { className: 'fas fa-link', style: { marginRight: 3, opacity: 0.5 } }),
-                  (sp.internal_links || []).length + ' links'
-                ),
-                React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage),
-                React.createElement('button', {
-                  onClick: function(e) { e.stopPropagation(); setEditingPage(sp); },
-                  style: { fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }
-                }, React.createElement('i', { className: 'fas fa-pen', style: { marginRight: 3 } }), 'Edit'),
-                React.createElement('button', {
-                  onClick: function(e) { e.stopPropagation(); handleDeletePage(sp.id); },
-                  style: { fontSize: 10, padding: '3px 6px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer' }
-                }, React.createElement('i', { className: 'fas fa-trash' }))
-              )
-            );
-          })
+        // Loading
+        loading && React.createElement('div', { style: { textAlign: 'center', padding: 60 } },
+          React.createElement('div', { className: 'spinner-large' }),
+          React.createElement('div', { style: { marginTop: 12, color: 'var(--text3)' } }, 'Loading site structure...')
         ),
 
         // Empty state
-        pages.length === 0 && !loading && React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
-          React.createElement('i', { className: 'fas fa-project-diagram', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16 } }),
-          React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 8 } }, 'No site map yet'),
-          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Assign keywords to pages in Page Setup, then generate your site map here.'),
-          React.createElement('button', {
-            onClick: handleGenerate, disabled: generating,
-            style: { padding: '10px 24px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }
-          }, generating ? 'Generating...' : 'Generate Site Map')
+        !loading && pages.length === 0 && React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
+          React.createElement('i', { className: 'fas fa-sitemap', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16, display: 'block' } }),
+          React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 8 } }, 'No site structure yet'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Generate a site map with AI or start adding pages manually below.'),
+          React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' } },
+            React.createElement('button', {
+              onClick: handleGenerate, disabled: generating,
+              style: { padding: '10px 24px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }
+            }, generating ? 'Generating...' : 'AI Generate Site Map'),
+            React.createElement('button', {
+              onClick: function() { setAddingType('home'); },
+              style: { padding: '10px 24px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontWeight: 600, fontSize: 14, cursor: 'pointer' }
+            }, '+ Add Page Manually')
+          )
         ),
 
-        loading && React.createElement('div', { style: { textAlign: 'center', padding: 60 } },
-          React.createElement('div', { className: 'spinner-large' }),
-          React.createElement('div', { style: { marginTop: 12, color: 'var(--text3)' } }, 'Loading site map...')
-        ),
-
-        // Detail panel (slide-in from right when a page is selected)
-        renderDetailPanel()
+        // Hierarchical layout
+        !loading && pages.length > 0 && React.createElement('div', null,
+          // HOME section
+          renderSection('Home', 'home', homePages, typeColors.home, 'fas fa-home'),
+          connector,
+          // Services + Suburbs side by side
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            renderSection('Services', 'service', servicePages, typeColors.service, 'fas fa-briefcase'),
+            renderSection('Suburbs', 'suburb', suburbPages, typeColors.suburb, 'fas fa-map-marker-alt')
+          ),
+          connector,
+          // BLOG section
+          renderSection('Blog', 'blog', blogPages, typeColors.blog, 'fas fa-blog')
+        )
       );
     }
 
