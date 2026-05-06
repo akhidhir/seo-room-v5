@@ -9350,7 +9350,7 @@ app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (re
   req.setTimeout(60000);
   res.setTimeout(60000);
   const { projectId, id } = req.params;
-  const { section_id } = req.body;
+  const { section_id, instruction } = req.body;
   try {
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
     if (!item) return res.status(404).json({ error: 'Not found' });
@@ -9367,21 +9367,24 @@ app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (re
     const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
     const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
 
+    const hasInstruction = instruction && instruction.trim();
+
     const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
 
-Rewrite ONE section of a page. Return ONLY a JSON object:
-{ "heading": "Section heading", "content_html": "<p>rewritten content</p>", "word_count": N, "changes_summary": "What changed" }
+${hasInstruction ? 'Apply the user\'s instruction to modify ONE section. Do exactly what they ask — no more, no less. You are an implementor, not a chatbot.' : 'Rewrite ONE section of a page.'}
+
+Return ONLY a JSON object:
+{ "heading": "Section heading", "content_html": "<p>modified content</p>", "word_count": N, "changes_summary": "Brief 1-line summary of what you changed" }
 
 Rules:
-- Keep the same section TYPE and DESIGN intent
+- ${hasInstruction ? 'Follow the instruction precisely. If they say shorter, cut it. If they say longer, expand it. If they say add X, add X.' : 'Keep the same section TYPE and DESIGN intent'}
 - Use proper HTML: <p>, <h3>, <ul>/<li>, <strong>, <em>, <a>
 - Short paragraphs (2-4 sentences, max 60 words each)
-- Break content with <h3> sub-headings every 150-200 words
 - Write in Australian English, natural tone
 - Include focus keyword naturally
 ${buildCopywriterContext(project, item)}`;
 
-    const userPrompt = `Rewrite this ${section.type} section for page "${item.page_title}" (${item.page_url})
+    const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${item.page_title}" (${item.page_url})
 Focus keyword: ${focusKw}
 ${targetKeywords.length ? 'Target keywords: ' + targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ') : ''}
 ${acceptedTopics.length ? 'Must cover topics: ' + acceptedTopics.join(', ') : ''}

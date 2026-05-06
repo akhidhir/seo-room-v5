@@ -10469,16 +10469,36 @@
         } catch (e) { console.error('Toggle lock error:', e); }
       };
 
-      const handleRewriteSection = async (sectionId) => {
+      const [chatSection, setChatSection] = useState(null); // section id with chat open
+      const [chatInput, setChatInput] = useState('');
+      const [chatHistory, setChatHistory] = useState({}); // { sectionId: [{role, text}] }
+
+      const handleSectionChat = async (sectionId) => {
+        const instruction = chatInput.trim();
+        if (!instruction) return;
         setRewritingSection(sectionId);
+        const history = chatHistory[sectionId] || [];
+        const newHistory = [...history, { role: 'user', text: instruction }];
+        setChatHistory(prev => ({ ...prev, [sectionId]: newHistory }));
+        setChatInput('');
         const table = entityType === 'content_queue' ? 'content-queue' : entityType;
         try {
           const r = await api('/projects/' + projectId + '/' + table + '/' + entityId + '/rewrite-section', {
-            method: 'POST', body: { section_id: sectionId }
+            method: 'POST', body: { section_id: sectionId, instruction }
           });
           if (r.page_sections && onSectionsChange) onSectionsChange(r.page_sections);
-        } catch (e) { alert('Rewrite failed: ' + e.message); }
+          const section = (r.page_sections || []).find(s => s.id === sectionId);
+          setChatHistory(prev => ({ ...prev, [sectionId]: [...(prev[sectionId] || []), { role: 'ai', text: section?.changes_summary || 'Done' }] }));
+        } catch (e) {
+          setChatHistory(prev => ({ ...prev, [sectionId]: [...(prev[sectionId] || []), { role: 'ai', text: 'Error: ' + e.message }] }));
+        }
         setRewritingSection(null);
+      };
+
+      const handleRewriteSection = async (sectionId) => {
+        // Open chat instead of auto-rewriting
+        setChatSection(chatSection === sectionId ? null : sectionId);
+        setChatInput('');
       };
 
       // ── Text selection → suggestion popup ──
@@ -10636,6 +10656,42 @@
             // Changes summary
             section.changes_summary && React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 8, fontStyle: 'italic' } },
               React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
+            ),
+            // Section chat — inline instruction box
+            chatSection === section.id && !section.locked && React.createElement('div', { style: { marginTop: 12, padding: 12, background: 'rgba(168,85,247,0.05)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8 } },
+              // Chat history
+              (chatHistory[section.id] || []).length > 0 && React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto', marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 } },
+                (chatHistory[section.id] || []).map((msg, mi) =>
+                  React.createElement('div', { key: mi, style: { display: 'flex', gap: 8, alignItems: 'flex-start' } },
+                    React.createElement('span', { style: { fontSize: 10, fontWeight: 700, color: msg.role === 'user' ? '#3b82f6' : '#a855f7', minWidth: 24 } }, msg.role === 'user' ? 'You' : 'AI'),
+                    React.createElement('span', { style: { fontSize: 12, color: msg.role === 'user' ? 'var(--text)' : 'var(--text2)' } }, msg.text)
+                  )
+                )
+              ),
+              // Quick action chips
+              React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 } },
+                ['Make it shorter', 'Make it longer', 'More conversational', 'Add statistics', 'Simplify language', 'Make it persuasive'].map(chip =>
+                  React.createElement('button', { key: chip, onClick: () => { setChatInput(chip); }, style: { fontSize: 10, padding: '3px 8px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 12, cursor: 'pointer' } }, chip)
+                )
+              ),
+              // Input row
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('input', {
+                  value: chatInput, onChange: e => setChatInput(e.target.value),
+                  placeholder: 'Tell AI what to change...',
+                  onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSectionChat(section.id); } },
+                  disabled: rewritingSection === section.id,
+                  style: { flex: 1, padding: '8px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }
+                }),
+                React.createElement('button', {
+                  onClick: () => handleSectionChat(section.id),
+                  disabled: rewritingSection === section.id || !chatInput.trim(),
+                  style: { padding: '8px 16px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }
+                }, rewritingSection === section.id
+                  ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 4 } }), 'Applying...')
+                  : React.createElement('span', null, React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 4 } }), 'Apply')
+                )
+              )
             )
           );
         }),
