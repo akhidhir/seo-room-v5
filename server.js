@@ -5716,58 +5716,155 @@ function buildUserContent(textPrompt, item) {
   return [...imgBlocks, { type: 'text', text: textPrompt }];
 }
 
+// ═══════════════════════════════════════════════════════════
+// SHARED HELPERS — reusable across all content endpoints
+// ═══════════════════════════════════════════════════════════
+
+// Resolve the WP page_id for a given URL + project.
+// PRIORITY: URL match first (most reliable), then WP settings for homepage, then title search (last resort).
+// Returns { pageId, pageUrl } — pageUrl may be updated if resolved from WP.
+async function resolveWpPageId(project, pageUrl, pageTitle) {
+  const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
+  if (!wpBase) return { pageId: null, pageUrl };
+  const authHeaders = getWpAuthHeaders(project);
+  const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const urlClean = (pageUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const isHomepage = !pageUrl || pageUrl === '/' || (domainClean && urlClean === domainClean);
+  let pageId = null;
+
+  // ── STEP 1: URL-based resolution (most accurate) ──
+  // If we have a real URL (not just "/" or domain root), match it against WP pages by link
+  if (pageUrl && !isHomepage) {
+    try {
+      // Extract slug from URL for faster search
+      const urlPath = new URL(pageUrl.startsWith('http') ? pageUrl : 'https://' + domainClean + pageUrl).pathname.replace(/^\/|\/$/g, '');
+      const slug = urlPath.split('/').pop();
+      if (slug) {
+        for (const type of ['pages', 'posts']) {
+          try {
+            const sRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,link,title&per_page=5`, {
+              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+            });
+            if (sRes.ok) {
+              const data = await sRes.json();
+              // Prefer exact link match
+              const exact = data.find(p => {
+                const pUrl = (p.link || '').replace(/\/$/, '').replace(/^https?:\/\//, '');
+                return pUrl === urlClean;
+              });
+              if (exact) { pageId = exact.id; console.log(`[resolveWpPageId] URL match: ${pageUrl} → ${type}/${pageId}`); return { pageId, pageUrl }; }
+              // Slug match (single result = good enough)
+              if (data.length === 1) { pageId = data[0].id; console.log(`[resolveWpPageId] Slug match: ${slug} → ${type}/${pageId}`); return { pageId, pageUrl }; }
+            }
+          } catch (e) { /* try next type */ }
+        }
+      }
+    } catch (e) { /* URL parse failed */ }
+  }
+
+  // ── STEP 2: Homepage resolution ──
+  if (isHomepage) {
+    // Method 1: WP settings → page_on_front (most reliable for homepage)
+    try {
+      const settingsRes = await fetch(`${wpBase}/wp-json/wp/v2/settings`, {
+        headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+      });
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json();
+        if (settings.page_on_front) {
+          pageId = settings.page_on_front;
+          console.log(`[resolveWpPageId] Homepage via WP settings page_on_front: ${pageId}`);
+          return { pageId, pageUrl };
+        }
+      }
+    } catch (e) { /* settings may require admin auth */ }
+    // Method 2: slug search
+    for (const slug of ['home', 'homepage', 'front-page', 'home-page']) {
+      try {
+        const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${slug}&_fields=id,link&per_page=1`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (sRes.ok) { const d = await sRes.json(); if (d.length > 0) { pageId = d[0].id; console.log(`[resolveWpPageId] Homepage via slug "${slug}": ${pageId}`); return { pageId, pageUrl }; } }
+      } catch (e) { /* try next */ }
+    }
+    // Method 3: link matching against domain root
+    try {
+      const allRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?_fields=id,link&per_page=100`, {
+        headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+      });
+      if (allRes.ok) {
+        const allPages = await allRes.json();
+        const homePage = allPages.find(p => (p.link || '').replace(/\/$/, '').replace(/^https?:\/\//, '') === domainClean);
+        if (homePage) { pageId = homePage.id; console.log(`[resolveWpPageId] Homepage via link match: ${pageId}`); return { pageId, pageUrl }; }
+      }
+    } catch (e) { /* silent */ }
+  }
+
+  // ── STEP 3: Title search (last resort — only if no URL) ──
+  if (!pageId && !pageUrl && pageTitle) {
+    const searchTerms = pageTitle.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
+      .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
+    if (searchTerms.length > 2) {
+      for (const type of ['pages', 'posts']) {
+        try {
+          const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
+            headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+          });
+          if (wpRes.ok) {
+            const wpData = await wpRes.json();
+            const titleLower = searchTerms.toLowerCase();
+            const best = wpData.length === 1 ? wpData[0] : wpData.find(p => {
+              const wpTitle = (p.title?.rendered || '').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').toLowerCase();
+              return titleLower.includes(wpTitle) || wpTitle.includes(titleLower);
+            });
+            if (best) {
+              pageId = best.id;
+              pageUrl = best.link || pageUrl;
+              console.log(`[resolveWpPageId] Title search: "${pageTitle}" → ${type}/${pageId}`);
+              break;
+            }
+          }
+        } catch (e) { /* skip */ }
+      }
+    }
+  }
+  return { pageId, pageUrl };
+}
+
 // Helper: fetch live page content for Elementor or when WP REST content is thin
 async function fetchLivePageContent(pageUrl, project, pageId) {
   let content = '';
   const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
-  // For homepage without page_id, try to find the front page ID from WP settings
+  // Resolve page_id if missing, or verify homepage page_id is correct
   if (wpBase && !pageId) {
-    const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const urlClean = (pageUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const isHome = !pageUrl || pageUrl === '/' || (domainClean && urlClean === domainClean);
-    if (isHome) {
-      try {
-        const authHeaders = getWpAuthHeaders(project);
-        // Method 1: WP settings endpoint (requires auth) — directly gives front page ID
-        try {
-          const settingsRes = await fetch(`${wpBase}/wp-json/wp/v2/settings`, {
-            headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-          });
-          if (settingsRes.ok) {
-            const settings = await settingsRes.json();
-            if (settings.page_on_front) { pageId = settings.page_on_front; console.log('[fetchLivePageContent] Found front page ID from WP settings:', pageId); }
-          }
-        } catch (e) { /* settings may require admin auth */ }
-        // Method 2: search by common homepage slugs
-        if (!pageId) {
-          for (const slug of ['home', 'homepage', 'front-page', 'home-page']) {
-            try {
-              const sRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?slug=${slug}&_fields=id,link&per_page=1`, {
-                headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-              });
-              if (sRes.ok) { const d = await sRes.json(); if (d.length > 0) { pageId = d[0].id; console.log('[fetchLivePageContent] Found home page ID via slug:', slug, pageId); break; } }
-            } catch (e) { /* try next */ }
-          }
-        }
-        // Method 3: fetch all pages and find the one whose link matches domain root
-        if (!pageId) {
-          try {
-            const allRes = await fetch(`${wpBase}/wp-json/wp/v2/pages?_fields=id,link&per_page=100`, {
-              headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-            });
-            if (allRes.ok) {
-              const allPages = await allRes.json();
-              const homePage = allPages.find(p => {
-                const pLink = (p.link || '').replace(/\/$/, '').replace(/^https?:\/\//, '');
-                return pLink === domainClean;
-              });
-              if (homePage) { pageId = homePage.id; console.log('[fetchLivePageContent] Found home page ID via link match:', pageId); }
-            }
-          } catch (e) { /* silent */ }
-        }
-      } catch (e) { console.log('[fetchLivePageContent] Home page ID lookup failed:', e.message); }
+    const resolved = await resolveWpPageId(project, pageUrl, null);
+    if (resolved.pageId) {
+      pageId = resolved.pageId;
+      console.log('[fetchLivePageContent] Resolved page_id via shared helper:', pageId);
     }
   }
+  // For homepage: verify page_id matches WP front page setting to avoid fetching wrong page
+  if (wpBase && pageId) {
+    const domainClean2 = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const urlClean2 = (pageUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const isHome2 = !pageUrl || pageUrl === '/' || (domainClean2 && urlClean2 === domainClean2);
+    if (isHome2) {
+      try {
+        const authHeaders = getWpAuthHeaders(project);
+        const settingsRes = await fetch(`${wpBase}/wp-json/wp/v2/settings`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          if (settings.page_on_front && settings.page_on_front !== pageId) {
+            console.log(`[fetchLivePageContent] Homepage page_id MISMATCH: stored=${pageId}, WP front page=${settings.page_on_front}. Correcting.`);
+            pageId = settings.page_on_front;
+          }
+        }
+      } catch (e) { /* settings may require admin auth */ }
+    }
+  }
+
   // Try WP REST API first
   if (wpBase && pageId) {
     const authHeaders = getWpAuthHeaders(project);
@@ -5778,6 +5875,8 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
         });
         if (wpRes.ok) {
           const wpData = await wpRes.json();
+          const wpTitle = (wpData.title?.rendered || '').replace(/<[^>]+>/g, '');
+          console.log(`[fetchLivePageContent] WP REST returned page: id=${pageId}, title="${wpTitle}", type=${type}`);
           content = wpData.content?.rendered || '';
           break;
         }
@@ -5855,63 +5954,20 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
     console.log('[import-current] Item:', { id: item.id, page_id: item.page_id, page_url: item.page_url, page_title: item.page_title });
     // Always fetch fresh — no cache
 
-    // Detect homepage URL (domain root = wrong URL) — try to auto-resolve from WP
+    // Use shared resolver — URL-first, then homepage detection, then title search
     let rawPageUrl = item.page_url || '';
     const domainClean = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const urlClean = rawPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const isHomepage = !rawPageUrl || (domainClean && urlClean === domainClean);
-    let resolvedPageId = item.page_id;
-    const wpBase2 = (project?.wordpress_url || '').replace(/\/$/, '');
-    const authHeaders2 = getWpAuthHeaders(project);
+    const resolved = await resolveWpPageId(project, rawPageUrl, item.page_title);
+    let resolvedPageId = item.page_id || resolved.pageId;
+    if (resolved.pageUrl && resolved.pageUrl !== rawPageUrl) rawPageUrl = resolved.pageUrl;
 
-    // For homepage without page_id, try discoverPages first (sitemap + WP REST)
-    if (isHomepage && !resolvedPageId) {
-      console.log('[import-current] Homepage without page_id, trying discoverPages...');
-      try {
-        const discovered = await discoverPages('https://' + domainClean, wpBase2, authHeaders2);
-        // Find homepage: link matches domain root, or slug is 'home'/'homepage'
-        const homeEntry = discovered.find(p => {
-          const pUrl = (p.url || '').replace(/\/$/, '').replace(/^https?:\/\//, '');
-          return pUrl === domainClean;
-        }) || discovered.find(p => ['home', 'homepage', 'front-page'].includes(p.slug));
-        if (homeEntry && homeEntry.page_id && !isNaN(homeEntry.page_id)) {
-          resolvedPageId = parseInt(homeEntry.page_id);
-          await pool.query('UPDATE content_queue SET page_id=$1 WHERE id=$2', [resolvedPageId, item.id]);
-          console.log(`[import-current] Found homepage page_id via discoverPages: ${resolvedPageId}`);
-        }
-      } catch (e) { console.log('[import-current] discoverPages failed:', e.message); }
+    // Persist if resolver found a page_id or URL we didn't have
+    if (resolved.pageId && resolved.pageId !== item.page_id) {
+      await pool.query('UPDATE content_queue SET page_id=$1 WHERE id=$2', [resolved.pageId, item.id]);
+      console.log(`[import-current] Persisted resolved page_id: ${resolved.pageId}`);
     }
-
-    if (isHomepage && !resolvedPageId && wpBase2 && item.page_title) {
-      // Auto-resolve: search WP by title
-      console.log('[import-current] No URL, searching WP for title:', item.page_title);
-      const searchTerms = item.page_title.replace(/^(expand|improve|rewrite|update|optimise|optimize|fix|create|add|build|new)\s+/i, '')
-        .replace(/\s+(page|pages|content|copy|text|for)\s*$/gi, '').replace(/\s+(page|pages|content|copy|text)\s/gi, ' ').trim();
-      if (searchTerms.length > 2) {
-        for (const type of ['pages', 'posts']) {
-          try {
-            const wpRes = await fetch(`${wpBase2}/wp-json/wp/v2/${type}?search=${encodeURIComponent(searchTerms)}&_fields=id,link,title&per_page=5`, {
-              headers: { ...(authHeaders2 || {}), 'Accept': 'application/json' }
-            });
-            if (wpRes.ok) {
-              const wpData = await wpRes.json();
-              const titleLower = searchTerms.toLowerCase();
-              const best = wpData.length === 1 ? wpData[0] : wpData.find(p => {
-                const wpTitle = (p.title?.rendered || '').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').toLowerCase();
-                return titleLower.includes(wpTitle) || wpTitle.includes(titleLower);
-              });
-              if (best) {
-                resolvedPageId = best.id;
-                rawPageUrl = best.link || '';
-                // Persist the resolved URL + page_id to DB
-                await pool.query('UPDATE content_queue SET page_url=$1, page_id=$2 WHERE id=$3', [rawPageUrl, resolvedPageId, item.id]);
-                console.log(`[import-current] Auto-resolved "${item.page_title}" → WP ${type}/${resolvedPageId} (${rawPageUrl})`);
-                break;
-              }
-            }
-          } catch (e) { /* skip */ }
-        }
-      }
+    if (resolved.pageUrl && resolved.pageUrl !== item.page_url) {
+      await pool.query('UPDATE content_queue SET page_url=$1 WHERE id=$2', [resolved.pageUrl, item.id]);
     }
 
     // Home page: if page_url is "/" or empty, use the domain
@@ -5922,21 +5978,23 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
       return res.json({ content: '', meta_title: item.current_meta_title || '', meta_desc: item.current_meta_desc || '', focus_keyword: item.current_focus_keyword || '', warning: 'No page URL set and could not auto-resolve from WordPress.' });
     }
     const pageUrl = rawPageUrl.startsWith('http') ? rawPageUrl : ('https://' + domainClean + rawPageUrl);
-    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId, 'wpBase:', wpBase2);
+    console.log('[import-current] Fetching live from:', pageUrl, 'page_id:', resolvedPageId);
     const fetchResult = await fetchLivePageContent(pageUrl, project, resolvedPageId);
     let content = fetchResult.content || fetchResult; // backward compat
 
     console.log('[import-current] Content result:', content ? `${content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length} words` : 'EMPTY');
-    // If fetchLivePageContent discovered the page_id, persist it
-    if (fetchResult.resolvedPageId && !resolvedPageId) {
+    // If fetchLivePageContent corrected or discovered the page_id, persist it
+    if (fetchResult.resolvedPageId && fetchResult.resolvedPageId !== resolvedPageId) {
       resolvedPageId = fetchResult.resolvedPageId;
       await pool.query('UPDATE content_queue SET page_id=$1 WHERE id=$2', [resolvedPageId, req.params.id]);
-      console.log('[import-current] Persisted discovered page_id:', resolvedPageId);
+      console.log('[import-current] Persisted corrected page_id:', resolvedPageId);
     }
     console.log('[import-current] Got content length:', content ? content.length : 0, 'words:', content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0);
 
     // Also try to get Yoast meta
     let meta = {};
+    const wpBase2 = (project?.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders2 = getWpAuthHeaders(project);
     if (wpBase2 && resolvedPageId) {
       try {
         const m = await readWpYoastMeta(wpBase2, resolvedPageId, authHeaders2);
