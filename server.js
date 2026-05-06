@@ -8663,13 +8663,16 @@ IMPORTANT:
       messages: [{ role: 'user', content: `Analyse this page HTML and identify all visual sections:\n\n${contentHtml.slice(0, 30000)}` }]
     });
 
-    const aiText = aiResp.content[0].text;
+    let psAiText = aiResp.content[0].text;
     let sections;
     try {
-      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      psAiText = psAiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      const jsonMatch = psAiText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No JSON array found');
       sections = JSON.parse(jsonMatch[0]);
-    } catch {
-      return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+    } catch (parseErr) {
+      console.error('[parse-sections] JSON parse failed:', parseErr.message, 'AI text:', psAiText.slice(0, 500));
+      return res.status(500).json({ error: 'AI returned invalid JSON during section parsing' });
     }
 
     // Enrich with IDs and order
@@ -8763,15 +8766,36 @@ Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's d
     let aiText = aiResp.content[0].text;
     console.log('[generate-sections] AI response length:', aiText.length, 'stop_reason:', aiResp.stop_reason);
     let generated;
-    try {
-      // Strip markdown code fences if present
-      aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+    function parseJsonArray(text) {
+      let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
       if (!jsonMatch) throw new Error('No JSON array found');
-      generated = JSON.parse(jsonMatch[0]);
+      return JSON.parse(jsonMatch[0]);
+    }
+    try {
+      generated = parseJsonArray(aiText);
     } catch (parseErr) {
-      console.error('[generate-sections] JSON parse failed:', parseErr.message, 'AI text:', aiText.slice(0, 500));
-      return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+      console.log('[generate-sections] First parse failed, retrying with strict JSON prompt. Error:', parseErr.message);
+      console.log('[generate-sections] AI text preview:', aiText.slice(0, 500));
+      // Retry with explicit JSON-only instruction
+      try {
+        const retryResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 16000,
+          system: 'You are a JSON converter. Return ONLY a valid JSON array, no other text. No markdown fences.',
+          messages: [
+            { role: 'user', content: userPrompt },
+            { role: 'assistant', content: aiText },
+            { role: 'user', content: 'Your response was not valid JSON. Please return ONLY the JSON array with the rewritten sections. Format: [{"section_id":"...","heading":"...","content_html":"...","word_count":N,"changes_summary":"..."},...]' }
+          ],
+        });
+        const retryText = retryResp.content[0].text;
+        console.log('[generate-sections] Retry response length:', retryText.length);
+        generated = parseJsonArray(retryText);
+      } catch (retryErr) {
+        console.error('[generate-sections] Retry also failed:', retryErr.message);
+        return res.status(500).json({ error: 'AI returned invalid JSON after retry. Check Railway logs for details.' });
+      }
     }
 
     // Merge generated content back into sections
