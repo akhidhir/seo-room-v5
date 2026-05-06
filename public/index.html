@@ -12490,50 +12490,50 @@
                     React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
                   )
                 );
-              }),
-
-              // Section suggestions panel
-              sectionSuggestions && sectionSuggestions.length > 0 && React.createElement('div', { style: { marginTop: 12, padding: 14, background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px dashed rgba(34,197,94,0.4)' } },
-                React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
-                  React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: 0.5 } },
-                    React.createElement('i', { className: 'fas fa-trophy', style: { marginRight: 6 } }), 'Based on competitors — suggested sections'
-                  ),
-                  React.createElement('button', { onClick: () => setSectionSuggestions(null), style: { fontSize: 10, padding: '2px 8px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' } }, 'Dismiss all')
-                ),
-                sectionSuggestions.map((sug, i) =>
-                  React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', marginBottom: 6, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
-                    React.createElement('div', { style: { flex: 1 } },
-                      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
-                        React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#059669', padding: '1px 5px', borderRadius: 3 } }, (sug.type || 'text').toUpperCase()),
-                        React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)' } }, sug.heading)
-                      ),
-                      React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 4 } }, sug.rationale),
-                      React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, '~' + sug.estimated_words + ' words • Position: ' + (sug.position || 'end'))
-                    ),
-                    React.createElement('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
-                      React.createElement('button', {
-                        onClick: () => handleAddSection(sug),
-                        disabled: addingSection === sug.heading,
-                        title: 'Add this section',
-                        style: { padding: '6px 12px', background: addingSection === sug.heading ? 'var(--bg3)' : '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
-                      }, addingSection === sug.heading
-                        ? React.createElement('i', { className: 'fas fa-spinner fa-spin' })
-                        : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Add')
-                      ),
-                      React.createElement('button', {
-                        onClick: () => setSectionSuggestions(prev => prev ? prev.filter(s => s.heading !== sug.heading) : null),
-                        title: 'Dismiss',
-                        style: { padding: '6px 8px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
-                      }, React.createElement('i', { className: 'fas fa-times' }))
-                    )
-                  )
-                )
-              )
+              })
             ),
 
             // When no sections parsed yet, show explanation
             !selectedItem.page_sections?.length && selectedItem.page_url && React.createElement('div', { style: { marginTop: 8, color: 'var(--text3)', fontSize: 12, lineHeight: 1.6 } },
               'Click "Analyse Page Structure" to let AI identify all sections on the live page. Then you can rewrite content section-by-section without changing the page design.'
+            )
+          ),
+
+          // Section suggestions panel (from "Suggest from Competitors")
+          sectionSuggestions && sectionSuggestions.length > 0 && React.createElement('div', { style: { marginBottom: 20, padding: 14, background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px dashed rgba(34,197,94,0.4)' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: 0.5 } },
+                React.createElement('i', { className: 'fas fa-trophy', style: { marginRight: 6 } }), 'Based on competitors — suggested sections'
+              ),
+              React.createElement('button', { onClick: () => setSectionSuggestions(null), style: { fontSize: 10, padding: '2px 8px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' } }, 'Dismiss all')
+            ),
+            sectionSuggestions.map((sug, i) =>
+              React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', marginBottom: 6, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
+                React.createElement('div', { style: { flex: 1 } },
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+                    React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#059669', padding: '1px 5px', borderRadius: 3 } }, (sug.type || 'text').toUpperCase()),
+                    React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)' } }, sug.heading)
+                  ),
+                  React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 4 } }, sug.rationale),
+                  React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, '~' + sug.estimated_words + ' words • Position: ' + (sug.position || 'end'))
+                ),
+                React.createElement('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+                  React.createElement('button', {
+                    onClick: () => handleAddSection(sug),
+                    disabled: addingSection === sug.heading,
+                    title: 'Add this section',
+                    style: { padding: '6px 12px', background: addingSection === sug.heading ? 'var(--bg3)' : '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+                  }, addingSection === sug.heading
+                    ? React.createElement('i', { className: 'fas fa-spinner fa-spin' })
+                    : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Add')
+                  ),
+                  React.createElement('button', {
+                    onClick: () => setSectionSuggestions(prev => prev ? prev.filter(s => s.heading !== sug.heading) : null),
+                    title: 'Dismiss',
+                    style: { padding: '6px 8px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                  }, React.createElement('i', { className: 'fas fa-times' }))
+                )
+              )
             )
           ),
 
