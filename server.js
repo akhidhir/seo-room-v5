@@ -8760,12 +8760,16 @@ Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's d
       system: systemPrompt,
     });
 
-    const aiText = aiResp.content[0].text;
+    let aiText = aiResp.content[0].text;
     let generated;
     try {
+      // Strip markdown code fences if present
+      aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
       const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No JSON array found');
       generated = JSON.parse(jsonMatch[0]);
-    } catch {
+    } catch (parseErr) {
+      console.error('[generate-sections] JSON parse failed:', parseErr.message, 'AI text:', aiText.slice(0, 500));
       return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
     }
 
