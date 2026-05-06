@@ -11096,37 +11096,71 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
       } catch (e) { console.log(`[kw-research] DFS Labs error for "${seed}": ${e.message}`); }
     }
 
-    // Fallback: if Labs returned nothing, try Google Ads search_volume on the seeds
-    if (allKeywords.length === 0) {
-      console.log(`[kw-research] Labs returned nothing, falling back to google_ads search_volume`);
-      try {
-        const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
-          body: JSON.stringify([{
-            keywords: expandedSeeds.slice(0, 100),
-            location_code: locationCode,
-            language_name: 'English',
-          }]),
-          signal: AbortSignal.timeout(20000),
-        });
-        if (dfsResp.ok) {
-          const dfsData = await dfsResp.json();
-          const results = dfsData?.tasks?.[0]?.result || [];
-          for (const r of results) {
-            if (r.keyword && r.search_volume != null) {
-              allKeywords.push({
-                keyword: r.keyword,
-                volume: r.search_volume || 0,
-                competition: r.competition || null,
-                competition_index: r.competition_index != null ? r.competition_index : null,
-                cpc: r.cpc || null,
-                intent: null,
-              });
+    // Step 3: Enrich ALL keywords with Google Ads search_volume for accurate AU volumes
+    // Labs clickstream volumes are unreliable for Australian locations — Google Ads data is the gold standard
+    const allKwTexts = [...new Set([
+      ...allKeywords.map(k => k.keyword),
+      ...expandedSeeds
+    ].map(k => k.toLowerCase().trim()))].filter(Boolean);
+
+    if (allKwTexts.length > 0) {
+      console.log(`[kw-research] Enriching ${allKwTexts.length} keywords with Google Ads volumes`);
+      const gadsVolumes = {};
+      // Google Ads API accepts up to 1000 keywords per request, batch in 700s
+      for (let i = 0; i < allKwTexts.length; i += 700) {
+        const batch = allKwTexts.slice(i, i + 700);
+        try {
+          const dfsResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+            body: JSON.stringify([{
+              keywords: batch,
+              location_code: locationCode,
+              language_name: 'English',
+            }]),
+            signal: AbortSignal.timeout(20000),
+          });
+          if (dfsResp.ok) {
+            const dfsData = await dfsResp.json();
+            const results = dfsData?.tasks?.[0]?.result || [];
+            for (const r of results) {
+              if (r.keyword) {
+                gadsVolumes[r.keyword.toLowerCase()] = {
+                  volume: r.search_volume || 0,
+                  competition: r.competition || null,
+                  competition_index: r.competition_index != null ? r.competition_index : null,
+                  cpc: r.cpc || null,
+                  monthly_searches: r.monthly_searches || [],
+                };
+              }
             }
           }
+        } catch (e) { console.log(`[kw-research] Google Ads enrichment error: ${e.message}`); }
+      }
+
+      // Override Labs volumes with Google Ads data (more accurate for AU)
+      for (const kw of allKeywords) {
+        const gads = gadsVolumes[kw.keyword.toLowerCase()];
+        if (gads) {
+          kw.volume = gads.volume;
+          if (gads.competition) kw.competition = gads.competition > 0.66 ? 'HIGH' : gads.competition > 0.33 ? 'MEDIUM' : 'LOW';
+          if (gads.competition_index != null) kw.competition_index = Math.round(gads.competition_index);
+          if (gads.cpc) kw.cpc = gads.cpc;
         }
-      } catch (e) { console.log(`[kw-research] search_volume fallback error: ${e.message}`); }
+      }
+
+      // Also add any expanded seeds that Labs missed but Google Ads has data for
+      const labsKwSet = new Set(allKeywords.map(k => k.keyword.toLowerCase()));
+      for (const [kwLower, gads] of Object.entries(gadsVolumes)) {
+        if (!labsKwSet.has(kwLower) && gads.volume > 0) {
+          allKeywords.push({
+            keyword: kwLower, volume: gads.volume,
+            competition: gads.competition ? (gads.competition > 0.66 ? 'HIGH' : gads.competition > 0.33 ? 'MEDIUM' : 'LOW') : null,
+            competition_index: gads.competition_index != null ? Math.round(gads.competition_index) : null,
+            cpc: gads.cpc || null, intent: null,
+          });
+        }
+      }
     }
 
     // Deduplicate by keyword (keep highest volume)
@@ -11138,27 +11172,6 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
       }
     }
     let final = Object.values(kwMap);
-
-    // Collapse Google Ads "near me" clusters — when multiple keywords share the exact same
-    // volume AND are "near me" variants, keep only the shortest (most generic) one.
-    // Google Ads groups these into one cluster with identical volumes.
-    const volumeGroups = {};
-    for (const kw of final) {
-      const v = kw.volume || 0;
-      if (!volumeGroups[v]) volumeGroups[v] = [];
-      volumeGroups[v].push(kw);
-    }
-    const collapsed = [];
-    for (const [vol, group] of Object.entries(volumeGroups)) {
-      if (group.length > 3) {
-        // Likely a Google Ads cluster — keep the 2 shortest (most generic) keywords
-        group.sort((a, b) => a.keyword.length - b.keyword.length);
-        collapsed.push(group[0], group[1]);
-      } else {
-        collapsed.push(...group);
-      }
-    }
-    final = collapsed;
 
     // Exclude already-shown keywords (for "Fetch More")
     if (Array.isArray(exclude_keywords) && exclude_keywords.length > 0) {
