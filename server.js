@@ -6662,7 +6662,7 @@ MANDATORY:
 - Keep existing good content, expand it substantially
 - Australian English ONLY — use "optimise" not "optimize", "colour" not "color", "centre" not "center", "specialise" not "specialize", "organisation" not "organization", "behaviour" not "behavior", "analyse" not "analyze", "licence" (noun), "defence", "favour", "labour", "programme" (not "program" for plans/events). This is MANDATORY for every word in the output.
 - Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div, section
-- NEW SECTIONS: If you add entirely new sections that did NOT exist in the original, wrap them in <section class="new-section">...</section> so they are visually marked. Do NOT wrap modified/expanded existing sections.
+- NEW SECTIONS: When adding new sections, just use normal HTML (h2, h3, p, ul, etc). Do NOT wrap them in any special tags or classes — they must blend seamlessly with the existing content.
 - Every <a> MUST have a real href from the linking pages provided
 - Add at least 2 <img src="" alt="descriptive alt text"> tags in the content — one after the intro, one in a later section. NEVER skip this
 
