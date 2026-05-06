@@ -10080,14 +10080,15 @@
 
       function startComment() {
         if (!quillRef.current) return;
+        const q = quillRef.current;
         // Try multiple methods to get selection
-        let sel = quillRef.current.getSelection();
+        let sel = q.getSelection();
         if (!sel || sel.length === 0) sel = lastSelectionRef.current;
         // Last resort: use browser's native selection and map to Quill range
         if (!sel || sel.length === 0) {
           const nativeSel = window.getSelection();
           if (nativeSel && !nativeSel.isCollapsed && nativeSel.toString().trim()) {
-            const editorEl = quillRef.current.root;
+            const editorEl = q.root;
             if (editorEl && editorEl.contains(nativeSel.anchorNode)) {
               const range = nativeSel.getRangeAt(0);
               const preRange = document.createRange();
@@ -10098,9 +10099,17 @@
             }
           }
         }
-        if (!sel || sel.length === 0) { setPendingSelection({ index: 0, length: 0, text: '', top: 0, general: true }); setNewCommentText(''); return; }
-        const selectedText = quillRef.current.getText(sel.index, sel.length);
-        const bounds = quillRef.current.getBounds(sel.index, sel.length);
+        if (!sel || sel.length === 0) {
+          // No text selected — open general comment (not linked to text)
+          setPendingSelection({ index: 0, length: 0, text: '', top: 0, general: true });
+          setNewCommentText('');
+          return;
+        }
+        const selectedText = q.getText(sel.index, sel.length);
+        const bounds = q.getBounds(sel.index, sel.length);
+        // Immediately highlight the selected text (pending highlight — bright blue)
+        q.formatText(sel.index, sel.length, 'background', '#60a5fa', 'silent');
+        q.formatText(sel.index, sel.length, 'color', '#000', 'silent');
         setPendingSelection({ index: sel.index, length: sel.length, text: selectedText, top: bounds ? bounds.top : 0 });
         setNewCommentText('');
       }
@@ -10114,15 +10123,17 @@
         if (!pendingSelection || !newCommentText.trim()) return;
         const comment = {
           id: Date.now().toString(),
-          selectedText: pendingSelection.text,
+          selectedText: pendingSelection.text || '',
           text: newCommentText.trim(),
-          author: 'You',
+          author: window._seoRoomUser || 'You',
           createdAt: new Date().toISOString(),
           resolved: false
         };
         updateComments([...comments, comment]);
         setPendingSelection(null);
         setNewCommentText('');
+        // Re-apply highlights (switches from blue pending → yellow comment)
+        if (quillRef.current) applyCommentHighlights(quillRef.current, [...comments, comment]);
       }
 
       function resolveComment(id) {
@@ -10224,11 +10235,11 @@
             pendingSelection && React.createElement('div', { style: { position: 'absolute', top: pendingSelection.top || 0, left: 0, right: 0, zIndex: 10 } },
               React.createElement('div', { className: 'add-comment-box', style: { margin: 0, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 } },
                 React.createElement('div', { className: 'comment-input-label', style: { fontSize: 12, color: 'var(--text3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 } },
-                  React.createElement('i', { className: 'fa-solid fa-quote-left', style: { marginRight: 6 } }), '"' + pendingSelection.text.slice(0, 60) + (pendingSelection.text.length > 60 ? '...' : '') + '"'
+                  pendingSelection.general ? React.createElement('span', { style: { color: 'var(--text3)', fontStyle: 'italic' } }, 'General comment (not linked to specific text)') : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fa-solid fa-quote-left', style: { marginRight: 6 } }), '"' + (pendingSelection.text || '').slice(0, 60) + ((pendingSelection.text || '').length > 60 ? '...' : '') + '"')
                 ),
                 React.createElement('textarea', { value: newCommentText, onChange: e => setNewCommentText(e.target.value), placeholder: 'Write your comment...', autoFocus: true, onKeyDown: e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addComment(); }, style: { width: '100%', padding: '8px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, minHeight: 60, fontFamily: 'inherit' } }),
                 React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, justifyContent: 'flex-end' } },
-                  React.createElement('button', { onClick: () => setPendingSelection(null), className: 'btn', style: { fontSize: 12, padding: '4px 10px', background: 'var(--bg3)', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Cancel'),
+                  React.createElement('button', { onClick: () => { setPendingSelection(null); if (quillRef.current) applyCommentHighlights(quillRef.current, comments); }, className: 'btn', style: { fontSize: 12, padding: '4px 10px', background: 'var(--bg3)', border: 'none', color: 'var(--text)', borderRadius: 6, cursor: 'pointer' } }, 'Cancel'),
                   React.createElement('button', { onClick: addComment, className: 'btn', style: { fontSize: 12, padding: '4px 10px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } }, 'Comment')
                 )
               )
