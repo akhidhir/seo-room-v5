@@ -8570,50 +8570,107 @@
       var suburbPages = pages.filter(function(p) { return p.page_type === 'suburb'; });
       var blogPages = pages.filter(function(p) { return p.page_type === 'blog'; });
 
-      // Render a page card
+      // Drag-to-reorder state
+      var [dragItem, setDragItem] = React.useState(null);
+      var [dragOverItem, setDragOverItem] = React.useState(null);
+
+      var handleDragStart = function(e, pageId) {
+        setDragItem(pageId);
+        e.dataTransfer.effectAllowed = 'move';
+      };
+      var handleDragOver = function(e, pageId) {
+        e.preventDefault();
+        if (pageId !== dragItem) setDragOverItem(pageId);
+      };
+      var handleDrop = function(e, targetId, type) {
+        e.preventDefault();
+        setDragOverItem(null);
+        if (!dragItem || dragItem === targetId) { setDragItem(null); return; }
+        // Reorder within same type — swap positions in local state
+        setPages(function(prev) {
+          var arr = prev.slice();
+          var srcIdx = arr.findIndex(function(p) { return p.id === dragItem; });
+          var tgtIdx = arr.findIndex(function(p) { return p.id === targetId; });
+          if (srcIdx < 0 || tgtIdx < 0) return prev;
+          if (arr[srcIdx].page_type !== arr[tgtIdx].page_type) return prev; // only within same type
+          var item = arr.splice(srcIdx, 1)[0];
+          tgtIdx = arr.findIndex(function(p) { return p.id === targetId; });
+          arr.splice(tgtIdx, 0, item);
+          return arr;
+        });
+        setDragItem(null);
+      };
+      var handleDragEnd = function() { setDragItem(null); setDragOverItem(null); };
+
+      // Render a page card (draggable)
       var renderPageCard = function(p) {
         var color = typeColors[p.page_type] || '#6366f1';
+        var isDragging = dragItem === p.id;
+        var isDragOver = dragOverItem === p.id;
         return React.createElement('div', {
           key: p.id,
+          draggable: true,
+          onDragStart: function(e) { handleDragStart(e, p.id); },
+          onDragOver: function(e) { handleDragOver(e, p.id); },
+          onDrop: function(e) { handleDrop(e, p.id, p.page_type); },
+          onDragEnd: handleDragEnd,
           onClick: function() { setEditingPage(p); },
-          style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, cursor: 'pointer', transition: 'border-color 0.15s', minWidth: 0 }
+          style: {
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+            padding: '12px 10px', background: 'var(--card)',
+            border: isDragOver ? '2px solid ' + color : '1px solid var(--border)',
+            borderRadius: 10, cursor: 'grab', transition: 'all 0.15s',
+            minWidth: 140, maxWidth: 180, flexShrink: 0,
+            opacity: isDragging ? 0.4 : 1,
+            position: 'relative'
+          }
         },
-          React.createElement('div', { style: { width: 32, height: 32, borderRadius: '50%', background: color + '18', border: '2px solid ' + color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 } },
+          // Top connector dot (input)
+          React.createElement('div', { style: { position: 'absolute', top: -5, left: '50%', transform: 'translateX(-50%)', width: 10, height: 10, borderRadius: '50%', background: color, border: '2px solid var(--card)', zIndex: 2 } }),
+          // Icon circle
+          React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', background: color + '18', border: '2px solid ' + color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 } },
             React.createElement('i', { className: typeIcons[p.page_type] || 'fas fa-file', style: { color: color } })
           ),
-          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.page_name),
-            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-              (p.slug || '/') + (p.focus_keyword ? ' • ' + p.focus_keyword : '') + (p.word_count ? ' • ' + p.word_count + 'w' : '')
-            )
+          // Name
+          React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text)', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' } }, p.page_name),
+          // Slug + keyword
+          React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' } },
+            p.focus_keyword || p.slug || '/'
           ),
-          React.createElement('span', { style: { fontSize: 9, padding: '2px 7px', borderRadius: 10, background: (stageColors[p.stage] || '#6b7280') + '20', color: stageColors[p.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase', flexShrink: 0 } }, p.stage || 'draft'),
+          // Stage + word count row
+          React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
+            React.createElement('span', { style: { fontSize: 9, padding: '1px 6px', borderRadius: 8, background: (stageColors[p.stage] || '#6b7280') + '20', color: stageColors[p.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, p.stage || 'draft'),
+            p.word_count && React.createElement('span', { style: { fontSize: 9, color: 'var(--text3)' } }, p.word_count + 'w')
+          ),
+          // Delete button
           React.createElement('button', {
             onClick: function(e) { handleDeletePage(p.id, e); },
-            style: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: '4px 6px', opacity: 0.5, flexShrink: 0 },
+            style: { position: 'absolute', top: 4, right: 4, background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 11, padding: '2px 4px', opacity: 0.3 },
             title: 'Delete page'
-          }, React.createElement('i', { className: 'fas fa-trash-alt' }))
+          }, React.createElement('i', { className: 'fas fa-trash-alt' })),
+          // Bottom connector dot (output)
+          React.createElement('div', { style: { position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%)', width: 10, height: 10, borderRadius: '50%', background: color, border: '2px solid var(--card)', zIndex: 2 } })
         );
       };
 
-      // Render a section (Home, Service, Suburb, Blog)
-      var renderSection = function(title, type, sectionPages, color, icon) {
-        return React.createElement('div', { style: { marginBottom: 0 } },
+      // Render a section
+      var renderSection = function(title, type, sectionPages, color, icon, centered) {
+        return React.createElement('div', { style: { marginBottom: 0, display: 'flex', flexDirection: 'column', alignItems: centered ? 'center' : 'stretch' } },
           // Section header
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: color + '12', borderRadius: 10, marginBottom: 8 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', background: color + '10', borderRadius: 8, marginBottom: 10, border: '1px solid ' + color + '25', width: centered ? 'fit-content' : 'auto', minWidth: centered ? 300 : 'auto' } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-              React.createElement('i', { className: icon, style: { color: color, fontSize: 14 } }),
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } }, title),
+              React.createElement('i', { className: icon, style: { color: color, fontSize: 13 } }),
+              React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text)' } }, title),
               React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', fontWeight: 400 } }, '(' + sectionPages.length + ')')
             ),
             React.createElement('button', {
               onClick: function() { setAddingType(addingType === type ? null : type); setNewPageName(''); },
-              style: { padding: '4px 12px', borderRadius: 6, border: '1px dashed ' + color, background: addingType === type ? color + '18' : 'transparent', color: color, fontWeight: 600, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }
-            }, React.createElement('i', { className: 'fas fa-plus', style: { fontSize: 10 } }), 'Add ' + title.replace(/s$/, ''))
+              style: { padding: '3px 10px', borderRadius: 6, border: '1px dashed ' + color, background: addingType === type ? color + '18' : 'transparent', color: color, fontWeight: 600, fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 12 }
+            }, React.createElement('i', { className: 'fas fa-plus', style: { fontSize: 9 } }), 'Add')
           ),
           // Inline add form
           addingType === type && React.createElement('div', {
-            style: { display: 'flex', gap: 8, marginBottom: 8, padding: '8px 12px', background: 'var(--card)', border: '1px solid ' + color + '40', borderRadius: 8, alignItems: 'center' }
+            style: { display: 'flex', gap: 8, marginBottom: 8, padding: '8px 12px', background: 'var(--card)', border: '1px solid ' + color + '40', borderRadius: 8, alignItems: 'center', width: centered ? 400 : 'auto' }
           },
             React.createElement('input', {
               value: newPageName,
@@ -8633,20 +8690,57 @@
               style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }
             }, String.fromCharCode(215))
           ),
-          // Page cards grid
+          // Page cards — horizontal scroll row
           sectionPages.length > 0
-            ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 } },
+            ? React.createElement('div', { style: { display: 'flex', gap: 10, overflowX: 'auto', padding: '8px 4px', justifyContent: centered ? 'center' : 'flex-start', flexWrap: 'wrap' } },
                 sectionPages.map(renderPageCard)
               )
-            : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 16px' } },
-                'No ' + title.toLowerCase() + ' yet. Click "+ Add" above.'
+            : React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '8px 16px', textAlign: centered ? 'center' : 'left' } },
+                'No ' + title.toLowerCase() + ' yet.'
               )
         );
       };
 
-      // Vertical connector between sections
-      var connector = React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: '4px 0' } },
-        React.createElement('div', { style: { width: 2, height: 20, background: 'var(--border)', borderRadius: 1 } })
+      // n8n-style vertical connector: line with dots at each end
+      var nConnector = function(height) {
+        height = height || 36;
+        return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: '2px 0', position: 'relative' } },
+          React.createElement('div', { style: { width: 2, height: height, background: 'var(--text3)', opacity: 0.25 } }),
+          // Top dot
+          React.createElement('div', { style: { position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } }),
+          // Bottom dot
+          React.createElement('div', { style: { position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } })
+        );
+      };
+
+      // T-connector: vertical line splits into two horizontal branches
+      var tConnector = React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center' } },
+        // Vertical stem
+        React.createElement('div', { style: { position: 'relative', display: 'flex', justifyContent: 'center' } },
+          React.createElement('div', { style: { width: 2, height: 24, background: 'var(--text3)', opacity: 0.25 } }),
+          React.createElement('div', { style: { position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } })
+        ),
+        // Horizontal bar spanning full width
+        React.createElement('div', { style: { width: '60%', height: 2, background: 'var(--text3)', opacity: 0.25, position: 'relative' } },
+          // Left dot
+          React.createElement('div', { style: { position: 'absolute', top: '50%', left: 0, transform: 'translate(-50%, -50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } }),
+          // Right dot
+          React.createElement('div', { style: { position: 'absolute', top: '50%', right: 0, transform: 'translate(50%, -50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } })
+        )
+      );
+
+      // Merge connector: two branches merge into one
+      var mergeConnector = React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center' } },
+        // Horizontal bar
+        React.createElement('div', { style: { width: '60%', height: 2, background: 'var(--text3)', opacity: 0.25, position: 'relative' } },
+          React.createElement('div', { style: { position: 'absolute', top: '50%', left: 0, transform: 'translate(-50%, -50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } }),
+          React.createElement('div', { style: { position: 'absolute', top: '50%', right: 0, transform: 'translate(50%, -50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } })
+        ),
+        // Vertical stem down
+        React.createElement('div', { style: { position: 'relative', display: 'flex', justifyContent: 'center' } },
+          React.createElement('div', { style: { width: 2, height: 24, background: 'var(--text3)', opacity: 0.25 } }),
+          React.createElement('div', { style: { position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: 'var(--text3)', opacity: 0.3 } })
+        )
       );
 
       /* D3 force graph removed — replaced with hierarchical layout */
@@ -8712,18 +8806,22 @@
         ),
 
         // Hierarchical layout
-        !loading && pages.length > 0 && React.createElement('div', null,
-          // HOME section
-          renderSection('Home', 'home', homePages, typeColors.home, 'fas fa-home'),
-          connector,
+        !loading && pages.length > 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center' } },
+          // HOME section (centered)
+          renderSection('Home', 'home', homePages, typeColors.home, 'fas fa-home', true),
+          // T-connector: Home splits to Services + Suburbs
+          tConnector,
           // Services + Suburbs side by side
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, width: '100%' } },
             renderSection('Services', 'service', servicePages, typeColors.service, 'fas fa-briefcase'),
             renderSection('Suburbs', 'suburb', suburbPages, typeColors.suburb, 'fas fa-map-marker-alt')
           ),
-          connector,
+          // Merge connector: Services + Suburbs merge to Blog
+          mergeConnector,
           // BLOG section
-          renderSection('Blog', 'blog', blogPages, typeColors.blog, 'fas fa-blog')
+          React.createElement('div', { style: { width: '100%' } },
+            renderSection('Blog', 'blog', blogPages, typeColors.blog, 'fas fa-blog')
+          )
         )
       );
     }
