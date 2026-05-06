@@ -330,6 +330,42 @@ async function initDb() {
       )
     `);
 
+    // Review comments — generic, works for content_queue, blog_posts, site_pages, etc.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS review_comments (
+        id SERIAL PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        selected_text TEXT,
+        comment TEXT NOT NULL,
+        author TEXT DEFAULT 'You',
+        resolved BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        resolved_at TIMESTAMPTZ
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rc_entity ON review_comments(entity_type, entity_id)`).catch(() => {});
+
+    // Review suggestions — generic phrase replacement suggestions
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS review_suggestions (
+        id SERIAL PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        section_id TEXT,
+        original_phrase TEXT NOT NULL,
+        suggested_phrase TEXT NOT NULL,
+        comment TEXT,
+        status TEXT DEFAULT 'pending',
+        author TEXT DEFAULT 'You',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        resolved_at TIMESTAMPTZ
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rs_entity ON review_suggestions(entity_type, entity_id)`).catch(() => {});
+
     // Add columns for existing databases
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS competitors TEXT[]`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_elementor_site BOOLEAN DEFAULT true`);
@@ -9051,95 +9087,188 @@ function replacePhraseSafelyInHTML(html, originalPhrase, replacementPhrase) {
   return html;
 }
 
-// Add suggestion to a section
-app.post('/api/projects/:projectId/content-queue/:id/suggestions', async (req, res) => {
-  const { projectId, id } = req.params;
-  const { section_id, original_phrase, suggested_phrase, comment } = req.body;
+// ═══════════════════════════════════════════════════════════════
+// GENERIC REVIEW SYSTEM — comments + suggestions for any entity
+// ═══════════════════════════════════════════════════════════════
+
+// Helper: combine page_sections into draft_content HTML
+function combineSectionsToHtml(sections) {
+  return (sections || []).map(s => {
+    if (s.locked) return s.original_text;
+    const heading = s.draft_heading || s.heading;
+    const content = s.draft_text || s.original_text;
+    const hasH = /<h[1-6]/i.test(content);
+    if (heading && !hasH) return '<h2>' + heading + '</h2>\n' + content;
+    return content;
+  }).join('\n\n');
+}
+
+// Helper: resolve entity table from entity_type
+function getEntityTable(entityType) {
+  const tables = { content_queue: 'content_queue', blog_post: 'blog_posts', site_page: 'site_pages' };
+  return tables[entityType] || null;
+}
+
+// GET all reviews (comments + suggestions) for an entity
+app.get('/api/projects/:projectId/reviews/:entityType/:entityId', async (req, res) => {
+  const { projectId, entityType, entityId } = req.params;
   try {
-    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
-    if (!item) return res.status(404).json({ error: 'Not found' });
-
-    const suggestions = item.suggestions || [];
-    const suggestion = {
-      id: 'sugg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-      section_id,
-      original_phrase,
-      suggested_phrase,
-      comment: comment || '',
-      status: 'pending',
-      created_at: new Date().toISOString()
-    };
-    suggestions.push(suggestion);
-
-    await pool.query('UPDATE content_queue SET suggestions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(suggestions), id]);
-    res.json({ suggestion, suggestions });
+    const comments = (await pool.query(
+      'SELECT * FROM review_comments WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 ORDER BY created_at',
+      [entityType, entityId, projectId]
+    )).rows;
+    const suggestions = (await pool.query(
+      'SELECT * FROM review_suggestions WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 AND status != $4 ORDER BY created_at',
+      [entityType, entityId, projectId, 'rejected']
+    )).rows;
+    res.json({ comments, suggestions });
   } catch (e) {
-    console.error('[suggestions] Add error:', e.message);
+    console.error('[reviews] Fetch error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Accept a suggestion — apply replacement to section draft_text
-app.post('/api/projects/:projectId/content-queue/:id/suggestions/:suggId/accept', async (req, res) => {
-  const { projectId, id, suggId } = req.params;
+// POST add comment
+app.post('/api/projects/:projectId/reviews/:entityType/:entityId/comments', async (req, res) => {
+  const { projectId, entityType, entityId } = req.params;
+  const { selected_text, comment, author } = req.body;
+  if (!comment?.trim()) return res.status(400).json({ error: 'Comment required' });
   try {
-    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
-    if (!item) return res.status(404).json({ error: 'Not found' });
+    const row = (await pool.query(
+      'INSERT INTO review_comments (entity_type, entity_id, project_id, selected_text, comment, author) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [entityType, entityId, projectId, selected_text || null, comment.trim(), author || 'You']
+    )).rows[0];
+    const comments = (await pool.query(
+      'SELECT * FROM review_comments WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 ORDER BY created_at',
+      [entityType, entityId, projectId]
+    )).rows;
+    res.json({ comment: row, comments });
+  } catch (e) {
+    console.error('[reviews] Add comment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    const suggestions = item.suggestions || [];
-    const sugg = suggestions.find(s => s.id === suggId);
+// PATCH resolve comment
+app.patch('/api/projects/:projectId/reviews/:entityType/:entityId/comments/:commentId/resolve', async (req, res) => {
+  const { projectId, entityType, entityId, commentId } = req.params;
+  try {
+    await pool.query(
+      'UPDATE review_comments SET resolved=TRUE, resolved_at=NOW() WHERE id=$1 AND entity_type=$2 AND entity_id=$3 AND project_id=$4',
+      [commentId, entityType, entityId, projectId]
+    );
+    const comments = (await pool.query(
+      'SELECT * FROM review_comments WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 ORDER BY created_at',
+      [entityType, entityId, projectId]
+    )).rows;
+    res.json({ comments });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE comment
+app.delete('/api/projects/:projectId/reviews/:entityType/:entityId/comments/:commentId', async (req, res) => {
+  const { projectId, entityType, entityId, commentId } = req.params;
+  try {
+    await pool.query(
+      'DELETE FROM review_comments WHERE id=$1 AND entity_type=$2 AND entity_id=$3 AND project_id=$4',
+      [commentId, entityType, entityId, projectId]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST add suggestion
+app.post('/api/projects/:projectId/reviews/:entityType/:entityId/suggestions', async (req, res) => {
+  const { projectId, entityType, entityId } = req.params;
+  const { section_id, original_phrase, suggested_phrase, comment, author } = req.body;
+  if (!original_phrase || !suggested_phrase) return res.status(400).json({ error: 'original_phrase and suggested_phrase required' });
+  try {
+    const row = (await pool.query(
+      'INSERT INTO review_suggestions (entity_type, entity_id, project_id, section_id, original_phrase, suggested_phrase, comment, author) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [entityType, entityId, projectId, section_id || null, original_phrase, suggested_phrase, comment || '', author || 'You']
+    )).rows[0];
+    const suggestions = (await pool.query(
+      'SELECT * FROM review_suggestions WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 AND status != $4 ORDER BY created_at',
+      [entityType, entityId, projectId, 'rejected']
+    )).rows;
+    res.json({ suggestion: row, suggestions });
+  } catch (e) {
+    console.error('[reviews] Add suggestion error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST accept suggestion — also applies phrase replacement to entity content
+app.post('/api/projects/:projectId/reviews/:entityType/:entityId/suggestions/:suggId/accept', async (req, res) => {
+  const { projectId, entityType, entityId, suggId } = req.params;
+  try {
+    const sugg = (await pool.query('SELECT * FROM review_suggestions WHERE id=$1', [suggId])).rows[0];
     if (!sugg) return res.status(404).json({ error: 'Suggestion not found' });
 
-    // Apply replacement to the section's draft_text
-    const sections = item.page_sections || [];
-    const section = sections.find(s => s.id === sugg.section_id);
-    if (section) {
-      const content = section.draft_text || section.original_text || '';
-      section.draft_text = replacePhraseSafelyInHTML(content, sugg.original_phrase, sugg.suggested_phrase);
+    // Apply replacement to entity content
+    const table = getEntityTable(entityType);
+    if (table) {
+      const item = (await pool.query(`SELECT * FROM ${table} WHERE id=$1 AND project_id=$2`, [entityId, projectId])).rows[0];
+      if (item) {
+        // Apply to section if section_id provided
+        if (sugg.section_id && item.page_sections) {
+          const sections = item.page_sections;
+          const section = sections.find(s => s.id === sugg.section_id);
+          if (section) {
+            section.draft_text = replacePhraseSafelyInHTML(section.draft_text || section.original_text || '', sugg.original_phrase, sugg.suggested_phrase);
+          }
+          const combinedHtml = combineSectionsToHtml(sections);
+          await pool.query(`UPDATE ${table} SET page_sections=$1, draft_content=$2, updated_at=NOW() WHERE id=$3`, [JSON.stringify(sections), combinedHtml, entityId]);
+        } else if (item.draft_content) {
+          // Apply to draft_content directly
+          const updated = replacePhraseSafelyInHTML(item.draft_content, sugg.original_phrase, sugg.suggested_phrase);
+          await pool.query(`UPDATE ${table} SET draft_content=$1, updated_at=NOW() WHERE id=$2`, [updated, entityId]);
+        }
+      }
     }
 
-    sugg.status = 'accepted';
-    sugg.accepted_at = new Date().toISOString();
+    await pool.query('UPDATE review_suggestions SET status=$1, resolved_at=NOW() WHERE id=$2', ['accepted', suggId]);
 
-    // Also update combined draft_content
-    const combinedHtml = sections.map(s => {
-      if (s.locked) return s.original_text;
-      const heading = s.draft_heading || s.heading;
-      const content = s.draft_text || s.original_text;
-      const hasH = /<h[1-6]/i.test(content);
-      if (heading && !hasH) return '<h2>' + heading + '</h2>\n' + content;
-      return content;
-    }).join('\n\n');
+    const suggestions = (await pool.query(
+      'SELECT * FROM review_suggestions WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 AND status != $4 ORDER BY created_at',
+      [entityType, entityId, projectId, 'rejected']
+    )).rows;
 
-    await pool.query(
-      'UPDATE content_queue SET suggestions=$1, page_sections=$2, draft_content=$3, updated_at=NOW() WHERE id=$4',
-      [JSON.stringify(suggestions), JSON.stringify(sections), combinedHtml, id]
-    );
-    res.json({ suggestion: sugg, suggestions, page_sections: sections });
+    // Return updated entity if available
+    let updatedItem = null;
+    if (table) {
+      updatedItem = (await pool.query(`SELECT * FROM ${table} WHERE id=$1`, [entityId])).rows[0];
+    }
+
+    res.json({ suggestion: { ...sugg, status: 'accepted' }, suggestions, item: updatedItem });
   } catch (e) {
-    console.error('[suggestions] Accept error:', e.message);
+    console.error('[reviews] Accept suggestion error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Reject a suggestion
-app.post('/api/projects/:projectId/content-queue/:id/suggestions/:suggId/reject', async (req, res) => {
-  const { projectId, id, suggId } = req.params;
+// POST reject suggestion
+app.post('/api/projects/:projectId/reviews/:entityType/:entityId/suggestions/:suggId/reject', async (req, res) => {
+  const { projectId, entityType, entityId, suggId } = req.params;
   try {
-    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
-    if (!item) return res.status(404).json({ error: 'Not found' });
-
-    const suggestions = (item.suggestions || []).map(s =>
-      s.id === suggId ? { ...s, status: 'rejected', rejected_at: new Date().toISOString() } : s
-    );
-
-    await pool.query('UPDATE content_queue SET suggestions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(suggestions), id]);
-    res.json({ suggestions: suggestions.filter(s => s.status !== 'rejected') });
+    await pool.query('UPDATE review_suggestions SET status=$1, resolved_at=NOW() WHERE id=$2', ['rejected', suggId]);
+    const suggestions = (await pool.query(
+      'SELECT * FROM review_suggestions WHERE entity_type=$1 AND entity_id=$2 AND project_id=$3 AND status != $4 ORDER BY created_at',
+      [entityType, entityId, projectId, 'rejected']
+    )).rows;
+    res.json({ suggestions });
   } catch (e) {
-    console.error('[suggestions] Reject error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// LEGACY ENDPOINTS — redirect to generic review system
+// ═══════════════════════════════════════════════════════════════
 
 // Rewrite a single section with AI
 app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (req, res) => {
