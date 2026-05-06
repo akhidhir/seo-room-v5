@@ -10563,8 +10563,8 @@
           });
 
           return React.createElement('div', { key: section.id || idx, style: { marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid var(--border)', opacity: section.locked ? 0.5 : 1 } },
-            // Section header
-            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 } },
+            // Section header row 1: type badge + heading + controls
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: chatSection === section.id ? 6 : 8 } },
               React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: section.locked ? '#6b7280' : '#6366f1', padding: '2px 6px', borderRadius: 3 } }, (section.type || 'text').toUpperCase()),
               React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: 6 } },
                 React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: 0, lineHeight: 1.3 } }, section.draft_heading || section.heading || '(No heading)'),
@@ -10582,8 +10582,8 @@
                 }, React.createElement('i', { className: isEditing ? 'fas fa-times' : 'fas fa-pen', style: { fontSize: 10 } })),
                 !section.locked && React.createElement('button', {
                   onClick: () => handleRewriteSection(section.id), disabled: isRewriting,
-                  title: 'AI rewrite',
-                  style: { fontSize: 11, padding: '3px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', opacity: isRewriting ? 0.5 : 1 }
+                  title: chatSection === section.id ? 'Close AI chat' : 'AI edit',
+                  style: { fontSize: 11, padding: '3px 8px', background: chatSection === section.id ? '#a855f7' : 'transparent', color: chatSection === section.id ? '#fff' : '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', opacity: isRewriting ? 0.5 : 1 }
                 }, React.createElement('i', { className: isRewriting ? 'fas fa-spinner fa-spin' : 'fas fa-magic', style: { fontSize: 10 } })),
                 React.createElement('button', {
                   onClick: () => handleToggleLock(section.id),
@@ -10594,6 +10594,37 @@
                   onClick: () => setExpandedOriginals(prev => ({ ...prev, [section.id]: !isExpanded })),
                   style: { fontSize: 10, padding: '3px 8px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }
                 }, isExpanded ? 'Hide Orig' : 'Show Orig')
+              )
+            ),
+            // Section chat — compact inline input next to header
+            chatSection === section.id && !section.locked && React.createElement('div', { style: { marginBottom: 10, padding: '8px 10px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.15)', borderRadius: 6 } },
+              // Chat history (compact)
+              (chatHistory[section.id] || []).length > 0 && React.createElement('div', { style: { maxHeight: 120, overflowY: 'auto', marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 } },
+                (chatHistory[section.id] || []).map((msg, mi) =>
+                  React.createElement('div', { key: mi, style: { fontSize: 11, color: msg.role === 'user' ? 'var(--text)' : '#a855f7' } },
+                    React.createElement('strong', { style: { color: msg.role === 'user' ? '#3b82f6' : '#a855f7', marginRight: 6 } }, msg.role === 'user' ? 'You:' : 'Done:'),
+                    msg.text
+                  )
+                )
+              ),
+              // Quick chips + input in one row
+              React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                ['Shorter', 'Longer', 'Casual', 'Persuasive', 'Add stats'].map(chip =>
+                  React.createElement('button', { key: chip, onClick: () => { setChatInput(chip === 'Shorter' ? 'Make it 50% shorter' : chip === 'Longer' ? 'Make it 50% longer' : chip === 'Casual' ? 'Make it more conversational' : chip === 'Persuasive' ? 'Make it more persuasive' : 'Add relevant statistics or data points'); }, style: { fontSize: 9, padding: '2px 6px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.15)', borderRadius: 10, cursor: 'pointer', whiteSpace: 'nowrap' } }, chip)
+                ),
+                React.createElement('input', {
+                  value: chatInput, onChange: e => setChatInput(e.target.value),
+                  placeholder: 'e.g. "make it 200 words" or "add a CTA"',
+                  onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); handleSectionChat(section.id); } },
+                  disabled: rewritingSection === section.id,
+                  autoFocus: true,
+                  style: { flex: 1, minWidth: 200, padding: '6px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontFamily: 'inherit' }
+                }),
+                React.createElement('button', {
+                  onClick: () => handleSectionChat(section.id),
+                  disabled: rewritingSection === section.id || !chatInput.trim(),
+                  style: { padding: '6px 12px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                }, rewritingSection === section.id ? '...' : 'Apply')
               )
             ),
 
@@ -10656,42 +10687,6 @@
             // Changes summary
             section.changes_summary && React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 8, fontStyle: 'italic' } },
               React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
-            ),
-            // Section chat — inline instruction box
-            chatSection === section.id && !section.locked && React.createElement('div', { style: { marginTop: 12, padding: 12, background: 'rgba(168,85,247,0.05)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8 } },
-              // Chat history
-              (chatHistory[section.id] || []).length > 0 && React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto', marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 } },
-                (chatHistory[section.id] || []).map((msg, mi) =>
-                  React.createElement('div', { key: mi, style: { display: 'flex', gap: 8, alignItems: 'flex-start' } },
-                    React.createElement('span', { style: { fontSize: 10, fontWeight: 700, color: msg.role === 'user' ? '#3b82f6' : '#a855f7', minWidth: 24 } }, msg.role === 'user' ? 'You' : 'AI'),
-                    React.createElement('span', { style: { fontSize: 12, color: msg.role === 'user' ? 'var(--text)' : 'var(--text2)' } }, msg.text)
-                  )
-                )
-              ),
-              // Quick action chips
-              React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 } },
-                ['Make it shorter', 'Make it longer', 'More conversational', 'Add statistics', 'Simplify language', 'Make it persuasive'].map(chip =>
-                  React.createElement('button', { key: chip, onClick: () => { setChatInput(chip); }, style: { fontSize: 10, padding: '3px 8px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 12, cursor: 'pointer' } }, chip)
-                )
-              ),
-              // Input row
-              React.createElement('div', { style: { display: 'flex', gap: 8 } },
-                React.createElement('input', {
-                  value: chatInput, onChange: e => setChatInput(e.target.value),
-                  placeholder: 'Tell AI what to change...',
-                  onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSectionChat(section.id); } },
-                  disabled: rewritingSection === section.id,
-                  style: { flex: 1, padding: '8px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }
-                }),
-                React.createElement('button', {
-                  onClick: () => handleSectionChat(section.id),
-                  disabled: rewritingSection === section.id || !chatInput.trim(),
-                  style: { padding: '8px 16px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }
-                }, rewritingSection === section.id
-                  ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 4 } }), 'Applying...')
-                  : React.createElement('span', null, React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 4 } }), 'Apply')
-                )
-              )
             )
           );
         }),

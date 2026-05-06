@@ -9369,19 +9369,18 @@ app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (re
 
     const hasInstruction = instruction && instruction.trim();
 
-    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
+    const systemPrompt = `You are an SEO copywriter implementing edits for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
 
-${hasInstruction ? 'Apply the user\'s instruction to modify ONE section. Do exactly what they ask — no more, no less. You are an implementor, not a chatbot.' : 'Rewrite ONE section of a page.'}
+${hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instruction — execute it precisely on the section content below.
+- "make it shorter" = aggressively cut content, remove filler, keep only essential points
+- "make it longer" or "add N words" = expand with NEW specific details, examples, facts — count your words carefully
+- "add X" = add X to the content
+- Any word count instruction is STRICT — count your words and hit the target
+- The output MUST be visibly different from the input. If the user says change it, CHANGE IT.` : 'Rewrite this section with better SEO and readability.'}
 
-Return ONLY a JSON object:
-{ "heading": "Section heading", "content_html": "<p>modified content</p>", "word_count": N, "changes_summary": "Brief 1-line summary of what you changed" }
+Return ONLY JSON: { "heading": "heading text", "content_html": "<p>the full modified section HTML</p>", "word_count": N, "changes_summary": "1-line what changed" }
 
-Rules:
-- ${hasInstruction ? 'Follow the instruction precisely. If they say shorter, cut it. If they say longer, expand it. If they say add X, add X.' : 'Keep the same section TYPE and DESIGN intent'}
-- Use proper HTML: <p>, <h3>, <ul>/<li>, <strong>, <em>, <a>
-- Short paragraphs (2-4 sentences, max 60 words each)
-- Write in Australian English, natural tone
-- Include focus keyword naturally
+Rules: proper HTML (p, h3, ul/li, strong, em, a), Australian English, natural tone, include focus keyword.
 ${buildCopywriterContext(project, item)}`;
 
     const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${item.page_title}" (${item.page_url})
