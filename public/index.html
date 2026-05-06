@@ -8329,7 +8329,7 @@
                     )
             )
           ),
-          React.createElement('div', { style: { width: 380, minWidth: 380, position: 'sticky', top: 20 } },
+          React.createElement('div', { style: { width: 380, minWidth: 380, position: 'sticky', top: 80, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto', overflowX: 'hidden' } },
             React.createElement(ContentScorePanel, {
               content: editContent,
               focusKeyword: editMeta.focus_keyword,
@@ -11915,8 +11915,8 @@
 
         // Detail view: editor with score panel, chat, optimise
         return React.createElement('div', null,
-          // Header with action buttons
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 } },
+          // Header with action buttons — sticky
+          React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', paddingTop: 12, paddingBottom: 12, marginBottom: 12, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
             React.createElement('div', null,
               React.createElement('a', { href: '#', onClick: e => { e.preventDefault(); setSelectedItem(null); }, style: { color: 'var(--accent)', fontSize: 14, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 } },
                 React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
@@ -12562,7 +12562,7 @@
                     })
               )
             ),
-            React.createElement('div', { style: { width: 500, minWidth: 500, position: 'sticky', top: 20 } },
+            React.createElement('div', { style: { width: 500, minWidth: 500, position: 'sticky', top: 80, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto', overflowX: 'hidden' } },
               React.createElement(ContentScorePanel, {
                 content: editContent,
                 focusKeyword: editMeta.focus_keyword,
