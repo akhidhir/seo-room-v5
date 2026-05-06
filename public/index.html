@@ -11951,18 +11951,30 @@
                       selectedItem.page_sections.filter(s => !s.locked).map((section, idx) => {
                         const hasChanges = !!(section.draft_text && section.original_text && section.draft_text !== section.original_text);
                         const htmlContent = hasChanges ? highlightDraftChanges(section.original_text, section.draft_text) : (section.draft_text || section.original_text || '');
+                        const isExpanded = expandedSections && expandedSections[section.id];
                         return React.createElement('div', { key: section.id || idx, style: { marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid var(--border)' } },
-                          // Section heading with badge
+                          // Section heading with badge + Show Original toggle
                           (section.draft_heading || section.heading) && React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
-                            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0, lineHeight: 1.3 } }, section.draft_heading || section.heading),
-                            hasChanges && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'UPDATED'),
-                            section.is_new && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#22c55e', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'NEW')
+                            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 1 } },
+                              React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0, lineHeight: 1.3 } }, section.draft_heading || section.heading),
+                              hasChanges && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'UPDATED'),
+                              section.is_new && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#22c55e', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'NEW')
+                            ),
+                            hasChanges && React.createElement('button', {
+                              onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
+                              style: { fontSize: 10, padding: '3px 10px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }
+                            }, isExpanded ? 'Hide Original' : 'Show Original')
                           ),
-                          // Section content with highlights
+                          // Draft content with highlights
                           React.createElement('div', {
                             style: { fontSize: 14, color: 'var(--text2)', lineHeight: 1.8 },
                             dangerouslySetInnerHTML: { __html: htmlContent }
                           }),
+                          // Original content — only when expanded
+                          isExpanded && hasChanges && React.createElement('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.06)', border: '1px dashed rgba(239,68,68,0.3)' } },
+                            React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 } }, 'Original Content'),
+                            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: section.original_text || '' } })
+                          ),
                           // Changes summary
                           section.changes_summary && React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 8, fontStyle: 'italic' } },
                             React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
