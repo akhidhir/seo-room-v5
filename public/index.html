@@ -7878,6 +7878,15 @@
       var [rewritingMeta, setRewritingMeta] = React.useState(null);
       var [importingTemplate, setImportingTemplate] = React.useState(false);
       var [importTemplateUrl, setImportTemplateUrl] = React.useState('');
+      // Section-aware editing (parity with content_queue)
+      var [sectionView, setSectionView] = React.useState(false);
+      var [parsingSections, setParsingSections] = React.useState(false);
+      var [sectionSuggestions, setSectionSuggestions] = React.useState(null);
+      var [loadingSuggestions, setLoadingSuggestions] = React.useState(false);
+      var [addingSection, setAddingSection] = React.useState(null);
+      var [importingCurrent, setImportingCurrent] = React.useState(false);
+      var [editorKey, setEditorKey] = React.useState(0);
+      var [pageUrl, setPageUrl] = React.useState(page.page_url || page.published_url || '');
 
       var hasDraft = !!editContent;
 
@@ -8043,46 +8052,113 @@
         setPublishing(false);
       };
 
+      // ── Section-aware handlers (parity with content_queue) ──
+      var handleParseSections = async function() {
+        if (!pid || parsingSections) return;
+        setParsingSections(true);
+        try {
+          var r = await api('/projects/' + pid + '/site-pages/' + page.id + '/parse-sections', { method: 'POST' });
+          if (r.error) { alert(r.error); } else {
+            onUpdate(Object.assign({}, page, { page_sections: r.sections }));
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setParsingSections(false);
+      };
+
+      var handleImportCurrent = async function() {
+        if (!pid || importingCurrent) return;
+        setImportingCurrent(true);
+        try {
+          var r = await api('/projects/' + pid + '/site-pages/' + page.id + '/import-current', { method: 'POST', body: { force: true } });
+          if (r.error) { alert(r.error); } else {
+            setEditContent(r.content || '');
+            setEditorKey(function(k) { return k + 1; });
+            onUpdate(Object.assign({}, page, { draft_content: r.content, current_content: r.content, word_count: r.word_count }));
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setImportingCurrent(false);
+      };
+
+      var handleSuggestSections = async function() {
+        if (!pid || loadingSuggestions) return;
+        setLoadingSuggestions(true);
+        try {
+          var r = await api('/projects/' + pid + '/site-pages/' + page.id + '/suggest-sections', { method: 'POST' });
+          if (r.error) { alert(r.error); } else { setSectionSuggestions(r.suggestions); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setLoadingSuggestions(false);
+      };
+
+      var handleAddSection = async function(suggestion) {
+        if (!pid || addingSection) return;
+        setAddingSection(suggestion.heading);
+        try {
+          var r = await api('/projects/' + pid + '/site-pages/' + page.id + '/add-section', {
+            method: 'POST',
+            body: { type: suggestion.type, heading: suggestion.heading, position: suggestion.position, estimated_words: suggestion.estimated_words }
+          });
+          if (r.error) { alert(r.error); } else {
+            onUpdate(Object.assign({}, page, { page_sections: r.sections }));
+            var combined = r.sections.map(function(s) {
+              if (s.locked) return s.original_text;
+              var h = s.draft_heading || s.heading;
+              var c = s.draft_text || s.original_text;
+              var hasH = /<h[1-6]/i.test(c);
+              if (h && !hasH) return '<h2>' + h + '</h2>\n' + c;
+              return c;
+            }).join('\n\n');
+            setEditContent(combined);
+            setEditorKey(function(k) { return k + 1; });
+            setSectionSuggestions(function(prev) { return prev ? prev.filter(function(s) { return s.heading !== suggestion.heading; }) : null; });
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setAddingSection(null);
+      };
+
+      var handleSavePageUrl = async function() {
+        if (!pid || !pageUrl.trim()) return;
+        try {
+          await api('/projects/' + pid + '/site-pages/' + page.id, { method: 'PUT', body: { page_url: pageUrl.trim() } });
+          onUpdate(Object.assign({}, page, { page_url: pageUrl.trim() }));
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
       return React.createElement('div', null,
         // Header with action buttons (matches CopywriterPage)
-        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 } },
-          React.createElement('div', null,
-            React.createElement('a', { href: '#', onClick: function(e) { e.preventDefault(); onBack(); }, style: { color: 'var(--accent)', fontSize: 14, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 } },
-              React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
-            ),
-            React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, page.page_name),
-            page.slug && React.createElement('a', { href: '#', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
-              React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' /' + page.slug + '/'
-            )
+        // Back + title
+        React.createElement('div', { style: { marginBottom: 16 } },
+          React.createElement('a', { href: '#', onClick: function(e) { e.preventDefault(); onBack(); }, style: { color: 'var(--accent)', fontSize: 14, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 } },
+            React.createElement('i', { className: 'fa-solid fa-arrow-left' }), ' Back to list'
           ),
-          React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
-            // AI Optimise
+          React.createElement('h2', { style: { marginTop: 10, marginBottom: 6, fontSize: 22 } }, page.page_name),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 } },
+            page.slug && React.createElement('a', { href: '#', style: { color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 } },
+              React.createElement('i', { className: 'fa-solid fa-external-link-alt', style: { fontSize: 10 } }), ' /' + page.slug + '/'
+            ),
+            // Page URL inline editor
+            React.createElement('input', {
+              value: pageUrl, onChange: function(e) { setPageUrl(e.target.value); },
+              onBlur: handleSavePageUrl,
+              placeholder: 'Page URL (e.g. https://example.com/services)',
+              style: { flex: 1, maxWidth: 400, padding: '4px 8px', background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }
+            })
+          )
+        ),
+
+        // Sticky action bar (matches content_queue)
+        React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+            // Import Current Copy
+            !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
+              onClick: handleImportCurrent, disabled: importingCurrent,
+              style: { fontSize: 12, padding: '6px 14px', background: 'transparent', color: '#3b82f6', border: '1px solid #3b82f6', borderRadius: 6, cursor: 'pointer', fontWeight: 600, opacity: importingCurrent ? 0.6 : 1 }
+            }, React.createElement('i', { className: importingCurrent ? 'fas fa-spinner fa-spin' : 'fas fa-download', style: { marginRight: 5 } }), importingCurrent ? 'Importing...' : 'Import Current Copy'),
+            // Rewrite
             !isPublished && hasDraft && React.createElement('button', {
               onClick: handleOptimise, disabled: optimising,
-              style: { background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
-                border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer',
-                boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
-            }, optimising
-              ? React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 6 } }), 'Writing...')
-              : React.createElement('span', null, React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Copywriter')
-            ),
-            // AI Editor
-            !isPublished && hasDraft && React.createElement('button', {
-              onClick: function() {
-                var html = editContent || '';
-                var plain = html.replace(/<[^>]+>/g, '');
-                var words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
-                setOptimisePreview({
-                  preview: true,
-                  proposed: { content_html: html, meta_title: editMeta.meta_title || '', meta_description: editMeta.meta_desc || '', ai_notes: null },
-                  stats: { current: { words: words }, proposed: { words: words, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length } },
-                  item_id: page.id
-                });
-              },
-              style: { background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', fontSize: 14, padding: '8px 22px', fontWeight: 700,
-                border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer',
-                boxShadow: '0 2px 12px rgba(99,102,241,0.3)' }
-            }, React.createElement('i', { className: 'fa-solid fa-comments', style: { marginRight: 6 } }), 'AI Editor'),
+              style: { background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 12, padding: '6px 14px', fontWeight: 700,
+                border: 'none', color: '#fff', borderRadius: 6, cursor: optimising ? 'wait' : 'pointer' }
+            }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 5 } }), optimising ? 'Rewriting...' : 'Rewrite'),
             // Preview
             hasDraft && React.createElement('button', {
               onClick: function() {
@@ -8093,26 +8169,44 @@
                   window.open('/api/projects/' + pid + '/site-pages/' + page.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
                 });
               },
-              style: { padding: '8px 16px', background: '#a855f7', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
-            }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview'),
+              style: { padding: '6px 14px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+            }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 5 } }), 'Preview'),
             // Save
-            !isPublished && React.createElement('button', { onClick: handleSaveEdit, style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
-              React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save'
-            ),
-            // Move to CW Current (content_queue)
+            !isPublished && React.createElement('button', { onClick: handleSaveEdit,
+              style: { padding: '6px 14px', background: savingMeta === 'done' ? '#22c55e' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 } },
+              React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 5 } }), savingMeta === 'done' ? 'Saved!' : 'Save'
+            )
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+            // Analyse Page Structure
+            !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
+              onClick: handleParseSections, disabled: parsingSections,
+              style: { fontSize: 12, padding: '4px 12px', background: '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: parsingSections ? 0.6 : 1 }
+            }, React.createElement('i', { className: parsingSections ? 'fas fa-spinner fa-spin' : 'fas fa-search-plus', style: { marginRight: 5 } }), parsingSections ? 'Analysing...' : 'Analyse Page Structure'),
+            // Suggest from Competitors
+            page.page_sections?.length > 0 && !isPublished && React.createElement('button', {
+              onClick: handleSuggestSections, disabled: loadingSuggestions,
+              style: { fontSize: 12, padding: '4px 12px', background: 'transparent', color: '#059669', border: '1px solid #059669', borderRadius: 6, cursor: 'pointer', opacity: loadingSuggestions ? 0.6 : 1 }
+            }, React.createElement('i', { className: loadingSuggestions ? 'fas fa-spinner fa-spin' : 'fas fa-trophy', style: { marginRight: 5 } }), loadingSuggestions ? 'Analysing competitors...' : 'Suggest from Competitors'),
+            // Section View toggle
+            page.page_sections?.length > 0 && React.createElement('button', {
+              onClick: function() { setSectionView(!sectionView); },
+              style: { fontSize: 12, padding: '4px 12px', background: sectionView ? 'rgba(5,150,105,0.1)' : 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }
+            }, React.createElement('i', { className: sectionView ? 'fas fa-th-list' : 'fas fa-align-left', style: { marginRight: 5 } }), sectionView ? 'Section View' : 'Full Editor'),
+            // Move to CW Current
             !isPublished && React.createElement('button', {
               onClick: function() {
-                if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current (Optimise Existing)?')) return;
+                if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current?')) return;
                 api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: page.id, from: 'site_pages', to: 'content_queue' } })
                   .then(function() { onBack(); })
                   .catch(function(e) { alert('Move failed: ' + e.message); });
               },
-              style: { padding: '8px 16px', background: '#8b5cf620', color: '#8b5cf6', border: '1px solid #8b5cf640', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              style: { padding: '4px 12px', background: '#8b5cf620', color: '#8b5cf6', border: '1px solid #8b5cf640', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }
             }, React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 4 } }), 'Move to CW Current'),
             // Approve
-            !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove, style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, 'Approve'),
+            !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove, style: { padding: '4px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Approve'),
             // Publish
-            page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing, style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 } },
+            page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing, style: { padding: '4px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
               publishing ? 'Publishing...' : 'Publish'
             )
           )
@@ -8301,32 +8395,94 @@
           )
         ),
 
-        // Content editor + Score panel side by side (matches CopywriterPage flex layout)
+        // Section suggestions panel (from "Suggest from Competitors")
+        sectionSuggestions && sectionSuggestions.length > 0 && React.createElement('div', { style: { marginBottom: 20, padding: 14, background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px dashed rgba(34,197,94,0.4)' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: 0.5 } },
+              React.createElement('i', { className: 'fas fa-trophy', style: { marginRight: 6 } }), 'Based on competitors — suggested sections'
+            ),
+            React.createElement('button', { onClick: function() { setSectionSuggestions(null); }, style: { fontSize: 10, padding: '2px 8px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' } }, 'Dismiss all')
+          ),
+          sectionSuggestions.map(function(sug, i) {
+            return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', marginBottom: 6, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
+              React.createElement('div', { style: { flex: 1 } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+                  React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#059669', padding: '1px 5px', borderRadius: 3 } }, (sug.type || 'text').toUpperCase()),
+                  React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)' } }, sug.heading)
+                ),
+                React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 4 } }, sug.rationale),
+                React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, '~' + sug.estimated_words + ' words')
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+                React.createElement('button', {
+                  onClick: function() { handleAddSection(sug); },
+                  disabled: addingSection === sug.heading,
+                  style: { padding: '6px 12px', background: addingSection === sug.heading ? 'var(--bg3)' : '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+                }, addingSection === sug.heading
+                  ? React.createElement('i', { className: 'fas fa-spinner fa-spin' })
+                  : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Add')
+                ),
+                React.createElement('button', {
+                  onClick: function() { setSectionSuggestions(function(prev) { return prev ? prev.filter(function(s) { return s.heading !== sug.heading; }) : null; }); },
+                  style: { padding: '6px 8px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                }, React.createElement('i', { className: 'fas fa-times' }))
+              )
+            );
+          })
+        ),
+
+        // Content editor + Score panel side by side
         React.createElement('div', { style: { display: 'flex', gap: 20, alignItems: 'flex-start' } },
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
             React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' } },
-              hasDraft
-                ? React.createElement(QuillEditor, {
-                    value: editContent,
-                    onChange: isPublished ? undefined : setEditContent,
-                    readOnly: isPublished,
-                    initialComments: comments,
-                    onCommentsChange: isPublished ? undefined : setComments,
-                    onSave: isPublished ? undefined : handleSaveEdit,
-                    saveStatus: savingMeta
-                  })
-                : !generating
-                  ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
-                      React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16, display: 'block' } }),
-                      React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No content yet'),
-                      React.createElement('button', { onClick: handleGenerate, style: { padding: '12px 24px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' } },
-                        React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8 } }), 'Generate Content'
+              // Section View — uses ReviewEditor (same as content_queue)
+              sectionView && page.page_sections?.length > 0
+                ? React.createElement('div', { style: { position: 'relative' } },
+                    React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 8 } },
+                      React.createElement('button', {
+                        onClick: function() { setSectionView(false); },
+                        style: { fontSize: 11, padding: '3px 10px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' }
+                      }, 'Switch to Editor')
+                    ),
+                    React.createElement(ReviewEditor, {
+                      entityType: 'site_pages',
+                      entityId: page.id,
+                      projectId: pid,
+                      sections: page.page_sections,
+                      readOnly: isPublished,
+                      onSectionsChange: function(sections) { onUpdate(Object.assign({}, page, { page_sections: sections })); },
+                      onItemUpdate: function(item) {
+                        if (item) {
+                          onUpdate(item);
+                          setEditContent(item.draft_content || '');
+                          setEditorKey(function(k) { return k + 1; });
+                        }
+                      }
+                    })
+                  )
+                : hasDraft
+                  ? React.createElement(QuillEditor, {
+                      key: editorKey,
+                      value: editContent,
+                      onChange: isPublished ? undefined : setEditContent,
+                      readOnly: isPublished,
+                      initialComments: comments,
+                      onCommentsChange: isPublished ? undefined : setComments,
+                      onSave: isPublished ? undefined : handleSaveEdit,
+                      saveStatus: savingMeta
+                    })
+                  : !generating
+                    ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
+                        React.createElement('i', { className: 'fas fa-pen-fancy', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16, display: 'block' } }),
+                        React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No content yet'),
+                        React.createElement('button', { onClick: handleGenerate, style: { padding: '12px 24px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' } },
+                          React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8 } }), 'Generate Content'
+                        )
                       )
-                    )
-                  : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
-                      React.createElement('div', { className: 'spinner-large' }),
-                      React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
-                    )
+                    : React.createElement('div', { style: { textAlign: 'center', padding: 80 } },
+                        React.createElement('div', { className: 'spinner-large' }),
+                        React.createElement('div', { style: { marginTop: 16, color: 'var(--text3)' } }, 'AI is writing your content...')
+                      )
             )
           ),
           React.createElement('div', { style: { width: 380, minWidth: 380, position: 'sticky', top: 80, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto', overflowX: 'hidden' } },
@@ -8339,7 +8495,9 @@
               targetKeywords: targetKeywords,
               projectId: pid,
               itemId: page.id,
-              pageTitle: page.page_title || page.title || '',
+              itemType: 'site_pages',
+              pageTitle: page.page_name || page.page_title || '',
+              pageUrl: page.page_url || page.published_url || '',
               onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(targetKeywords.concat([kw])); },
               onRemoveKeyword: function(kw) { setTargetKeywords(targetKeywords.filter(function(k) { return k !== kw; })); },
               onScoreChange: setScoreData
@@ -10460,7 +10618,7 @@
       };
 
       const handleToggleLock = async (sectionId) => {
-        const table = entityType === 'content_queue' ? 'content-queue' : entityType;
+        const table = entityType === 'content_queue' ? 'content-queue' : entityType === 'site_pages' ? 'site-pages' : entityType;
         try {
           const r = await api('/projects/' + projectId + '/' + table + '/' + entityId + '/toggle-section-lock', {
             method: 'POST', body: { section_id: sectionId }
@@ -10481,7 +10639,7 @@
         const newHistory = [...history, { role: 'user', text: instruction }];
         setChatHistory(prev => ({ ...prev, [sectionId]: newHistory }));
         setChatInput('');
-        const table = entityType === 'content_queue' ? 'content-queue' : entityType;
+        const table = entityType === 'content_queue' ? 'content-queue' : entityType === 'site_pages' ? 'site-pages' : entityType;
         try {
           const r = await api('/projects/' + projectId + '/' + table + '/' + entityId + '/rewrite-section', {
             method: 'POST', body: { section_id: sectionId, instruction }
@@ -10772,7 +10930,8 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, pageTitle, metaTitle, metaDesc }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc }) {
+      const apiTable = itemType === 'site_pages' ? 'site-pages' : 'content-queue';
       const text = useMemo(() => {
         if (!content) return '';
         const div = document.createElement('div');
@@ -10828,7 +10987,7 @@
       // Load saved competitor analysis on mount
       useEffect(() => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/content-queue/' + itemId + '/competitor-analysis')
+        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/competitor-analysis')
           .then(r => {
             if (r && r.competitor_analysis) {
               const data = r.competitor_analysis;
@@ -10851,14 +11010,14 @@
 
       const saveCompetitorAnalysis = (data) => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/content-queue/' + itemId + '/save-competitor-analysis', {
+        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/save-competitor-analysis', {
           method: 'POST', body: { competitor_analysis: data }
         }).catch(e => console.error('Save competitor analysis failed:', e));
       };
 
       const updateTopicStatus = (type, index, status) => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/content-queue/' + itemId + '/update-topic-status', {
+        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/update-topic-status', {
           method: 'POST', body: { type, index, status }
         }).then(r => {
           if (r && r.competitor_analysis) setCompetitorData(r.competitor_analysis);

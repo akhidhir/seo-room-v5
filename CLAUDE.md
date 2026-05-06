@@ -184,17 +184,37 @@ const PILLAR_CATEGORIES = {
 
 ## Pending / Next Up (Priority Order)
 
-1. **GBP fix automation** — Chrome extension executes approved GBP action items (update description, add categories, respond to reviews, create posts). Flow: audit → approve → extension executes.
-2. **Copywriter pages** — replace fake data with real content workflow connected to action items.
-3. **Project switcher** — sidebar dropdown loads real projects from DB (currently hardcoded "Current Project" / "Project 2").
+1. **Shared helper refactor** — CRITICAL technical debt. Extract duplicated logic into shared functions. Do incrementally (one function at a time, deploy, verify). No test suite so be careful. Best done during off-hours. Target functions:
+   - `resolvePageId(project, item)` — homepage WP page ID resolution (currently in `fetchLivePageContent`, `import-current`, `parse-sections`)
+   - `resolvePageUrl(project, item)` — URL normalization for homepage "/" handling (currently in 3+ server locations + 2 frontend locations)
+   - `getPageContent(project, pageUrl, pageId)` — single content fetching function combining WP REST + live HTML (currently duplicated in `fetchLivePageContent`, `import-current`, `optimise`, `generate-draft`)
+   - `loadItemIntoEditor(item)` — frontend: set editContent/editMeta/targetKeywords from item (currently duplicated in `handleSelectItem`, `handleApplyOptimise`, `handleItemUpdate`, `handleGenerateDraft`)
+2. **GBP fix automation** — Chrome extension executes approved GBP action items (update description, add categories, respond to reviews, create posts). Flow: audit → approve → extension executes.
+3. **Copywriter pages** — replace fake data with real content workflow connected to action items.
 4. **Ahrefs data ingestion** — port from v4 (handleAhrefsIngest + parseAhrefsFindings functions), store backlinks/referring domains for citation analysis in GBP audit.
 5. **DataForSEO integration** — for richer GBP profile data (description, hours, full reviews with responses). User has account. Better than SerpAPI for GBP details.
 6. **Build own SERP API** — future cost optimization, replace SerpAPI with direct Google scraping via proxies.
 7. **Grid scan history** — track position changes over time, show trend arrows in table.
 8. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
+## Recent Changes (This Session)
+
+- **Preview (Design-Safe) button** — always shows green on all pages. Auto-parses sections on click if not yet parsed. Uses `sections_count` from list API as fallback for `page_sections`.
+- **Project switch reload** — `handleProjectSwitch` sets project to null briefly, clears cached audit reports, remounts all components fresh after 50ms.
+- **Reset button** — full wipe via `/content-queue/:id/reset` endpoint. Clears ALL fields: page_id, page_url, current_content, draft_content, meta, sections, wireframe, keywords, AI notes, comments. Returns item to queue stage.
+- **Discover URL** — always visible on all items (not just items without URLs). Saves both URL and WP `page_id` when picked from sitemap/WP REST. Button styled as subtle "Discover URL" link next to page URL.
+- **Import Current Copy** — always force-refreshes (`force: true`), never returns stale cache. Tries both WP REST API and live HTML fetch, uses whichever has more content.
+- **fetchLivePageContent** — now always tries live HTML fetch regardless of WP REST word count. Extracts content between `</header>` and `<footer>`. Falls back to `<main>`/`<article>` tags, then full body with chrome stripped.
+- **Homepage page_id resolution** — 3 methods: WP settings API (`page_on_front`), slug search (home/homepage/front-page), link matching (all pages, find domain root match). Also tries `discoverPages()`. Persists discovered page_id to DB.
+- **Late.dev GBP publishing** — endpoint fixed to `https://getlate.dev/api/v1/posts`, body `{content, platforms: [{platform: 'googlebusiness', accountId}], publishNow: true}`. Account ID: `69f9e327157a6202f6ce3b82`. Env var: `LATE_GBP_ACCOUNT_ID`.
+- **GBP audit accuracy** — SerpAPI Place Details call for exact review count, rating, photos, categories.
+- **Competitor analysis persistence** — saved to `competitor_analysis` JSONB column with accept/reject status per topic gap.
+- **Action Plan filters** — always shows all 4 types (Automated, Copywriter Current, Copywriter New, Manual) regardless of existing data.
+
 ## Known Issues
 
+- **Import Current Copy on some sites** — WP REST API returns classic editor content only; sites using ACF, theme builders, or custom fields may have real content stored elsewhere. Live HTML fetch works but depends on server-side rendering (JS-rendered content won't be captured). Gold PC homepage page_id = 5.
+- **Duplicated logic** — URL resolution, content fetching, editor state loading all duplicated across multiple endpoints/handlers. Root cause of most recent bugs. See "Shared helper refactor" in Pending.
 - GBP audit AI sometimes flags "Missing Business Description" even when SerpAPI doesn't return that field. Prompt updated to say "don't flag null fields" but may still occur.
 - GBP Management API: 0 quota, can't list locations in Project Settings dropdown. Using manual Place ID input instead.
 - Places API (New): billing project limit reached, can't enable. Would give better GBP profile data than SerpAPI.

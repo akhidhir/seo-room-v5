@@ -501,6 +501,14 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS wireframe_image TEXT`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS wireframe_mime TEXT`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS page_sections JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS competitor_analysis JSONB DEFAULT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS page_url TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS current_content TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS current_focus_keyword TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS target_keywords JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
 
     // Content settings — tone, style, word count per project
     await client.query(`
@@ -9561,6 +9569,478 @@ ${sections.filter(s => s.id !== newSection.id).map(s => `- ${s.heading || s.type
   }
 });
 
+// ============ SITE-PAGES SECTION ENDPOINTS (feature parity with content-queue) ============
+
+// Helper: resolve table name from route
+function resolveTableName(routeTable) {
+  if (routeTable === 'site-pages') return 'site_pages';
+  if (routeTable === 'content-queue') return 'content_queue';
+  return null;
+}
+
+// Generic section endpoints for both content-queue and site-pages
+['site-pages'].forEach(routeTable => {
+  const dbTable = resolveTableName(routeTable);
+
+  // Parse sections
+  app.post(`/api/projects/:projectId/${routeTable}/:id/parse-sections`, async (req, res) => {
+    req.setTimeout(60000);
+    res.setTimeout(60000);
+    const { projectId, id } = req.params;
+    try {
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+      let pageUrl = item.page_url || item.published_url || '';
+      if (pageUrl && !pageUrl.startsWith('http')) pageUrl = 'https://' + (project?.domain || '') + pageUrl;
+      if (!pageUrl || pageUrl === '/') {
+        const dom = (project?.domain || '').replace(/\/$/, '');
+        if (dom) pageUrl = dom.startsWith('http') ? dom : 'https://' + dom;
+      }
+      if (!pageUrl) return res.status(400).json({ error: 'No page URL set — pick a URL first' });
+
+      console.log(`[parse-sections][${routeTable}] Fetching: ${pageUrl}`);
+      const resp = await fetch(pageUrl, {
+        signal: AbortSignal.timeout(15000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      if (!resp.ok) return res.status(502).json({ error: `Failed to fetch page: ${resp.status}` });
+      const fullHtml = await resp.text();
+
+      const headerEnd = fullHtml.search(/<\/header>/i);
+      const footerStart = fullHtml.search(/<footer[\s>]/i);
+      const contentHtml = fullHtml.slice(
+        headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+        footerStart !== -1 ? footerStart : fullHtml.length
+      );
+
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 4000,
+        system: `You are a web page structure analyser. Given the HTML content area of a page, identify each visual section/block.
+For each section, extract:
+- type: one of "hero", "intro", "content", "services-grid", "features-list", "image-text", "cta", "faq", "testimonials", "form", "gallery", "stats", "process-steps", "comparison", "pricing", "team", "other"
+- heading: the H1/H2/H3 heading text (null if none)
+- text_content: ALL the text content in this section (stripped of HTML), preserving paragraph breaks as \\n\\n
+- word_count: approximate word count
+- has_image: boolean
+- has_form: boolean
+- has_list: boolean
+- css_identifier: the most unique class or id on this section's container
+
+Return JSON array: [{ "type": "...", "heading": "...", "text_content": "...", "word_count": N, "has_image": bool, "has_form": bool, "has_list": bool, "css_identifier": "..." }, ...]
+
+IMPORTANT: Maintain the EXACT order sections appear on the page. Include ALL sections.`,
+        messages: [{ role: 'user', content: `Analyse this page HTML and identify all visual sections:\n\n${contentHtml.slice(0, 30000)}` }]
+      });
+
+      let psAiText = aiResp.content[0].text;
+      let sections;
+      try {
+        psAiText = psAiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+        const jsonMatch = psAiText.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) throw new Error('No JSON array found');
+        sections = JSON.parse(jsonMatch[0]);
+      } catch (parseErr) {
+        return res.status(500).json({ error: 'AI returned invalid JSON during section parsing' });
+      }
+
+      const pageSections = sections.map((s, i) => ({
+        id: `section_${i + 1}`,
+        order: i + 1,
+        type: s.type || 'content',
+        heading: s.heading || null,
+        original_text: s.text_content || '',
+        draft_text: null,
+        word_count: s.word_count || 0,
+        has_image: !!s.has_image,
+        has_form: !!s.has_form,
+        has_list: !!s.has_list,
+        css_identifier: s.css_identifier || `section-${i + 1}`,
+        locked: !!s.has_form,
+      }));
+
+      await pool.query(`UPDATE ${dbTable} SET page_sections=$1, updated_at=NOW() WHERE id=$2`, [JSON.stringify(pageSections), id]);
+      console.log(`[parse-sections][${routeTable}] Found ${pageSections.length} sections`);
+      res.json({ sections: pageSections, count: pageSections.length });
+    } catch (e) {
+      console.error(`[parse-sections][${routeTable}] Error:`, e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Rewrite section (per-section AI chat)
+  app.post(`/api/projects/:projectId/${routeTable}/:id/rewrite-section`, async (req, res) => {
+    req.setTimeout(60000);
+    res.setTimeout(60000);
+    const { projectId, id } = req.params;
+    const { section_id, instruction } = req.body;
+    try {
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+      const sections = item.page_sections || [];
+      const section = sections.find(s => s.id === section_id);
+      if (!section) return res.status(404).json({ error: 'Section not found' });
+      if (section.locked) return res.status(400).json({ error: 'Section is locked' });
+
+      const focusKw = item.draft_focus_keyword || item.focus_keyword || item.current_focus_keyword || '';
+      const targetKeywords = item.target_keywords || [];
+      const compAnalysis = item.competitor_analysis || {};
+      const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
+      const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
+
+      const hasInstruction = instruction && instruction.trim();
+      const pageTitle = item.page_title || item.page_name || '';
+
+      const systemPrompt = `You are an SEO copywriter implementing edits for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
+
+${hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instruction — execute it precisely on the section content below.
+- "make it shorter" = aggressively cut content, remove filler, keep only essential points
+- "make it longer" or "add N words" = expand with NEW specific details, examples, facts — count your words carefully
+- "add X" = add X to the content
+- Any word count instruction is STRICT — count your words and hit the target
+- The output MUST be visibly different from the input. If the user says change it, CHANGE IT.` : 'Rewrite this section with better SEO and readability.'}
+
+Return ONLY JSON: { "heading": "heading text", "content_html": "<p>the full modified section HTML</p>", "word_count": N, "changes_summary": "1-line what changed" }
+
+Rules: proper HTML (p, h3, ul/li, strong, em, a), Australian English, natural tone, include focus keyword.
+${buildCopywriterContext(project, item)}`;
+
+      const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${pageTitle}" (${item.page_url || ''})
+Focus keyword: ${focusKw}
+${targetKeywords.length ? 'Target keywords: ' + targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ') : ''}
+${acceptedTopics.length ? 'Must cover topics: ' + acceptedTopics.join(', ') : ''}
+${acceptedKeywords.length ? 'Must use keywords: ' + acceptedKeywords.join(', ') : ''}
+
+Section heading: "${section.heading || 'No heading'}"
+Section type: ${section.type}
+Current word count: ${section.word_count}
+Current content:
+${(section.draft_text || section.original_text || '').slice(0, 3000)}`;
+
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 4000,
+        system: systemPrompt,
+        messages: [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: '{' }
+        ]
+      });
+
+      let aiText = '{' + aiResp.content[0].text;
+      aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      let generated;
+      try {
+        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found');
+        generated = JSON.parse(jsonMatch[0]);
+      } catch (parseErr) {
+        return res.status(500).json({ error: 'AI returned invalid response' });
+      }
+
+      section.draft_text = generated.content_html || section.draft_text;
+      section.draft_heading = generated.heading || section.heading;
+      section.draft_word_count = generated.word_count || section.word_count;
+      section.changes_summary = generated.changes_summary || 'AI rewritten';
+
+      await pool.query(`UPDATE ${dbTable} SET page_sections=$1, updated_at=NOW() WHERE id=$2`, [JSON.stringify(sections), id]);
+      res.json({ section, page_sections: sections });
+    } catch (e) {
+      console.error(`[rewrite-section][${routeTable}] Error:`, e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Toggle section lock
+  app.post(`/api/projects/:projectId/${routeTable}/:id/toggle-section-lock`, async (req, res) => {
+    const { projectId, id } = req.params;
+    const { section_id } = req.body;
+    try {
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      const sections = item.page_sections || [];
+      const section = sections.find(s => s.id === section_id);
+      if (!section) return res.status(404).json({ error: 'Section not found' });
+      section.locked = !section.locked;
+      await pool.query(`UPDATE ${dbTable} SET page_sections=$1, updated_at=NOW() WHERE id=$2`, [JSON.stringify(sections), id]);
+      res.json({ section, page_sections: sections });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Add suggested section
+  app.post(`/api/projects/:projectId/${routeTable}/:id/add-section`, async (req, res) => {
+    try {
+      const { projectId, id } = req.params;
+      const { type, heading, position, estimated_words } = req.body;
+      if (!type || !heading) return res.status(400).json({ error: 'type and heading required' });
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+      const sections = item.page_sections || [];
+      const newSection = {
+        id: `section_${sections.length + 1}_new`,
+        order: sections.length + 1,
+        type, heading,
+        original_text: '',
+        draft_text: null,
+        word_count: estimated_words || 150,
+        has_image: false, has_form: false,
+        has_list: type === 'faq' || type === 'features-list',
+        css_identifier: `new-${type}`,
+        locked: false,
+        is_new: true,
+      };
+
+      let insertIdx = sections.length;
+      if (position === 'start') insertIdx = 0;
+      else if (position === 'end') insertIdx = sections.length;
+      else if (position) {
+        const afterIdx = sections.findIndex(s => s.id === position);
+        if (afterIdx >= 0) insertIdx = afterIdx + 1;
+      }
+      sections.splice(insertIdx, 0, newSection);
+      sections.forEach((s, i) => { s.order = i + 1; });
+
+      const focusKw = item.focus_keyword || item.draft_focus_keyword || item.current_focus_keyword || '';
+      const targetKeywords = item.target_keywords || [];
+      const pageTitle = item.page_title || item.page_name || '';
+
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
+Write content for a NEW section being added to an existing page. Match the page's voice and style.
+Write in Australian English. Never use banned AI phrases (In today's, Whether you're, Look no further, etc).
+Return JSON: {"heading": "<H2 heading>", "content_html": "<p>...</p>", "word_count": N}
+${buildCopywriterContext(project, item)}`,
+        messages: [{ role: 'user', content: `Page: ${pageTitle}
+Focus keyword: ${focusKw}
+${targetKeywords.length ? `Target keywords: ${targetKeywords.join(', ')}` : ''}
+
+New section to write:
+- Type: ${type}
+- Heading: ${heading}
+- Target length: ~${estimated_words || 150} words
+- Position: after "${position ? sections[insertIdx - 1]?.heading || 'start' : 'last section'}"
+
+Existing sections on this page:
+${sections.filter(s => s.id !== newSection.id).map(s => `- ${s.heading || s.type}`).join('\n')}` }]
+      });
+
+      const aiText = aiResp.content[0].text;
+      try {
+        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+        const gen = JSON.parse(jsonMatch[0]);
+        newSection.draft_text = gen.content_html || '';
+        newSection.draft_heading = gen.heading || heading;
+        newSection.draft_word_count = gen.word_count || estimated_words || 150;
+      } catch {
+        newSection.draft_text = `<p>[AI generation failed — write content for: ${heading}]</p>`;
+      }
+
+      await pool.query(`UPDATE ${dbTable} SET page_sections=$1, updated_at=NOW() WHERE id=$2`, [JSON.stringify(sections), id]);
+
+      const combinedHtml = sections.map(s => {
+        if (s.locked) return s.original_text;
+        const h = s.draft_heading || s.heading;
+        const c = s.draft_text || s.original_text;
+        const hasH = /<h[1-6]/i.test(c);
+        if (h && !hasH) return `<h2>${h}</h2>\n${c}`;
+        return c;
+      }).join('\n\n');
+      const wc = combinedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+      await pool.query(`UPDATE ${dbTable} SET draft_content=$1, word_count=$2 WHERE id=$3`, [combinedHtml, wc, id]);
+
+      res.json({ sections, new_section: newSection });
+    } catch (e) {
+      console.error(`[add-section][${routeTable}] Error:`, e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Suggest sections from competitors
+  app.post(`/api/projects/:projectId/${routeTable}/:id/suggest-sections`, async (req, res) => {
+    try {
+      const { projectId, id } = req.params;
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      if (!item.page_sections?.length) return res.status(400).json({ error: 'Parse sections first' });
+      const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+      const findings = (await pool.query(
+        `SELECT title, description, category FROM audit_findings WHERE project_id=$1 AND status='approved' LIMIT 10`,
+        [projectId]
+      )).rows;
+
+      const compAnalysis = item.competitor_analysis || {};
+      const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
+      const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
+      const currentSections = item.page_sections.map(s => `- ${s.type}: "${s.heading || 'no heading'}" (${s.word_count} words)`).join('\n');
+      const pageTitle = item.page_title || item.page_name || '';
+
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        system: `You are an SEO strategist. Given a page's current sections, competitor analysis, and SEO findings, suggest NEW sections that should be added to improve rankings and beat competitors.
+Only suggest sections that are genuinely missing and valuable. Don't suggest what already exists.
+${acceptedTopics.length ? 'PRIORITY: The user has accepted these competitor topics — suggest sections for any that don\'t already have a dedicated section: ' + acceptedTopics.join(', ') : ''}
+Return JSON array: [{ "type": "<section type>", "heading": "<suggested H2>", "rationale": "<why this helps SEO>", "position": "<after which section_id, or 'start' or 'end'>", "estimated_words": N }]`,
+        messages: [{ role: 'user', content: `Page: ${pageTitle} (${item.page_url || item.published_url || ''})
+Industry: ${project.industry || 'services'}
+Location: ${project.location || 'Australia'}
+Focus keyword: ${item.focus_keyword || item.draft_focus_keyword || item.current_focus_keyword || ''}
+
+CURRENT SECTIONS:
+${currentSections}
+
+${acceptedTopics.length ? 'ACCEPTED COMPETITOR TOPICS (must suggest sections for these):\n' + acceptedTopics.map(t => '- ' + t).join('\n') : ''}
+${acceptedKeywords.length ? 'ACCEPTED COMPETITOR KEYWORDS:\n' + acceptedKeywords.map(k => '- ' + k).join('\n') : ''}
+
+RELEVANT AUDIT FINDINGS:
+${findings.length ? findings.map(f => `- [${f.category}] ${f.title}: ${f.description}`).join('\n') : 'No specific findings.'}
+
+COMMON SEO GAPS TO CHECK:
+- FAQ section (helps featured snippets)
+- Local suburb mentions
+- Trust signals (testimonials, certifications, guarantees)
+- Process/how-it-works steps
+- Comparison tables
+- Schema-worthy content (reviews, services list)` }]
+      });
+
+      const aiText = aiResp.content[0].text;
+      let suggestions;
+      try {
+        const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+        suggestions = JSON.parse(jsonMatch[0]);
+      } catch {
+        return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.slice(0, 500) });
+      }
+      res.json({ suggestions });
+    } catch (e) {
+      console.error(`[suggest-sections][${routeTable}] Error:`, e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Save competitor analysis
+  app.post(`/api/projects/:projectId/${routeTable}/:id/save-competitor-analysis`, async (req, res) => {
+    const { projectId, id } = req.params;
+    const { competitor_analysis } = req.body;
+    if (!competitor_analysis) return res.status(400).json({ error: 'Missing competitor_analysis' });
+    try {
+      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3`, [JSON.stringify(competitor_analysis), id, projectId]);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Load competitor analysis
+  app.get(`/api/projects/:projectId/${routeTable}/:id/competitor-analysis`, async (req, res) => {
+    const { projectId, id } = req.params;
+    try {
+      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId]);
+      if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+      res.json({ competitor_analysis: r.rows[0].competitor_analysis });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Update topic status (accept/reject)
+  app.post(`/api/projects/:projectId/${routeTable}/:id/update-topic-status`, async (req, res) => {
+    const { projectId, id } = req.params;
+    const { type, index, status } = req.body;
+    if (!type || index === undefined || !status) return res.status(400).json({ error: 'Missing type, index, or status' });
+    try {
+      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId]);
+      if (!r.rows[0] || !r.rows[0].competitor_analysis) return res.status(404).json({ error: 'No analysis found' });
+      const analysis = r.rows[0].competitor_analysis;
+      if (analysis.topicGaps && analysis.topicGaps[type] && analysis.topicGaps[type][index]) {
+        analysis.topicGaps[type][index].status = status;
+      }
+      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3`, [JSON.stringify(analysis), id, projectId]);
+      res.json({ ok: true, competitor_analysis: analysis });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Import current content
+  app.post(`/api/projects/:projectId/${routeTable}/:id/import-current`, async (req, res) => {
+    try {
+      const item = (await pool.query(`SELECT * FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [req.params.id, req.params.projectId])).rows[0];
+      if (!item) return res.status(404).json({ error: 'Not found' });
+      const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+
+      let rawPageUrl = item.page_url || item.published_url || '';
+      if (!rawPageUrl || rawPageUrl === '/') {
+        const dom = (project?.domain || '').replace(/\/$/, '');
+        if (dom) rawPageUrl = dom.startsWith('http') ? dom : 'https://' + dom;
+      }
+      if (rawPageUrl && !rawPageUrl.startsWith('http')) rawPageUrl = 'https://' + (project?.domain || '').replace(/\/$/, '') + rawPageUrl;
+      if (!rawPageUrl) return res.status(400).json({ error: 'No page URL — set a URL first' });
+
+      console.log(`[import-current][${routeTable}] Fetching: ${rawPageUrl}`);
+      const resp = await fetch(rawPageUrl, {
+        signal: AbortSignal.timeout(15000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+      });
+      if (!resp.ok) return res.status(502).json({ error: `Failed to fetch: ${resp.status}` });
+      const fullHtml = await resp.text();
+
+      // Extract content between header and footer
+      const headerEnd = fullHtml.search(/<\/header>/i);
+      const footerStart = fullHtml.search(/<footer[\s>]/i);
+      let contentHtml = fullHtml.slice(
+        headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+        footerStart !== -1 ? footerStart : fullHtml.length
+      );
+      // Strip script/style tags
+      contentHtml = contentHtml.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '');
+
+      const plainText = contentHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+
+      // Also try WP REST API if available
+      let wpContent = '';
+      let wpWordCount = 0;
+      const wpUrl = project?.wordpress_url;
+      if (wpUrl && item.page_id) {
+        try {
+          const wpResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, { signal: AbortSignal.timeout(10000) });
+          if (wpResp.ok) {
+            const wpData = await wpResp.json();
+            wpContent = wpData.content?.rendered || '';
+            wpWordCount = wpContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+          }
+        } catch {}
+      }
+
+      // Use whichever has more content
+      const finalContent = wpWordCount > wordCount ? wpContent : contentHtml;
+      const finalWc = Math.max(wpWordCount, wordCount);
+
+      await pool.query(`UPDATE ${dbTable} SET current_content=$1, draft_content=$1, word_count=$2, updated_at=NOW() WHERE id=$3`,
+        [finalContent, finalWc, req.params.id]);
+
+      console.log(`[import-current][${routeTable}] Imported ${finalWc} words`);
+      res.json({ content: finalContent, word_count: finalWc });
+    } catch (e) {
+      console.error(`[import-current][${routeTable}] Error:`, e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+});
+
 // Section-aware preview — surgical content replacement in live page
 app.get('/api/projects/:projectId/content-queue/:id/section-preview', async (req, res) => {
   req.setTimeout(30000);
@@ -10853,16 +11333,19 @@ app.get('/api/projects/:projectId/site-pages', async (req, res) => {
 // Update a site page (edit meta, content, stage)
 app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
   try {
-    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name } = req.body;
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords } = req.body;
     const result = await pool.query(
       `UPDATE site_pages SET
         meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
         focus_keyword=COALESCE($5, focus_keyword), draft_content=COALESCE($6, draft_content),
         word_count=COALESCE($7, word_count), stage=COALESCE($8, stage), slug=COALESCE($9, slug),
         is_cornerstone=COALESCE($10, is_cornerstone), page_name=COALESCE($11, page_name),
+        page_url=COALESCE($12, page_url), page_sections=COALESCE($13, page_sections),
+        target_keywords=COALESCE($14, target_keywords),
         updated_at=NOW()
        WHERE id=$1 AND project_id=$2 RETURNING *`,
-      [req.params.pageId, req.params.projectId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name]
+      [req.params.pageId, req.params.projectId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name,
+       page_url || null, page_sections ? JSON.stringify(page_sections) : null, target_keywords ? JSON.stringify(target_keywords) : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
     res.json(result.rows[0]);
