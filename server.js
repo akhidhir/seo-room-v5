@@ -521,6 +521,7 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_category TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS blog_tags TEXT[]`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS competitor_analysis JSONB DEFAULT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS suggestions JSONB DEFAULT '[]'`).catch(() => {});
 
     // GBP tasks are manual — no extension automation
     await client.query(`
@@ -5531,7 +5532,7 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
                            'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime',
-                           'page_url', 'page_id', 'page_title', 'page_sections', 'ai_notes', 'target_keywords', 'competitor_analysis', 'schema_markup'];
+                           'page_url', 'page_id', 'page_title', 'page_sections', 'ai_notes', 'target_keywords', 'competitor_analysis', 'schema_markup', 'suggestions'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
@@ -8971,6 +8972,257 @@ COMMON SEO GAPS TO CHECK:
     res.json({ suggestions });
   } catch (e) {
     console.error('[suggest-sections] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============ SUGGESTION SYSTEM (Google Docs style) ============
+
+// Helper: replace phrase in HTML while preserving tags
+function replacePhraseSafelyInHTML(html, originalPhrase, replacementPhrase) {
+  if (!html || !originalPhrase) return html;
+  // Try direct text replace first (works for most cases)
+  const escaped = originalPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escaped, 'g');
+  const plainText = html.replace(/<[^>]+>/g, '');
+  if (plainText.includes(originalPhrase)) {
+    // Walk HTML, replace in text nodes only
+    let result = '';
+    let remaining = originalPhrase;
+    let replacing = false;
+    const parts = html.split(/(<[^>]+>)/);
+    for (const part of parts) {
+      if (part.startsWith('<')) {
+        result += part; // tag, keep as-is
+        continue;
+      }
+      // text node
+      if (!replacing && part.includes(remaining)) {
+        // Full phrase in this text node
+        result += part.replace(remaining, replacementPhrase);
+        remaining = '';
+      } else if (!replacing) {
+        // Check if phrase starts here and spans into next text node
+        for (let i = Math.min(part.length, remaining.length); i > 0; i--) {
+          if (part.endsWith(remaining.substring(0, i))) {
+            result += part.substring(0, part.length - i) + replacementPhrase;
+            remaining = remaining.substring(i);
+            replacing = true;
+            break;
+          }
+        }
+        if (!replacing) result += part;
+      } else {
+        // Continuing a cross-tag replacement
+        if (part.startsWith(remaining)) {
+          result += part.substring(remaining.length);
+          remaining = '';
+          replacing = false;
+        } else if (remaining.startsWith(part)) {
+          remaining = remaining.substring(part.length);
+          // skip this text node entirely (consumed by replacement)
+        } else {
+          result += part;
+          replacing = false;
+        }
+      }
+    }
+    return result;
+  }
+  return html;
+}
+
+// Add suggestion to a section
+app.post('/api/projects/:projectId/content-queue/:id/suggestions', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { section_id, original_phrase, suggested_phrase, comment } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const suggestions = item.suggestions || [];
+    const suggestion = {
+      id: 'sugg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      section_id,
+      original_phrase,
+      suggested_phrase,
+      comment: comment || '',
+      status: 'pending',
+      created_at: new Date().toISOString()
+    };
+    suggestions.push(suggestion);
+
+    await pool.query('UPDATE content_queue SET suggestions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(suggestions), id]);
+    res.json({ suggestion, suggestions });
+  } catch (e) {
+    console.error('[suggestions] Add error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Accept a suggestion — apply replacement to section draft_text
+app.post('/api/projects/:projectId/content-queue/:id/suggestions/:suggId/accept', async (req, res) => {
+  const { projectId, id, suggId } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const suggestions = item.suggestions || [];
+    const sugg = suggestions.find(s => s.id === suggId);
+    if (!sugg) return res.status(404).json({ error: 'Suggestion not found' });
+
+    // Apply replacement to the section's draft_text
+    const sections = item.page_sections || [];
+    const section = sections.find(s => s.id === sugg.section_id);
+    if (section) {
+      const content = section.draft_text || section.original_text || '';
+      section.draft_text = replacePhraseSafelyInHTML(content, sugg.original_phrase, sugg.suggested_phrase);
+    }
+
+    sugg.status = 'accepted';
+    sugg.accepted_at = new Date().toISOString();
+
+    // Also update combined draft_content
+    const combinedHtml = sections.map(s => {
+      if (s.locked) return s.original_text;
+      const heading = s.draft_heading || s.heading;
+      const content = s.draft_text || s.original_text;
+      const hasH = /<h[1-6]/i.test(content);
+      if (heading && !hasH) return '<h2>' + heading + '</h2>\n' + content;
+      return content;
+    }).join('\n\n');
+
+    await pool.query(
+      'UPDATE content_queue SET suggestions=$1, page_sections=$2, draft_content=$3, updated_at=NOW() WHERE id=$4',
+      [JSON.stringify(suggestions), JSON.stringify(sections), combinedHtml, id]
+    );
+    res.json({ suggestion: sugg, suggestions, page_sections: sections });
+  } catch (e) {
+    console.error('[suggestions] Accept error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reject a suggestion
+app.post('/api/projects/:projectId/content-queue/:id/suggestions/:suggId/reject', async (req, res) => {
+  const { projectId, id, suggId } = req.params;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const suggestions = (item.suggestions || []).map(s =>
+      s.id === suggId ? { ...s, status: 'rejected', rejected_at: new Date().toISOString() } : s
+    );
+
+    await pool.query('UPDATE content_queue SET suggestions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(suggestions), id]);
+    res.json({ suggestions: suggestions.filter(s => s.status !== 'rejected') });
+  } catch (e) {
+    console.error('[suggestions] Reject error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Rewrite a single section with AI
+app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { projectId, id } = req.params;
+  const { section_id } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const sections = item.page_sections || [];
+    const section = sections.find(s => s.id === section_id);
+    if (!section) return res.status(404).json({ error: 'Section not found' });
+    if (section.locked) return res.status(400).json({ error: 'Section is locked' });
+
+    const focusKw = item.draft_focus_keyword || item.current_focus_keyword || '';
+    const targetKeywords = item.target_keywords || [];
+    const compAnalysis = item.competitor_analysis || {};
+    const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
+    const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
+
+    const systemPrompt = `You are an expert SEO copywriter for "${project.business_name || project.name}" in ${project.location || 'Australia'}, industry: ${project.industry || 'services'}.
+
+Rewrite ONE section of a page. Return ONLY a JSON object:
+{ "heading": "Section heading", "content_html": "<p>rewritten content</p>", "word_count": N, "changes_summary": "What changed" }
+
+Rules:
+- Keep the same section TYPE and DESIGN intent
+- Use proper HTML: <p>, <h3>, <ul>/<li>, <strong>, <em>, <a>
+- Short paragraphs (2-4 sentences, max 60 words each)
+- Break content with <h3> sub-headings every 150-200 words
+- Write in Australian English, natural tone
+- Include focus keyword naturally
+${buildCopywriterContext(project, item)}`;
+
+    const userPrompt = `Rewrite this ${section.type} section for page "${item.page_title}" (${item.page_url})
+Focus keyword: ${focusKw}
+${targetKeywords.length ? 'Target keywords: ' + targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ') : ''}
+${acceptedTopics.length ? 'Must cover topics: ' + acceptedTopics.join(', ') : ''}
+${acceptedKeywords.length ? 'Must use keywords: ' + acceptedKeywords.join(', ') : ''}
+
+Section heading: "${section.heading || 'No heading'}"
+Section type: ${section.type}
+Current word count: ${section.word_count}
+Current content:
+${(section.draft_text || section.original_text || '').slice(0, 3000)}`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: '{' }
+      ]
+    });
+
+    let aiText = '{' + aiResp.content[0].text;
+    aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+    let generated;
+    try {
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found');
+      generated = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      console.error('[rewrite-section] Parse failed:', parseErr.message);
+      return res.status(500).json({ error: 'AI returned invalid response' });
+    }
+
+    // Update the section
+    section.draft_text = generated.content_html || section.draft_text;
+    section.draft_heading = generated.heading || section.heading;
+    section.draft_word_count = generated.word_count || section.word_count;
+    section.changes_summary = generated.changes_summary || 'AI rewritten';
+
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+    console.log(`[rewrite-section] Rewrote section ${section_id} for item ${id}`);
+    res.json({ section, page_sections: sections });
+  } catch (e) {
+    console.error('[rewrite-section] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Toggle section lock
+app.post('/api/projects/:projectId/content-queue/:id/toggle-section-lock', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { section_id } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const sections = item.page_sections || [];
+    const section = sections.find(s => s.id === section_id);
+    if (!section) return res.status(404).json({ error: 'Section not found' });
+
+    section.locked = !section.locked;
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+    res.json({ section, page_sections: sections });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

@@ -10794,6 +10794,14 @@
       const [addingSection, setAddingSection] = useState(null); // section being added
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
+      // Suggestion system (Google Docs style)
+      const [suggestions, setSuggestions] = useState([]); // all suggestions for this item
+      const [activeSelection, setActiveSelection] = useState(null); // {sectionId, phrase, x, y}
+      const [suggestionText, setSuggestionText] = useState('');
+      const [suggestionComment, setSuggestionComment] = useState('');
+      const [sectionEditing, setSectionEditing] = useState(null); // section_id in edit mode
+      const [sectionDrafts, setSectionDrafts] = useState({}); // {section_id: html}
+      const [rewritingSection, setRewritingSection] = useState(null); // section_id being AI rewritten
 
       // Highlight changed paragraphs — POSITIONAL comparison (same logic as preview page)
       // Compares draft blocks vs original blocks by position. If text differs → orange highlight.
@@ -10923,11 +10931,16 @@
         setComments(item.comments || []);
         setOptimisePreview(null);
         setSectionSuggestions(null);
+        setSuggestions([]);
+        setSectionEditing(null);
+        setSectionDrafts({});
+        setActiveSelection(null);
         // Fetch full item with heavy fields
         try {
           const full = await api('/projects/' + pid + '/content-queue/' + item.id);
           if (full && full.id) {
             setSelectedItem(full);
+            setSuggestions((full.suggestions || []).filter(s => s.status === 'pending'));
             if (full.page_sections?.length) {
               setSectionView(true);
             } else if (full.page_url) {
@@ -11188,6 +11201,108 @@
           window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
         });
       };
+
+      // ============ SUGGESTION SYSTEM HANDLERS ============
+
+      // Handle text selection in section view
+      const handleSectionMouseUp = (e, sectionId) => {
+        const selection = window.getSelection();
+        const text = (selection.toString() || '').trim();
+        if (text.length < 3) { return; }
+        // Get position for popup
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        setActiveSelection({ sectionId, phrase: text, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+        setSuggestionText('');
+        setSuggestionComment('');
+      };
+
+      // Add a suggestion
+      const handleAddSuggestion = async () => {
+        if (!activeSelection || !suggestionText.trim()) return;
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/suggestions', {
+            method: 'POST',
+            body: { section_id: activeSelection.sectionId, original_phrase: activeSelection.phrase, suggested_phrase: suggestionText, comment: suggestionComment }
+          });
+          if (r.suggestion) {
+            setSuggestions(prev => [...prev, r.suggestion]);
+          }
+          setActiveSelection(null);
+          window.getSelection().removeAllRanges();
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      // Accept suggestion
+      const handleAcceptSuggestion = async (suggId) => {
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/suggestions/' + suggId + '/accept', { method: 'POST' });
+          if (r.page_sections) {
+            setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+          }
+          setSuggestions(prev => prev.filter(s => s.id !== suggId));
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      // Reject suggestion
+      const handleRejectSuggestion = async (suggId) => {
+        try {
+          await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/suggestions/' + suggId + '/reject', { method: 'POST' });
+          setSuggestions(prev => prev.filter(s => s.id !== suggId));
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      // Rewrite single section with AI
+      const handleRewriteOneSection = async (sectionId) => {
+        setRewritingSection(sectionId);
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/rewrite-section', {
+            method: 'POST', body: { section_id: sectionId }
+          });
+          if (r.page_sections) {
+            setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+          }
+        } catch (e) { alert('Rewrite failed: ' + e.message); }
+        setRewritingSection(null);
+      };
+
+      // Toggle section lock
+      const handleToggleLock = async (sectionId) => {
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/toggle-section-lock', {
+            method: 'POST', body: { section_id: sectionId }
+          });
+          if (r.page_sections) {
+            setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+          }
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      // Start editing a section inline
+      const handleStartEditSection = (sectionId) => {
+        const section = (selectedItem.page_sections || []).find(s => s.id === sectionId);
+        if (!section) return;
+        setSectionEditing(sectionId);
+        setSectionDrafts(prev => ({ ...prev, [sectionId]: section.draft_text || section.original_text || '' }));
+      };
+
+      // Save section edit
+      const handleSaveSectionEdit = async (sectionId) => {
+        const newContent = sectionDrafts[sectionId];
+        if (newContent == null) return;
+        const updatedSections = (selectedItem.page_sections || []).map(s =>
+          s.id === sectionId ? { ...s, draft_text: newContent, changes_summary: 'Manually edited' } : s
+        );
+        try {
+          await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
+            method: 'PUT', body: { page_sections: updatedSections }
+          });
+          setSelectedItem(prev => ({ ...prev, page_sections: updatedSections }));
+          setSectionEditing(null);
+        } catch (e) { alert('Save failed: ' + e.message); }
+      };
+
+      // ============ END SUGGESTION SYSTEM ============
 
       // AI Optimise — sends all score tips (issues) to the server for AI to fix
       const handleOptimise = async () => {
@@ -11936,51 +12051,159 @@
               React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 20, border: '1px solid var(--border)' } },
                 // Highlighted content view when sections exist and sectionView is on
                 sectionView && selectedItem.page_sections?.length > 0
-                  ? React.createElement('div', null,
+                  ? React.createElement('div', { style: { position: 'relative' } },
                       // Toggle bar
                       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid var(--border)' } },
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.5 } },
-                          React.createElement('i', { className: 'fas fa-highlighter', style: { marginRight: 6 } }), 'Highlighted View — changes shown in orange'
+                          React.createElement('i', { className: 'fas fa-highlighter', style: { marginRight: 6 } }), 'Section View — select text to suggest changes'
                         ),
                         React.createElement('button', {
                           onClick: () => setSectionView(false),
                           style: { fontSize: 11, padding: '3px 10px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' }
                         }, 'Switch to Editor')
                       ),
-                      // Render each section with highlights
-                      selectedItem.page_sections.filter(s => !s.locked).map((section, idx) => {
+                      // Render each section
+                      selectedItem.page_sections.map((section, idx) => {
                         const hasChanges = !!(section.draft_text && section.original_text && section.draft_text !== section.original_text);
-                        const htmlContent = hasChanges ? highlightDraftChanges(section.original_text, section.draft_text) : (section.draft_text || section.original_text || '');
+                        const sectionSuggs = suggestions.filter(s => s.section_id === section.id);
+                        // Apply suggestion strikethroughs to content
+                        let htmlContent = hasChanges ? highlightDraftChanges(section.original_text, section.draft_text) : (section.draft_text || section.original_text || '');
+                        sectionSuggs.forEach(sugg => {
+                          const escaped = sugg.original_phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                          htmlContent = htmlContent.replace(new RegExp('(?!<[^>]*>)(' + escaped + ')', 'g'),
+                            '<span style="text-decoration:line-through;color:#ef4444;background:rgba(239,68,68,0.08)">$1</span>' +
+                            '<span style="color:#22c55e;font-weight:600"> ' + sugg.suggested_phrase + '</span>');
+                        });
                         const isExpanded = expandedSections && expandedSections[section.id];
-                        return React.createElement('div', { key: section.id || idx, style: { marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid var(--border)' } },
-                          // Section heading with badge + Show Original toggle
-                          (section.draft_heading || section.heading) && React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
-                            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 1 } },
-                              React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0, lineHeight: 1.3 } }, section.draft_heading || section.heading),
-                              hasChanges && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'UPDATED'),
-                              section.is_new && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#22c55e', padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap' } }, 'NEW')
+                        const isEditingThis = sectionEditing === section.id;
+                        const isRewritingThis = rewritingSection === section.id;
+
+                        return React.createElement('div', { key: section.id || idx, style: { marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid var(--border)', opacity: section.locked ? 0.5 : 1 } },
+                          // Section header with controls
+                          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 } },
+                            // Type badge
+                            React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: section.locked ? '#6b7280' : '#6366f1', padding: '2px 6px', borderRadius: 3 } }, section.type.toUpperCase()),
+                            // Heading
+                            React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: 6 } },
+                              React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: 0, lineHeight: 1.3 } }, section.draft_heading || section.heading || '(No heading)'),
+                              hasChanges && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '2px 6px', borderRadius: 3 } }, 'UPDATED'),
+                              section.is_new && React.createElement('span', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: '#22c55e', padding: '2px 6px', borderRadius: 3 } }, 'NEW'),
+                              section.locked && React.createElement('span', { style: { fontSize: 9, color: '#6b7280' } }, '🔒')
                             ),
-                            hasChanges && React.createElement('button', {
-                              onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
-                              style: { fontSize: 10, padding: '3px 10px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }
-                            }, isExpanded ? 'Hide Original' : 'Show Original')
+                            // Per-section controls
+                            !isPublished && React.createElement('div', { style: { display: 'flex', gap: 4 } },
+                              // Edit button
+                              !section.locked && React.createElement('button', {
+                                onClick: () => isEditingThis ? setSectionEditing(null) : handleStartEditSection(section.id),
+                                title: isEditingThis ? 'Cancel edit' : 'Edit section',
+                                style: { fontSize: 11, padding: '3px 8px', background: isEditingThis ? '#3b82f6' : 'transparent', color: isEditingThis ? '#fff' : '#3b82f6', border: '1px solid #3b82f6', borderRadius: 4, cursor: 'pointer' }
+                              }, React.createElement('i', { className: isEditingThis ? 'fas fa-times' : 'fas fa-pen', style: { fontSize: 10 } })),
+                              // AI Rewrite button
+                              !section.locked && React.createElement('button', {
+                                onClick: () => handleRewriteOneSection(section.id),
+                                disabled: isRewritingThis,
+                                title: 'AI rewrite this section',
+                                style: { fontSize: 11, padding: '3px 8px', background: 'transparent', color: '#a855f7', border: '1px solid #a855f7', borderRadius: 4, cursor: 'pointer', opacity: isRewritingThis ? 0.5 : 1 }
+                              }, React.createElement('i', { className: isRewritingThis ? 'fas fa-spinner fa-spin' : 'fas fa-magic', style: { fontSize: 10 } })),
+                              // Lock toggle
+                              React.createElement('button', {
+                                onClick: () => handleToggleLock(section.id),
+                                title: section.locked ? 'Unlock section' : 'Lock section',
+                                style: { fontSize: 11, padding: '3px 8px', background: section.locked ? '#6b7280' : 'transparent', color: section.locked ? '#fff' : '#6b7280', border: '1px solid #6b7280', borderRadius: 4, cursor: 'pointer' }
+                              }, React.createElement('i', { className: section.locked ? 'fas fa-lock' : 'fas fa-unlock', style: { fontSize: 10 } })),
+                              // Show Original
+                              hasChanges && React.createElement('button', {
+                                onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
+                                style: { fontSize: 10, padding: '3px 8px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }
+                              }, isExpanded ? 'Hide Orig' : 'Show Orig')
+                            )
                           ),
-                          // Draft content with highlights
-                          React.createElement('div', {
-                            style: { fontSize: 14, color: 'var(--text2)', lineHeight: 1.8 },
-                            dangerouslySetInnerHTML: { __html: htmlContent }
+                          // Section content — either inline editor or highlighted view
+                          isEditingThis
+                            ? React.createElement('div', { style: { marginTop: 8 } },
+                                React.createElement(QuillEditor, {
+                                  key: 'section-edit-' + section.id,
+                                  value: sectionDrafts[section.id] || '',
+                                  onChange: (html) => setSectionDrafts(prev => ({ ...prev, [section.id]: html }))
+                                }),
+                                React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+                                  React.createElement('button', {
+                                    onClick: () => handleSaveSectionEdit(section.id),
+                                    style: { fontSize: 12, padding: '6px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }
+                                  }, 'Save Section'),
+                                  React.createElement('button', {
+                                    onClick: () => setSectionEditing(null),
+                                    style: { fontSize: 12, padding: '6px 16px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }
+                                  }, 'Cancel')
+                                )
+                              )
+                            : !section.locked && React.createElement('div', {
+                                onMouseUp: (e) => handleSectionMouseUp(e, section.id),
+                                style: { fontSize: 14, color: 'var(--text2)', lineHeight: 1.8, cursor: 'text' },
+                                dangerouslySetInnerHTML: { __html: htmlContent }
+                              }),
+                          // Locked section content (no mouse handler)
+                          !isEditingThis && section.locked && React.createElement('div', {
+                            style: { fontSize: 14, color: 'var(--text3)', lineHeight: 1.8, fontStyle: 'italic' },
+                            dangerouslySetInnerHTML: { __html: section.original_text || '' }
                           }),
                           // Original content — only when expanded
                           isExpanded && hasChanges && React.createElement('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.06)', border: '1px dashed rgba(239,68,68,0.3)' } },
                             React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 } }, 'Original Content'),
                             React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', lineHeight: 1.7 }, dangerouslySetInnerHTML: { __html: section.original_text || '' } })
                           ),
+                          // Suggestion cards for this section
+                          sectionSuggs.length > 0 && React.createElement('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
+                            sectionSuggs.map(sugg => React.createElement('div', { key: sugg.id, style: { display: 'flex', gap: 10, padding: '10px 12px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 8 } },
+                              React.createElement('div', { style: { flex: 1 } },
+                                React.createElement('div', { style: { fontSize: 12 } },
+                                  React.createElement('span', { style: { textDecoration: 'line-through', color: '#ef4444' } }, sugg.original_phrase),
+                                  ' → ',
+                                  React.createElement('span', { style: { color: '#22c55e', fontWeight: 600 } }, sugg.suggested_phrase)
+                                ),
+                                sugg.comment && React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4, fontStyle: 'italic' } }, sugg.comment)
+                              ),
+                              React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'flex-start' } },
+                                React.createElement('button', { onClick: () => handleAcceptSuggestion(sugg.id), title: 'Accept',
+                                  style: { width: 28, height: 28, border: 'none', background: 'rgba(34,197,94,0.15)', color: '#22c55e', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700 } }, '✓'),
+                                React.createElement('button', { onClick: () => handleRejectSuggestion(sugg.id), title: 'Reject',
+                                  style: { width: 28, height: 28, border: 'none', background: 'rgba(239,68,68,0.15)', color: '#ef4444', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700 } }, '✕')
+                              )
+                            ))
+                          ),
                           // Changes summary
                           section.changes_summary && React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 8, fontStyle: 'italic' } },
                             React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
                           )
                         );
-                      })
+                      }),
+                      // Suggestion popup — appears on text selection
+                      activeSelection && React.createElement('div', {
+                        style: { position: 'fixed', left: Math.min(activeSelection.x - 180, window.innerWidth - 400), top: activeSelection.y, zIndex: 9999, width: 360, background: 'var(--card)', border: '1px solid var(--accent)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.3)', padding: 16 }
+                      },
+                        React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 10, display: 'flex', justifyContent: 'space-between' } },
+                          React.createElement('span', null, React.createElement('i', { className: 'fas fa-comment-dots', style: { marginRight: 6, color: '#6366f1' } }), 'Add Suggestion'),
+                          React.createElement('button', { onClick: () => { setActiveSelection(null); window.getSelection().removeAllRanges(); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 } }, '✕')
+                        ),
+                        React.createElement('div', { style: { fontSize: 12, color: '#ef4444', textDecoration: 'line-through', marginBottom: 8, padding: '6px 8px', background: 'rgba(239,68,68,0.06)', borderRadius: 4 } }, activeSelection.phrase.length > 80 ? activeSelection.phrase.slice(0, 80) + '...' : activeSelection.phrase),
+                        React.createElement('input', {
+                          type: 'text', placeholder: 'Replacement text...', autoFocus: true,
+                          value: suggestionText, onChange: e => setSuggestionText(e.target.value),
+                          onKeyDown: e => e.key === 'Enter' && !e.shiftKey && handleAddSuggestion(),
+                          style: { width: '100%', padding: '8px 10px', fontSize: 13, background: 'var(--bg)', color: '#22c55e', fontWeight: 600, border: '1px solid var(--border)', borderRadius: 6, marginBottom: 6, boxSizing: 'border-box' }
+                        }),
+                        React.createElement('input', {
+                          type: 'text', placeholder: 'Comment (optional)',
+                          value: suggestionComment, onChange: e => setSuggestionComment(e.target.value),
+                          style: { width: '100%', padding: '6px 10px', fontSize: 12, background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 10, boxSizing: 'border-box' }
+                        }),
+                        React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+                          React.createElement('button', { onClick: () => { setActiveSelection(null); window.getSelection().removeAllRanges(); },
+                            style: { padding: '6px 14px', fontSize: 12, background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' } }, 'Cancel'),
+                          React.createElement('button', { onClick: handleAddSuggestion, disabled: !suggestionText.trim(),
+                            style: { padding: '6px 14px', fontSize: 12, background: '#6366f1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, opacity: suggestionText.trim() ? 1 : 0.5 } }, 'Add Suggestion')
+                        )
+                      )
                     )
                   : React.createElement(QuillEditor, {
                       key: editorKey,
