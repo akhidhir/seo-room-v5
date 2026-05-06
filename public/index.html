@@ -10614,7 +10614,7 @@
                 ),
                 React.createElement('input', {
                   value: chatInput, onChange: e => setChatInput(e.target.value),
-                  placeholder: 'e.g. "make it 200 words" or "add a CTA"',
+                  placeholder: 'Tell AI what to change...',
                   onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); handleSectionChat(section.id); } },
                   disabled: rewritingSection === section.id,
                   autoFocus: true,
@@ -10624,7 +10624,7 @@
                   onClick: () => handleSectionChat(section.id),
                   disabled: rewritingSection === section.id || !chatInput.trim(),
                   style: { padding: '6px 12px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
-                }, rewritingSection === section.id ? '...' : 'Apply')
+                }, rewritingSection === section.id ? React.createElement('i', { className: 'fas fa-spinner fa-spin' }) : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 4, fontSize: 10 } }), 'Send'))
               )
             ),
 
