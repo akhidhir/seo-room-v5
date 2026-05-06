@@ -11057,46 +11057,72 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
     expandedSeeds = [...new Set(expandedSeeds.map(s => s.trim().toLowerCase()))].filter(Boolean);
     console.log(`[kw-research] Expanded to ${expandedSeeds.length} seed keywords`);
 
-    // Step 2: DataForSEO Labs — keyword suggestions (clickstream-adjusted, like Ahrefs)
+    // Step 2: DataForSEO Labs — 3 endpoints for comprehensive keyword discovery
+    // 1. keyword_suggestions — close variants and autocomplete-style ideas
+    // 2. related_keywords — semantically related terms (like "seo services" from "seo agency")
+    // 3. keyword_ideas — Google "People Also Search For" data
     let allKeywords = [];
-    for (const seed of expandedSeeds.slice(0, 10)) { // Labs takes one seed at a time
-      try {
-        const dfsResp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
-          body: JSON.stringify([{
-            keyword: seed,
-            location_code: discoveryCode,
-            language_name: 'English',
-            limit: Math.min(cap * 2, 100),
-            include_seed_keyword: true,
-            include_serp_info: false,
-          }]),
-          signal: AbortSignal.timeout(20000),
-        });
-        if (dfsResp.ok) {
-          const dfsData = await dfsResp.json();
-          const items = dfsData?.tasks?.[0]?.result?.[0]?.items || [];
-          for (const item of items) {
-            const kd = item.keyword_data || item;
-            const ki = kd.keyword_info || {};
-            if (kd.keyword && ki.search_volume != null) {
-              allKeywords.push({
-                keyword: kd.keyword,
-                volume: ki.search_volume || 0,
-                competition: ki.competition != null ? (ki.competition > 0.66 ? 'HIGH' : ki.competition > 0.33 ? 'MEDIUM' : 'LOW') : null,
-                competition_index: ki.competition != null ? Math.round(ki.competition * 100) : null,
-                cpc: ki.cpc || null,
-                intent: ki.keyword_properties?.keyword_intent || null,
-                difficulty: kd.keyword_properties?.keyword_difficulty || null,
-              });
-            }
-          }
-        } else {
-          const errText = await dfsResp.text();
-          console.log(`[kw-research] DFS Labs error: ${dfsResp.status} ${errText.substring(0, 300)}`);
+    const labsLimit = Math.min(cap * 3, 150); // request more, dedup later
+
+    const parseDfsItems = (items) => {
+      const results = [];
+      for (const item of items) {
+        const kd = item.keyword_data || item;
+        const ki = kd.keyword_info || {};
+        if (kd.keyword && (ki.search_volume != null || ki.search_volume === 0)) {
+          results.push({
+            keyword: kd.keyword,
+            volume: ki.search_volume || 0,
+            competition: ki.competition != null ? (ki.competition > 0.66 ? 'HIGH' : ki.competition > 0.33 ? 'MEDIUM' : 'LOW') : null,
+            competition_index: ki.competition != null ? Math.round(ki.competition * 100) : null,
+            cpc: ki.cpc || null,
+            intent: ki.keyword_properties?.keyword_intent || null,
+            difficulty: kd.keyword_properties?.keyword_difficulty || null,
+          });
         }
-      } catch (e) { console.log(`[kw-research] DFS Labs error for "${seed}": ${e.message}`); }
+      }
+      return results;
+    };
+
+    const dfsHeaders = { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH };
+
+    // Run all 3 endpoints in parallel for each seed (capped at top 5 seeds)
+    const seedsToQuery = expandedSeeds.slice(0, 5);
+    for (const seed of seedsToQuery) {
+      const endpoints = [
+        { name: 'suggestions', url: 'https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live',
+          body: [{ keyword: seed, location_code: discoveryCode, language_name: 'English', limit: labsLimit, include_seed_keyword: true, include_serp_info: false }] },
+        { name: 'related', url: 'https://api.dataforseo.com/v3/dataforseo_labs/google/related_keywords/live',
+          body: [{ keyword: seed, location_code: discoveryCode, language_name: 'English', limit: labsLimit, include_seed_keyword: true }] },
+        { name: 'ideas', url: 'https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_ideas/live',
+          body: [{ keyword: seed, location_code: discoveryCode, language_name: 'English', limit: labsLimit, include_seed_keyword: true }] },
+      ];
+
+      const fetches = endpoints.map(async (ep) => {
+        try {
+          const resp = await fetch(ep.url, {
+            method: 'POST', headers: dfsHeaders, body: JSON.stringify(ep.body),
+            signal: AbortSignal.timeout(20000),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const items = data?.tasks?.[0]?.result?.[0]?.items || [];
+            const kws = parseDfsItems(items);
+            console.log(`[kw-research] ${ep.name} for "${seed}": ${kws.length} keywords`);
+            return kws;
+          } else {
+            const errText = await resp.text();
+            console.log(`[kw-research] ${ep.name} error for "${seed}": ${resp.status} ${errText.substring(0, 200)}`);
+            return [];
+          }
+        } catch (e) {
+          console.log(`[kw-research] ${ep.name} error for "${seed}": ${e.message}`);
+          return [];
+        }
+      });
+
+      const results = await Promise.all(fetches);
+      for (const kws of results) allKeywords.push(...kws);
     }
 
     // Step 3: Enrich ALL keywords with Google Ads search_volume for accurate AU volumes
