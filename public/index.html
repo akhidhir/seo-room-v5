@@ -8311,7 +8311,9 @@
                     onChange: isPublished ? undefined : setEditContent,
                     readOnly: isPublished,
                     initialComments: comments,
-                    onCommentsChange: isPublished ? undefined : setComments
+                    onCommentsChange: isPublished ? undefined : setComments,
+                    onSave: isPublished ? undefined : handleSaveEdit,
+                    saveStatus: savingMeta
                   })
                 : !generating
                   ? React.createElement('div', { style: { textAlign: 'center', padding: '80px 40px' } },
@@ -9964,7 +9966,7 @@
         .trim();
     }
 
-    function QuillEditor({ value, onChange, readOnly, initialComments, onCommentsChange }) {
+    function QuillEditor({ value, onChange, readOnly, initialComments, onCommentsChange, onSave, saveStatus }) {
       const editorRef = useRef(null);
       const quillRef = useRef(null);
       const lastSelectionRef = useRef(null);
@@ -10101,9 +10103,14 @@
           }
         }
         if (!sel || sel.length === 0) {
-          // No text selected — open general comment (not linked to text)
-          setPendingSelection({ index: 0, length: 0, text: '', top: 0, general: true });
-          setNewCommentText('');
+          // No text selected — show visual hint, do NOT open comment
+          const btn = document.querySelector('.comment-btn');
+          if (btn) {
+            btn.style.outline = '2px solid #ef4444';
+            btn.style.outlineOffset = '2px';
+            btn.setAttribute('title', 'Select text first, then click Add Comment');
+            setTimeout(() => { btn.style.outline = ''; btn.removeAttribute('title'); }, 2000);
+          }
           return;
         }
         const selectedText = q.getText(sel.index, sel.length);
@@ -10252,6 +10259,9 @@
             ),
             !readOnly && React.createElement('button', { onMouseDown: (e) => { e.preventDefault(); lockParagraph(); }, className: 'editor-btn', style: { padding: '6px 12px', fontSize: 12, background: 'rgba(99,102,241,0.15)', color: '#6366f1', border: '1px solid #6366f1', borderRadius: 6, cursor: 'pointer' } },
               React.createElement('i', { className: 'fa-solid fa-lock', style: { marginRight: 6 } }), 'Lock Selection'
+            ),
+            onSave && React.createElement('button', { onClick: onSave, className: 'editor-btn', style: { padding: '6px 14px', fontSize: 12, background: saveStatus === 'done' ? '#22c55e' : '#10b981', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, minWidth: 80 } },
+              React.createElement('i', { className: saveStatus === true ? 'fas fa-spinner fa-spin' : 'fas fa-save', style: { marginRight: 5 } }), saveStatus === true ? 'Saving...' : saveStatus === 'done' ? 'Saved!' : 'Save'
             ),
             !readOnly && React.createElement('button', { onClick: () => setShowFind(!showFind), className: 'editor-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' } },
               React.createElement('i', { className: 'fa-solid fa-magnifying-glass', style: { marginRight: 6 } }), 'Find & Replace'
@@ -12548,7 +12558,9 @@
                       onChange: isPublished ? undefined : setEditContent,
                       readOnly: isPublished,
                       initialComments: comments,
-                      onCommentsChange: isPublished ? undefined : setComments
+                      onCommentsChange: isPublished ? undefined : setComments,
+                      onSave: isPublished ? undefined : handleSaveEdit,
+                      saveStatus: savingMeta
                     })
               )
             ),
