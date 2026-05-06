@@ -6709,6 +6709,7 @@
 
     function KeywordResearchPage({ project }) {
       var pid = project ? project.id : null;
+      var apiPrefix = project?.build_id ? '/builds/' + project.build_id : '/projects/' + pid;
       var [seeds, setSeeds] = React.useState('');
       var [country] = React.useState('Australia');
       var [state, setState] = React.useState(project?.nw_location ? '' : 'Western Australia');
@@ -6759,7 +6760,7 @@
         setSelected([]);
         setSent(false);
         try {
-          var data = await api('/projects/' + pid + '/keyword-research', {
+          var data = await api(apiPrefix + '/keyword-research', {
             method: 'POST',
             body: { seeds: seedList, country: country, state: state, city: city, is_local: isLocal, package_size: packageSize }
           });
@@ -6805,7 +6806,7 @@
         setFetchingMore(true);
         try {
           var existingKws = results.keywords.map(function(kw) { return kw.keyword; });
-          var data = await api('/projects/' + pid + '/keyword-research', {
+          var data = await api(apiPrefix + '/keyword-research', {
             method: 'POST',
             body: { seeds: seedList, country: country, state: state, city: city, is_local: isLocal, package_size: packageSize, exclude_keywords: existingKws, min_volume: minVolume || 0 }
           });
@@ -6840,7 +6841,7 @@
           var bulk = keywords.map(function(kw) {
             return { keyword: kw.keyword, search_volume: kw.volume || 0 };
           });
-          await api('/projects/' + pid + '/content-keywords/bulk', {
+          await api(apiPrefix + '/content-keywords/bulk', {
             method: 'POST',
             body: { keywords: bulk.map(function(k) { return k.keyword; }), search_volumes: bulk.reduce(function(acc, k) { acc[k.keyword] = k.search_volume; return acc; }, {}) }
           });
@@ -18313,6 +18314,7 @@ case 'action-plan':
                       <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: '#eab308' }}>BUILD</div>
                       {[
                         { id: 'nw-settings', label: 'Build Settings', icon: 'fas fa-cog' },
+                        { id: 'nw-research', label: 'Research', icon: 'fas fa-search' },
                         { id: 'nw-keywords', label: 'Keywords', icon: 'fas fa-key' },
                         { id: 'nw-pages', label: 'Pages', icon: 'fas fa-file-alt' },
                         { id: 'nw-staging', label: 'Staging', icon: 'fas fa-sitemap' },

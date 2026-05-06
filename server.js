@@ -849,6 +849,7 @@ app.delete('/api/builds/:buildId/content-keywords/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
 // Build-scoped site-pages generate (creates pages from assigned keywords)
 app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
   try {
@@ -10998,8 +10999,8 @@ const AU_STATE_POP = {
   'Northern Territory': 250000, 'Australian Capital Territory': 470000,
 };
 
-app.post('/api/projects/:projectId/keyword-research', async (req, res) => {
-  const { projectId } = req.params;
+app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/keyword-research'], async (req, res) => {
+  const projectId = req.params.projectId || req.params.buildId;
   const { seeds, country, state, city, is_local, package_size, exclude_keywords, min_volume } = req.body;
   // seeds: string[] of seed keywords
   // country: 'Australia' (future: others)
