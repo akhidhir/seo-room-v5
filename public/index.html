@@ -10080,9 +10080,24 @@
 
       function startComment() {
         if (!quillRef.current) return;
-        // Try current selection first, fall back to last known selection (saved before blur)
+        // Try multiple methods to get selection
         let sel = quillRef.current.getSelection();
         if (!sel || sel.length === 0) sel = lastSelectionRef.current;
+        // Last resort: use browser's native selection and map to Quill range
+        if (!sel || sel.length === 0) {
+          const nativeSel = window.getSelection();
+          if (nativeSel && !nativeSel.isCollapsed && nativeSel.toString().trim()) {
+            const editorEl = quillRef.current.root;
+            if (editorEl && editorEl.contains(nativeSel.anchorNode)) {
+              const range = nativeSel.getRangeAt(0);
+              const preRange = document.createRange();
+              preRange.setStart(editorEl, 0);
+              preRange.setEnd(range.startContainer, range.startOffset);
+              const startIdx = preRange.toString().length;
+              sel = { index: startIdx, length: nativeSel.toString().length };
+            }
+          }
+        }
         if (!sel || sel.length === 0) { alert('Select some text first, then click Add Comment'); return; }
         const selectedText = quillRef.current.getText(sel.index, sel.length);
         const bounds = quillRef.current.getBounds(sel.index, sel.length);
