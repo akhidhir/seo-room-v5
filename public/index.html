@@ -8634,38 +8634,45 @@
         svg.call(zoom);
 
         // Arrow marker
-        svg.append('defs').append('marker')
+        var defs = svg.append('defs');
+        defs.append('marker')
           .attr('id', 'arrowhead').attr('viewBox', '0 -5 10 10')
-          .attr('refX', 28).attr('refY', 0)
+          .attr('refX', 35).attr('refY', 0)
           .attr('markerWidth', 6).attr('markerHeight', 6)
           .attr('orient', 'auto')
           .append('path').attr('d', 'M0,-5L10,0L0,5')
           .attr('fill', '#6b728080');
 
+        // Node dimensions
+        var nodeW = 120, nodeH = 50, cornerW = 140, cornerH = 60;
+
         // Force simulation
         var simulation = d3.forceSimulation(nodes)
-          .force('link', d3.forceLink(links).distance(150).strength(0.5))
-          .force('charge', d3.forceManyBody().strength(-400))
+          .force('link', d3.forceLink(links).distance(180).strength(0.4))
+          .force('charge', d3.forceManyBody().strength(-500))
           .force('center', d3.forceCenter(width / 2, height / 2))
-          .force('collision', d3.forceCollide(50));
+          .force('collision', d3.forceCollide(80));
 
         // Links
         var linkG = g.append('g').selectAll('line').data(links).enter().append('line')
           .attr('stroke', '#6b728060').attr('stroke-width', 1.5)
           .attr('marker-end', 'url(#arrowhead)');
 
-        // Link labels (anchor text)
-        var linkLabels = g.append('g').selectAll('text').data(links).enter().append('text')
-          .text(function(d) { return d.anchor || ''; })
-          .attr('font-size', 9).attr('fill', '#9ca3af').attr('text-anchor', 'middle')
-          .attr('dy', -6);
-
         // Nodes
         var nodeG = g.append('g').selectAll('g').data(nodes).enter().append('g')
           .style('cursor', 'pointer')
           .on('click', function(event, d) {
-            var page = pages.find(function(p) { return p.id === d.id; });
-            setSelectedPage(page);
+            event.stopPropagation();
+            if (linkMode) {
+              if (linkMode.sourceId !== d.id) {
+                handleToggleLink(linkMode.sourceId, d.id);
+              } else {
+                setLinkMode(null);
+              }
+            } else {
+              var page = pages.find(function(p) { return p.id === d.id; });
+              setSelectedPage(page);
+            }
           })
           .call(d3.drag()
             .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
@@ -8673,35 +8680,59 @@
             .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
           );
 
-        // Node circles
-        nodeG.append('circle')
-          .attr('r', function(d) { return d.cornerstone ? 28 : 20; })
-          .attr('fill', function(d) { return (typeColors[d.type] || '#6366f1') + '20'; })
+        // Node rectangles (rounded)
+        nodeG.append('rect')
+          .attr('width', function(d) { return d.cornerstone ? cornerW : nodeW; })
+          .attr('height', function(d) { return d.cornerstone ? cornerH : nodeH; })
+          .attr('x', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
+          .attr('y', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
+          .attr('rx', 8).attr('ry', 8)
+          .attr('fill', function(d) { return (typeColors[d.type] || '#6366f1') + '18'; })
           .attr('stroke', function(d) { return typeColors[d.type] || '#6366f1'; })
-          .attr('stroke-width', function(d) { return d.cornerstone ? 3 : 1.5; });
+          .attr('stroke-width', function(d) { return d.cornerstone ? 2.5 : 1.5; });
+
+        // Type color bar at top of rectangle
+        nodeG.append('rect')
+          .attr('width', function(d) { return d.cornerstone ? cornerW : nodeW; })
+          .attr('height', 4)
+          .attr('x', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
+          .attr('y', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
+          .attr('rx', 8).attr('ry', 8)
+          .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; });
 
         // Stage indicator dot
         nodeG.append('circle')
-          .attr('r', 5).attr('cx', function(d) { return d.cornerstone ? 20 : 14; }).attr('cy', function(d) { return d.cornerstone ? -20 : -14; })
+          .attr('r', 5)
+          .attr('cx', function(d) { return (d.cornerstone ? cornerW : nodeW) / 2 - 4; })
+          .attr('cy', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2 - 4; })
           .attr('fill', function(d) { return stageColors[d.stage] || '#6b7280'; });
 
-        // Node labels
+        // Cornerstone star
+        nodeG.filter(function(d) { return d.cornerstone; }).append('text')
+          .text('★').attr('text-anchor', 'middle')
+          .attr('x', function(d) { return -(cornerW / 2) + 12; })
+          .attr('dy', 4).attr('font-size', 12)
+          .attr('fill', '#f59e0b');
+
+        // Page name label
         nodeG.append('text')
-          .text(function(d) { return d.name.length > 18 ? d.name.substring(0, 16) + '...' : d.name; })
-          .attr('text-anchor', 'middle').attr('dy', function(d) { return d.cornerstone ? 42 : 34; })
+          .text(function(d) { return d.name.length > 16 ? d.name.substring(0, 14) + '...' : d.name; })
+          .attr('text-anchor', 'middle').attr('dy', 2)
           .attr('font-size', 11).attr('font-weight', 600)
           .attr('fill', 'var(--text)');
 
-        // Cornerstone badge
-        nodeG.filter(function(d) { return d.cornerstone; }).append('text')
-          .text('★').attr('text-anchor', 'middle').attr('dy', 5).attr('font-size', 14)
-          .attr('fill', typeColors.service);
+        // Page type label below name
+        nodeG.append('text')
+          .text(function(d) { return d.type; })
+          .attr('text-anchor', 'middle').attr('dy', 16)
+          .attr('font-size', 9).attr('font-weight', 400)
+          .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; })
+          .attr('opacity', 0.7);
 
         simulation.on('tick', function() {
-          linkG.attr('x1', function(d) { return d.source.x; }).attr('y1', function(d) { return d.source.y; })
+          linkG
+            .attr('x1', function(d) { return d.source.x; }).attr('y1', function(d) { return d.source.y; })
             .attr('x2', function(d) { return d.target.x; }).attr('y2', function(d) { return d.target.y; });
-          linkLabels.attr('x', function(d) { return (d.source.x + d.target.x) / 2; })
-            .attr('y', function(d) { return (d.source.y + d.target.y) / 2; });
           nodeG.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
         });
 
@@ -8859,12 +8890,12 @@
         pages.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
           [{ label: 'Home', color: typeColors.home }, { label: 'Service', color: typeColors.service }, { label: 'Suburb', color: typeColors.suburb }, { label: 'Blog', color: typeColors.blog }].map(function(item) {
             return React.createElement('div', { key: item.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
-              React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: item.color } }),
+              React.createElement('div', { style: { width: 12, height: 8, borderRadius: 2, background: item.color } }),
               item.label
             );
           }),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)' } },
-            React.createElement('div', { style: { width: 14, height: 14, borderRadius: '50%', border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8 } }, '★'),
+            React.createElement('div', { style: { width: 14, height: 10, borderRadius: 2, border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7 } }, '★'),
             'Cornerstone'
           ),
           [{ label: 'Draft', color: stageColors.draft }, { label: 'Written', color: stageColors.written }, { label: 'Published', color: stageColors.published }].map(function(item) {
@@ -8880,9 +8911,22 @@
           ref: containerRef,
           style: { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', position: 'relative' }
         },
+          // Link mode bar
+          linkMode && React.createElement('div', {
+            style: { position: 'absolute', top: 0, left: 0, right: 0, padding: '10px 16px', background: '#3b82f6', color: '#fff', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }
+          },
+            React.createElement('span', null,
+              React.createElement('i', { className: 'fas fa-link', style: { marginRight: 8 } }),
+              'Click a page to link/unlink from "' + linkMode.sourceName + '"'
+            ),
+            React.createElement('button', {
+              onClick: function() { setLinkMode(null); },
+              style: { background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+            }, 'Cancel')
+          ),
           React.createElement('svg', { ref: svgRef, style: { width: '100%', height: 600 } }),
           React.createElement('div', { style: { position: 'absolute', bottom: 12, right: 12, fontSize: 11, color: 'var(--text3)', background: 'var(--card)', padding: '4px 10px', borderRadius: 6 } },
-            'Scroll to zoom • Drag nodes • Click to inspect'
+            'Scroll to zoom • Drag nodes • Click to edit'
           )
         ),
 
@@ -8904,7 +8948,11 @@
                 )
               ),
               React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } }, (sp.internal_links || []).length + ' links out'),
+                React.createElement('button', {
+                  onClick: function(e) { e.stopPropagation(); setLinkMode({ sourceId: sp.id, sourceName: sp.page_name }); setViewMode('graph'); },
+                  style: { fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid #3b82f6', background: 'transparent', color: '#3b82f6', cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 3 } }), 'Link'),
+                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } }, (sp.internal_links || []).length + ' links'),
                 React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage)
               )
             );
