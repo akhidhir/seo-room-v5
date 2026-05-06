@@ -5858,35 +5858,60 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
       const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000) });
       if (liveRes.ok) {
         const liveHtml = await liveRes.text();
-        const headerEnd = liveHtml.search(/<\/header>/i);
-        const footerStart = liveHtml.search(/<footer[\s>]/i);
+        // Helper to strip non-content elements
+        const stripChrome = (html) => html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+          .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '')
+          .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+          .replace(/<div[^>]*class="[^"]*(?:sidebar|widget|menu|breadcrumb|se-pre-con)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+          .replace(/<div[^>]*id="[^"]*(?:sidebar|widget)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+        const wordCount = (html) => html.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
         let extracted = '';
-        if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
-          extracted = liveHtml.slice(headerEnd + '</header>'.length, footerStart)
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-            .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-            .replace(/<!--[\s\S]*?-->/g, '')
-            .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+        // Priority 1: <main> or <article> — most accurate semantic content
+        const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*)<\/main>/i);
+        if (mainMatch && wordCount(mainMatch[1]) >= 30) {
+          extracted = stripChrome(mainMatch[1]);
+          console.log('[fetchLivePageContent] Extracted from <main> tag:', wordCount(extracted), 'words');
         }
-        if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
-          const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*)<\/main>/i) ||
-                            liveHtml.match(/<article[^>]*>([\s\S]*)<\/article>/i);
-          if (mainMatch) extracted = mainMatch[1];
+        if (!extracted || wordCount(extracted) < 30) {
+          const articleMatch = liveHtml.match(/<article[^>]*>([\s\S]*)<\/article>/i);
+          if (articleMatch && wordCount(articleMatch[1]) >= 30) {
+            extracted = stripChrome(articleMatch[1]);
+            console.log('[fetchLivePageContent] Extracted from <article> tag:', wordCount(extracted), 'words');
+          }
         }
-        if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
+        // Priority 2: Elementor content container (common in WP sites)
+        if (!extracted || wordCount(extracted) < 30) {
+          const elMatch = liveHtml.match(/<div[^>]*class="[^"]*elementor[^"]*"[^>]*data-elementor-type="wp-page"[^>]*>([\s\S]*?)(?=<footer|<div[^>]*class="[^"]*footer)/i);
+          if (elMatch && wordCount(elMatch[1]) >= 30) {
+            extracted = stripChrome(elMatch[1]);
+            console.log('[fetchLivePageContent] Extracted from Elementor container:', wordCount(extracted), 'words');
+          }
+        }
+        // Priority 3: header-to-footer (strip sidebars)
+        if (!extracted || wordCount(extracted) < 30) {
+          const headerEnd = liveHtml.search(/<\/header>/i);
+          const footerStart = liveHtml.search(/<footer[\s>]/i);
+          if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
+            const between = liveHtml.slice(headerEnd + '</header>'.length, footerStart);
+            const cleaned = stripChrome(between);
+            if (wordCount(cleaned) >= 30) {
+              extracted = cleaned;
+              console.log('[fetchLivePageContent] Extracted header-to-footer:', wordCount(extracted), 'words');
+            }
+          }
+        }
+        // Priority 4: full body minus chrome
+        if (!extracted || wordCount(extracted) < 30) {
           const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
           if (bodyMatch) {
-            extracted = bodyMatch[1]
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+            extracted = stripChrome(bodyMatch[1])
               .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-              .replace(/<header[\s\S]*?<\/header>/gi, '')
-              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-              .replace(/<!--[\s\S]*?-->/g, '')
-              .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+              .replace(/<header[\s\S]*?<\/header>/gi, '');
+            console.log('[fetchLivePageContent] Extracted from body (last resort):', wordCount(extracted), 'words');
           }
         }
         if (extracted) {
