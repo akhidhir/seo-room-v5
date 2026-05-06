@@ -510,6 +510,28 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS target_keywords JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
 
+    // Website builds — standalone new website projects (not tied to existing projects)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS website_builds (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        domain TEXT,
+        business_name TEXT,
+        industry TEXT,
+        location TEXT,
+        status TEXT NOT NULL DEFAULT 'planning',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+    // Add optional build_id to site_pages and content_keywords
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
+    // Make project_id nullable on site_pages and content_keywords for build-only items
+    await client.query(`ALTER TABLE site_pages ALTER COLUMN project_id DROP NOT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ALTER COLUMN project_id DROP NOT NULL`).catch(() => {});
+
     // Content settings — tone, style, word count per project
     await client.query(`
       CREATE TABLE IF NOT EXISTS content_settings (
@@ -666,6 +688,199 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 app.use(optionalAuth);
 
 // ==================== 4. PROJECTS ====================
+
+// ============ WEBSITE BUILDS (standalone new website projects) ============
+
+app.get('/api/website-builds', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM website_builds ORDER BY updated_at DESC');
+    res.json({ builds: result.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/website-builds', async (req, res) => {
+  try {
+    const { name, domain, business_name, industry, location } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    const result = await pool.query(
+      `INSERT INTO website_builds (name, domain, business_name, industry, location) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [name, domain || null, business_name || null, industry || null, location || null]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/website-builds/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM website_builds WHERE id=$1', [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/website-builds/:id', async (req, res) => {
+  try {
+    const { name, domain, business_name, industry, location, status } = req.body;
+    const result = await pool.query(
+      `UPDATE website_builds SET name=COALESCE($2,name), domain=COALESCE($3,domain), business_name=COALESCE($4,business_name),
+       industry=COALESCE($5,industry), location=COALESCE($6,location), status=COALESCE($7,status), updated_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [req.params.id, name, domain, business_name, industry, location, status]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/website-builds/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM website_builds WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Site pages and keywords for a build (same structure, build_id instead of project_id)
+app.get('/api/builds/:buildId/site-pages', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM site_pages WHERE build_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name', [req.params.buildId]);
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/builds/:buildId/site-pages', async (req, res) => {
+  try {
+    const { page_type, page_name, slug, focus_keyword, meta_title, meta_description, is_cornerstone, cluster_id, keywords } = req.body;
+    const result = await pool.query(
+      `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, meta_title, meta_description, is_cornerstone, cluster_id, keywords)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [req.params.buildId, page_type || 'service', page_name, slug, focus_keyword, meta_title, meta_description, is_cornerstone || false, cluster_id, JSON.stringify(keywords || [])]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
+  try {
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords } = req.body;
+    const result = await pool.query(
+      `UPDATE site_pages SET
+        meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
+        focus_keyword=COALESCE($5, focus_keyword), draft_content=COALESCE($6, draft_content),
+        word_count=COALESCE($7, word_count), stage=COALESCE($8, stage), slug=COALESCE($9, slug),
+        is_cornerstone=COALESCE($10, is_cornerstone), page_name=COALESCE($11, page_name),
+        page_url=COALESCE($12, page_url), page_sections=COALESCE($13, page_sections),
+        target_keywords=COALESCE($14, target_keywords), updated_at=NOW()
+       WHERE id=$1 AND build_id=$2 RETURNING *`,
+      [req.params.pageId, req.params.buildId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name,
+       page_url || null, page_sections ? JSON.stringify(page_sections) : null, target_keywords ? JSON.stringify(target_keywords) : null]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/builds/:buildId/content-keywords', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM content_keywords WHERE build_id=$1 ORDER BY keyword', [req.params.buildId]);
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/builds/:buildId/content-keywords', async (req, res) => {
+  try {
+    const { keyword, page_type, page_name, search_volume } = req.body;
+    const result = await pool.query(
+      `INSERT INTO content_keywords (build_id, keyword, page_type, page_name, search_volume) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [req.params.buildId, keyword, page_type, page_name, search_volume]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Build-scoped content-keywords bulk endpoints (mirror project-scoped ones)
+app.post('/api/builds/:buildId/content-keywords/bulk', async (req, res) => {
+  try {
+    const { keywords, search_volumes } = req.body;
+    if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+    const buildId = req.params.buildId;
+    const volMap = search_volumes || {};
+    const added = [];
+    for (const kw of keywords) {
+      const keyword = (kw.keyword || kw).toString().trim();
+      if (!keyword) continue;
+      const exists = await pool.query('SELECT id FROM content_keywords WHERE build_id=$1 AND LOWER(keyword)=LOWER($2)', [buildId, keyword]);
+      if (exists.rows.length > 0) continue;
+      const vol = volMap[keyword] || volMap[keyword.toLowerCase()] || (kw.search_volume != null ? kw.search_volume : null);
+      const r = await pool.query(
+        `INSERT INTO content_keywords (build_id, keyword, page_type, page_name, search_volume) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [buildId, keyword, kw.page_type || 'unassigned', kw.page_name || null, vol]
+      );
+      added.push(r.rows[0]);
+    }
+    res.json({ success: true, added: added.length, keywords: added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/builds/:buildId/content-keywords/bulk-assign', async (req, res) => {
+  try {
+    const { keyword_ids, page_type, page_name } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=$2 WHERE id = ANY($3) AND build_id=$4`,
+      [page_type, page_name || null, keyword_ids, req.params.buildId]
+    );
+    res.json({ success: true, updated: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/builds/:buildId/content-keywords/bulk-delete', async (req, res) => {
+  try {
+    const { keyword_ids } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    await pool.query('DELETE FROM content_keywords WHERE id = ANY($1) AND build_id=$2', [keyword_ids, req.params.buildId]);
+    res.json({ success: true, deleted: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/builds/:buildId/content-keywords/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM content_keywords WHERE id=$1 AND build_id=$2', [req.params.id, req.params.buildId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Build-scoped site-pages generate (creates pages from assigned keywords)
+app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
+  try {
+    const buildId = req.params.buildId;
+    const keywords = await pool.query('SELECT * FROM content_keywords WHERE build_id=$1 AND page_type != $2', [buildId, 'unassigned']);
+    const pageMap = {};
+    keywords.rows.forEach(kw => {
+      const key = kw.page_type + '::' + (kw.page_name || 'default');
+      if (!pageMap[key]) pageMap[key] = { page_type: kw.page_type, page_name: kw.page_name, keywords: [] };
+      pageMap[key].keywords.push({ keyword: kw.keyword, search_volume: kw.search_volume });
+    });
+    const pages = [];
+    for (const key of Object.keys(pageMap)) {
+      const p = pageMap[key];
+      const existing = await pool.query('SELECT id FROM site_pages WHERE build_id=$1 AND page_type=$2 AND page_name=$3', [buildId, p.page_type, p.page_name]);
+      if (existing.rows.length > 0) {
+        await pool.query('UPDATE site_pages SET keywords=$1 WHERE id=$2', [JSON.stringify(p.keywords), existing.rows[0].id]);
+        const r2 = await pool.query('SELECT * FROM site_pages WHERE id=$1', [existing.rows[0].id]);
+        pages.push(r2.rows[0]);
+      } else {
+        const slug = (p.page_name || p.page_type).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const r = await pool.query(
+          `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, keywords, is_cornerstone)
+           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+          [buildId, p.page_type, p.page_name, slug, p.keywords[0]?.keyword || '', JSON.stringify(p.keywords), p.page_type === 'home']
+        );
+        pages.push(r.rows[0]);
+      }
+    }
+    res.json({ pages });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // List projects for current user
 app.get('/api/projects', async (req, res) => {
