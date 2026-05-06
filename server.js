@@ -6650,7 +6650,7 @@ SCORING SYSTEM (100 points total — hit EVERY threshold):
 3. H3 SUBHEADINGS: 2 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
 3b. H1 TAG: 5 points if EXACTLY 1 H1. You MUST include exactly ONE <h1> tag (the page title). NEVER use more than one H1 — if you see multiple, keep only the first and demote the rest to <h2>.
 4. INTERNAL LINKS: 8 points if 3+ links. You MUST include at least 4 <a href="URL"> tags linking to pages listed below.
-5. IMAGES: 2 points if 1+ image. Add <img src="" alt="descriptive alt text"> placeholder where an image should go.
+5. IMAGES: 2 points if 1+ image. You MUST add at least 2 <img src="" alt="descriptive alt text for the image"> tags in relevant sections. This is MANDATORY — never skip images.
 6. FOCUS KEYWORD IN CONTENT: 15 points if used 3-8 times. Count your usage — EXACTLY 5 times is ideal.
 7. TARGET KEYWORDS: 15 points proportional to how many target keywords appear. Include EVERY one.
 8. META TITLE: 10 points — MUST be 50-60 characters AND contain focus keyword near the start. No pipes/dashes (theme adds those).
@@ -6664,7 +6664,7 @@ MANDATORY:
 - Clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em, img, div, section
 - NEW SECTIONS: If you add entirely new sections that did NOT exist in the original, wrap them in <section class="new-section">...</section> so they are visually marked. Do NOT wrap modified/expanded existing sections.
 - Every <a> MUST have a real href from the linking pages provided
-- Add an <img> tag with descriptive alt text where a relevant image should go
+- Add at least 2 <img src="" alt="descriptive alt text"> tags in the content — one after the intro, one in a later section. NEVER skip this
 
 WRITE LIKE A HUMAN — NOT AN AI (this is critical):
 - BANNED PHRASES (never use these): "In today's", "In the world of", "Whether you're", "Look no further", "When it comes to", "It's important to note", "At the end of the day", "Are you looking for", "Understanding the importance", "In this comprehensive guide", "Navigate the complexities", "rest assured", "peace of mind", "top-notch", "cutting-edge", "state-of-the-art", "second to none", "the right choice", "your trusted partner", "one-stop shop", "hassle-free", "seamless experience", "don't hesitate to", "feel free to", "game-changer", "unlock the power", "a wide range of", "take it to the next level", "dive into", "let's explore", "without further ado"
@@ -6733,13 +6733,9 @@ ${competitor_data ? `COMPETITOR ANALYSIS (for "${competitor_data.keyword}"):
 - Top 3 avg word count: ${competitor_data.summary?.top3_avg || 'N/A'} | All avg: ${competitor_data.summary?.avg || 'N/A'} | Recommended: ${competitor_data.summary?.recommended || 'N/A'}
 ${(competitor_data.top3 || []).map((c, i) => `  #${c.position}: ${c.domain} — ${c.words} words, H2s: ${(c.h2Texts || []).slice(0, 5).join(' | ') || 'none'}`).join('\n')}` : ''}
 
-${topic_gaps ? `TOPIC GAP ANALYSIS (competitors cover these, you DON'T — MUST address):
-- Missing topics to add as H2/H3 sections: ${(topic_gaps.missing_topics || []).join(', ') || 'none'}
-- Missing keywords to weave in naturally: ${(topic_gaps.missing_keywords || []).join(', ') || 'none'}
+${topic_gaps ? `TOPIC GAP ANALYSIS (competitors cover these, you DON'T):
 - Your strengths to keep: ${(topic_gaps.content_strengths || []).join(', ') || 'none'}
-- Summary: ${topic_gaps.recommendation || 'none'}
-
-IMPORTANT: Address the missing topics by adding new H2/H3 sections. Weave missing keywords throughout the content. This is how you beat competitors.` : ''}
+- Summary: ${topic_gaps.recommendation || 'none'}` : ''}
 
 PAGES FOR INTERNAL LINKING (add <a> tags linking to these):
 ${pagesRes.rows.slice(0, 20).map(p => `- ${p.page_url} (${p.page_title})`).join('\n') || '- No pages available yet'}
@@ -6764,7 +6760,8 @@ ${locked_content && locked_content.length > 0 ? '- LOCKED PARAGRAPHS (DO NOT MOD
 - Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear 5 times in the content (scoring gives full 15 pts for 3-8 occurrences, but 5 is ideal).
 - Focus keyword MUST be in meta title AND meta description (required for full meta points).
 - EVERY target keyword must appear at least once naturally in the content (15 pts proportional to coverage).
-${topic_gaps && (topic_gaps.missing_topics?.length || topic_gaps.missing_keywords?.length) ? '- TOPIC GAPS ARE YOUR #1 PRIORITY: Add new H2/H3 sections for missing topics. Weave ALL missing keywords. This is how you beat competitors and maximise the score.' : ''}
+${topic_gaps && topic_gaps.missing_topics?.length ? '- MANDATORY NEW SECTIONS — The user has ACCEPTED these topics. You MUST add a dedicated H2 or H3 section for EACH one. Do NOT skip any:\n' + topic_gaps.missing_topics.map((t, i) => '  ' + (i+1) + '. ADD NEW SECTION: "' + t + '" — write a full H2 section with 100+ words about this topic').join('\n') + '\n- FAILURE TO ADD THESE SECTIONS MEANS THE REWRITE IS REJECTED.' : ''}
+${topic_gaps && topic_gaps.missing_keywords?.length ? '- MANDATORY KEYWORDS — The user has ACCEPTED these keywords. Each one MUST appear at least once in the content:\n' + topic_gaps.missing_keywords.map(k => '  - "' + k + '"').join('\n') : ''}
 ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? '- SKELETON MODE: Fill in the skeleton placeholders. Do NOT rewrite or restructure. Keep ALL HTML tags, divs, classes, and section comments exactly as provided.' : '- Rewrite the FULL content fixing ALL numbered issues above.'}`;
 
     console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix, competitor_data: ${competitor_data ? 'YES (' + (competitor_data.top3?.length || 0) + ' top3)' : 'NONE'}, topic_gaps: ${topic_gaps ? 'YES (' + (topic_gaps.missing_topics?.length || 0) + ' topics, ' + (topic_gaps.missing_keywords?.length || 0) + ' keywords)' : 'NONE'}, word_target: ${word_target || 'default'}`);
