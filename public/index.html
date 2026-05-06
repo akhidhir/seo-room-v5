@@ -8742,24 +8742,24 @@
           .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; })
           .attr('opacity', 0.7);
 
-        // === n8n-style connection handles ===
+        // === n8n-style connection handles: bottom (output) + top (input) ===
 
-        // Output handle (right edge) — drag FROM here
+        // Output handle — bottom-middle (drag FROM here)
         nodeG.append('circle')
           .attr('class', 'conn-handle conn-output')
           .attr('r', handleR)
-          .attr('cx', function(d) { return (d.cornerstone ? cornerW : nodeW) / 2; })
-          .attr('cy', 0)
+          .attr('cx', 0)
+          .attr('cy', function(d) { return (d.cornerstone ? cornerH : nodeH) / 2; })
           .attr('fill', '#3b82f6').attr('stroke', '#fff').attr('stroke-width', 2)
           .style('cursor', 'crosshair')
           .style('opacity', 0);
 
-        // Input handle (left edge) — drop TO here
+        // Input handle — top-middle (drop TO here)
         nodeG.append('circle')
           .attr('class', 'conn-handle conn-input')
           .attr('r', handleR)
-          .attr('cx', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
-          .attr('cy', 0)
+          .attr('cx', 0)
+          .attr('cy', function(d) { return -(d.cornerstone ? cornerH : nodeH) / 2; })
           .attr('fill', '#22c55e').attr('stroke', '#fff').attr('stroke-width', 2)
           .style('cursor', 'crosshair')
           .style('opacity', 0);
@@ -8778,13 +8778,13 @@
           d3.drag()
             .on('start', function(event, d) {
               event.sourceEvent.stopPropagation();
-              var w = d.cornerstone ? cornerW : nodeW;
+              var h = d.cornerstone ? cornerH : nodeH;
               dragLineRef.current = { sourceId: d.id, sourceName: d.name };
               tempLine
-                .attr('x1', d.x + w / 2).attr('y1', d.y)
-                .attr('x2', d.x + w / 2).attr('y2', d.y)
+                .attr('x1', d.x).attr('y1', d.y + h / 2)
+                .attr('x2', d.x).attr('y2', d.y + h / 2)
                 .style('display', null);
-              // Show all input handles
+              // Show all input handles (top-middle green dots)
               g.selectAll('.conn-input').style('opacity', 0.6);
             })
             .on('drag', function(event, d) {
@@ -8793,15 +8793,15 @@
               var mouseX = (event.sourceEvent.offsetX - transform.x) / transform.k;
               var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
               tempLine.attr('x2', mouseX).attr('y2', mouseY);
-              // Highlight nearby input handles
+              // Highlight nearby nodes' top handles
               g.selectAll('.conn-input').each(function(nd) {
-                var w2 = nd.cornerstone ? cornerW : nodeW;
-                var hx = nd.x - w2 / 2;
-                var hy = nd.y;
+                var h2 = nd.cornerstone ? cornerH : nodeH;
+                var hx = nd.x;
+                var hy = nd.y - h2 / 2;
                 var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
                 d3.select(this)
-                  .attr('r', dist < 20 ? handleR + 3 : handleR)
-                  .style('opacity', dist < 20 ? 1 : 0.6);
+                  .attr('r', dist < 25 ? handleR + 3 : handleR)
+                  .style('opacity', dist < 25 ? 1 : 0.6);
               });
             })
             .on('end', function(event, d) {
@@ -8817,12 +8817,12 @@
               var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
 
               var targetNode = null;
-              var minDist = 25;
+              var minDist = 35;
               nodes.forEach(function(n) {
                 if (n.id === sourceId) return;
-                var w2 = n.cornerstone ? cornerW : nodeW;
-                var hx = n.x - w2 / 2;
-                var hy = n.y;
+                var h2 = n.cornerstone ? cornerH : nodeH;
+                var hx = n.x;
+                var hy = n.y - h2 / 2; // top-middle of target
                 var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
                 if (dist < minDist) { minDist = dist; targetNode = n; }
               });
@@ -8868,12 +8868,12 @@
           });
 
         simulation.on('tick', function() {
-          // Link lines go from output handle (right edge) to input handle (left edge)
+          // Link lines: bottom-middle of source → top-middle of target
           linkG
-            .attr('x1', function(d) { var w = d.source.cornerstone ? cornerW : nodeW; return d.source.x + w / 2; })
-            .attr('y1', function(d) { return d.source.y; })
-            .attr('x2', function(d) { var w = d.target.cornerstone ? cornerW : nodeW; return d.target.x - w / 2; })
-            .attr('y2', function(d) { return d.target.y; });
+            .attr('x1', function(d) { return d.source.x; })
+            .attr('y1', function(d) { var h = d.source.cornerstone ? cornerH : nodeH; return d.source.y + h / 2; })
+            .attr('x2', function(d) { return d.target.x; })
+            .attr('y2', function(d) { var h = d.target.cornerstone ? cornerH : nodeH; return d.target.y - h / 2; });
           nodeG.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
         });
 
