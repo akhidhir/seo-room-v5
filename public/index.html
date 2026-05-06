@@ -11342,7 +11342,7 @@
                 top3: (compData.top3 || []).map(c => ({ position: c.position, domain: c.domain, title: c.title, words: c.words, h2Texts: c.h2Texts })),
                 summary: compData.summary
               } : null,
-              topic_gaps: compData?.topicGaps ? { missingTopics: (compData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missingKeywords: (compData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: compData.topicGaps.content_strengths, recommendation: compData.topicGaps.recommendation } : null,
+              topic_gaps: compData?.topicGaps ? { missing_topics: (compData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missing_keywords: (compData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: compData.topicGaps.content_strengths, recommendation: compData.topicGaps.recommendation } : null,
               word_target: scoreData?.wordTarget || 1500
             }
           });
@@ -12555,7 +12555,7 @@
               tips: (scoreData?.tips || []).map(t => (t.type === 'warn' || t.type === 'error' ? '❌ ' : '✅ ') + (t.text || t.msg || '')),
               target_keywords: (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword),
               competitor_data: scoreData?.competitorData ? { keyword: scoreData.competitorData.keyword, top3_avg: scoreData.competitorData.summary?.top3_avg, avg: scoreData.competitorData.summary?.avg, recommended: scoreData.competitorData.summary?.recommended, competitors_checked: scoreData.competitorData.summary?.competitors_checked, results: (scoreData.competitorData.results || []).filter(r => r.words && !r.isOwn).slice(0, 7).map(r => ({ title: r.title?.slice(0, 60), words: r.words, position: r.position })), top3: (scoreData.competitorData.top3 || []).map(c => ({ position: c.position, domain: c.domain, title: c.title, words: c.words, h2Texts: c.h2Texts })) } : null,
-              topic_gaps: scoreData?.competitorData?.topicGaps ? { missingTopics: (scoreData.competitorData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missingKeywords: (scoreData.competitorData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: scoreData.competitorData.topicGaps.content_strengths, recommendation: scoreData.competitorData.topicGaps.recommendation } : null,
+              topic_gaps: scoreData?.competitorData?.topicGaps ? { missing_topics: (scoreData.competitorData.topicGaps.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text), missing_keywords: (scoreData.competitorData.topicGaps.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text), content_strengths: scoreData.competitorData.topicGaps.content_strengths, recommendation: scoreData.competitorData.topicGaps.recommendation } : null,
               word_target: scoreData?.wordTarget || 1500
             }
           });
@@ -12589,7 +12589,7 @@
         { label: 'H3s', before: (currentContent.match(/<h3/gi) || []).length, after: preview.stats?.proposed?.h3s || 0 },
       ];
 
-      // Compute content score for proposed content
+      // Compute content score for proposed content — MUST match main scorer exactly
       const proposedScore = useMemo(() => {
         const html = preview.proposed?.content_html || '';
         const div = document.createElement('div');
@@ -12599,7 +12599,7 @@
         const h1s = div.querySelectorAll('h1').length;
         const h2s = div.querySelectorAll('h2').length;
         const h3s = div.querySelectorAll('h3').length;
-        const links = div.querySelectorAll('a').length;
+        const links = div.querySelectorAll('a[href]').length;
         const imgs = div.querySelectorAll('img').length;
 
         const focusKw = (preview.proposed?.focus_keyword || item?.draft_focus_keyword || item?.current_focus_keyword || '').toLowerCase().trim();
@@ -12617,6 +12617,7 @@
         // Words (20 pts)
         if (words >= wt) { s += 20; tips.push({ type: 'success', msg: 'Content length: ' + words + ' words (target: ' + wt + ')' }); }
         else if (words >= wt * 0.5) { s += 12; tips.push({ type: 'warn', msg: 'Add ' + (wt - words) + ' more words (target: ' + wt.toLocaleString() + ')' }); }
+        else if (words >= wt * 0.25) { s += 6; tips.push({ type: 'error', msg: 'Content too short (' + words + ' words). Aim for ' + wt.toLocaleString() }); }
         else { tips.push({ type: 'error', msg: 'Too short: ' + words + ' words (need ' + wt.toLocaleString() + ')' }); }
 
         // H2 (8 pts)
@@ -12644,21 +12645,57 @@
 
         // Focus keyword (15 pts)
         if (focusCount >= 3 && focusCount <= 8) { s += 15; tips.push({ type: 'success', msg: 'Focus keyword ' + focusCount + 'x (ideal: 3-8)' }); }
-        else if (focusCount > 8) { s += 10; tips.push({ type: 'warn', msg: 'Focus keyword overused (' + focusCount + 'x)' }); }
+        else if (focusCount > 8) { s += 10; tips.push({ type: 'warn', msg: 'Focus keyword overused (' + focusCount + 'x). Reduce to 3-8' }); }
         else if (focusCount >= 1) { s += 7; tips.push({ type: 'warn', msg: 'Focus keyword ' + focusCount + 'x (need 3-8)' }); }
-        else if (focusKw) { tips.push({ type: 'error', msg: 'Focus keyword "' + focusKw + '" not found' }); }
+        else if (focusKw) { tips.push({ type: 'error', msg: 'Focus keyword "' + focusKw + '" not found in content' }); }
+        else { tips.push({ type: 'error', msg: 'Set a focus keyword' }); }
 
-        // Meta title (10 pts)
+        // Target keywords (15 pts) — check how many are present in the text
+        const targetKws = (item?.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword || '').filter(Boolean);
+        if (targetKws.length > 0) {
+          const lower = text.toLowerCase();
+          const used = targetKws.filter(k => lower.includes(k.toLowerCase())).length;
+          const total = targetKws.length;
+          s += Math.min(15, Math.round((used / total) * 15));
+          if (used < total) { tips.push({ type: used < total * 0.5 ? 'warn' : 'success', msg: 'Target keywords: ' + used + '/' + total + ' used' }); }
+          else { tips.push({ type: 'success', msg: 'All ' + total + ' target keywords used' }); }
+        } else {
+          tips.push({ type: 'error', msg: 'Add target keywords' });
+        }
+
+        // Meta Title (10 pts) — must include focus keyword
         const mt = (metaTitle || '').trim();
-        if (mt.length >= 50 && mt.length <= 60) { s += 10; tips.push({ type: 'success', msg: 'Meta title ' + mt.length + ' chars' }); }
-        else if (mt.length > 0) { s += 5; tips.push({ type: 'warn', msg: 'Meta title ' + mt.length + ' chars (need 50-60)' }); }
-        else { tips.push({ type: 'error', msg: 'Missing meta title' }); }
+        const mtLen = mt.length;
+        const mtHasKw = focusKw && mt.toLowerCase().includes(focusKw);
+        if (mt) {
+          if (mtLen >= 50 && mtLen <= 60 && mtHasKw) { s += 10; tips.push({ type: 'success', msg: 'Meta title optimised (' + mtLen + ' chars, has keyword)' }); }
+          else if (mtLen >= 40 && mtLen <= 65 && mtHasKw) { s += 7; tips.push({ type: 'success', msg: 'Meta title good (' + mtLen + ' chars). Ideal: 50-60' }); }
+          else {
+            s += 3;
+            const mtIssues = [];
+            if (mtLen < 40) mtIssues.push('too short (' + mtLen + ')');
+            else if (mtLen > 65) mtIssues.push('too long (' + mtLen + ')');
+            if (!mtHasKw && focusKw) mtIssues.push('missing focus keyword');
+            tips.push({ type: 'warn', msg: 'Meta title: ' + mtIssues.join(', ') });
+          }
+        } else { tips.push({ type: 'error', msg: 'Add a meta title (+10 pts)' }); }
 
-        // Meta desc (10 pts)
+        // Meta Description (10 pts) — must include focus keyword
         const md = (metaDesc || '').trim();
-        if (md.length >= 120 && md.length <= 155) { s += 10; tips.push({ type: 'success', msg: 'Meta desc ' + md.length + ' chars' }); }
-        else if (md.length > 0) { s += 5; tips.push({ type: 'warn', msg: 'Meta desc ' + md.length + ' chars (need 120-155)' }); }
-        else { tips.push({ type: 'error', msg: 'Missing meta description' }); }
+        const mdLen = md.length;
+        const mdHasKw = focusKw && md.toLowerCase().includes(focusKw);
+        if (md) {
+          if (mdLen >= 120 && mdLen <= 155 && mdHasKw) { s += 10; tips.push({ type: 'success', msg: 'Meta desc optimised (' + mdLen + ' chars, has keyword)' }); }
+          else if (mdLen >= 100 && mdLen <= 160 && mdHasKw) { s += 7; tips.push({ type: 'success', msg: 'Meta desc good (' + mdLen + ' chars). Ideal: 120-155' }); }
+          else {
+            s += 3;
+            const mdIssues = [];
+            if (mdLen < 100) mdIssues.push('too short (' + mdLen + ')');
+            else if (mdLen > 160) mdIssues.push('too long (' + mdLen + ')');
+            if (!mdHasKw && focusKw) mdIssues.push('missing focus keyword');
+            tips.push({ type: 'warn', msg: 'Meta desc: ' + mdIssues.join(', ') });
+          }
+        } else { tips.push({ type: 'error', msg: 'Add a meta description (+10 pts)' }); }
 
         return { score: Math.min(100, s), tips };
       }, [preview.proposed?.content_html, metaTitle, metaDesc, item, scoreData]);

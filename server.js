@@ -6531,7 +6531,7 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
 You will receive page content, meta data, and SEO content score issues. Your SOLE objective is to MAXIMISE the content score to 90+. The score is calculated by these EXACT rules:
 
 SCORING SYSTEM (100 points total — hit EVERY threshold):
-1. WORDS: 20 points if 1,500+ words. You MUST write at least 2,000 words of content. This is the most important threshold — do NOT produce less than 1,800 words.
+1. WORDS: 20 points if ${word_target || 1500}+ words. You MUST write at least ${Math.round((word_target || 1500) * 1.2)} words of content. This is the most important threshold.
 2. H2 HEADINGS: 8 points if 3+ H2s. You MUST include at least 4 <h2> tags.
 3. H3 SUBHEADINGS: 2 points if 2+ H3s. Include at least 3 <h3> tags under your H2s.
 3b. H1 TAG: 5 points if EXACTLY 1 H1. You MUST include exactly ONE <h1> tag (the page title). NEVER use more than one H1 — if you see multiple, keep only the first and demote the rest to <h2>.
@@ -6646,9 +6646,11 @@ ${contentToOptimise.slice(0, 12000)}
 ${contentToOptimise.slice(0, 12000)}`}
 
 CRITICAL REMINDERS:
-- You MUST produce at least 2,000 words total. This is NON-NEGOTIABLE.
-- Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear EXACTLY 5 times in the entire content. NOT 4, NOT 6, NOT 12. EXACTLY 5.
-- After writing, mentally count every occurrence of the focus keyword. If you have more than 5, replace the extras with synonyms or rephrase those sentences.
+- You MUST produce at least ${word_target || 1500} words total. This is NON-NEGOTIABLE.
+- Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear 5 times in the content (scoring gives full 15 pts for 3-8 occurrences, but 5 is ideal).
+- Focus keyword MUST be in meta title AND meta description (required for full meta points).
+- EVERY target keyword must appear at least once naturally in the content (15 pts proportional to coverage).
+${topic_gaps && (topic_gaps.missing_topics?.length || topic_gaps.missing_keywords?.length) ? '- TOPIC GAPS ARE YOUR #1 PRIORITY: Add new H2/H3 sections for missing topics. Weave ALL missing keywords. This is how you beat competitors and maximise the score.' : ''}
 ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~') || contentToOptimise.includes('wf-columns') ? '- SKELETON MODE: Fill in the skeleton placeholders. Do NOT rewrite or restructure. Keep ALL HTML tags, divs, classes, and section comments exactly as provided.' : '- Rewrite the FULL content fixing ALL numbered issues above.'}`;
 
     console.log(`[optimise] Starting AI optimisation for item ${id}, ${numberedIssues.split('\n').length} issues to fix, competitor_data: ${competitor_data ? 'YES (' + (competitor_data.top3?.length || 0) + ' top3)' : 'NONE'}, topic_gaps: ${topic_gaps ? 'YES (' + (topic_gaps.missing_topics?.length || 0) + ' topics, ' + (topic_gaps.missing_keywords?.length || 0) + ' keywords)' : 'NONE'}, word_target: ${word_target || 'default'}`);
@@ -7524,15 +7526,18 @@ RULES:
 - Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
 - Use target keywords naturally 1-2 times each in the content
 
-SCORING SYSTEM (how the dashboard calculates score — predict accurately):
-- Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
-- H2 >= 3: 15 pts | >= 1: 8 pts
-- H3 >= 2: 5 pts
-- Links >= 3: 10 pts | >= 1: 5 pts
-- Images >= 1: 5 pts
-- Focus keyword 3-8x in content: 20 pts | >8x: only 12 pts (overused!)
-- Target keywords coverage: up to 20 pts (each keyword found = points)
-Max 100. Without focus_keyword + target_keywords, score CAPS at 60.
+SCORING SYSTEM (how the dashboard calculates score — match EXACTLY):
+- Words >= word_target: 20 pts | >= 50%: 12 pts | >= 25%: 6 pts
+- H2 >= 3: 8 pts | >= 1: 4 pts
+- H3 >= 2: 2 pts
+- H1 exactly 1: 5 pts
+- Links >= 3: 8 pts | >= 1: 4 pts
+- Images >= 1: 2 pts
+- Focus keyword 3-8x in content: 15 pts | >8x: only 10 pts (overused!) | 1-2x: 7 pts
+- Target keywords: 15 pts proportional (used/total × 15)
+- Meta title 50-60 chars WITH focus keyword: 10 pts | 40-65 + keyword: 7 pts | otherwise: 3 pts
+- Meta desc 120-155 chars WITH focus keyword: 10 pts | 100-160 + keyword: 7 pts | otherwise: 3 pts
+Max 100. Focus keyword in meta is REQUIRED for full meta points.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
 {"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "target_keywords": ["kw1", "kw2", "kw3"], "ai_notes": "1-2 sentence max summary", "changed": true}
@@ -7541,9 +7546,20 @@ CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.$
         messages: [{ role: 'user', content: buildUserContent(`USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
+WORD TARGET: ${word_target || 1500}
 TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
 SEO TIPS:
 ${(tips || []).join('\n')}
+
+${competitor_data ? `COMPETITOR ANALYSIS (from "${competitor_data.keyword}" SERP):
+- Top 3 avg word count: ${competitor_data.top3_avg || 'N/A'}
+- Recommended word target: ${competitor_data.recommended || 'N/A'}
+${(competitor_data.top3 || []).map((c, i) => `  Top ${i+1}: ${c.domain} — ${c.words} words, H2s: ${(c.h2Texts || []).slice(0, 5).join(' | ') || 'none'}`).join('\n')}` : ''}
+
+${topic_gaps ? `TOPIC GAP ANALYSIS (competitors cover these, you DON'T — MUST address):
+- Missing topics to add: ${(topic_gaps.missing_topics || []).join(', ') || 'none'}
+- Missing keywords to weave in: ${(topic_gaps.missing_keywords || []).join(', ') || 'none'}
+- Strengths to keep: ${(topic_gaps.content_strengths || []).join(', ') || 'none'}` : ''}
 
 CURRENT CONTENT (revise this):
 ${current_proposed.content_html}
@@ -7748,15 +7764,18 @@ RULES:
 - Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
 - Use target keywords naturally 1-2 times each in the content
 
-SCORING SYSTEM (how the dashboard calculates score — predict accurately):
-- Words >= target: 25 pts | >= 50%: 15 pts | >= 25%: 8 pts
-- H2 >= 3: 15 pts | >= 1: 8 pts
-- H3 >= 2: 5 pts
-- Links >= 3: 10 pts | >= 1: 5 pts
-- Images >= 1: 5 pts
-- Focus keyword 3-8x in content: 20 pts | >8x: only 12 pts (overused!)
-- Target keywords coverage: up to 20 pts (each keyword found = points)
-Max 100. Without focus_keyword + target_keywords, score CAPS at 60.
+SCORING SYSTEM (how the dashboard calculates score — match EXACTLY):
+- Words >= word_target: 20 pts | >= 50%: 12 pts | >= 25%: 6 pts
+- H2 >= 3: 8 pts | >= 1: 4 pts
+- H3 >= 2: 2 pts
+- H1 exactly 1: 5 pts
+- Links >= 3: 8 pts | >= 1: 4 pts
+- Images >= 1: 2 pts
+- Focus keyword 3-8x in content: 15 pts | >8x: only 10 pts (overused!) | 1-2x: 7 pts
+- Target keywords: 15 pts proportional (used/total × 15)
+- Meta title 50-60 chars WITH focus keyword: 10 pts | 40-65 + keyword: 7 pts | otherwise: 3 pts
+- Meta desc 120-155 chars WITH focus keyword: 10 pts | 100-160 + keyword: 7 pts | otherwise: 3 pts
+Max 100. Focus keyword in meta is REQUIRED for full meta points.
 
 YOU MUST RESPOND WITH ONLY A JSON OBJECT:
 {"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "target_keywords": ["kw1", "kw2", "kw3"], "ai_notes": "1-2 sentence max summary", "changed": true}
