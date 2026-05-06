@@ -10186,7 +10186,7 @@
             )
           ),
           React.createElement('div', { className: 'toolbar-right', style: { display: 'flex', gap: 8 } },
-            !readOnly && React.createElement('button', { onClick: startComment, className: 'editor-btn comment-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } },
+            !readOnly && React.createElement('button', { onMouseDown: (e) => { e.preventDefault(); startComment(); }, className: 'editor-btn comment-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } },
               React.createElement('i', { className: 'fa-solid fa-comment-dots', style: { marginRight: 6 } }), 'Add Comment'
             ),
             !readOnly && React.createElement('button', { onClick: () => setShowFind(!showFind), className: 'editor-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' } },

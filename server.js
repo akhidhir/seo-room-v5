@@ -5835,7 +5835,8 @@ async function resolveWpPageId(project, pageUrl, pageTitle) {
 async function fetchLivePageContent(pageUrl, project, pageId) {
   let content = '';
   const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
-  // Resolve page_id if missing, or verify homepage page_id is correct
+
+  // Resolve page_id if missing (needed for Yoast meta later, not for content)
   if (wpBase && !pageId) {
     const resolved = await resolveWpPageId(project, pageUrl, null);
     if (resolved.pageId) {
@@ -5843,56 +5844,20 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
       console.log('[fetchLivePageContent] Resolved page_id via shared helper:', pageId);
     }
   }
-  // For homepage: verify page_id matches WP front page setting to avoid fetching wrong page
-  if (wpBase && pageId) {
-    const domainClean2 = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const urlClean2 = (pageUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const isHome2 = !pageUrl || pageUrl === '/' || (domainClean2 && urlClean2 === domainClean2);
-    if (isHome2) {
-      try {
-        const authHeaders = getWpAuthHeaders(project);
-        const settingsRes = await fetch(`${wpBase}/wp-json/wp/v2/settings`, {
-          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-        });
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json();
-          if (settings.page_on_front && settings.page_on_front !== pageId) {
-            console.log(`[fetchLivePageContent] Homepage page_id MISMATCH: stored=${pageId}, WP front page=${settings.page_on_front}. Correcting.`);
-            pageId = settings.page_on_front;
-          }
-        }
-      } catch (e) { /* settings may require admin auth */ }
-    }
-  }
 
-  // Try WP REST API first
-  if (wpBase && pageId) {
-    const authHeaders = getWpAuthHeaders(project);
-    for (const type of ['pages', 'posts']) {
-      try {
-        const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
-          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
-        });
-        if (wpRes.ok) {
-          const wpData = await wpRes.json();
-          const wpTitle = (wpData.title?.rendered || '').replace(/<[^>]+>/g, '');
-          console.log(`[fetchLivePageContent] WP REST returned page: id=${pageId}, title="${wpTitle}", type=${type}`);
-          content = wpData.content?.rendered || '';
-          break;
-        }
-      } catch (e) { /* try next */ }
-    }
-  }
-  // Always try live HTML fetch too — WP REST may not have the real rendered content (ACF, theme builders, shortcodes)
-  const plainText = content.replace(/<[^>]+>/g, '').trim();
-  const wc = plainText ? plainText.split(/\s+/).length : 0;
-  console.log(`[fetchLivePageContent] WP REST got ${wc} words, now trying live fetch: ${pageUrl}`);
+  // ── STRATEGY: URL is the source of truth ──
+  // 1. Always try live HTML fetch from the URL first (what the user actually chose)
+  // 2. Only fall back to WP REST API if live fetch fails or returns very little
+  // 3. page_id is mainly for Yoast meta retrieval, NOT for content fetching
+  let liveContent = '';
+  let wpContent = '';
+  console.log(`[fetchLivePageContent] Fetching live from URL: ${pageUrl}`);
+  // ── Step 1: Live HTML fetch from the URL (primary — this is what user chose) ──
   if (pageUrl) {
     try {
       const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000) });
       if (liveRes.ok) {
         const liveHtml = await liveRes.text();
-        // Extract content between header and footer (most reliable for any theme)
         const headerEnd = liveHtml.search(/<\/header>/i);
         const footerStart = liveHtml.search(/<footer[\s>]/i);
         let extracted = '';
@@ -5905,13 +5870,11 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
             .replace(/<!--[\s\S]*?-->/g, '')
             .replace(/<div[^>]*class="[^"]*se-pre-con[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
         }
-        // Fallback: try main/article tags
         if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
           const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*)<\/main>/i) ||
                             liveHtml.match(/<article[^>]*>([\s\S]*)<\/article>/i);
           if (mainMatch) extracted = mainMatch[1];
         }
-        // Last fallback: extract full body, strip chrome
         if (!extracted || extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 30) {
           const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
           if (bodyMatch) {
@@ -5927,21 +5890,39 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
           }
         }
         if (extracted) {
-          const liveText = extracted.replace(/<[^>]+>/g, '').trim();
-          const liveWc = liveText.split(/\s+/).length;
-          console.log(`[fetchLivePageContent] Live fetch extracted ${liveWc} words (WP had ${wc})`);
-          if (liveWc > wc) {
-            content = extracted;
-            console.log('[fetchLivePageContent] Using live content (more words)');
-          } else {
-            console.log('[fetchLivePageContent] Keeping WP content (more or equal words)');
-          }
+          liveContent = extracted;
+          const liveWc = extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
+          console.log(`[fetchLivePageContent] Live fetch: ${liveWc} words`);
         } else {
           console.log('[fetchLivePageContent] Live fetch: no content extracted');
         }
       }
     } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
   }
+
+  // ── Step 2: WP REST API fallback (only if live fetch got nothing) ──
+  if (!liveContent && wpBase && pageId) {
+    const authHeaders = getWpAuthHeaders(project);
+    for (const type of ['pages', 'posts']) {
+      try {
+        const wpRes = await fetch(`${wpBase}/wp-json/wp/v2/${type}/${pageId}`, {
+          headers: { ...(authHeaders || {}), 'Accept': 'application/json' }
+        });
+        if (wpRes.ok) {
+          const wpData = await wpRes.json();
+          const wpTitle = (wpData.title?.rendered || '').replace(/<[^>]+>/g, '');
+          wpContent = wpData.content?.rendered || '';
+          const wpWc = wpContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
+          console.log(`[fetchLivePageContent] WP REST fallback: id=${pageId}, title="${wpTitle}", ${wpWc} words`);
+          break;
+        }
+      } catch (e) { /* try next */ }
+    }
+  }
+
+  // ── Pick result: live content wins, WP REST is fallback only ──
+  content = liveContent || wpContent;
+  console.log(`[fetchLivePageContent] Final: ${content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0} words (source: ${liveContent ? 'live URL' : wpContent ? 'WP REST fallback' : 'none'})`);
   return { content, resolvedPageId: pageId };
 }
 
