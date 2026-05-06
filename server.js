@@ -6428,15 +6428,21 @@ Add ${Math.max(300, (target_words || 1500) - currentWords)} more words of new co
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
+      messages: [
+        { role: 'user', content: buildUserContent(userPrompt, item) },
+        { role: 'assistant', content: '{' }
+      ]
     });
 
-    const text = response.content[0]?.text || '';
+    let text = '{' + (response.content[0]?.text || '');
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
     let parsed;
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON object found');
       parsed = JSON.parse(jsonMatch[0]);
     } catch (e) {
+      console.error('[expand] JSON parse failed:', e.message, 'text preview:', text.slice(0, 500));
       return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
     }
 
@@ -6650,15 +6656,21 @@ ${contentToOptimise.includes('<!-- SECTION') || contentToOptimise.includes('[~')
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 16000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }]
+      messages: [
+        { role: 'user', content: buildUserContent(userPrompt, item) },
+        { role: 'assistant', content: '{' }
+      ]
     });
 
-    const text = response.content[0]?.text || '';
+    let text = '{' + (response.content[0]?.text || '');
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
     let parsed;
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON object found');
       parsed = JSON.parse(jsonMatch[0]);
     } catch (e) {
+      console.error('[optimise] JSON parse failed:', e.message, 'text preview:', text.slice(0, 500));
       return res.status(500).json({ error: 'Failed to parse AI response', raw: text.slice(0, 500) });
     }
 
@@ -8731,7 +8743,7 @@ You are rewriting page content SECTION BY SECTION. The page has ${sections.lengt
 2. Keeps the same DESIGN intent (hero stays hero, CTA stays CTA, features stay features)
 3. Is SEO-optimized for the focus keyword
 4. Maintains natural keyword density
-5. Matches the approximate word count of the original (±20%)
+5. Aims for the WORD TARGET specified in competitor intelligence — expand sections if needed to reach it
 6. Does NOT add new design elements — only replaces TEXT content
 
 CRITICAL HTML FORMATTING RULES:
@@ -8755,15 +8767,33 @@ Return ONLY a JSON array matching the section order:
 Write in Australian English. Never use banned AI phrases.
 ${buildCopywriterContext(project, item)}`;
 
+    // Build competitor intelligence context
+    const compAnalysis = item.competitor_analysis || {};
+    const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
+    const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
+    const pendingTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'pending').map(t => t.text);
+    const pendingKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'pending').map(k => k.text);
+    const wordTarget = compAnalysis.summary?.recommended || 1500;
+    const top3Competitors = (compAnalysis.top3 || []).map(c => `${c.domain}: ${c.word_count} words, ${c.h2_count} H2s`).join('; ');
+
     const userPrompt = `Rewrite content for page: "${item.page_title}" (${item.page_url})
 Focus keyword: ${focusKw}
 ${targetKeywords.length ? `Target keywords: ${targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ')}` : ''}
 ${item.brief ? `Brief: ${item.brief}` : ''}
 
+COMPETITOR INTELLIGENCE:
+- Word target: ${wordTarget}+ words (top 3 competitors average: ${compAnalysis.summary?.top3_avg || 'unknown'})
+- Top competitors: ${top3Competitors || 'none analysed'}
+${acceptedTopics.length ? `- MUST ADD these topics (approved by user): ${acceptedTopics.join(', ')}` : ''}
+${pendingTopics.length ? `- Consider adding these topics (competitors cover them): ${pendingTopics.join(', ')}` : ''}
+${acceptedKeywords.length ? `- MUST USE these keywords naturally: ${acceptedKeywords.join(', ')}` : ''}
+${pendingKeywords.length ? `- Consider using these keywords: ${pendingKeywords.join(', ')}` : ''}
+
 PAGE SECTIONS:
 ${sectionDescriptions}
 
-Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's design structure exactly.`;
+Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's design structure exactly.
+If the current content is too short to reach the word target, EXPAND sections with more detail — add sub-sections, examples, FAQs, or service details.`;
 
     console.log(`[generate-sections] Generating for ${sections.length} sections`);
     const aiResp = await anthropic.messages.create({
@@ -10043,8 +10073,11 @@ Rules:
 
     let aiPlan;
     try {
-      const text = aiResponse.content[0].text.trim();
-      aiPlan = JSON.parse(text.replace(/^```json?\n?/, '').replace(/\n?```$/, ''));
+      let text = aiResponse.content[0].text.trim();
+      text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON object found');
+      aiPlan = JSON.parse(jsonMatch[0]);
     } catch (e) {
       console.error('[site-pages] AI parse error:', e.message);
       return res.status(500).json({ error: 'Failed to parse AI response' });
