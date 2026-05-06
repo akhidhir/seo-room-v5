@@ -8759,11 +8759,14 @@ Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's d
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 16000,
-      messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }],
+      messages: [
+        { role: 'user', content: buildUserContent(userPrompt, item) },
+        { role: 'assistant', content: '[' }
+      ],
       system: systemPrompt,
     });
 
-    let aiText = aiResp.content[0].text;
+    let aiText = '[' + aiResp.content[0].text; // prepend '[' from assistant prefill
     console.log('[generate-sections] AI response length:', aiText.length, 'stop_reason:', aiResp.stop_reason);
     let generated;
     function parseJsonArray(text) {
