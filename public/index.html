@@ -10674,6 +10674,17 @@
       const [pages, setPages] = useState(null); // null = not loaded, [] = loaded empty
       const [search, setSearch] = useState('');
       const [open, setOpen] = useState(false);
+      const pickerRef = useRef(null);
+
+      // Close on click outside
+      useEffect(() => {
+        if (!open) return;
+        const handleClickOutside = (e) => {
+          if (pickerRef.current && !pickerRef.current.contains(e.target)) setOpen(false);
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+      }, [open]);
 
       const loadPages = async () => {
         if (pages !== null) { setOpen(true); return; } // already loaded
@@ -10700,9 +10711,9 @@
         } catch (e) { alert('Failed: ' + e.message); }
       };
 
-      return React.createElement('div', { style: { position: 'relative' } },
+      return React.createElement('div', { ref: pickerRef, style: { position: 'relative' } },
         React.createElement('button', {
-          onClick: loadPages,
+          onClick: () => open ? setOpen(false) : loadPages(),
           style: { padding: '3px 10px', fontSize: 12, background: 'none', color: 'var(--accent)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 }
         }, React.createElement('i', { className: 'fa-solid fa-sitemap', style: { fontSize: 10 } }), 'Discover URL'),
         open && React.createElement('div', { style: { position: 'absolute', top: '100%', left: 0, zIndex: 999, width: 500, maxHeight: 350, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.3)', marginTop: 6, display: 'flex', flexDirection: 'column' } },
