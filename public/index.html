@@ -11114,10 +11114,11 @@
         setGeneratingSections(true);
         try {
           const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/generate-sections', { method: 'POST' });
-          if (r.error) { alert(r.error); }
+          if (r.error) { alert(r.error + (r.raw ? '\n\nAI response preview:\n' + r.raw : '')); }
           else {
             setSelectedItem(prev => ({ ...prev, page_sections: r.sections, draft_content: r.combined_html, draft_word_count: r.word_count, stage: 'drafts' }));
             setEditContent(r.combined_html);
+            setSectionView(true); // show highlighted changes
             setEditorKey(k => k + 1);
             await loadItems();
           }

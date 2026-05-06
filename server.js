@@ -8755,12 +8755,13 @@ Rewrite each unlocked section. Keep locked sections as-is. Maintain the page's d
     console.log(`[generate-sections] Generating for ${sections.length} sections`);
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
+      max_tokens: 16000,
       messages: [{ role: 'user', content: buildUserContent(userPrompt, item) }],
       system: systemPrompt,
     });
 
     let aiText = aiResp.content[0].text;
+    console.log('[generate-sections] AI response length:', aiText.length, 'stop_reason:', aiResp.stop_reason);
     let generated;
     try {
       // Strip markdown code fences if present
