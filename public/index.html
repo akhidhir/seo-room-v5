@@ -10098,7 +10098,7 @@
             }
           }
         }
-        if (!sel || sel.length === 0) { alert('Select some text first, then click Add Comment'); return; }
+        if (!sel || sel.length === 0) { setPendingSelection({ index: 0, length: 0, text: '', top: 0, general: true }); setNewCommentText(''); return; }
         const selectedText = quillRef.current.getText(sel.index, sel.length);
         const bounds = quillRef.current.getBounds(sel.index, sel.length);
         setPendingSelection({ index: sel.index, length: sel.length, text: selectedText, top: bounds ? bounds.top : 0 });
