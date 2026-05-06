@@ -6584,7 +6584,7 @@ app.post('/api/projects/:projectId/content-queue/:id/optimise', async (req, res)
   req.setTimeout(120000);
   res.setTimeout(120000);
   const { projectId, id } = req.params;
-  const { tips, missing_keywords, target_keywords, content_score, stats, current_meta, competitor_data, topic_gaps, word_target } = req.body;
+  const { tips, missing_keywords, target_keywords, content_score, stats, current_meta, competitor_data, topic_gaps, word_target, locked_content } = req.body;
 
   try {
     const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
@@ -6760,7 +6760,7 @@ ${contentToOptimise.slice(0, 12000)}
 ${contentToOptimise.slice(0, 12000)}`}
 
 CRITICAL REMINDERS:
-- You MUST produce at least ${word_target || 1500} words total. This is NON-NEGOTIABLE.
+${locked_content && locked_content.length > 0 ? '- LOCKED PARAGRAPHS (DO NOT MODIFY): The following paragraphs were manually written by the user. Include them EXACTLY as-is in your output. Do not rephrase, restructure, or remove them:\n' + locked_content.map((t, i) => '  LOCKED ' + (i+1) + ': "' + t.substring(0, 300) + '"').join('\n') + '\n' : ''}- You MUST produce at least ${word_target || 1500} words total. This is NON-NEGOTIABLE.
 - Focus keyword "${item.draft_focus_keyword || item.current_focus_keyword}" must appear 5 times in the content (scoring gives full 15 pts for 3-8 occurrences, but 5 is ideal).
 - Focus keyword MUST be in meta title AND meta description (required for full meta points).
 - EVERY target keyword must appear at least once naturally in the content (15 pts proportional to coverage).

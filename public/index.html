@@ -9976,6 +9976,7 @@
       const [activeComment, setActiveComment] = useState(null);
       const [newCommentText, setNewCommentText] = useState('');
       const [pendingSelection, setPendingSelection] = useState(null);
+      const [lockedRanges, setLockedRanges] = useState([]);
       const [comments, setComments] = useState(initialComments || []);
 
       const settingProgrammatically = useRef(false);
@@ -10178,6 +10179,40 @@
         doFind();
       }
 
+      function lockParagraph() {
+        if (!quillRef.current) return;
+        let sel = quillRef.current.getSelection();
+        if (!sel || sel.length === 0) sel = lastSelectionRef.current;
+        if (!sel || sel.length === 0) { alert('Select the paragraph you want to lock first'); return; }
+        // Wrap selected text with lock markers in the HTML
+        const htmlContent = quillRef.current.root.innerHTML;
+        const selectedText = quillRef.current.getText(sel.index, sel.length).trim();
+        if (!selectedText) return;
+        // Find the selected text in the HTML and wrap with lock comment markers
+        // Use a data attribute on a wrapper div for visual + machine-readable lock
+        const escaped = selectedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s\\S]*?');
+        // Add visual lock styling via Quill format
+        quillRef.current.formatText(sel.index, sel.length, 'background', 'rgba(99,102,241,0.12)', 'silent');
+        // Store locked ranges in state
+        setLockedRanges(prev => [...prev, { text: selectedText.substring(0, 200), index: sel.index, length: sel.length }]);
+      }
+
+      function unlockParagraph(lockIdx) {
+        setLockedRanges(prev => {
+          const updated = prev.filter((_, i) => i !== lockIdx);
+          // Re-apply highlights without the removed lock
+          if (quillRef.current) {
+            applyCommentHighlights(quillRef.current, comments || []);
+            updated.forEach(lock => {
+              const text = quillRef.current.getText();
+              const idx = text.indexOf(lock.text.substring(0, 50));
+              if (idx >= 0) quillRef.current.formatText(idx, lock.text.length, 'background', 'rgba(99,102,241,0.12)', 'silent');
+            });
+          }
+          return updated;
+        });
+      }
+
       function doReplaceAll() {
         if (!findText || !quillRef.current) return;
         const html = quillRef.current.root.innerHTML;
@@ -10214,6 +10249,9 @@
           React.createElement('div', { className: 'toolbar-right', style: { display: 'flex', gap: 8 } },
             !readOnly && React.createElement('button', { onMouseDown: (e) => { e.preventDefault(); startComment(); }, className: 'editor-btn comment-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } },
               React.createElement('i', { className: 'fa-solid fa-comment-dots', style: { marginRight: 6 } }), 'Add Comment'
+            ),
+            !readOnly && React.createElement('button', { onMouseDown: (e) => { e.preventDefault(); lockParagraph(); }, className: 'editor-btn', style: { padding: '6px 12px', fontSize: 12, background: 'rgba(99,102,241,0.15)', color: '#6366f1', border: '1px solid #6366f1', borderRadius: 6, cursor: 'pointer' } },
+              React.createElement('i', { className: 'fa-solid fa-lock', style: { marginRight: 6 } }), 'Lock Selection'
             ),
             !readOnly && React.createElement('button', { onClick: () => setShowFind(!showFind), className: 'editor-btn', style: { padding: '6px 12px', fontSize: 12, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' } },
               React.createElement('i', { className: 'fa-solid fa-magnifying-glass', style: { marginRight: 6 } }), 'Find & Replace'
@@ -10263,6 +10301,15 @@
               );
             })
           )
+        ),
+        lockedRanges.length > 0 && React.createElement('div', { style: { marginTop: 12, padding: '10px 14px', background: 'rgba(99,102,241,0.06)', borderRadius: 6, border: '1px solid rgba(99,102,241,0.2)' } },
+          React.createElement('div', { style: { fontSize: 12, color: '#6366f1', fontWeight: 600, marginBottom: 8 } },
+            React.createElement('i', { className: 'fa-solid fa-lock', style: { marginRight: 6 } }), 'Locked Paragraphs (' + lockedRanges.length + ') — AI will not modify these'
+          ),
+          lockedRanges.map((lock, i) => React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', marginBottom: 4, background: 'var(--bg)', borderRadius: 4, fontSize: 12 } },
+            React.createElement('span', { style: { color: 'var(--text)', flex: 1 } }, '"' + lock.text.substring(0, 80) + (lock.text.length > 80 ? '...' : '') + '"'),
+            React.createElement('button', { onClick: () => unlockParagraph(i), style: { fontSize: 11, padding: '2px 8px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', marginLeft: 8 } }, 'Unlock')
+          ))
         ),
         resolvedComments.length > 0 && React.createElement('div', { style: { marginTop: 12, padding: '10px 14px', background: 'var(--bg2)', borderRadius: 6, border: '1px solid var(--border)' } },
           React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontWeight: 600 } }, 'Resolved (' + resolvedComments.length + ')'),
