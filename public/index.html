@@ -8519,29 +8519,31 @@
       var [viewMode, setViewMode] = React.useState('graph'); // 'graph' | 'list'
       var svgRef = React.useRef(null);
       var containerRef = React.useRef(null);
-      var [linkMode, setLinkMode] = React.useState(null); // { sourceId, sourceName } when linking
+      // n8n-style drag-to-connect state
+      var dragLineRef = React.useRef(null); // { sourceId, sourceName, line (SVG element) }
 
-      var handleToggleLink = async function(sourceId, targetId) {
-        // Check if link already exists
+      var handleCreateLink = async function(sourceId, targetId) {
         var sourcePage = pages.find(function(p) { return p.id === sourceId; });
+        if (!sourcePage) return;
+        // Don't duplicate
         var existing = (sourcePage.internal_links || []).find(function(l) { return l.target_page_id === targetId; });
-        if (existing) {
-          // Unlink
-          var newLinks = (sourcePage.internal_links || []).filter(function(l) { return l.target_page_id !== targetId; });
-          try {
-            await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
-            await loadPages();
-          } catch (e) { alert('Error: ' + e.message); }
-        } else {
-          // Link
-          var targetPage = pages.find(function(p) { return p.id === targetId; });
-          var newLinks2 = (sourcePage.internal_links || []).concat([{ target_page_id: targetId, target_page_name: targetPage.page_name, anchor_text: targetPage.page_name }]);
-          try {
-            await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks2 } });
-            await loadPages();
-          } catch (e) { alert('Error: ' + e.message); }
-        }
-        setLinkMode(null);
+        if (existing) return;
+        var targetPage = pages.find(function(p) { return p.id === targetId; });
+        var newLinks = (sourcePage.internal_links || []).concat([{ target_page_id: targetId, target_page_name: targetPage.page_name, anchor_text: targetPage.page_name }]);
+        try {
+          await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
+          await loadPages();
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
+      var handleRemoveLink = async function(sourceId, targetId) {
+        var sourcePage = pages.find(function(p) { return p.id === sourceId; });
+        if (!sourcePage) return;
+        var newLinks = (sourcePage.internal_links || []).filter(function(l) { return l.target_page_id !== targetId; });
+        try {
+          await api(apiPrefix + '/site-pages/' + sourceId, { method: 'PUT', body: { internal_links: newLinks } });
+          await loadPages();
+        } catch (e) { alert('Error: ' + e.message); }
       };
 
       var loadPages = async function() {
@@ -8637,7 +8639,7 @@
         var defs = svg.append('defs');
         defs.append('marker')
           .attr('id', 'arrowhead').attr('viewBox', '0 -5 10 10')
-          .attr('refX', 35).attr('refY', 0)
+          .attr('refX', 10).attr('refY', 0)
           .attr('markerWidth', 6).attr('markerHeight', 6)
           .attr('orient', 'auto')
           .append('path').attr('d', 'M0,-5L10,0L0,5')
@@ -8658,23 +8660,34 @@
           .attr('stroke', '#6b728060').attr('stroke-width', 1.5)
           .attr('marker-end', 'url(#arrowhead)');
 
+        // Temp drag line for n8n-style connecting
+        var tempLine = g.append('line')
+          .attr('stroke', '#3b82f6').attr('stroke-width', 2)
+          .attr('stroke-dasharray', '6,3')
+          .style('display', 'none');
+
+        // Blue drag arrow marker
+        defs.append('marker')
+          .attr('id', 'arrowhead-drag').attr('viewBox', '0 -5 10 10')
+          .attr('refX', 8).attr('refY', 0)
+          .attr('markerWidth', 6).attr('markerHeight', 6)
+          .attr('orient', 'auto')
+          .append('path').attr('d', 'M0,-5L10,0L0,5')
+          .attr('fill', '#3b82f6');
+        tempLine.attr('marker-end', 'url(#arrowhead-drag)');
+
+        var handleR = 6;
+
         // Nodes
         var nodeG = g.append('g').selectAll('g').data(nodes).enter().append('g')
           .style('cursor', 'pointer')
           .on('click', function(event, d) {
             event.stopPropagation();
-            if (linkMode) {
-              if (linkMode.sourceId !== d.id) {
-                handleToggleLink(linkMode.sourceId, d.id);
-              } else {
-                setLinkMode(null);
-              }
-            } else {
-              var page = pages.find(function(p) { return p.id === d.id; });
-              setSelectedPage(page);
-            }
+            var page = pages.find(function(p) { return p.id === d.id; });
+            setSelectedPage(page);
           })
           .call(d3.drag()
+            .filter(function(event) { return !event.button && !event.target.classList.contains('conn-handle'); })
             .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
             .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
             .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
@@ -8729,8 +8742,115 @@
           .attr('fill', function(d) { return typeColors[d.type] || '#6366f1'; })
           .attr('opacity', 0.7);
 
-        // Link icon (top-left of node) — click to enter link mode from graph
-        nodeG.append('text')
+        // === n8n-style connection handles ===
+
+        // Output handle (right edge) — drag FROM here
+        nodeG.append('circle')
+          .attr('class', 'conn-handle conn-output')
+          .attr('r', handleR)
+          .attr('cx', function(d) { return (d.cornerstone ? cornerW : nodeW) / 2; })
+          .attr('cy', 0)
+          .attr('fill', '#3b82f6').attr('stroke', '#fff').attr('stroke-width', 2)
+          .style('cursor', 'crosshair')
+          .style('opacity', 0);
+
+        // Input handle (left edge) — drop TO here
+        nodeG.append('circle')
+          .attr('class', 'conn-handle conn-input')
+          .attr('r', handleR)
+          .attr('cx', function(d) { return -(d.cornerstone ? cornerW : nodeW) / 2; })
+          .attr('cy', 0)
+          .attr('fill', '#22c55e').attr('stroke', '#fff').attr('stroke-width', 2)
+          .style('cursor', 'crosshair')
+          .style('opacity', 0);
+
+        // Show handles on node hover
+        nodeG.on('mouseenter.handles', function() {
+          d3.select(this).selectAll('.conn-handle').style('opacity', 1);
+        }).on('mouseleave.handles', function() {
+          if (!dragLineRef.current) {
+            d3.select(this).selectAll('.conn-handle').style('opacity', 0);
+          }
+        });
+
+        // Drag behavior on output handles
+        nodeG.selectAll('.conn-output').call(
+          d3.drag()
+            .on('start', function(event, d) {
+              event.sourceEvent.stopPropagation();
+              var w = d.cornerstone ? cornerW : nodeW;
+              dragLineRef.current = { sourceId: d.id, sourceName: d.name };
+              tempLine
+                .attr('x1', d.x + w / 2).attr('y1', d.y)
+                .attr('x2', d.x + w / 2).attr('y2', d.y)
+                .style('display', null);
+              // Show all input handles
+              g.selectAll('.conn-input').style('opacity', 0.6);
+            })
+            .on('drag', function(event, d) {
+              if (!dragLineRef.current) return;
+              var transform = d3.zoomTransform(svg.node());
+              var mouseX = (event.sourceEvent.offsetX - transform.x) / transform.k;
+              var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
+              tempLine.attr('x2', mouseX).attr('y2', mouseY);
+              // Highlight nearby input handles
+              g.selectAll('.conn-input').each(function(nd) {
+                var w2 = nd.cornerstone ? cornerW : nodeW;
+                var hx = nd.x - w2 / 2;
+                var hy = nd.y;
+                var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
+                d3.select(this)
+                  .attr('r', dist < 20 ? handleR + 3 : handleR)
+                  .style('opacity', dist < 20 ? 1 : 0.6);
+              });
+            })
+            .on('end', function(event, d) {
+              tempLine.style('display', 'none');
+              g.selectAll('.conn-handle').style('opacity', 0).attr('r', handleR);
+              if (!dragLineRef.current) return;
+              var sourceId = dragLineRef.current.sourceId;
+              dragLineRef.current = null;
+
+              // Find target by proximity to input handle
+              var transform = d3.zoomTransform(svg.node());
+              var mouseX = (event.sourceEvent.offsetX - transform.x) / transform.k;
+              var mouseY = (event.sourceEvent.offsetY - transform.y) / transform.k;
+
+              var targetNode = null;
+              var minDist = 25;
+              nodes.forEach(function(n) {
+                if (n.id === sourceId) return;
+                var w2 = n.cornerstone ? cornerW : nodeW;
+                var hx = n.x - w2 / 2;
+                var hy = n.y;
+                var dist = Math.sqrt((mouseX - hx) * (mouseX - hx) + (mouseY - hy) * (mouseY - hy));
+                if (dist < minDist) { minDist = dist; targetNode = n; }
+              });
+
+              if (targetNode) {
+                handleCreateLink(sourceId, targetNode.id);
+              }
+            })
+        );
+
+        // Right-click on link lines to remove
+        linkG.style('cursor', 'pointer')
+          .on('contextmenu', function(event, d) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (confirm('Remove link from "' + d.source.name + '" to "' + d.target.name + '"?')) {
+              handleRemoveLink(d.source.id, d.target.id);
+            }
+          })
+          .on('mouseenter', function() {
+            d3.select(this).attr('stroke', '#ef4444').attr('stroke-width', 3);
+          })
+          .on('mouseleave', function() {
+            d3.select(this).attr('stroke', '#6b728060').attr('stroke-width', 1.5);
+          });
+
+        // old link icon removed — replaced by n8n handles above
+        if (false) nodeG.append('text')
           .text('') // fa-link unicode
           .attr('font-family', '"Font Awesome 5 Free"')
           .attr('font-weight', 900)
@@ -8748,9 +8868,12 @@
           });
 
         simulation.on('tick', function() {
+          // Link lines go from output handle (right edge) to input handle (left edge)
           linkG
-            .attr('x1', function(d) { return d.source.x; }).attr('y1', function(d) { return d.source.y; })
-            .attr('x2', function(d) { return d.target.x; }).attr('y2', function(d) { return d.target.y; });
+            .attr('x1', function(d) { var w = d.source.cornerstone ? cornerW : nodeW; return d.source.x + w / 2; })
+            .attr('y1', function(d) { return d.source.y; })
+            .attr('x2', function(d) { var w = d.target.cornerstone ? cornerW : nodeW; return d.target.x - w / 2; })
+            .attr('y2', function(d) { return d.target.y; });
           nodeG.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
         });
 
@@ -8929,22 +9052,9 @@
           ref: containerRef,
           style: { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', position: 'relative' }
         },
-          // Link mode bar
-          linkMode && React.createElement('div', {
-            style: { position: 'absolute', top: 0, left: 0, right: 0, padding: '10px 16px', background: '#3b82f6', color: '#fff', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }
-          },
-            React.createElement('span', null,
-              React.createElement('i', { className: 'fas fa-link', style: { marginRight: 8 } }),
-              'Click a page to link/unlink from "' + linkMode.sourceName + '"'
-            ),
-            React.createElement('button', {
-              onClick: function() { setLinkMode(null); },
-              style: { background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
-            }, 'Cancel')
-          ),
           React.createElement('svg', { ref: svgRef, style: { width: '100%', height: 600 } }),
           React.createElement('div', { style: { position: 'absolute', bottom: 12, right: 12, fontSize: 11, color: 'var(--text3)', background: 'var(--card)', padding: '4px 10px', borderRadius: 6 } },
-            'Scroll to zoom • Drag nodes • Click to edit'
+            'Scroll to zoom • Drag nodes • Drag handle to link • Right-click link to remove'
           )
         ),
 
@@ -8966,11 +9076,10 @@
                 )
               ),
               React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-                React.createElement('button', {
-                  onClick: function(e) { e.stopPropagation(); setLinkMode({ sourceId: sp.id, sourceName: sp.page_name }); setViewMode('graph'); },
-                  style: { fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '1px solid #3b82f6', background: 'transparent', color: '#3b82f6', cursor: 'pointer', fontWeight: 600 }
-                }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 3 } }), 'Link'),
-                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } }, (sp.internal_links || []).length + ' links'),
+                (sp.internal_links || []).length > 0 && React.createElement('span', { style: { fontSize: 10, color: 'var(--text3)' } },
+                  React.createElement('i', { className: 'fas fa-link', style: { marginRight: 3, opacity: 0.5 } }),
+                  (sp.internal_links || []).length + ' links'
+                ),
                 React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 10, background: (stageColors[sp.stage] || '#6b7280') + '20', color: stageColors[sp.stage] || '#6b7280', fontWeight: 600, textTransform: 'uppercase' } }, sp.stage)
               )
             );
