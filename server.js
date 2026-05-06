@@ -8217,11 +8217,17 @@ Respond with ONLY the JSON object.` }]
 
 // Live preview ��� fetch live page, extract header/hero/footer, inject draft content
 // AI rewrite a single meta field (title or description)
-app.post('/api/projects/:projectId/rewrite-meta', async (req, res) => {
+app.post(['/api/projects/:projectId/rewrite-meta', '/api/builds/:buildId/rewrite-meta'], async (req, res) => {
   try {
-    const { projectId } = req.params;
+    const projectId = req.params.projectId;
+    const buildId = req.params.buildId;
     const { field, meta_title, meta_desc, focus_keyword, content_snippet, score_tips } = req.body;
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    let project;
+    if (buildId) {
+      project = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [buildId])).rows[0];
+    } else {
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    }
 
     const currentTitle = meta_title || '';
     const currentDesc = meta_desc || '';

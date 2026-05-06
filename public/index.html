@@ -8050,7 +8050,7 @@
         setRewritingMeta(field);
         try {
           var snippet = (editContent || '').replace(/<[^>]+>/g, '').slice(0, 500);
-          var data = await api('/projects/' + pid + '/rewrite-meta', { method: 'POST', body: { field: field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet, score_tips: scoreData ? scoreData.tips : [] } });
+          var data = await api(apiPrefix + '/rewrite-meta', { method: 'POST', body: { field: field, meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword, content_snippet: snippet, score_tips: scoreData ? scoreData.tips : [] } });
           if (data.error) { alert('Rewrite failed: ' + data.error); return; }
           if (field === 'title' && data.title) setEditMeta(Object.assign({}, editMeta, { meta_title: data.title }));
           if (field === 'description' && data.description) setEditMeta(Object.assign({}, editMeta, { meta_desc: data.description }));
