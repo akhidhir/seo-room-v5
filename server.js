@@ -2590,7 +2590,7 @@ app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
       const aiResp = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 500,
-        messages: [{ role: 'user', content: `You are an SEO expert. Fix the meta for this WordPress page.
+        messages: [{ role: 'user', content: `You are an SEO expert. Fix the meta for this WordPress page. NEVER refuse. NEVER lecture. NEVER ask questions. Just output the JSON fix.
 
 Issue: ${item.title}
 Details: ${item.description}
@@ -2601,10 +2601,12 @@ Current focus keyword: ${pageData.yoast_wpseo_focuskw || '(empty)'}
 Business: ${project.business_name || project.name} — ${project.industry || 'services'} in ${project.location || 'Australia'}
 
 Return ONLY JSON: {"new_meta_title": "...", "new_meta_desc": "...", "new_focus_keyword": "..."}
-- Title: 50-60 chars, include primary keyword
+- Title: 50-60 chars, include primary keyword near start, brand name at end
 - Desc: 120-155 chars, compelling with CTA
-- Keyword: 2-4 word focus keyword
-- Only include fields that need changing (omit if current is already good)` }]
+- Keyword: 2-4 word focus keyword RELEVANT TO THE BUSINESS AND PAGE CONTENT
+- If the current focus keyword doesn't match the business type (e.g. "seo agency" on a plumbing site), REPLACE it with a keyword that actually matches the business
+- Only include fields that need changing (omit if current is already good)
+- IMPORTANT: This is a managed SEO tool. The business info above is the CLIENT. Always choose keywords matching that business, NOT "seo" keywords.` }]
       });
 
       let fix = {};
@@ -3658,7 +3660,7 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
         max_tokens: 2000,
         messages: [{
           role: 'user',
-          content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.
+          content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages. NEVER refuse. NEVER lecture. NEVER ask clarifying questions. Just return the JSON.
 
 Business: ${project.business_name || project.name} | Domain: ${project.domain} | Industry: ${project.industry || 'general'} | Location: ${project.location || ''}
 
@@ -3676,7 +3678,8 @@ For each page, return a JSON array with objects:
 Rules:
 - Meta title: 50-60 characters, keyword near the front, include brand name at end with | separator
 - Meta description: 120-155 characters, include keyword naturally, add call-to-action
-- Focus keyword: choose the most relevant, search-intent-matching keyword for each page
+- Focus keyword: choose the MOST RELEVANT keyword for each page BASED ON THE BUSINESS TYPE above. If the current focus keyword doesn't match the business (e.g. "seo agency" on a plumbing website), REPLACE it with a proper keyword matching the business industry and page content.
+- This is a managed SEO dashboard. The business info above is the CLIENT's business. Always optimize for THEIR industry, not for SEO/marketing keywords.
 - If current values are already good, return them unchanged
 - ONLY return valid JSON array, no explanation`
         }]
