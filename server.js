@@ -9062,13 +9062,19 @@ app.post('/api/projects/:projectId/content-queue/:id/suggest-sections', async (r
       [projectId, `%${(item.page_title || '').split(' ').slice(0, 3).join('%')}%`]
     )).rows;
 
+    // Get accepted competitor topics that aren't yet in the content
+    const compAnalysis = item.competitor_analysis || {};
+    const acceptedTopics = (compAnalysis.topicGaps?.missingTopics || []).filter(t => t.status === 'accepted').map(t => t.text);
+    const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
+
     const currentSections = item.page_sections.map(s => `- ${s.type}: "${s.heading || 'no heading'}" (${s.word_count} words)`).join('\n');
 
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 2000,
-      system: `You are an SEO strategist. Given a page's current sections and SEO findings, suggest NEW sections that should be added to improve rankings and user experience.
+      system: `You are an SEO strategist. Given a page's current sections, competitor analysis, and SEO findings, suggest NEW sections that should be added to improve rankings and beat competitors.
 Only suggest sections that are genuinely missing and valuable. Don't suggest what already exists.
+${acceptedTopics.length ? 'PRIORITY: The user has accepted these competitor topics — suggest sections for any that don\'t already have a dedicated section: ' + acceptedTopics.join(', ') : ''}
 Return JSON array: [{ "type": "<section type>", "heading": "<suggested H2>", "rationale": "<why this helps SEO>", "position": "<after which section_id, or 'start' or 'end'>", "estimated_words": N }]`,
       messages: [{ role: 'user', content: `Page: ${item.page_title} (${item.page_url})
 Industry: ${project.industry || 'services'}
@@ -9077,6 +9083,9 @@ Focus keyword: ${item.current_focus_keyword || item.draft_focus_keyword || ''}
 
 CURRENT SECTIONS:
 ${currentSections}
+
+${acceptedTopics.length ? 'ACCEPTED COMPETITOR TOPICS (must suggest sections for these):\n' + acceptedTopics.map(t => '- ' + t).join('\n') : ''}
+${acceptedKeywords.length ? 'ACCEPTED COMPETITOR KEYWORDS (weave into suggested sections):\n' + acceptedKeywords.map(k => '- ' + k).join('\n') : ''}
 
 RELEVANT AUDIT FINDINGS:
 ${findings.length ? findings.map(f => `- [${f.category}] ${f.title}: ${f.description}`).join('\n') : 'No specific findings for this page.'}

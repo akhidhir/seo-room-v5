@@ -12419,13 +12419,7 @@
                   disabled: parsingSections,
                   style: { fontSize: 12, padding: '4px 12px', background: '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: parsingSections ? 0.6 : 1 }
                 }, React.createElement('i', { className: parsingSections ? 'fas fa-spinner fa-spin' : 'fas fa-search-plus', style: { marginRight: 5 } }), parsingSections ? 'Analysing page...' : 'Analyse Page Structure'),
-                // Generate Section-by-Section button
-                selectedItem.page_sections?.length > 0 && !isPublished && React.createElement('button', {
-                  className: 'btn btn-small',
-                  onClick: handleGenerateSections,
-                  disabled: generatingSections,
-                  style: { fontSize: 12, padding: '4px 12px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: generatingSections ? 0.6 : 1 }
-                }, React.createElement('i', { className: generatingSections ? 'fas fa-spinner fa-spin' : 'fas fa-magic', style: { marginRight: 5 } }), generatingSections ? 'Generating...' : 'Rewrite Sections'),
+                // Rewrite Sections removed — use top-bar Rewrite or per-section ✨ chat instead
                 // Suggest New Sections button
                 selectedItem.page_sections?.length > 0 && !isPublished && React.createElement('button', {
                   className: 'btn btn-small',
