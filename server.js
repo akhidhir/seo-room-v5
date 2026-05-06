@@ -11018,18 +11018,21 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
   const locationCity = city || null;
   const locationState = state || null;
 
-  // Use the most specific location code available: city > state > country
-  let locationCode = AU_LOCATIONS.country.code; // 2036 = Australia
+  // Two location codes: specific (for Labs keyword discovery) and country (for Google Ads volumes)
+  // Google Ads at state/city level only counts searches FROM that region — volumes are artificially tiny.
+  // Country-level gives the real national search demand, which is what users expect to see.
+  const countryCode = AU_LOCATIONS.country.code; // 2036 = Australia
+  let discoveryCode = countryCode; // For Labs keyword suggestions — more specific = more relevant ideas
   let locationName = 'Australia';
   if (locationCity && locationState && AU_LOCATIONS.states[locationState]?.cities?.[locationCity]) {
-    locationCode = AU_LOCATIONS.states[locationState].cities[locationCity];
+    discoveryCode = AU_LOCATIONS.states[locationState].cities[locationCity];
     locationName = locationCity + ', ' + locationState + ', Australia';
   } else if (locationState && AU_LOCATIONS.states[locationState]) {
-    locationCode = AU_LOCATIONS.states[locationState].code;
+    discoveryCode = AU_LOCATIONS.states[locationState].code;
     locationName = locationState + ', Australia';
   }
 
-  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} (code: ${locationCode}) | Cap: ${cap}`);
+  console.log(`[kw-research] Seeds: ${seeds.join(', ')} | Location: ${locationName} | Discovery code: ${discoveryCode} | Volume code: ${countryCode} (AU) | Cap: ${cap}`);
 
   try {
     // Step 1: Expand seeds with SerpAPI autocomplete
@@ -11063,7 +11066,7 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
           headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
           body: JSON.stringify([{
             keyword: seed,
-            location_code: locationCode,
+            location_code: discoveryCode,
             language_name: 'English',
             limit: Math.min(cap * 2, 100),
             include_seed_keyword: true,
@@ -11115,7 +11118,7 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
             headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
             body: JSON.stringify([{
               keywords: batch,
-              location_code: locationCode,
+              location_code: countryCode,
               language_name: 'English',
             }]),
             signal: AbortSignal.timeout(20000),
@@ -11192,12 +11195,12 @@ app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/key
     // Cap to package size
     final = final.slice(0, cap);
 
-    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, location_code: ${locationCode})`);
+    console.log(`[kw-research] Returning ${final.length} keywords (cap: ${cap}, volume_code: ${countryCode}, discovery_code: ${discoveryCode})`);
     res.json({
       keywords: final,
       total_found: Object.keys(kwMap).length,
       location: locationName,
-      location_code: locationCode,
+      location_code: countryCode,
     });
   } catch (e) {
     console.error('[kw-research] Error:', e.message, e.stack);
