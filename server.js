@@ -446,6 +446,25 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS revision_requested_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_approved_at TIMESTAMPTZ`).catch(() => {});
 
+    // Client access — role-based multi-user system
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin'`).catch(() => {});
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`).catch(() => {});
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS project_invites (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        invite_token TEXT UNIQUE NOT NULL,
+        created_by INTEGER REFERENCES users(id),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days'),
+        used_by INTEGER REFERENCES users(id),
+        used_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+    // Client draft — separate from agency draft so client edits don't overwrite agency work
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_content TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_meta JSONB`).catch(() => {});
+
     // Content keywords — for new project keyword workflow
     await client.query(`
       CREATE TABLE IF NOT EXISTS content_keywords (
@@ -615,8 +634,8 @@ async function initDb() {
 // ==================== 3. AUTH ====================
 
 // Generate JWT token
-function generateToken(userId, email) {
-  return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '30d' });
+function generateToken(userId, email, role = 'admin', projectId = null) {
+  return jwt.sign({ userId, email, role, projectId }, JWT_SECRET, { expiresIn: '30d' });
 }
 
 // Auth middleware
@@ -636,6 +655,8 @@ function optionalAuth(req, res, next) {
   const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
+  // Allow invite routes without auth (client signup flow)
+  if (req.path.match(/^\/api\/invite\//)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
@@ -666,13 +687,13 @@ app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   try {
-    const result = await pool.query('SELECT id, email, password_hash, name FROM users WHERE email=$1', [email]);
+    const result = await pool.query('SELECT id, email, password_hash, name, role, project_id FROM users WHERE email=$1', [email]);
     if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
     const user = result.rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = generateToken(user.id, user.email);
-    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name }, token });
+    const token = generateToken(user.id, user.email, user.role || 'admin', user.project_id);
+    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role || 'admin', project_id: user.project_id }, token });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -681,12 +702,208 @@ app.post('/api/auth/login', async (req, res) => {
 // Me (get current user)
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, email, name FROM users WHERE id=$1', [req.auth.userId]);
+    const result = await pool.query('SELECT id, email, name, role, project_id FROM users WHERE id=$1', [req.auth.userId]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ user: result.rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ==================== CLIENT INVITE SYSTEM ====================
+
+// Generate invite link (agency only, requires auth)
+app.post('/api/projects/:projectId/invite', authMiddleware, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    // Verify user owns this project and is admin
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1 AND user_id=$2', [projectId, req.auth.userId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const crypto = require('crypto');
+    const inviteToken = crypto.randomBytes(24).toString('hex');
+    await pool.query(
+      'INSERT INTO project_invites (project_id, invite_token, created_by) VALUES ($1, $2, $3)',
+      [projectId, inviteToken, req.auth.userId]
+    );
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    res.json({ token: inviteToken, url: `${baseUrl}/invite/${inviteToken}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// List clients for a project (agency only)
+app.get('/api/projects/:projectId/clients', authMiddleware, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const clients = await pool.query(
+      'SELECT id, email, name, created_at FROM users WHERE role=$1 AND project_id=$2 ORDER BY created_at DESC',
+      ['client', projectId]
+    );
+    const invites = await pool.query(
+      'SELECT id, invite_token, created_at, expires_at, used_by FROM project_invites WHERE project_id=$1 ORDER BY created_at DESC',
+      [projectId]
+    );
+    res.json({ clients: clients.rows, invites: invites.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Validate invite token (no auth — client accessing invite link)
+app.get('/api/invite/:token', async (req, res) => {
+  try {
+    const invite = (await pool.query(
+      `SELECT pi.*, p.name as project_name, p.business_name, p.domain
+       FROM project_invites pi JOIN projects p ON p.id = pi.project_id
+       WHERE pi.invite_token = $1 AND pi.expires_at > NOW()`,
+      [req.params.token]
+    )).rows[0];
+    if (!invite) return res.status(404).json({ error: 'Invite link is invalid or expired' });
+    if (invite.used_by) return res.status(400).json({ error: 'This invite has already been used', already_used: true });
+    res.json({ project_name: invite.project_name, business_name: invite.business_name, domain: invite.domain });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Client registers via invite (no auth)
+app.post('/api/invite/:token/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: 'Name, email, and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    const invite = (await pool.query(
+      'SELECT * FROM project_invites WHERE invite_token=$1 AND expires_at > NOW()',
+      [req.params.token]
+    )).rows[0];
+    if (!invite) return res.status(404).json({ error: 'Invite link is invalid or expired' });
+    if (invite.used_by) return res.status(400).json({ error: 'This invite has already been used' });
+
+    // Check if email already exists
+    const existing = (await pool.query('SELECT id FROM users WHERE email=$1', [email])).rows[0];
+    if (existing) return res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+
+    // Create client user
+    const hash = await bcrypt.hash(password, 10);
+    const user = (await pool.query(
+      'INSERT INTO users (email, password_hash, name, role, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, role, project_id',
+      [email, hash, name, 'client', invite.project_id]
+    )).rows[0];
+
+    // Mark invite as used
+    await pool.query('UPDATE project_invites SET used_by=$1, used_at=NOW() WHERE id=$2', [user.id, invite.id]);
+
+    const token = generateToken(user.id, user.email, 'client', invite.project_id);
+    res.json({ ok: true, user, token });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Client saves their edits to a content item (separate from agency draft)
+app.put('/api/client/content/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.auth.role !== 'client') return res.status(403).json({ error: 'Client access only' });
+    const { id } = req.params;
+    const { client_draft_content, client_draft_meta, comment } = req.body;
+
+    // Verify item belongs to client's project and is in approval stage
+    const item = (await pool.query(
+      'SELECT * FROM content_queue WHERE id=$1 AND project_id=$2 AND stage=$3',
+      [id, req.auth.projectId, 'approved']
+    )).rows[0];
+    if (!item) return res.status(404).json({ error: 'Item not found or not in approval stage' });
+
+    const updates = [];
+    const values = [];
+    let idx = 1;
+
+    if (client_draft_content !== undefined) {
+      updates.push(`client_draft_content=$${idx++}`);
+      values.push(client_draft_content);
+    }
+    if (client_draft_meta !== undefined) {
+      updates.push(`client_draft_meta=$${idx++}`);
+      values.push(JSON.stringify(client_draft_meta));
+    }
+    if (comment) {
+      const comments = item.client_comments || [];
+      comments.push({ author: 'Client', text: comment, timestamp: new Date().toISOString() });
+      updates.push(`client_comments=$${idx++}`);
+      values.push(JSON.stringify(comments));
+    }
+
+    updates.push(`updated_at=NOW()`);
+    values.push(id);
+    await pool.query(`UPDATE content_queue SET ${updates.join(', ')} WHERE id=$${idx}`, values);
+
+    const fresh = (await pool.query('SELECT * FROM content_queue WHERE id=$1', [id])).rows[0];
+    res.json(fresh);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Client approves or requests revision
+app.post('/api/client/content/:id/action', authMiddleware, async (req, res) => {
+  try {
+    if (req.auth.role !== 'client') return res.status(403).json({ error: 'Client access only' });
+    const { id } = req.params;
+    const { action, comment } = req.body;
+
+    const item = (await pool.query(
+      'SELECT * FROM content_queue WHERE id=$1 AND project_id=$2 AND stage=$3',
+      [id, req.auth.projectId, 'approved']
+    )).rows[0];
+    if (!item) return res.status(404).json({ error: 'Item not found or not in approval stage' });
+
+    let comments = item.client_comments || [];
+    if (comment) {
+      comments.push({ author: 'Client', text: comment, timestamp: new Date().toISOString(), action });
+    }
+
+    if (action === 'approve') {
+      await pool.query(
+        `UPDATE content_queue SET stage='staging', client_approved_at=NOW(), client_comments=$1, updated_at=NOW() WHERE id=$2`,
+        [JSON.stringify(comments), id]
+      );
+    } else if (action === 'revision') {
+      await pool.query(
+        `UPDATE content_queue SET stage='drafts', revision_requested_at=NOW(), client_comments=$1, updated_at=NOW() WHERE id=$2`,
+        [JSON.stringify(comments), id]
+      );
+    } else {
+      return res.status(400).json({ error: 'Invalid action. Use "approve" or "revision".' });
+    }
+
+    res.json({ success: true, action });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get approval items for client
+app.get('/api/client/approval-items', authMiddleware, async (req, res) => {
+  try {
+    if (req.auth.role !== 'client') return res.status(403).json({ error: 'Client access only' });
+    const items = await pool.query(
+      `SELECT id, page_title, page_url, stage, draft_content, draft_meta_title, draft_meta_desc, draft_focus_keyword,
+              current_content, current_meta_title, current_meta_desc, current_focus_keyword,
+              client_draft_content, client_draft_meta, client_comments, client_approved_at, revision_requested_at,
+              updated_at, created_at
+       FROM content_queue WHERE project_id=$1 AND stage='approved' ORDER BY updated_at DESC`,
+      [req.auth.projectId]
+    );
+    res.json({ items: items.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single approval item for client (full content)
+app.get('/api/client/approval-items/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.auth.role !== 'client') return res.status(403).json({ error: 'Client access only' });
+    const item = (await pool.query(
+      'SELECT * FROM content_queue WHERE id=$1 AND project_id=$2',
+      [req.params.id, req.auth.projectId]
+    )).rows[0];
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    res.json(item);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Apply optional auth to all routes
@@ -915,10 +1132,13 @@ app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
 // List projects for current user
 app.get('/api/projects', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM projects WHERE user_id=$1 ORDER BY created_at DESC',
-      [req.auth.userId]
-    );
+    let result;
+    if (req.auth.role === 'client' && req.auth.projectId) {
+      // Clients only see their assigned project
+      result = await pool.query('SELECT * FROM projects WHERE id=$1', [req.auth.projectId]);
+    } else {
+      result = await pool.query('SELECT * FROM projects WHERE user_id=$1 ORDER BY created_at DESC', [req.auth.userId]);
+    }
     res.json({ projects: result.rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -6730,9 +6950,9 @@ app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ==================== CLIENT SHARE LINK — APPROVAL WORKFLOW ====================
+// ==================== LEGACY CLIENT SHARE LINK (deprecated — replaced by invite system) ====================
+// Kept temporarily for backwards compatibility, will be removed in future cleanup
 
-// Generate share link for a content queue item
 app.post('/api/projects/:projectId/content-queue/:id/share', async (req, res) => {
   try {
     const { projectId, id } = req.params;

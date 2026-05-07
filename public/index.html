@@ -1292,14 +1292,394 @@
               </button>
             </form>
 
-            <div className="toggle-auth">
-              {isRegister ? 'Already have an account? ' : "Don't have an account? "}
-              <button onClick={() => setIsRegister(!isRegister)} disabled={loading}>
-                {isRegister ? 'Sign In' : 'Sign Up'}
+          </div>
+        </div>
+      );
+    }
+
+    // ============ INVITE PAGE — Client signup via invite link ============
+    function InvitePage({ token, onLogin }) {
+      const [inviteData, setInviteData] = useState(null);
+      const [inviteError, setInviteError] = useState('');
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [confirmPassword, setConfirmPassword] = useState('');
+      const [loading, setLoading] = useState(true);
+      const [submitting, setSubmitting] = useState(false);
+      const [error, setError] = useState('');
+      const [alreadyUsed, setAlreadyUsed] = useState(false);
+
+      useEffect(() => {
+        fetch('/api/invite/' + token)
+          .then(r => r.json())
+          .then(data => {
+            if (data.error) {
+              setInviteError(data.error);
+              if (data.already_used) setAlreadyUsed(true);
+            } else {
+              setInviteData(data);
+            }
+            setLoading(false);
+          })
+          .catch(() => { setInviteError('Failed to validate invite link'); setLoading(false); });
+      }, [token]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+        if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+        setSubmitting(true);
+        try {
+          const r = await fetch('/api/invite/' + token + '/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email, password })
+          });
+          const data = await r.json();
+          if (data.error) { setError(data.error); setSubmitting(false); return; }
+          localStorage.setItem('token', data.token);
+          onLogin(data.user);
+        } catch (err) {
+          setError('Something went wrong. Please try again.');
+          setSubmitting(false);
+        }
+      };
+
+      if (loading) return (
+        <div className="login-page">
+          <div className="login-form" style={{ textAlign: 'center' }}>
+            <span className="spinner" style={{ width: 32, height: 32 }}></span>
+            <div style={{ marginTop: 12, color: 'var(--text3)' }}>Validating invite...</div>
+          </div>
+        </div>
+      );
+
+      if (inviteError) return (
+        <div className="login-page">
+          <div className="login-form" style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }}><i className="fas fa-link-slash"></i></div>
+            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{inviteError}</div>
+            {alreadyUsed && <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16 }}>
+              If you already created your account, you can log in below.
+            </div>}
+            <a href="/" style={{ color: '#6366f1', fontSize: 13 }}>Go to login</a>
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="login-page">
+          <div className="login-form">
+            <div className="login-header">
+              <div className="login-title">
+                <i className="fas fa-user-plus" style={{ marginRight: 8 }}></i> Create Your Account
+              </div>
+              <div className="login-subtitle">
+                You've been invited to review content for <strong>{inviteData.business_name || inviteData.project_name}</strong>
+              </div>
+            </div>
+
+            {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+            <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label className="form-label">Full Name</label>
+                <input type="text" className="form-input" value={name} onChange={e => setName(e.target.value)}
+                  placeholder="Your name" required disabled={submitting} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com" required disabled={submitting} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder="Min 6 characters" required disabled={submitting} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Confirm Password</label>
+                <input type="password" className="form-input" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter password" required disabled={submitting} />
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={submitting}>
+                {submitting ? <span className="spinner"></span> : null}
+                Create Account
               </button>
+            </form>
+
+            <div style={{ textAlign: 'center', marginTop: 16, fontSize: 13, color: 'var(--text3)' }}>
+              Already have an account? <a href="/" style={{ color: '#6366f1' }}>Log in</a>
             </div>
           </div>
         </div>
+      );
+    }
+
+    // ============ CLIENT APPROVAL VIEW — stripped-down view for clients ============
+    function ClientApprovalView({ user, project, onLogout }) {
+      const [items, setItems] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [selectedItem, setSelectedItem] = useState(null);
+      const [editContent, setEditContent] = useState('');
+      const [editMeta, setEditMeta] = useState({ meta_title: '', meta_desc: '' });
+      const [comment, setComment] = useState('');
+      const [saving, setSaving] = useState(false);
+      const [actionLoading, setActionLoading] = useState('');
+      const [editorKey, setEditorKey] = useState(0);
+
+      const loadItems = async () => {
+        try {
+          const data = await api('/client/approval-items');
+          setItems(data.items || []);
+        } catch (e) { console.error('Load items error:', e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadItems(); }, []);
+
+      const handleSelectItem = (item) => {
+        setSelectedItem(item);
+        setEditContent(item.client_draft_content || item.draft_content || item.current_content || '');
+        setEditMeta({
+          meta_title: (item.client_draft_meta?.meta_title) || item.draft_meta_title || item.current_meta_title || '',
+          meta_desc: (item.client_draft_meta?.meta_desc) || item.draft_meta_desc || item.current_meta_desc || ''
+        });
+        setComment('');
+        setEditorKey(k => k + 1);
+      };
+
+      const handleSave = async () => {
+        if (!selectedItem) return;
+        setSaving(true);
+        try {
+          const body = {
+            client_draft_content: editContent,
+            client_draft_meta: editMeta
+          };
+          if (comment.trim()) body.comment = comment.trim();
+          await api('/client/content/' + selectedItem.id, { method: 'PUT', body });
+          setComment('');
+          // Refresh item
+          const fresh = await api('/client/approval-items/' + selectedItem.id);
+          setSelectedItem(fresh);
+        } catch (e) { alert('Save failed: ' + e.message); }
+        setSaving(false);
+      };
+
+      const handleAction = async (action) => {
+        if (!selectedItem) return;
+        const msg = action === 'approve'
+          ? 'Approve this content? It will be sent for publishing.'
+          : 'Request changes? The team will revise the content.';
+        if (!confirm(msg)) return;
+        setActionLoading(action);
+        try {
+          // Save any pending edits first
+          if (editContent || comment.trim()) {
+            await api('/client/content/' + selectedItem.id, {
+              method: 'PUT',
+              body: { client_draft_content: editContent, client_draft_meta: editMeta, comment: comment.trim() || undefined }
+            });
+          }
+          await api('/client/content/' + selectedItem.id + '/action', { method: 'POST', body: { action, comment: comment.trim() || undefined } });
+          setSelectedItem(null);
+          setComment('');
+          loadItems();
+        } catch (e) { alert('Action failed: ' + e.message); }
+        setActionLoading('');
+      };
+
+      // Header bar
+      const header = React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px',
+          background: 'var(--card)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 100 }
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+          React.createElement('i', { className: 'fas fa-rocket', style: { color: '#6366f1', fontSize: 20 } }),
+          React.createElement('span', { style: { fontWeight: 700, fontSize: 16 } }, 'SEO Room'),
+          React.createElement('span', { style: { color: 'var(--text3)', fontSize: 13, marginLeft: 8 } },
+            project?.business_name || project?.name || '')
+        ),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16 } },
+          React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)' } }, user.name || user.email),
+          React.createElement('button', {
+            onClick: onLogout,
+            style: { background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 14px',
+              color: 'var(--text3)', cursor: 'pointer', fontSize: 12 }
+          }, 'Log out')
+        )
+      );
+
+      if (loading) return React.createElement('div', { style: { minHeight: '100vh', background: 'var(--bg)' } },
+        header,
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 80 } },
+          React.createElement('span', { className: 'spinner', style: { width: 32, height: 32 } })
+        )
+      );
+
+      // No item selected — show list
+      if (!selectedItem) {
+        return React.createElement('div', { style: { minHeight: '100vh', background: 'var(--bg)' } },
+          header,
+          React.createElement('div', { style: { maxWidth: 800, margin: '0 auto', padding: '32px 24px' } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, marginBottom: 4 } }, 'Content for Review'),
+            React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginBottom: 24 } },
+              'Review the content below, make edits or leave comments, then approve or request changes.'),
+
+            items.length === 0
+              ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+                  React.createElement('i', { className: 'fas fa-check-circle', style: { fontSize: 48, opacity: 0.3, display: 'block', marginBottom: 12 } }),
+                  React.createElement('div', { style: { fontSize: 16, fontWeight: 600, marginBottom: 4 } }, 'All caught up!'),
+                  React.createElement('div', { style: { fontSize: 13 } }, 'No content waiting for your review right now.')
+                )
+              : items.map(item => React.createElement('div', {
+                  key: item.id,
+                  onClick: () => handleSelectItem(item),
+                  style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16,
+                    marginBottom: 12, cursor: 'pointer', transition: 'border-color 0.15s' },
+                  onMouseEnter: e => e.currentTarget.style.borderColor = '#6366f1',
+                  onMouseLeave: e => e.currentTarget.style.borderColor = 'var(--border)'
+                },
+                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                    React.createElement('div', null,
+                      React.createElement('div', { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } },
+                        item.page_title || 'Untitled Page'),
+                      React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)' } }, item.page_url || '')
+                    ),
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                      item.client_comments?.length > 0 && React.createElement('span', {
+                        style: { fontSize: 11, color: '#6366f1', background: '#6366f120', padding: '2px 8px', borderRadius: 4 }
+                      }, item.client_comments.length + ' comment' + (item.client_comments.length > 1 ? 's' : '')),
+                      React.createElement('i', { className: 'fas fa-chevron-right', style: { color: 'var(--text3)', fontSize: 12 } })
+                    )
+                  )
+                ))
+          )
+        );
+      }
+
+      // Item selected — editor view
+      const comments = selectedItem.client_comments || [];
+
+      return React.createElement('div', { style: { minHeight: '100vh', background: 'var(--bg)' } },
+        header,
+        React.createElement('div', { style: { maxWidth: 900, margin: '0 auto', padding: '24px 24px' } },
+          // Back button + title
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 } },
+            React.createElement('button', {
+              onClick: () => { setSelectedItem(null); loadItems(); },
+              style: { background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontSize: 14, padding: 0 }
+            }, React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back'),
+            React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, margin: 0 } },
+              selectedItem.page_title || 'Untitled Page')
+          ),
+
+          // Meta fields
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 16, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'SEO Meta'),
+            React.createElement('div', { style: { marginBottom: 10 } },
+              React.createElement('label', { style: { fontSize: 12, color: 'var(--text3)', display: 'block', marginBottom: 4 } }, 'Meta Title'),
+              React.createElement('input', {
+                type: 'text', value: editMeta.meta_title,
+                onChange: e => setEditMeta(prev => ({ ...prev, meta_title: e.target.value })),
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text)', fontSize: 14 }
+              })
+            ),
+            React.createElement('div', null,
+              React.createElement('label', { style: { fontSize: 12, color: 'var(--text3)', display: 'block', marginBottom: 4 } }, 'Meta Description'),
+              React.createElement('textarea', {
+                value: editMeta.meta_desc,
+                onChange: e => setEditMeta(prev => ({ ...prev, meta_desc: e.target.value })),
+                rows: 2,
+                style: { width: '100%', padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text)', fontSize: 14, resize: 'vertical' }
+              })
+            )
+          ),
+
+          // Content editor
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 16, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'Content'),
+            React.createElement('div', {
+              key: editorKey,
+              contentEditable: true,
+              suppressContentEditableWarning: true,
+              dangerouslySetInnerHTML: { __html: editContent },
+              onBlur: e => setEditContent(e.currentTarget.innerHTML),
+              style: { minHeight: 300, maxHeight: 500, overflowY: 'auto', padding: 12, background: 'var(--bg)',
+                border: '1px solid var(--border)', borderRadius: 6, fontSize: 14, lineHeight: 1.7, color: 'var(--text)',
+                outline: 'none' }
+            })
+          ),
+
+          // Comments section
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 16, border: '1px solid var(--border)' } },
+            React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } },
+              'Comments', comments.length > 0 && ' (' + comments.length + ')'),
+            comments.length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
+              comments.map((c, i) => React.createElement('div', { key: i,
+                style: { padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, marginBottom: 6,
+                  borderLeft: '3px solid ' + (c.action === 'approve' ? '#22c55e' : c.action === 'revision' ? '#f59e0b' : '#6366f1') }
+              },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 2 } },
+                  (c.author || 'Client') + ' — ' + (c.timestamp ? new Date(c.timestamp).toLocaleString() : ''),
+                  c.action && React.createElement('span', {
+                    style: { marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 3,
+                      background: c.action === 'approve' ? '#22c55e20' : '#f59e0b20',
+                      color: c.action === 'approve' ? '#22c55e' : '#f59e0b' }
+                  }, c.action)
+                ),
+                React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)' } }, c.text || c.comment || '')
+              ))
+            ),
+            React.createElement('textarea', {
+              value: comment, onChange: e => setComment(e.target.value),
+              placeholder: 'Add a comment or note for the team...',
+              rows: 3,
+              style: { width: '100%', padding: '10px 12px', background: 'var(--bg)', border: '1px solid var(--border)',
+                borderRadius: 6, color: 'var(--text)', fontSize: 13, resize: 'vertical' }
+            })
+          ),
+
+          // Action bar — sticky at bottom
+          React.createElement('div', {
+            style: { position: 'sticky', bottom: 0, background: 'var(--card)', borderTop: '1px solid var(--border)',
+              padding: '16px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 50 }
+          },
+            React.createElement('button', {
+              onClick: handleSave, disabled: saving,
+              style: { padding: '10px 20px', background: '#6366f120', color: '#6366f1', border: '1px solid #6366f140',
+                borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+            }, saving
+              ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { width: 14, height: 14, marginRight: 6 } }), 'Saving...')
+              : React.createElement('span', null, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes')
+            ),
+            React.createElement('div', { style: { display: 'flex', gap: 10 } },
+              React.createElement('button', {
+                onClick: () => handleAction('revision'),
+                disabled: !!actionLoading,
+                style: { padding: '10px 20px', background: '#f59e0b', color: '#fff', border: 'none',
+                  borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+              }, actionLoading === 'revision'
+                ? React.createElement('span', { className: 'spinner', style: { width: 14, height: 14 } })
+                : React.createElement('span', null, React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Request Changes')
+              ),
+              React.createElement('button', {
+                onClick: () => handleAction('approve'),
+                disabled: !!actionLoading,
+                style: { padding: '10px 24px', background: '#22c55e', color: '#fff', border: 'none',
+                  borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }
+              }, actionLoading === 'approve'
+                ? React.createElement('span', { className: 'spinner', style: { width: 14, height: 14 } })
+                : React.createElement('span', null, React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'Approve')
+              )
+            )
+          )
+        )
       );
     }
 
@@ -12146,19 +12526,7 @@
                 React.createElement('i', { className: 'fas fa-undo', style: { marginRight: 6 } }), 'Request Revision'),
               selectedItem.stage === 'approved' && React.createElement('button', { onClick: () => handlePublish(selectedItem), style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
                 React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'Approve'),
-              // Share Link — generate client review link for Approval stage
-              selectedItem.stage === 'approved' && React.createElement('button', {
-                onClick: async () => {
-                  try {
-                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/share', { method: 'POST' });
-                    if (r.url) {
-                      await navigator.clipboard.writeText(r.url);
-                      alert('Client review link copied to clipboard!\n\n' + r.url);
-                    }
-                  } catch (e) { alert('Failed to generate share link: ' + e.message); }
-                },
-                style: { padding: '8px 16px', background: '#6366f120', color: '#6366f1', border: '1px solid #6366f140', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
-              }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Share Link'),
+              // (Share Link removed — clients now use invite system + login)
               // Publishing stage: Back to Approval, Publish to WordPress
               selectedItem.stage === 'staging' && React.createElement('button', { onClick: () => handleRevertStaging(selectedItem), style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13 } },
                 React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back to Approval'),
@@ -16534,6 +16902,106 @@
     }
 
     // ============ PROJECT SETTINGS PAGE ============
+    // ============ CLIENT ACCESS CARD — manage invite links + client accounts ============
+    function ClientAccessCard({ projectId }) {
+      const [clients, setClients] = useState([]);
+      const [invites, setInvites] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [generating, setGenerating] = useState(false);
+      const [inviteUrl, setInviteUrl] = useState('');
+
+      const loadData = async () => {
+        try {
+          const data = await api('/projects/' + projectId + '/clients');
+          setClients(data.clients || []);
+          setInvites(data.invites || []);
+        } catch (e) { console.error('Load clients error:', e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { if (projectId) loadData(); }, [projectId]);
+
+      const handleGenerate = async () => {
+        setGenerating(true);
+        try {
+          const data = await api('/projects/' + projectId + '/invite', { method: 'POST' });
+          setInviteUrl(data.url);
+          navigator.clipboard.writeText(data.url).catch(() => {});
+          loadData();
+        } catch (e) { alert('Failed: ' + e.message); }
+        setGenerating(false);
+      };
+
+      return React.createElement('div', { className: 'card' },
+        React.createElement('div', { className: 'card-title', style: { marginBottom: 8 } },
+          React.createElement('i', { className: 'fas fa-user-shield', style: { marginRight: 8, color: '#6366f1' } }),
+          'Client Access'
+        ),
+        React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 16 } },
+          'Invite clients to review and approve content. They only see the Approval stage.'
+        ),
+
+        // Generate invite button
+        React.createElement('div', { style: { marginBottom: 16 } },
+          React.createElement('button', {
+            onClick: handleGenerate, disabled: generating,
+            className: 'btn btn-primary btn-small'
+          },
+            generating
+              ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { width: 12, height: 12, marginRight: 6 } }), 'Generating...')
+              : React.createElement('span', null, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Generate Invite Link')
+          ),
+          inviteUrl && React.createElement('div', { style: { marginTop: 8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: { flex: 1, color: '#6366f1' } }, inviteUrl),
+            React.createElement('button', {
+              onClick: () => { navigator.clipboard.writeText(inviteUrl); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 12, flexShrink: 0 }
+            }, React.createElement('i', { className: 'fas fa-copy' })),
+            React.createElement('span', { style: { color: '#22c55e', fontSize: 11 } }, 'Copied!')
+          )
+        ),
+
+        // Client accounts list
+        loading
+          ? React.createElement('div', { style: { color: 'var(--text3)', fontSize: 12 } }, 'Loading...')
+          : React.createElement('div', null,
+              clients.length > 0 && React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'Client Accounts'),
+                clients.map(c => React.createElement('div', { key: c.id,
+                  style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px',
+                    background: 'var(--bg)', borderRadius: 6, marginBottom: 4, fontSize: 13 }
+                },
+                  React.createElement('div', null,
+                    React.createElement('span', { style: { fontWeight: 600, marginRight: 8 } }, c.name || 'Client'),
+                    React.createElement('span', { style: { color: 'var(--text3)' } }, c.email)
+                  ),
+                  React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+                    'Joined ' + new Date(c.created_at).toLocaleDateString())
+                ))
+              ),
+              clients.length === 0 && invites.filter(i => !i.used_by).length === 0 && React.createElement('div', {
+                style: { color: 'var(--text3)', fontSize: 12, fontStyle: 'italic' }
+              }, 'No clients invited yet. Generate an invite link to get started.'),
+
+              // Pending invites
+              invites.filter(i => !i.used_by).length > 0 && React.createElement('div', { style: { marginTop: 12 } },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 } }, 'Pending Invites'),
+                invites.filter(i => !i.used_by).map(inv => React.createElement('div', { key: inv.id,
+                  style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px',
+                    background: 'var(--bg)', borderRadius: 6, marginBottom: 4, fontSize: 12 }
+                },
+                  React.createElement('span', { style: { color: '#f59e0b' } },
+                    React.createElement('i', { className: 'fas fa-clock', style: { marginRight: 6 } }),
+                    'Pending — created ' + new Date(inv.created_at).toLocaleDateString()
+                  ),
+                  React.createElement('span', { style: { color: 'var(--text3)', fontSize: 11 } },
+                    'Expires ' + new Date(inv.expires_at).toLocaleDateString())
+                ))
+              )
+            )
+      );
+    }
+
     function ProjectSettingsPage({ project: currentProject }) {
       const [project, setProject] = useState(null);
       const [loading, setLoading] = useState(false);
@@ -17215,6 +17683,9 @@
               />
             </div>
           </div>
+
+          {/* Client Access */}
+          <ClientAccessCard projectId={currentProject?.id} />
 
           {/* Page Templates */}
           <div className="card">
@@ -17925,6 +18396,10 @@
 
       const handleLogin = async (userData) => {
         setUser(userData);
+        // If on invite page, redirect to root after signup
+        if (window.location.pathname.startsWith('/invite/')) {
+          window.history.pushState({}, '', '/');
+        }
         // Load projects after login
         try {
           const projData = await api('/projects');
@@ -17964,8 +18439,19 @@
         return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span></div>;
       }
 
+      // Check for invite page (before login check — invite works without auth)
+      const inviteMatch = window.location.pathname.match(/^\/invite\/([a-f0-9]+)$/i);
+      if (inviteMatch) {
+        return <InvitePage token={inviteMatch[1]} onLogin={handleLogin} />;
+      }
+
       if (!user) {
         return <LoginPage onLogin={handleLogin} />;
+      }
+
+      // Client role — show stripped-down approval view only
+      if (user.role === 'client' && project) {
+        return <ClientApprovalView user={user} project={project} onLogout={handleLogout} />;
       }
 
       // Check for public blog review page
