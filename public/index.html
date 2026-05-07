@@ -11964,9 +11964,9 @@
               setEditorKey(k => k + 1);
             }
             setSuggestions((full.suggestions || []).filter(s => s.status === 'pending'));
-            if (full.page_sections?.length) {
+            if (full.page_sections?.length && full.stage !== 'approved') {
               setSectionView(true);
-            } else if (full.page_url) {
+            } else if (full.page_url && full.stage !== 'approved') {
               // Auto-parse sections so Design-Safe preview is always available
               try {
                 const sr = await api('/projects/' + pid + '/content-queue/' + full.id + '/parse-sections', { method: 'POST' });
