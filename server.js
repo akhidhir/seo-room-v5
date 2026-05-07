@@ -14227,14 +14227,12 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
 
-    const openaiKey = process.env.OPENAI_API_KEY;
-
-    if (!openaiKey) {
+    if (!anthropic) {
       await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
-      return res.status(500).json({ error: 'OpenAI not configured. Set OPENAI_API_KEY.' });
+      return res.status(500).json({ error: 'Anthropic API not configured.' });
     }
 
-    console.log(`[gbp-external] Starting GPT-5.5 audit for "${businessName}" in ${location}`);
+    console.log(`[gbp-external] Starting Opus 4.7 audit for "${businessName}" in ${location}`);
     console.log(`[gbp-external] Context: ${internalFindings.length} findings, ${gridData.length} grid scans, ${rankData.length} rank entries, profile: ${serpProfile ? 'YES' : 'NO'}`);
 
     // ===== BUILD ENRICHED PROMPT =====
@@ -14364,57 +14362,34 @@ ABSOLUTE RULES:
 - Keep findings to MAX 25 total. Quality over quantity. Each finding must be worth acting on.
 - For Competitor Analysis: analyze TOP 3 competitors only, compare on 4 metrics: reviews, rating, photos, categories`;
 
-    // Run via OpenAI Responses API with web_search
+    // Run via Claude Opus 4.7 with web_search tool
     res.json({ auditId, status: 'running' });
 
     (async () => {
       try {
-        console.log(`[gbp-external] Calling GPT-5.5 Responses API with web_search...`);
-        const oaiResp = await fetch('https://api.openai.com/v1/responses', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${openaiKey}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-5.5',
-            tools: [{ type: 'web_search' }],
-            input: userPrompt,
-          }),
+        console.log(`[gbp-external] Calling Opus 4.7 with web_search (server-side)...`);
+
+        // web_search is a server-side tool — Anthropic handles searches internally, returns final result
+        const resp = await anthropic.messages.create({
+          model: 'claude-opus-4-7-20250422',
+          max_tokens: 16000,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{ role: 'user', content: userPrompt }],
         });
 
-        if (!oaiResp.ok) {
-          const errBody = await oaiResp.text();
-          throw new Error(`OpenAI API error (${oaiResp.status}): ${errBody}`);
-        }
-
-        const oaiData = await oaiResp.json();
-        console.log(`[gbp-external] GPT-5.5 response received, extracting text...`);
-
-        // Extract text from response output items
         let finalText = '';
-        if (oaiData.output && Array.isArray(oaiData.output)) {
-          for (const item of oaiData.output) {
-            if (item.type === 'message' && item.content) {
-              for (const block of item.content) {
-                if (block.type === 'output_text' || block.type === 'text') {
-                  finalText += (block.text || '') + '\n';
-                }
-              }
-            }
+        for (const block of resp.content) {
+          if (block.type === 'text') {
+            finalText += block.text;
           }
-        }
-        // Fallback: check output_text directly
-        if (!finalText.trim() && oaiData.output_text) {
-          finalText = oaiData.output_text;
         }
 
         if (!finalText.trim()) {
-          console.error('[gbp-external] Empty response from GPT-5.5:', JSON.stringify(oaiData).slice(0, 500));
-          throw new Error('Empty response from GPT-5.5');
+          console.error('[gbp-external] Empty Opus response, stop_reason:', resp.stop_reason);
+          throw new Error('Empty response from Opus 4.7');
         }
 
-        console.log(`[gbp-external] Report: ${finalText.length} chars`);
+        console.log(`[gbp-external] Report: ${finalText.length} chars (stop: ${resp.stop_reason})`);
 
         const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
