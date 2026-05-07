@@ -13460,26 +13460,40 @@ async function pollAgentSession(apiBase, agentHeaders, sessionId, label, maxWait
 
 async function extractFindingsViaFollowUp(apiBase, agentHeaders, sessionId, pillar, label) {
   const validCategories = PILLAR_CATEGORIES[pillar] || [];
-  const followUpPrompt = `Now I need you to create a complete JSON inventory of EVERY individual finding from your report above.
+  const gbpExtractionRules = pillar === 'gbp_external' ? `
+QUALITY RULES FOR GBP FINDINGS:
+- Every finding MUST contain REAL DATA — actual numbers, names, URLs from your research. NO estimates, NO "Unknown", NO ranges like "0-10"
+- Competitor findings: ONE finding per competitor comparing a SPECIFIC metric. "Competitor X has 156 reviews vs our 47" NOT "competitors have more reviews"
+- Directory findings: ONE finding per missing directory with the actual signup URL
+- Suburb findings: ONE finding per suburb with current ranking position
+- Review findings: include actual review count, rating, response rate numbers
+- Photo findings: include actual photo count
+- Google Updates: include the specific update name and date
+- 30-Day Strategy: include week number and specific daily tasks
+- NO generic advice like "improve your profile" — every finding must say EXACTLY what to do with real data
+- MAX 5 findings per category (prioritize by impact). Total max 30 findings.
+- For Competitor Analysis: max 3 competitors, max 3 findings per competitor = max 9 total` : ``;
+
+  const followUpPrompt = `Now extract the KEY actionable findings from your report as structured JSON.
 
 CRITICAL RULES:
-- Go through your report section by section
-- Every single row in every table = one JSON object
-- Every single bullet point that describes an issue = one JSON object
-- Do NOT consolidate or summarize — if your report mentions 12 on-page issues, I need 12 JSON objects
-- Count your items and verify the total matches what your report shows
-- TITLE MUST describe the specific issue, NOT just the page URL. Bad: "/about-us/". Good: "Missing H1 tag on /about-us/". Bad: "All pages". Good: "No viewport meta tag on all pages"
-- Each title must be UNIQUE — if two findings have different issues, they need different titles
-- NEVER combine multiple suburbs/locations into one finding. "Create pages for Morley + Guilford" is WRONG. Create SEPARATE findings: "Create location page for Morley" and "Create location page for Guilford"
+- Each finding must contain SPECIFIC, REAL data from your research — actual numbers, URLs, names
+- NO generic SEO advice. Every finding must be unique and actionable with real data
+- TITLE format: "[Specific thing] — [specific data point]". Example: "Review count gap — 47 vs competitor's 156"
+- NO duplicates — if two findings say essentially the same thing, keep only the more specific one
+- Each title must be UNIQUE
+- For suburbs/locations: ONE finding per suburb
+- MAX findings per category: 5 (pick highest impact). Aim for 20-30 total findings, not 50+.
+${gbpExtractionRules}
 
 Output ONLY this, nothing else:
 ~~~findings
 [
-  {"category":"<one of: ${validCategories.join(', ')}>","title":"<DESCRIPTIVE issue title, not just a URL, under 60 chars>","description":"<what is wrong — be specific, include page URLs>","recommendation":"<specific fix steps>","severity":"<Critical|High|Medium|Low>","current_value":"<current state>","recommended_value":"<target state>"}
+  {"category":"<one of: ${validCategories.join(', ')}>","title":"<specific issue with real data, under 60 chars>","description":"<what is wrong with REAL numbers/names/URLs>","recommendation":"<EXACT steps — not generic advice>","severity":"<Critical|High|Medium|Low>","current_value":"<actual current state with numbers>","recommended_value":"<specific target with numbers>"}
 ]
 ~~~
 
-Remember: one JSON object per table row, per bullet point, per issue. The total count MUST match your report.`;
+Quality check before outputting: remove any finding where current_value or description contains "Unknown", "estimate", or "N/A".`;
 
   try {
     console.log(`[${label}] Sending follow-up extraction message...`);
@@ -13662,7 +13676,20 @@ async function extractFindingsFromReport(reportText, pillar, projectId, auditId)
         }
 
         if (expanded.length > 0) {
-          const deduped = expanded; // No silent dedup — orchestrator DP tagging handles duplicates visibly
+          // Deduplicate: remove findings with very similar titles (cosine-lite: shared words > 60%)
+          const deduped = [];
+          for (const f of expanded) {
+            const fWords = new Set((f.title || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).filter(w => w.length > 2));
+            const isDup = deduped.some(existing => {
+              const eWords = new Set((existing.title || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).filter(w => w.length > 2));
+              if (fWords.size === 0 || eWords.size === 0) return false;
+              const overlap = [...fWords].filter(w => eWords.has(w)).length;
+              const similarity = overlap / Math.min(fWords.size, eWords.size);
+              return similarity > 0.6 && existing.category === f.category;
+            });
+            if (!isDup) deduped.push(f);
+          }
+          if (deduped.length < expanded.length) console.log(`[findings-extractor] Deduped: ${expanded.length} → ${deduped.length} for ${pillar}`);
 
           console.log(`[findings-extractor] Structured block: ${parsed.length} raw → ${deduped.length} valid findings for ${pillar}`);
 
@@ -14307,7 +14334,17 @@ Break into 4 weeks with SPECIFIC daily/weekly tasks:
 ## 6. Suburb Coverage Strategy
 For each service area suburb: current ranking position (if known from grid data) → what's needed to rank top 3 there. Prioritize suburbs by search volume and current gap.
 
-IMPORTANT: Every recommendation must be SPECIFIC and ACTIONABLE. Not "improve your description" but "Rewrite description to include: [specific keywords]. Here's a draft: [actual draft]". Not "get more reviews" but "Target 5 reviews/week. Send this exact message to recent customers: [template]".`;
+IMPORTANT: Every recommendation must be SPECIFIC and ACTIONABLE. Not "improve your description" but "Rewrite description to include: [specific keywords]. Here's a draft: [actual draft]". Not "get more reviews" but "Target 5 reviews/week. Send this exact message to recent customers: [template]".
+
+ABSOLUTE RULES:
+- NEVER write "Unknown" or "estimate" — if you don't know a number, SEARCH FOR IT. You have web search. Use it.
+- Every metric must have a REAL number from your research, not a guess
+- Competitor names must be REAL businesses you found on Google Maps, not placeholders
+- Directory URLs must be REAL URLs you verified exist
+- Review counts, ratings, photo counts must be ACTUAL numbers from Google Maps
+- If you cannot find a specific data point after searching, say "Not found in search" — never estimate
+- Keep findings to MAX 25 total. Quality over quantity. Each finding must be worth acting on.
+- For Competitor Analysis: analyze TOP 3 competitors only, compare on 4 metrics: reviews, rating, photos, categories`;
 
     // Run the managed agent via Sessions API
     const apiKey = process.env.ANTHROPIC_API_KEY;
