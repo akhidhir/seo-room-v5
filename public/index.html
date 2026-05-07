@@ -12681,18 +12681,74 @@
           ),
 
 
-          // Client Feedback — show client comments from share link reviews
-          selectedItem && selectedItem.client_comments && selectedItem.client_comments.length > 0 && React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid #6366f140' } },
-            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 } },
-              React.createElement('i', { className: 'fas fa-comments', style: { marginRight: 6 } }),
-              'Client Feedback',
-              selectedItem.client_approved_at && React.createElement('span', { style: { marginLeft: 10, background: '#22c55e20', color: '#22c55e', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Client Approved'),
-              selectedItem.revision_requested_at && !selectedItem.client_approved_at && React.createElement('span', { style: { marginLeft: 10, background: '#f59e0b20', color: '#f59e0b', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Revision Requested')
+          // Client Feedback — comments + client draft edits + inline comments
+          selectedItem && (
+            (selectedItem.client_comments && selectedItem.client_comments.length > 0) ||
+            selectedItem.client_draft_content ||
+            selectedItem.client_approved_at ||
+            selectedItem.revision_requested_at
+          ) && React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid #6366f140' } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              React.createElement('span', null, React.createElement('i', { className: 'fas fa-comments', style: { marginRight: 6 } }), 'Client Feedback'),
+              selectedItem.client_approved_at && React.createElement('span', { style: { background: '#22c55e20', color: '#22c55e', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Approved'),
+              selectedItem.revision_requested_at && !selectedItem.client_approved_at && React.createElement('span', { style: { background: '#f59e0b20', color: '#f59e0b', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Revision Requested'),
+              selectedItem.client_draft_content && React.createElement('span', { style: { background: '#6366f120', color: '#6366f1', padding: '2px 8px', borderRadius: 4, fontSize: 11, textTransform: 'none' } }, 'Has Edits')
             ),
-            selectedItem.client_comments.map((c, i) => React.createElement('div', { key: i, style: { padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 6, fontSize: 13, color: 'var(--text2)', borderLeft: '3px solid #6366f1' } },
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 4 } }, c.date ? new Date(c.date).toLocaleString() : '', c.action ? ' — ' + c.action : ''),
-              c.comment || c.text || ''
-            ))
+
+            // Client text comments/notes
+            selectedItem.client_comments && selectedItem.client_comments.length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
+              selectedItem.client_comments.map((c, i) => React.createElement('div', { key: i, style: { padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 6, fontSize: 13, color: 'var(--text2)', borderLeft: '3px solid #6366f1' } },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 4 } },
+                  (c.author || 'Client') + (c.timestamp ? ' — ' + new Date(c.timestamp).toLocaleString() : c.date ? ' — ' + new Date(c.date).toLocaleString() : ''),
+                  c.action ? React.createElement('span', { style: { marginLeft: 6, background: c.action === 'approve' ? '#22c55e20' : '#f59e0b20', color: c.action === 'approve' ? '#22c55e' : '#f59e0b', padding: '1px 6px', borderRadius: 3, fontSize: 10 } }, c.action) : null
+                ),
+                c.comment || c.text || ''
+              ))
+            ),
+
+            // Client meta changes
+            selectedItem.client_draft_meta && React.createElement('div', { style: { marginBottom: 12 } },
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 6 } }, 'Client Meta Changes:'),
+              selectedItem.client_draft_meta.meta_title && selectedItem.client_draft_meta.meta_title !== (selectedItem.draft_meta_title || selectedItem.current_meta_title || '') &&
+                React.createElement('div', { style: { fontSize: 12, marginBottom: 4, padding: '4px 8px', background: '#6366f110', borderRadius: 4 } },
+                  React.createElement('span', { style: { color: 'var(--text3)' } }, 'Title: '),
+                  React.createElement('span', { style: { color: '#6366f1' } }, selectedItem.client_draft_meta.meta_title)
+                ),
+              selectedItem.client_draft_meta.meta_desc && selectedItem.client_draft_meta.meta_desc !== (selectedItem.draft_meta_desc || selectedItem.current_meta_desc || '') &&
+                React.createElement('div', { style: { fontSize: 12, padding: '4px 8px', background: '#6366f110', borderRadius: 4 } },
+                  React.createElement('span', { style: { color: 'var(--text3)' } }, 'Description: '),
+                  React.createElement('span', { style: { color: '#6366f1' } }, selectedItem.client_draft_meta.meta_desc)
+                )
+            ),
+
+            // Accept client edits button — loads client_draft_content into editor
+            selectedItem.client_draft_content && React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+              React.createElement('button', {
+                onClick: () => {
+                  if (confirm('Load client edits into the editor? This will replace current draft content with the client version (including their inline comments). You can still undo by not saving.')) {
+                    setEditContent(selectedItem.client_draft_content);
+                    if (selectedItem.client_draft_meta) {
+                      setEditMeta(prev => ({
+                        meta_title: selectedItem.client_draft_meta.meta_title || prev.meta_title,
+                        meta_desc: selectedItem.client_draft_meta.meta_desc || prev.meta_desc,
+                        focus_keyword: prev.focus_keyword
+                      }));
+                    }
+                    setEditorKey(k => k + 1);
+                  }
+                },
+                style: { padding: '8px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fas fa-file-import', style: { marginRight: 6 } }), 'Load Client Edits into Editor'),
+              React.createElement('button', {
+                onClick: () => {
+                  // Open client version in a read-only preview window
+                  const w = window.open('', '_blank', 'width=900,height=700');
+                  w.document.write('<html><head><title>Client Draft Preview</title><style>body{font-family:system-ui;padding:40px;max-width:800px;margin:0 auto;background:#1a1a2e;color:#e0e0e0;} h1{font-size:16px;color:#6366f1;} .content{line-height:1.7;} .ql-comment-highlight{background:#6366f140;border-bottom:2px solid #6366f1;}</style></head><body><h1>Client Draft Preview</h1><div class="content">' + selectedItem.client_draft_content + '</div></body></html>');
+                  w.document.close();
+                },
+                style: { padding: '8px 16px', background: 'transparent', color: '#6366f1', border: '1px solid #6366f140', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6 } }), 'Preview Client Version')
+            )
           ),
 
           // Optimise preview modal

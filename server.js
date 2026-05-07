@@ -5609,6 +5609,7 @@ app.get('/api/projects/:projectId/content-queue', async (req, res) => {
              stage, approved_by, approved_at, published_at, created_at, updated_at, target_keywords,
              ai_notes, comments, schema_markup, page_wireframe, wireframe_mime,
              share_token, client_comments, revision_requested_at, client_approved_at,
+             client_draft_content, client_draft_meta,
              CASE WHEN page_sections IS NOT NULL THEN jsonb_array_length(page_sections) ELSE 0 END AS sections_count,
              CASE WHEN wireframe_image IS NOT NULL AND wireframe_image != '' THEN true ELSE false END AS has_wireframe
              FROM content_queue WHERE project_id=$1`;
