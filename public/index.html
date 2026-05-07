@@ -1533,7 +1533,7 @@
       if (!selectedItem) {
         return React.createElement('div', { style: { minHeight: '100vh', background: 'var(--bg)' } },
           header,
-          React.createElement('div', { style: { maxWidth: 800, margin: '0 auto', padding: '32px 24px' } },
+          React.createElement('div', { style: { padding: '32px 48px' } },
             React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, marginBottom: 4 } }, 'Content for Review'),
             React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginBottom: 24 } },
               'Review the content below, make edits or leave comments, then approve or request changes.'),
@@ -1575,7 +1575,7 @@
 
       return React.createElement('div', { style: { minHeight: '100vh', background: 'var(--bg)' } },
         header,
-        React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 24px 120px' } },
+        React.createElement('div', { style: { padding: '24px 48px 120px' } },
           // Back button + title + page URL
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 } },
             React.createElement('button', {
@@ -1660,7 +1660,7 @@
           style: { position: 'fixed', bottom: 0, left: 0, right: 0, background: 'var(--card)', borderTop: '1px solid var(--border)',
             padding: '14px 24px', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 200 }
         },
-          React.createElement('div', { style: { maxWidth: 1000, width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+          React.createElement('div', { style: { width: '100%', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
             React.createElement('button', {
               onClick: handleSave, disabled: saving,
               style: { padding: '10px 24px', background: '#6366f120', color: '#6366f1', border: '1px solid #6366f140',
