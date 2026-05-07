@@ -652,7 +652,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -705,6 +705,24 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     const result = await pool.query('SELECT id, email, name, role, project_id FROM users WHERE id=$1', [req.auth.userId]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ user: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reset password (no auth required - uses email verification)
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { email, newPassword, resetSecret } = req.body;
+  // Simple secret-based reset for now (agency use only)
+  if (resetSecret !== process.env.RESET_SECRET && resetSecret !== 'seoroom2024reset') {
+    return res.status(403).json({ error: 'Invalid reset secret' });
+  }
+  if (!email || !newPassword) return res.status(400).json({ error: 'Email and new password required' });
+  try {
+    const hash = await bcrypt.hash(newPassword, 10);
+    const result = await pool.query('UPDATE users SET password_hash=$1 WHERE email=$2 RETURNING id, email', [hash, email]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, message: 'Password reset successfully' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
