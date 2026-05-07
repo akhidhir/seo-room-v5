@@ -13498,7 +13498,7 @@ Remember: one JSON object per table row, per bullet point, per issue. The total 
 
 // Valid categories per pillar — findings MUST map to one of these
 const PILLAR_CATEGORIES = {
-  gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+  gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'],
   website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
   gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
   gsc: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
@@ -14080,8 +14080,11 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const location = project.location || '';
     const industry = project.industry || '';
     const serviceAreas = project.service_areas || [];
+    const competitors = project.competitors || [];
 
-    // Get extension-scraped data if available (for context)
+    // ===== GATHER ALL EXISTING DATA FOR CONTEXT =====
+
+    // 1. Extension-scraped GBP profile
     let extensionProfile = null;
     try {
       const extData = await pool.query(
@@ -14092,6 +14095,92 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) {}
 
+    // 2. Latest internal GBP audit findings (if any)
+    let internalFindings = [];
+    try {
+      const f = await pool.query(
+        `SELECT title, description, severity, category, current_value, new_value FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') ORDER BY severity DESC LIMIT 30`,
+        [projectId]
+      );
+      internalFindings = f.rows;
+    } catch (e) {}
+
+    // 3. Grid scan data (maps ranking positions)
+    let gridData = [];
+    try {
+      const g = await pool.query(
+        `SELECT keyword, grid_size, radius_km, arp, atrp, solv, found_in, data_points, competitors, scanned_at
+         FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 20`,
+        [projectId]
+      );
+      gridData = g.rows;
+    } catch (e) {}
+
+    // 4. SERP rank tracking data
+    let rankData = [];
+    try {
+      const r = await pool.query(
+        `SELECT rk.keyword, rk.location, rt.maps_position, rt.maps_title, rt.serp_position, rt.tracked_at
+         FROM rank_keywords rk LEFT JOIN rank_tracking rt ON rk.id = rt.keyword_id
+         WHERE rk.project_id=$1 ORDER BY rt.tracked_at DESC LIMIT 30`,
+        [projectId]
+      );
+      rankData = r.rows;
+    } catch (e) {}
+
+    // 5. SerpAPI profile snapshot (quick lookup)
+    let serpProfile = null;
+    try {
+      if (SERPAPI_KEY) {
+        const searchQ = `${businessName} ${location}`;
+        const data = await serpApiSearch({ engine: 'google_maps', q: searchQ, api_key: SERPAPI_KEY, num: 5 });
+        const results = data.local_results || [];
+        const domainClean = domain.replace(/^www\./, '').toLowerCase();
+        const match = results.find(r => {
+          const rDomain = (r.website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+          return rDomain === domainClean || rDomain.includes(domainClean) || domainClean.includes(rDomain);
+        }) || results.find(r => (r.title || '').toLowerCase().includes(businessName.toLowerCase().split(' ')[0]));
+        if (match) {
+          serpProfile = {
+            title: match.title, rating: match.rating, reviews: match.reviews,
+            type: match.type, address: match.address, phone: match.phone,
+            position: match.position, categories: match.categories || [],
+            website: match.website, thumbnail: match.thumbnail
+          };
+          // Get place details for richer data
+          if (match.data_id || match.place_id) {
+            try {
+              const placeParams = { engine: 'google_maps', type: 'place', api_key: SERPAPI_KEY };
+              if (match.data_id) placeParams.data_id = match.data_id;
+              else placeParams.place_id = match.place_id;
+              const pd = await serpApiSearch(placeParams);
+              const pr = pd.place_results || pd;
+              if (pr) {
+                serpProfile.reviews = pr.reviews || serpProfile.reviews;
+                serpProfile.rating = pr.rating || serpProfile.rating;
+                serpProfile.description = pr.description || null;
+                serpProfile.hours = pr.operating_hours || null;
+                serpProfile.photos_count = pr.photos_count || pr.images?.length || null;
+                serpProfile.categories = pr.categories || serpProfile.categories;
+                serpProfile.services = pr.services || null;
+                serpProfile.attributes = pr.attributes || null;
+                serpProfile.sampleReviews = (pr.user_reviews?.most_relevant || []).slice(0, 5).map(r => ({
+                  rating: r.rating, text: (r.description || r.snippet || '').slice(0, 200),
+                  date: r.date, hasResponse: !!r.response
+                }));
+              }
+            } catch (e) { console.log(`[gbp-external] Place details error: ${e.message}`); }
+          }
+        }
+        // Also grab top competitors from maps
+        const topCompetitors = results.filter(r => r.title !== match?.title).slice(0, 5).map(r => ({
+          name: r.title, rating: r.rating, reviews: r.reviews,
+          type: r.type, position: r.position, website: r.website
+        }));
+        if (topCompetitors.length) serpProfile = { ...serpProfile, mapsCompetitors: topCompetitors };
+      }
+    } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
+
     const gbpAgentId = process.env.GBP_AGENT_ID;
     const gbpEnvId = process.env.GBP_ENVIRONMENT_ID;
 
@@ -14101,10 +14190,126 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     }
 
     console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
+    console.log(`[gbp-external] Context: ${internalFindings.length} findings, ${gridData.length} grid scans, ${rankData.length} rank entries, profile: ${serpProfile ? 'YES' : 'NO'}`);
 
-    const userPrompt = `Conduct a full Google Business Profile audit for: ${businessName}, ${location}${domain ? `, website: ${domain}` : ''}${industry ? `, industry: ${industry}` : ''}`;
+    // ===== BUILD ENRICHED AGENT PROMPT =====
+    const userPrompt = `You are an elite Local SEO strategist. Your mission: get "${businessName}" into the TOP 3 on Google Maps within 30 days.
 
-    // Run the managed agent via Sessions API (raw fetch — SDK may not have beta.sessions)
+===== BUSINESS PROFILE =====
+Business: ${businessName}
+Domain: ${domain || 'N/A'}
+Industry: ${industry || 'trades/services'}
+Location: ${location}
+Service Areas: ${JSON.stringify(serviceAreas)}
+Known Competitors: ${JSON.stringify(competitors)}
+
+===== CURRENT GBP DATA (from our APIs) =====
+${serpProfile ? JSON.stringify(serpProfile, null, 1) : 'No profile data available — please search Google Maps for this business.'}
+
+===== GRID SCAN DATA (Maps ranking positions across suburbs) =====
+${gridData.length > 0 ? gridData.map(g => `Keyword: "${g.keyword}" | Grid: ${g.grid_size}x${g.grid_size} | ARP: ${g.arp || 'N/A'} | ATRP: ${g.atrp || 'N/A'} | SOLV: ${g.solv || 'N/A'}% | Found: ${g.found_in}/${g.data_points} | Top competitors: ${JSON.stringify((g.competitors?.top || []).slice(0, 3).map(c => ({ name: c.name, rating: c.rating, reviews: c.reviews, dominance: c.dominance })))}`).join('\n') : 'No grid scan data yet.'}
+
+===== RANK TRACKING =====
+${rankData.length > 0 ? rankData.slice(0, 15).map(r => `"${r.keyword}" ${r.location || ''} → Maps: #${r.maps_position || 'not found'} | SERP: #${r.serp_position || 'not found'}`).join('\n') : 'No rank tracking data yet.'}
+
+===== PREVIOUS AUDIT FINDINGS =====
+${internalFindings.length > 0 ? internalFindings.slice(0, 15).map(f => `[${f.severity}] ${f.title}: ${f.description?.slice(0, 100) || ''}`).join('\n') : 'No previous findings.'}
+
+===== YOUR RESEARCH TASKS =====
+
+You have web search. Use it for ALL of the following:
+
+1. **GOOGLE ALGORITHM UPDATES**: Search for "Google Maps ranking algorithm updates ${new Date().getFullYear()}" and "Google Business Profile ranking factors ${new Date().getFullYear()}". Find the LATEST changes. What signals matter most RIGHT NOW? Has anything changed in the last 3-6 months?
+
+2. **BUSINESS PROFILE DEEP DIVE**: Search Google Maps for "${businessName} ${location}" and examine:
+   - Full profile completeness (description, hours, categories, services, attributes, Q&A, posts)
+   - Review analysis (total count, rating, response rate, keyword mentions in reviews, review velocity)
+   - Photo analysis (quantity, types — logo, cover, interior, team, work photos)
+   - Post frequency and quality
+   - Services and products listed
+
+3. **COMPETITOR ANALYSIS**: For EACH of the top 3 competitors ranking above this business:
+   - Search their Google Maps profile
+   - Compare: review count, rating, response rate, photo count, post frequency, categories, services
+   - What are they doing that "${businessName}" is NOT doing?
+   - What's their review velocity (new reviews per month)?
+   - Do their reviews mention service areas/suburbs?
+
+4. **CITATION & NAP AUDIT**: Search for "${businessName} ${location}" across:
+   - Major directories (Yellow Pages AU, True Local, Yelp, Facebook, hipages)
+   - Industry-specific directories for ${industry || 'this industry'}
+   - Check NAP (Name, Address, Phone) consistency
+
+5. **WEBSITE LOCAL SEO**: Search the business website (${domain || 'find it'}) for:
+   - LocalBusiness schema markup
+   - NAP on every page (footer)
+   - Service area pages (do they have suburb-specific landing pages?)
+   - Internal linking to Google Maps
+   - Mobile responsiveness
+
+===== OUTPUT FORMAT =====
+
+Structure your report in these sections:
+
+## 1. Current Position Assessment
+Where does the business rank now? What's the competitive landscape? Rate 1-10 for each pillar:
+- **Proximity** (service area coverage, address optimization)
+- **Relevance** (categories, description, services, posts, attributes)
+- **Prominence** (reviews, photos, citations, backlinks, social signals)
+
+## 2. Google Algorithm Intelligence
+What are the latest Google Maps/GBP ranking factors? Any recent core updates affecting local search? What signals have increased/decreased in importance?
+
+## 3. Competitor Gap Analysis
+For each top competitor:
+- What they have that we don't
+- Their review count vs ours
+- Their photo count vs ours
+- Their categories vs ours
+- Their post frequency vs ours
+- Their citation profile vs ours
+
+## 4. 30-Day Action Plan
+Break into 4 weeks with SPECIFIC daily/weekly tasks:
+
+**Week 1 (Quick Wins — Relevance)**
+- Exact categories to add/change
+- Description rewrite (keyword-optimized)
+- Services/products to list
+- Attributes to set
+- First GBP post topics
+
+**Week 2 (Prominence Push — Reviews & Photos)**
+- Review generation strategy (how many per week, from whom)
+- Exact review request templates with suburb keywords
+- Photos to upload (types, quantity)
+- Social profile connections
+
+**Week 3 (Citations & Local Signals)**
+- Priority directories to list on (with URLs)
+- NAP consistency fixes needed
+- Industry-specific directories
+- Local link building opportunities
+
+**Week 4 (Advanced — Proximity & Content)**
+- Suburb-specific GBP posts
+- Service area optimization
+- Website local landing pages needed
+- Review response strategy with location keywords
+
+## 5. KPI Targets
+- Review count target (current → 30-day goal)
+- Photo count target
+- Citation count target
+- Post frequency target
+- Expected ranking improvement per keyword
+
+## 6. Suburb Coverage Strategy
+For each service area suburb: current ranking position (if known from grid data) → what's needed to rank top 3 there. Prioritize suburbs by search volume and current gap.
+
+IMPORTANT: Every recommendation must be SPECIFIC and ACTIONABLE. Not "improve your description" but "Rewrite description to include: [specific keywords]. Here's a draft: [actual draft]". Not "get more reviews" but "Target 5 reviews/week. Send this exact message to recent customers: [template]".`;
+
+    // Run the managed agent via Sessions API
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
     const agentHeaders = {

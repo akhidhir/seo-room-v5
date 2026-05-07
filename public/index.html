@@ -1783,7 +1783,7 @@
     // Allowed sections per audit type (whitelist)
     const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'];
     const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
-    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'];
+    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'];
 
     // Detect execution type / assignee from action text + category context
     // AUTOMATED = system can actually execute (Yoast, schema, redirects, compression, robots, sitemap)
@@ -1900,6 +1900,19 @@
         'suburb coverage': 'Suburb Coverage',
         'service area coverage': 'Suburb Coverage',
         'suburb targeting': 'Suburb Coverage',
+        'google updates': 'Google Updates',
+        'google algorithm updates': 'Google Updates',
+        'algorithm intelligence': 'Google Updates',
+        'google algorithm intelligence': 'Google Updates',
+        'ranking factor updates': 'Google Updates',
+        'core updates': 'Google Updates',
+        '30-day strategy': '30-Day Strategy',
+        '30 day strategy': '30-Day Strategy',
+        '30-day action plan': '30-Day Strategy',
+        '30 day action plan': '30-Day Strategy',
+        'action plan': '30-Day Strategy',
+        'kpi targets': '30-Day Strategy',
+        'weekly action plan': '30-Day Strategy',
       };
       if (exactMap[lower]) return exactMap[lower];
       // Fuzzy keyword matching for creative renames
@@ -2984,6 +2997,8 @@
             'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
             'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
             'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
+            'Google Updates': { icon: 'fas fa-satellite-dish', color: '#f97316', desc: 'Latest Google Maps algorithm changes affecting rankings' },
+            '30-Day Strategy': { icon: 'fas fa-calendar-check', color: '#22c55e', desc: 'Week-by-week action plan to reach top 3' },
             'PageSpeed Scores': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Full PageSpeed performance scores per page' },
           };
           const sm = secMeta[sec.title] || { icon: iconClass, color: '#818cf8', desc: '' };
@@ -3050,6 +3065,8 @@
         'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
         'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
         'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
+        'Google Updates': { icon: 'fas fa-satellite-dish', color: '#f97316', desc: 'Latest Google Maps algorithm changes affecting rankings' },
+        '30-Day Strategy': { icon: 'fas fa-calendar-check', color: '#22c55e', desc: 'Week-by-week action plan to reach top 3' },
         'PageSpeed Scores': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Full PageSpeed performance scores per page' },
       };
 
@@ -6539,7 +6556,7 @@
       };
 
       const PILLAR_VALID_CATS = {
-        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'],
         GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
         Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
       };
