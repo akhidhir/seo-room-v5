@@ -14227,12 +14227,14 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
 
-    if (!anthropic) {
+    const openaiKey = process.env.OPENAI_API_KEY;
+
+    if (!openaiKey) {
       await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
-      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured.' });
+      return res.status(500).json({ error: 'OpenAI not configured. Set OPENAI_API_KEY.' });
     }
 
-    console.log(`[gbp-external] Starting direct API audit for "${businessName}" in ${location}`);
+    console.log(`[gbp-external] Starting GPT-5.5 audit for "${businessName}" in ${location}`);
     console.log(`[gbp-external] Context: ${internalFindings.length} findings, ${gridData.length} grid scans, ${rankData.length} rank entries, profile: ${serpProfile ? 'YES' : 'NO'}`);
 
     // ===== BUILD ENRICHED PROMPT =====
@@ -14362,138 +14364,76 @@ ABSOLUTE RULES:
 - Keep findings to MAX 25 total. Quality over quantity. Each finding must be worth acting on.
 - For Competitor Analysis: analyze TOP 3 competitors only, compare on 4 metrics: reviews, rating, photos, categories`;
 
-    // ===== SYSTEM PROMPT — full control, no managed agent =====
-    const systemPrompt = `You are an elite Local SEO strategist specializing in Google Maps rankings for Australian businesses. You work for "The SEO Room" agency.
-
-Your job is to produce a SPECIFIC, DATA-DRIVEN audit with REAL numbers — never estimates, never "Unknown".
-
-RULES:
-- Use web_search to find REAL data. Search Google Maps, directories, competitor profiles.
-- Every number in your report must come from your research or the data provided.
-- Competitor names must be REAL businesses from Google Maps results.
-- Be direct and actionable. Not "improve your description" but "Add these exact keywords to your description: [list]".
-- Structure findings so each one is a single, executable task.
-- Focus on what moves the needle FASTEST for Google Maps top 3.
-
-The 3 pillars of Google Maps ranking:
-1. PROXIMITY — address, service areas, geo-signals
-2. RELEVANCE — categories, description, services, posts, attributes, Q&A
-3. PROMINENCE — reviews (count + velocity + keywords), photos, citations, backlinks, website authority`;
-
+    // Run via OpenAI Responses API with web_search
     res.json({ auditId, status: 'running' });
 
-    // Run in background
     (async () => {
       try {
-        req.setTimeout && req.setTimeout(300000);
-        console.log('[gbp-external] Starting agentic loop with web_search...');
-
-        const messages = [{ role: 'user', content: userPrompt }];
-        let finalReport = '';
-        let loopCount = 0;
-        const maxLoops = 15; // Safety cap
-
-        while (loopCount < maxLoops) {
-          loopCount++;
-          console.log('[gbp-external] API call #' + loopCount + '...');
-
-          const apiResp = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 16000,
-            system: systemPrompt,
-            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 20 }],
-            messages: messages,
-          });
-
-          console.log('[gbp-external] Stop reason: ' + apiResp.stop_reason + ', content blocks: ' + apiResp.content.length);
-
-          // Collect all text from response
-          let textParts = [];
-          let searchCount = 0;
-          for (const block of apiResp.content) {
-            if (block.type === 'text') textParts.push(block.text);
-            if (block.type === 'web_search_tool_result') searchCount++;
-          }
-          if (searchCount > 0) console.log('[gbp-external] ' + searchCount + ' web searches completed');
-
-          // Accumulate text (don't overwrite — append across loops)
-          if (textParts.length > 0) finalReport += (finalReport ? '\n\n' : '') + textParts.join('\n\n');
-
-          // end_turn = model is done writing
-          if (apiResp.stop_reason === 'end_turn') {
-            console.log('[gbp-external] Agent finished after ' + loopCount + ' loops, report: ' + finalReport.length + ' chars');
-            break;
-          }
-
-          // pause_turn = model did web searches and wants to continue
-          // Push assistant response and a continue prompt
-          if (apiResp.stop_reason === 'pause_turn') {
-            console.log('[gbp-external] pause_turn — continuing...');
-            messages.push({ role: 'assistant', content: apiResp.content });
-            messages.push({ role: 'user', content: 'Continue your analysis. Keep going with the remaining research tasks and complete the full report.' });
-            continue;
-          }
-
-          // Any other stop reason — done
-          console.log('[gbp-external] Stop: ' + apiResp.stop_reason + ', ending loop');
-          break;
-        }
-
-        if (!finalReport) {
-          throw new Error('No report generated after ' + loopCount + ' loops');
-        }
-
-        console.log('[gbp-external] Report: ' + finalReport.length + ' chars');
-
-        // Save report
-        const displayReport = finalReport.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
-        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: displayReport }), auditId]);
-
-        // PASS 2: Extract findings via separate Haiku call (fast + cheap)
-        console.log('[gbp-external] Extracting findings...');
-        const validCategories = PILLAR_CATEGORIES['gbp_external'] || [];
-        const extractionPrompt = `Extract actionable findings from this Local SEO audit report. Output ONLY a JSON array.
-
-RULES:
-- Each finding must have SPECIFIC data — real numbers, real competitor names, real URLs
-- NO generic advice. "Get more reviews" is WRONG. "Increase reviews from 47 to 60 (need 13 new reviews in 30 days)" is RIGHT.
-- NO duplicates — each finding must be unique
-- MAX 25 findings total, max 5 per category. Pick highest impact.
-- For suburbs: ONE finding per suburb
-- For competitors: max 3 competitors, ONE finding per gap metric
-- current_value and recommended_value must have REAL numbers
-
-Categories: ${validCategories.join(', ')}
-
-Output ONLY:
-~~~findings
-[{"category":"<category>","title":"<specific with data, max 60 chars>","description":"<what is wrong with REAL data>","recommendation":"<exact steps to fix>","severity":"<Critical|High|Medium|Low>","current_value":"<real current state>","recommended_value":"<specific target>"}]
-~~~
-
-REPORT:
-${finalReport.slice(0, 30000)}`;
-
-        const extractResp = await anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 8000,
-          messages: [{ role: 'user', content: extractionPrompt }],
+        console.log(`[gbp-external] Calling GPT-5.5 Responses API with web_search...`);
+        const oaiResp = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openaiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.5',
+            tools: [{ type: 'web_search' }],
+            input: userPrompt,
+          }),
         });
 
-        const extractText = extractResp.content.map(b => b.text || '').join('');
-        const extracted = await extractFindingsFromReport(extractText, 'gbp_external', projectId, auditId);
-        console.log('[gbp-external] Extracted ' + extracted.length + ' findings');
+        if (!oaiResp.ok) {
+          const errBody = await oaiResp.text();
+          throw new Error(`OpenAI API error (${oaiResp.status}): ${errBody}`);
+        }
 
+        const oaiData = await oaiResp.json();
+        console.log(`[gbp-external] GPT-5.5 response received, extracting text...`);
+
+        // Extract text from response output items
+        let finalText = '';
+        if (oaiData.output && Array.isArray(oaiData.output)) {
+          for (const item of oaiData.output) {
+            if (item.type === 'message' && item.content) {
+              for (const block of item.content) {
+                if (block.type === 'output_text' || block.type === 'text') {
+                  finalText += (block.text || '') + '\n';
+                }
+              }
+            }
+          }
+        }
+        // Fallback: check output_text directly
+        if (!finalText.trim() && oaiData.output_text) {
+          finalText = oaiData.output_text;
+        }
+
+        if (!finalText.trim()) {
+          console.error('[gbp-external] Empty response from GPT-5.5:', JSON.stringify(oaiData).slice(0, 500));
+          throw new Error('Empty response from GPT-5.5');
+        }
+
+        console.log(`[gbp-external] Report: ${finalText.length} chars`);
+
+        const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['completed', JSON.stringify({ report: displayReport }), auditId]);
+        console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
+
+        // PASS 2: Extract structured findings via Haiku
+        const extracted = await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
+        console.log(`[gbp-external] Extracted ${extracted.length} findings`);
       } catch (bgErr) {
-        console.error('[gbp-external] Error:', bgErr.message);
-        try { await pool.query("UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2",
+        console.error('[gbp-external] Background error:', bgErr.message);
+        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
       }
     })();
 
   } catch (e) {
     console.error('[gbp-external] Error:', e.message);
-    try { await pool.query("UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gbp_external' AND status='running'", [projectId]); } catch (e2) {}
+    try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gbp_external' AND status='running'`, [projectId]); } catch (e2) {}
     res.status(500).json({ error: e.message });
   }
 });
