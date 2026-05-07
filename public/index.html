@@ -13225,7 +13225,20 @@
                       onChange: isPublished ? undefined : setEditContent,
                       readOnly: isPublished,
                       initialComments: comments,
-                      onCommentsChange: isPublished ? undefined : setComments,
+                      onCommentsChange: isPublished ? undefined : (updated) => {
+                        setComments(updated);
+                        // Auto-save comment resolutions to client_draft_meta so client sees them
+                        if (selectedItem && selectedItem.stage === 'approved') {
+                          const hasResolution = updated.some(c => c.resolved && c.resolution);
+                          if (hasResolution) {
+                            const baseMeta = selectedItem.client_draft_meta || {};
+                            const meta = { ...baseMeta, inline_comments: updated.filter(c => !c._replying) };
+                            api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
+                              method: 'PUT', body: { client_draft_meta: meta }
+                            }).then(() => console.log('[sync] Comments saved to client_draft_meta')).catch(e => console.error('[sync] Save failed:', e));
+                          }
+                        }
+                      },
                       onSave: isPublished ? undefined : handleSaveEdit,
                       saveStatus: savingMeta
                     })

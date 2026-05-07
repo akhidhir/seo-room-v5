@@ -6064,12 +6064,13 @@ app.put('/api/projects/:projectId/content-queue/:id', async (req, res) => {
     let idx = 1;
     const allowedFields = ['stage', 'draft_content', 'draft_meta_title', 'draft_meta_desc', 'draft_focus_keyword',
                            'draft_word_count', 'priority', 'brief', 'approved_by', 'approved_at', 'published_at', 'content_type', 'page_wireframe', 'wireframe_image', 'wireframe_mime',
-                           'page_url', 'page_id', 'page_title', 'page_sections', 'ai_notes', 'target_keywords', 'competitor_analysis', 'schema_markup', 'suggestions'];
+                           'page_url', 'page_id', 'page_title', 'page_sections', 'ai_notes', 'target_keywords', 'competitor_analysis', 'schema_markup', 'suggestions',
+                           'client_draft_content', 'client_draft_meta'];
     for (const [k, v] of Object.entries(updates)) {
       if (allowedFields.includes(k)) {
         fields.push(`${k}=$${idx++}`);
         // JSONB fields need stringify if passed as object
-        if ((k === 'page_sections' || k === 'target_keywords' || k === 'comments' || k === 'schema_markup') && typeof v === 'object' && v !== null) {
+        if ((k === 'page_sections' || k === 'target_keywords' || k === 'comments' || k === 'schema_markup' || k === 'client_draft_meta') && typeof v === 'object' && v !== null) {
           vals.push(JSON.stringify(v));
         } else {
           vals.push(v);
