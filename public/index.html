@@ -12438,6 +12438,7 @@
         const hasDraft = !!(selectedItem.draft_content || editContent || selectedItem.current_content);
 
         // Detail view: editor with score panel, chat, optimise
+        const hasClientEdits = !!(selectedItem.client_draft_content || (selectedItem.client_comments && selectedItem.client_comments.length > 0) || selectedItem.client_approved_at || selectedItem.revision_requested_at);
         return React.createElement('div', null,
           // Header with action buttons — sticky
           React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', paddingTop: 12, paddingBottom: 12, marginBottom: 12, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
@@ -12488,6 +12489,43 @@
                 }, 'Move to CW New →')
               );
             })(),
+            // Client Feedback Banner — prominent alert when client has edits
+            hasClientEdits && React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#6366f115', border: '1px solid #6366f150', borderRadius: 8, marginBottom: 12 }
+            },
+              React.createElement('i', { className: 'fas fa-user-edit', style: { color: '#6366f1', fontSize: 16 } }),
+              React.createElement('span', { style: { flex: 1, fontSize: 13, color: '#6366f1' } },
+                selectedItem.client_draft_content ? 'Client has submitted edits with inline comments.' : '',
+                selectedItem.client_approved_at ? ' Client approved this content.' : '',
+                selectedItem.revision_requested_at && !selectedItem.client_approved_at ? ' Client requested changes.' : '',
+                (selectedItem.client_comments && selectedItem.client_comments.length > 0) ? ' ' + selectedItem.client_comments.length + ' comment(s).' : ''
+              ),
+              selectedItem.client_draft_content && React.createElement('button', {
+                onClick: () => {
+                  if (confirm('Load client edits into the editor? This replaces current draft with the client version (including inline comments). You can undo by not saving.')) {
+                    setEditContent(selectedItem.client_draft_content);
+                    if (selectedItem.client_draft_meta) {
+                      setEditMeta(prev => ({
+                        meta_title: selectedItem.client_draft_meta.meta_title || prev.meta_title,
+                        meta_desc: selectedItem.client_draft_meta.meta_desc || prev.meta_desc,
+                        focus_keyword: prev.focus_keyword
+                      }));
+                    }
+                    setSectionView(false);
+                    setEditorKey(k => k + 1);
+                  }
+                },
+                style: { padding: '6px 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+              }, React.createElement('i', { className: 'fas fa-file-import', style: { marginRight: 6 } }), 'Load Client Edits'),
+              selectedItem.client_draft_content && React.createElement('button', {
+                onClick: () => {
+                  const w = window.open('', '_blank', 'width=900,height=700');
+                  w.document.write('<html><head><title>Client Draft</title><style>body{font-family:system-ui;padding:40px;max-width:900px;margin:0 auto;background:#1a1a2e;color:#e0e0e0;line-height:1.7;} h1{font-size:16px;color:#6366f1;margin-bottom:20px;} .ql-comment-highlight{background:#6366f140;border-bottom:2px solid #6366f1;}</style></head><body><h1>Client Draft — ' + (selectedItem.page_title || '') + '</h1>' + selectedItem.client_draft_content + '</body></html>');
+                  w.document.close();
+                },
+                style: { padding: '6px 14px', background: 'transparent', color: '#6366f1', border: '1px solid #6366f140', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+              }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6 } }), 'Preview')
+            ),
             React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
               // AI Optimise button removed — replaced by AI Copywriter in the action row below
               // AI Editor — open chat with current draft (no optimise first)
