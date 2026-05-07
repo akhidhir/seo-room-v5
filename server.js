@@ -14371,7 +14371,7 @@ ABSOLUTE RULES:
 
         // web_search is a server-side tool — Anthropic handles searches internally, returns final result
         const resp = await anthropic.messages.create({
-          model: 'claude-opus-4-7-20250422',
+          model: 'claude-opus-4-7',
           max_tokens: 16000,
           tools: [{ type: 'web_search_20250305', name: 'web_search' }],
           messages: [{ role: 'user', content: userPrompt }],
