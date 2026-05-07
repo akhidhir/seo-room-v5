@@ -14227,12 +14227,15 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
 
-    if (!anthropic) {
+    const gbpAgentId = process.env.GBP_AGENT_ID;
+    const gbpEnvId = process.env.GBP_ENVIRONMENT_ID;
+
+    if (!anthropic || !gbpAgentId || !gbpEnvId) {
       await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
-      return res.status(500).json({ error: 'Anthropic API not configured.' });
+      return res.status(500).json({ error: 'GBP Agent not configured. Set GBP_AGENT_ID and GBP_ENVIRONMENT_ID.' });
     }
 
-    console.log(`[gbp-external] Starting Opus 4.7 audit for "${businessName}" in ${location}`);
+    console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
     console.log(`[gbp-external] Context: ${internalFindings.length} findings, ${gridData.length} grid scans, ${rankData.length} rank entries, profile: ${serpProfile ? 'YES' : 'NO'}`);
 
     // ===== BUILD ENRICHED PROMPT =====
@@ -14362,34 +14365,39 @@ ABSOLUTE RULES:
 - Keep findings to MAX 25 total. Quality over quantity. Each finding must be worth acting on.
 - For Competitor Analysis: analyze TOP 3 competitors only, compare on 4 metrics: reviews, rating, photos, categories`;
 
-    // Run via Claude Opus 4.7 with web_search tool
-    res.json({ auditId, status: 'running' });
+    // Run the managed agent via Sessions API
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiBase = 'https://api.anthropic.com/v1';
+    const agentHeaders = {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'managed-agents-2026-04-01',
+    };
+
+    console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
+
+    const sessionResp = await fetch(`${apiBase}/sessions`, {
+      method: 'POST',
+      headers: agentHeaders,
+      body: JSON.stringify({ agent: gbpAgentId, environment_id: gbpEnvId }),
+    });
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
+    }
+    const session = await sessionResp.json();
+    console.log(`[gbp-external] Session created: ${session.id}`);
+
+    res.json({ auditId, status: 'running', sessionId: session.id });
 
     (async () => {
       try {
-        console.log(`[gbp-external] Calling Opus 4.7 with web_search (server-side)...`);
+        await waitForSessionReady(apiBase, agentHeaders, session.id, 'gbp-external');
+        await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gbp-external');
+        const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gbp-external');
 
-        // web_search is a server-side tool — Anthropic handles searches internally, returns final result
-        const resp = await anthropic.messages.create({
-          model: 'claude-opus-4-7',
-          max_tokens: 16000,
-          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-          messages: [{ role: 'user', content: userPrompt }],
-        });
-
-        let finalText = '';
-        for (const block of resp.content) {
-          if (block.type === 'text') {
-            finalText += block.text;
-          }
-        }
-
-        if (!finalText.trim()) {
-          console.error('[gbp-external] Empty Opus response, stop_reason:', resp.stop_reason);
-          throw new Error('Empty response from Opus 4.7');
-        }
-
-        console.log(`[gbp-external] Report: ${finalText.length} chars (stop: ${resp.stop_reason})`);
+        console.log(`[gbp-external] Report: ${finalText.length} chars`);
 
         const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
