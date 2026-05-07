@@ -11938,14 +11938,16 @@
       const handleSelectItem = async (item) => {
         // Load full item (with page_sections, wireframe_image etc.) from single-item endpoint
         setSelectedItem(item); // show immediately with list data
-        setEditContent(item.draft_content || cleanWpHtml(item.current_content) || item.client_draft_content || '');
+        // In approval stage, prefer client edits (they're what needs reviewing)
+        const useClientFirst = item.stage === 'approved' && item.client_draft_content;
+        setEditContent(useClientFirst ? item.client_draft_content : (item.draft_content || cleanWpHtml(item.current_content) || item.client_draft_content || ''));
         setEditMeta({
           meta_title: item.draft_meta_title || item.current_meta_title || '',
           meta_desc: item.draft_meta_desc || item.current_meta_desc || '',
           focus_keyword: item.draft_focus_keyword || item.current_focus_keyword || ''
         });
         setTargetKeywords((item.target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword));
-        setComments(item.comments || []);
+        setComments((item.stage === 'approved' && item.client_draft_meta?.inline_comments) ? item.client_draft_meta.inline_comments : (item.comments || []));
         setOptimisePreview(null);
         setSectionSuggestions(null);
         setSuggestions([]);
@@ -11958,7 +11960,8 @@
           if (full && full.id) {
             setSelectedItem(full);
             // Update editContent if it was empty and full item has content
-            const fullContent = full.draft_content || cleanWpHtml(full.current_content) || full.client_draft_content || '';
+            const useClientFirst2 = full.stage === 'approved' && full.client_draft_content;
+            const fullContent = useClientFirst2 ? full.client_draft_content : (full.draft_content || cleanWpHtml(full.current_content) || full.client_draft_content || '');
             if (fullContent && !editContent) {
               setEditContent(fullContent);
               setEditorKey(k => k + 1);
