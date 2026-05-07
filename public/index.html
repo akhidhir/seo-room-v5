@@ -10617,8 +10617,8 @@
         if (quillRef.current) applyCommentHighlights(quillRef.current, [...comments, comment]);
       }
 
-      function resolveComment(id) {
-        updateComments(comments.map(c => c.id === id ? { ...c, resolved: true } : c));
+      function resolveComment(id, action, reply) {
+        updateComments(comments.map(c => c.id === id ? { ...c, resolved: true, resolution: action || 'resolved', reply: reply || null, resolvedAt: new Date().toISOString() } : c));
         if (activeComment === id) setActiveComment(null);
       }
 
@@ -10776,9 +10776,43 @@
                 React.createElement('div', { className: 'comment-card' + (activeComment === c.id ? ' active' : ''), onClick: () => scrollToComment(c), style: { margin: 0, borderLeft: activeComment === c.id ? '3px solid #f59e0b' : '3px solid transparent', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: 12, cursor: 'pointer' } },
                   React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 4 } }, c.author + ' · ' + new Date(c.createdAt).toLocaleDateString()),
                   React.createElement('div', { style: { fontSize: 13, color: 'var(--text)', lineHeight: 1.5, marginBottom: 8 } }, c.text),
-                  React.createElement('div', { style: { display: 'flex', gap: 6 } },
-                    React.createElement('button', { className: 'comment-resolve-btn resolve', onClick: e => { e.stopPropagation(); resolveComment(c.id); }, style: { padding: '4px 8px', fontSize: 11, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✓ Resolve'),
-                    React.createElement('button', { className: 'comment-resolve-btn delete', onClick: e => { e.stopPropagation(); deleteComment(c.id); }, style: { padding: '4px 8px', fontSize: 11, background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✕')
+                  // Reply field (shown when replying)
+                  c._replying && React.createElement('div', { style: { marginBottom: 8 }, onClick: e => e.stopPropagation() },
+                    React.createElement('textarea', {
+                      id: 'reply-' + c.id,
+                      placeholder: 'Add a reply (required for reject)...',
+                      rows: 2,
+                      style: { width: '100%', padding: 6, background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11, fontFamily: 'inherit', resize: 'vertical' }
+                    })
+                  ),
+                  React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                    !c._replying && React.createElement('button', { onClick: e => { e.stopPropagation(); resolveComment(c.id, 'accepted'); }, style: { padding: '4px 8px', fontSize: 11, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✓ Accept'),
+                    !c._replying && React.createElement('button', { onClick: e => {
+                      e.stopPropagation();
+                      // Toggle reply mode
+                      updateComments(comments.map(x => x.id === c.id ? { ...x, _replying: true } : x));
+                    }, style: { padding: '4px 8px', fontSize: 11, background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✎ Reply'),
+                    !c._replying && React.createElement('button', { onClick: e => {
+                      e.stopPropagation();
+                      updateComments(comments.map(x => x.id === c.id ? { ...x, _replying: true } : x));
+                      // Auto-focus reject mode
+                      setTimeout(() => { const el = document.getElementById('reply-' + c.id); if (el) { el.focus(); el.placeholder = 'Reason for rejection (required)...'; } }, 100);
+                    }, style: { padding: '4px 8px', fontSize: 11, background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✕ Reject'),
+                    c._replying && React.createElement('button', { onClick: e => {
+                      e.stopPropagation();
+                      const reply = document.getElementById('reply-' + c.id)?.value?.trim() || '';
+                      resolveComment(c.id, 'accepted', reply || null);
+                    }, style: { padding: '4px 8px', fontSize: 11, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✓ Accept'),
+                    c._replying && React.createElement('button', { onClick: e => {
+                      e.stopPropagation();
+                      const reply = document.getElementById('reply-' + c.id)?.value?.trim() || '';
+                      if (!reply) { alert('Please add a reason for rejection'); return; }
+                      resolveComment(c.id, 'rejected', reply);
+                    }, style: { padding: '4px 8px', fontSize: 11, background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✕ Reject'),
+                    c._replying && React.createElement('button', { onClick: e => {
+                      e.stopPropagation();
+                      updateComments(comments.map(x => x.id === c.id ? { ...x, _replying: false } : x));
+                    }, style: { padding: '4px 8px', fontSize: 11, background: 'var(--bg3)', color: 'var(--text3)', border: 'none', borderRadius: 4, cursor: 'pointer' } }, 'Cancel')
                   )
                 )
               );
@@ -10795,10 +10829,19 @@
           ))
         ),
         resolvedComments.length > 0 && React.createElement('div', { style: { marginTop: 12, padding: '10px 14px', background: 'var(--bg2)', borderRadius: 6, border: '1px solid var(--border)' } },
-          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontWeight: 600 } }, 'Resolved (' + resolvedComments.length + ')'),
-          resolvedComments.map(c => React.createElement('div', { key: c.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', opacity: 0.6, fontSize: 12 } },
-            React.createElement('span', { style: { color: 'var(--text3)', textDecoration: 'line-through' } }, c.text),
-            React.createElement('button', { className: 'comment-resolve-btn delete', onClick: () => deleteComment(c.id), style: { padding: '2px 6px', fontSize: 11, background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, '✕')
+          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 6 } }, 'Reviewed (' + resolvedComments.length + ')'),
+          resolvedComments.map(c => React.createElement('div', { key: c.id, style: { padding: '8px 0', borderBottom: '1px solid var(--border)', opacity: 0.8 } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                React.createElement('span', { style: { fontSize: 11, padding: '1px 6px', borderRadius: 3, background: c.resolution === 'rejected' ? '#ef444420' : '#22c55e20', color: c.resolution === 'rejected' ? '#ef4444' : '#22c55e', fontWeight: 600 } }, c.resolution === 'rejected' ? 'Rejected' : 'Accepted'),
+                React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, c.author)
+              ),
+              React.createElement('button', { onClick: () => deleteComment(c.id), style: { padding: '2px 6px', fontSize: 10, background: 'transparent', color: 'var(--text3)', border: 'none', cursor: 'pointer' } }, '✕')
+            ),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', textDecoration: c.resolution === 'rejected' ? 'none' : 'line-through' } }, c.text),
+            c.reply && React.createElement('div', { style: { fontSize: 12, color: c.resolution === 'rejected' ? '#f59e0b' : '#22c55e', marginTop: 4, paddingLeft: 8, borderLeft: '2px solid ' + (c.resolution === 'rejected' ? '#f59e0b' : '#22c55e') } },
+              React.createElement('span', { style: { fontWeight: 600, fontSize: 11 } }, 'Agency: '), c.reply
+            )
           ))
         )
       );
