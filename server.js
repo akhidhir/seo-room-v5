@@ -14421,9 +14421,94 @@ ABSOLUTE RULES:
           ['completed', JSON.stringify({ report: displayReport }), auditId]);
         console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
 
-        // PASS 2: Extract structured findings via Haiku
-        const extracted = await extractFindingsFromReport(finalText, 'gbp_external', projectId, auditId);
-        console.log(`[gbp-external] Extracted ${extracted.length} findings`);
+        // PASS 2: Extract structured findings via Haiku AI (not deterministic parser — GPT-5.5 sections don't map cleanly)
+        const validCategories = PILLAR_CATEGORIES['gbp_external'] || [];
+        const extractionPrompt = `You are a structured data extractor. Read the following GBP audit report and extract the KEY actionable findings as JSON.
+
+RULES:
+- Each finding MUST contain SPECIFIC, REAL data from the report — actual numbers, URLs, names
+- NO generic SEO advice. Every finding must be unique and actionable
+- TITLE format: "[Specific thing] — [specific data point]". Example: "Review count gap — 47 vs competitor's 156"
+- NO duplicates — if two findings say the same thing, keep only the more specific one
+- Maximum 25 findings total. Pick highest impact.
+- Maximum 4 findings per category.
+- Categories MUST be one of: ${validCategories.join(', ')}
+- severity MUST be one of: Critical, High, Medium, Low
+
+Output ONLY valid JSON array, nothing else — no markdown, no backticks:
+[{"category":"...","title":"...","description":"...","recommendation":"...","severity":"...","current_value":"...","recommended_value":"..."}]
+
+REPORT:
+${finalText.slice(0, 28000)}`;
+
+        let extractedFindings = [];
+        try {
+          const haikuResp = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 8000,
+            messages: [{ role: 'user', content: extractionPrompt }],
+          });
+          const haikuText = haikuResp.content?.[0]?.text || '';
+          // Try to parse JSON from response
+          const jsonMatch = haikuText.match(/\[[\s\S]*\]/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (Array.isArray(parsed)) {
+              extractedFindings = parsed
+                .filter(f => f.category && f.title && validCategories.includes(f.category))
+                .slice(0, 25)
+                .map(f => ({
+                  pillar: 'gbp_external',
+                  category: f.category,
+                  title: (f.title || '').slice(0, 120),
+                  description: f.description || '',
+                  recommendation: f.recommendation || '',
+                  severity: ['Critical','High','Medium','Low'].includes(f.severity) ? f.severity : 'Medium',
+                  current_value: f.current_value || '',
+                  recommended_value: f.recommended_value || '',
+                }));
+            }
+          }
+          console.log(`[gbp-external] Haiku extracted ${extractedFindings.length} structured findings`);
+        } catch (haikuErr) {
+          console.error(`[gbp-external] Haiku extraction failed: ${haikuErr.message}`);
+        }
+
+        // Save findings + action items
+        if (extractedFindings.length > 0) {
+          // Clear old findings for this audit
+          const oldFindings = await pool.query('SELECT id FROM audit_findings WHERE audit_id=$1', [auditId]);
+          for (const of_ of oldFindings.rows) {
+            await pool.query('DELETE FROM action_items WHERE finding_id=$1', [of_.id]);
+          }
+          await pool.query('DELETE FROM audit_findings WHERE audit_id=$1', [auditId]);
+
+          for (const f of extractedFindings) {
+            const fRes = await pool.query(
+              `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved') RETURNING id`,
+              [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+            );
+            const findingId = fRes.rows[0].id;
+            const titleLower = (f.title || '').toLowerCase();
+            const descLower = (f.description || '').toLowerCase();
+            const combined = titleLower + ' ' + descLower;
+            let execType = 'manual';
+            let assigneeLabel = 'Manual';
+            if (/\b(create|add|build|new)\b/.test(combined) && /\b(suburb|location|service|landing)\s*(page|pages)\b/.test(combined)) {
+              execType = 'copywriter_new'; assigneeLabel = 'Copywriter New';
+            } else if (/\b(write|rewrite|expand|improve|update|optimis|thin.?content|low.?word|meta.?title|meta.?desc)\b/.test(combined)) {
+              execType = 'copywriter'; assigneeLabel = 'Copywriter Current';
+            }
+            await pool.query(
+              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12)`,
+              [projectId, findingId, f.pillar, f.category, f.category, f.title, f.recommendation || f.description, f.current_value, f.recommended_value, f.severity, execType, assigneeLabel]
+            );
+          }
+          console.log(`[gbp-external] Saved ${extractedFindings.length} findings + action items`);
+        }
+        console.log(`[gbp-external] Audit complete`);
       } catch (bgErr) {
         console.error('[gbp-external] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
