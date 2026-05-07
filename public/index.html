@@ -1455,7 +1455,7 @@
             meta_title: (full.client_draft_meta?.meta_title) || full.draft_meta_title || full.current_meta_title || '',
             meta_desc: (full.client_draft_meta?.meta_desc) || full.draft_meta_desc || full.current_meta_desc || ''
           });
-          setComments(full.comments || []);
+          setComments(full.client_draft_meta?.inline_comments || full.comments || []);
           setClientComment('');
           setSaveStatus(null);
           setEditorKey(k => k + 1);
@@ -1469,7 +1469,7 @@
         try {
           const body = {
             client_draft_content: editContent,
-            client_draft_meta: editMeta
+            client_draft_meta: { ...editMeta, inline_comments: comments }
           };
           if (clientComment.trim()) body.comment = clientComment.trim();
           await api('/client/content/' + selectedItem.id, { method: 'PUT', body });
@@ -1491,7 +1491,7 @@
           // Save any pending edits first
           await api('/client/content/' + selectedItem.id, {
             method: 'PUT',
-            body: { client_draft_content: editContent, client_draft_meta: editMeta, comment: clientComment.trim() || undefined }
+            body: { client_draft_content: editContent, client_draft_meta: { ...editMeta, inline_comments: comments }, comment: clientComment.trim() || undefined }
           });
           await api('/client/content/' + selectedItem.id + '/action', { method: 'POST', body: { action, comment: clientComment.trim() || undefined } });
           setSelectedItem(null);
