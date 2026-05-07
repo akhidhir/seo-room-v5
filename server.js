@@ -14208,19 +14208,16 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       }
     } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
 
-    const gbpAgentId = process.env.GBP_AGENT_ID;
-    const gbpEnvId = process.env.GBP_ENVIRONMENT_ID;
-
-    if (!anthropic || !gbpAgentId || !gbpEnvId) {
+    if (!anthropic) {
       await pool.query('UPDATE audits SET status=$1, completed_at=NOW() WHERE id=$2', ['failed', auditId]);
-      return res.status(500).json({ error: 'GBP Agent not configured. Set GBP_AGENT_ID and GBP_ENVIRONMENT_ID.' });
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured.' });
     }
 
-    console.log(`[gbp-external] Starting managed agent audit for "${businessName}" in ${location}`);
+    console.log(`[gbp-external] Starting direct API audit for "${businessName}" in ${location}`);
     console.log(`[gbp-external] Context: ${internalFindings.length} findings, ${gridData.length} grid scans, ${rankData.length} rank entries, profile: ${serpProfile ? 'YES' : 'NO'}`);
 
-    // ===== BUILD ENRICHED AGENT PROMPT =====
-    const userPrompt = `You are an elite Local SEO strategist. Your mission: get "${businessName}" into the TOP 3 on Google Maps within 30 days.
+    // ===== BUILD ENRICHED PROMPT =====
+    const userPrompt = `Your mission: get "${businessName}" into the TOP 3 on Google Maps within 30 days.
 
 ===== BUSINESS PROFILE =====
 Business: ${businessName}
@@ -14346,58 +14343,138 @@ ABSOLUTE RULES:
 - Keep findings to MAX 25 total. Quality over quantity. Each finding must be worth acting on.
 - For Competitor Analysis: analyze TOP 3 competitors only, compare on 4 metrics: reviews, rating, photos, categories`;
 
-    // Run the managed agent via Sessions API
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    const apiBase = 'https://api.anthropic.com/v1';
-    const agentHeaders = {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'managed-agents-2026-04-01',
-    };
+    // ===== SYSTEM PROMPT — full control, no managed agent =====
+    const systemPrompt = `You are an elite Local SEO strategist specializing in Google Maps rankings for Australian businesses. You work for "The SEO Room" agency.
 
-    console.log(`[gbp-external] Creating session for agent ${gbpAgentId}...`);
+Your job is to produce a SPECIFIC, DATA-DRIVEN audit with REAL numbers — never estimates, never "Unknown".
 
-    const sessionResp = await fetch(`${apiBase}/sessions`, {
-      method: 'POST',
-      headers: agentHeaders,
-      body: JSON.stringify({ agent: gbpAgentId, environment_id: gbpEnvId }),
-    });
-    if (!sessionResp.ok) {
-      const errBody = await sessionResp.text();
-      throw new Error(`Session create failed (${sessionResp.status}): ${errBody}`);
-    }
-    const session = await sessionResp.json();
-    console.log(`[gbp-external] Session created: ${session.id}`);
+RULES:
+- Use web_search to find REAL data. Search Google Maps, directories, competitor profiles.
+- Every number in your report must come from your research or the data provided.
+- Competitor names must be REAL businesses from Google Maps results.
+- Be direct and actionable. Not "improve your description" but "Add these exact keywords to your description: [list]".
+- Structure findings so each one is a single, executable task.
+- Focus on what moves the needle FASTEST for Google Maps top 3.
 
-    res.json({ auditId, status: 'running', sessionId: session.id });
+The 3 pillars of Google Maps ranking:
+1. PROXIMITY — address, service areas, geo-signals
+2. RELEVANCE — categories, description, services, posts, attributes, Q&A
+3. PROMINENCE — reviews (count + velocity + keywords), photos, citations, backlinks, website authority`;
 
+    res.json({ auditId, status: 'running' });
+
+    // Run in background
     (async () => {
       try {
-        await waitForSessionReady(apiBase, agentHeaders, session.id, 'gbp-external');
-        await sendAgentMessage(apiBase, agentHeaders, session.id, userPrompt, 'gbp-external');
-        const finalText = await pollAgentSession(apiBase, agentHeaders, session.id, 'gbp-external');
+        req.setTimeout && req.setTimeout(300000);
+        console.log('[gbp-external] Starting agentic loop with web_search...');
 
-        const displayReport = finalText.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
+        const messages = [{ role: 'user', content: userPrompt }];
+        let finalReport = '';
+        let loopCount = 0;
+        const maxLoops = 15; // Safety cap
+
+        while (loopCount < maxLoops) {
+          loopCount++;
+          console.log('[gbp-external] API call #' + loopCount + '...');
+
+          const apiResp = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 16000,
+            system: systemPrompt,
+            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 20 }],
+            messages: messages,
+          });
+
+          console.log('[gbp-external] Stop reason: ' + apiResp.stop_reason + ', content blocks: ' + apiResp.content.length);
+
+          // Collect text and tool uses
+          let textParts = [];
+          let toolUses = [];
+          for (const block of apiResp.content) {
+            if (block.type === 'text') textParts.push(block.text);
+            if (block.type === 'tool_use') toolUses.push(block);
+            // web_search results come back as server_tool_use + tool_result inline
+            if (block.type === 'web_search_tool_result') {
+              console.log('[gbp-external] Web search completed (inline result)');
+            }
+          }
+
+          if (textParts.length > 0) finalReport = textParts.join('\n\n');
+
+          // If stop_reason is 'end_turn' or no tool uses, we're done
+          if (apiResp.stop_reason === 'end_turn' || toolUses.length === 0) {
+            console.log('[gbp-external] Agent finished after ' + loopCount + ' loops');
+            break;
+          }
+
+          // Continue the conversation with tool results (for any manual tool handling)
+          messages.push({ role: 'assistant', content: apiResp.content });
+          // Web search is server-side, so tool_result comes back automatically
+          // But if there are tool_use blocks that need responses, provide them
+          const toolResults = toolUses.map(tu => ({
+            type: 'tool_result', tool_use_id: tu.id, content: 'Search completed.'
+          }));
+          if (toolResults.length > 0) {
+            messages.push({ role: 'user', content: toolResults });
+          }
+        }
+
+        if (!finalReport) {
+          throw new Error('No report generated after ' + loopCount + ' loops');
+        }
+
+        console.log('[gbp-external] Report: ' + finalReport.length + ' chars');
+
+        // Save report
+        const displayReport = finalReport.replace(/~~~findings[\s\S]*?~~~/g, '').trim();
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-          ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
-        console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
+          ['completed', JSON.stringify({ report: displayReport }), auditId]);
 
-        // PASS 2: Follow-up extraction
-        const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'gbp_external', 'gbp-external');
-        const textForExtraction = extractionText || finalText;
-        const extracted = await extractFindingsFromReport(textForExtraction, 'gbp_external', projectId, auditId);
-        console.log(`[gbp-external] Extracted ${extracted.length} findings`);
+        // PASS 2: Extract findings via separate Haiku call (fast + cheap)
+        console.log('[gbp-external] Extracting findings...');
+        const validCategories = PILLAR_CATEGORIES['gbp_external'] || [];
+        const extractionPrompt = `Extract actionable findings from this Local SEO audit report. Output ONLY a JSON array.
+
+RULES:
+- Each finding must have SPECIFIC data — real numbers, real competitor names, real URLs
+- NO generic advice. "Get more reviews" is WRONG. "Increase reviews from 47 to 60 (need 13 new reviews in 30 days)" is RIGHT.
+- NO duplicates — each finding must be unique
+- MAX 25 findings total, max 5 per category. Pick highest impact.
+- For suburbs: ONE finding per suburb
+- For competitors: max 3 competitors, ONE finding per gap metric
+- current_value and recommended_value must have REAL numbers
+
+Categories: ${validCategories.join(', ')}
+
+Output ONLY:
+~~~findings
+[{"category":"<category>","title":"<specific with data, max 60 chars>","description":"<what is wrong with REAL data>","recommendation":"<exact steps to fix>","severity":"<Critical|High|Medium|Low>","current_value":"<real current state>","recommended_value":"<specific target>"}]
+~~~
+
+REPORT:
+${finalReport.slice(0, 30000)}`;
+
+        const extractResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: extractionPrompt }],
+        });
+
+        const extractText = extractResp.content.map(b => b.text || '').join('');
+        const extracted = await extractFindingsFromReport(extractText, 'gbp_external', projectId, auditId);
+        console.log('[gbp-external] Extracted ' + extracted.length + ' findings');
+
       } catch (bgErr) {
-        console.error('[gbp-external] Background error:', bgErr.message);
-        try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+        console.error('[gbp-external] Error:', bgErr.message);
+        try { await pool.query("UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2",
           [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
       }
     })();
 
   } catch (e) {
     console.error('[gbp-external] Error:', e.message);
-    try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gbp_external' AND status='running'`, [projectId]); } catch (e2) {}
+    try { await pool.query("UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='gbp_external' AND status='running'", [projectId]); } catch (e2) {}
     res.status(500).json({ error: e.message });
   }
 });
