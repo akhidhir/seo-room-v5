@@ -14159,14 +14159,33 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     let serpProfile = null;
     try {
       if (SERPAPI_KEY) {
-        const searchQ = `${businessName} ${location}`;
-        const data = await serpApiSearch({ engine: 'google_maps', q: searchQ, api_key: SERPAPI_KEY, num: 5 });
-        const results = data.local_results || [];
+        // Try multiple search queries to find the business
+        const locationShort = (location || '').split(',')[0].trim(); // "Bayswater" from "Bayswater, Perth WA"
+        const searchQueries = [
+          `${businessName} ${locationShort}`,
+          `${businessName} ${location}`,
+          domain ? `${domain.replace(/^www\./, '')} ${locationShort}` : null,
+        ].filter(Boolean);
+
+        let results = [];
+        let matchedQuery = '';
+        for (const searchQ of searchQueries) {
+          console.log(`[gbp-external] SerpAPI Maps search: "${searchQ}"`);
+          const data = await serpApiSearch({ engine: 'google_maps', q: searchQ, api_key: SERPAPI_KEY, num: 10 });
+          results = data.local_results || [];
+          if (results.length > 0) { matchedQuery = searchQ; break; }
+        }
+
         const domainClean = domain.replace(/^www\./, '').toLowerCase();
+        const bnWords = businessName.toLowerCase().split(/\s+/);
         const match = results.find(r => {
           const rDomain = (r.website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
           return rDomain === domainClean || rDomain.includes(domainClean) || domainClean.includes(rDomain);
-        }) || results.find(r => (r.title || '').toLowerCase().includes(businessName.toLowerCase().split(' ')[0]));
+        }) || results.find(r => {
+          const titleLower = (r.title || '').toLowerCase();
+          return bnWords.filter(w => w.length > 2).every(w => titleLower.includes(w));
+        }) || results.find(r => (r.title || '').toLowerCase().includes(bnWords[0]));
+        console.log(`[gbp-external] SerpAPI: ${results.length} results, match: ${match ? match.title : 'NONE'} (query: "${matchedQuery}")`);
         if (match) {
           serpProfile = {
             title: match.title, rating: match.rating, reviews: match.reviews,
@@ -14388,36 +14407,36 @@ The 3 pillars of Google Maps ranking:
 
           console.log('[gbp-external] Stop reason: ' + apiResp.stop_reason + ', content blocks: ' + apiResp.content.length);
 
-          // Collect text and tool uses
+          // Collect all text from response
           let textParts = [];
-          let toolUses = [];
+          let searchCount = 0;
           for (const block of apiResp.content) {
             if (block.type === 'text') textParts.push(block.text);
-            if (block.type === 'tool_use') toolUses.push(block);
-            // web_search results come back as server_tool_use + tool_result inline
-            if (block.type === 'web_search_tool_result') {
-              console.log('[gbp-external] Web search completed (inline result)');
-            }
+            if (block.type === 'web_search_tool_result') searchCount++;
           }
+          if (searchCount > 0) console.log('[gbp-external] ' + searchCount + ' web searches completed');
 
-          if (textParts.length > 0) finalReport = textParts.join('\n\n');
+          // Accumulate text (don't overwrite — append across loops)
+          if (textParts.length > 0) finalReport += (finalReport ? '\n\n' : '') + textParts.join('\n\n');
 
-          // If stop_reason is 'end_turn' or no tool uses, we're done
-          if (apiResp.stop_reason === 'end_turn' || toolUses.length === 0) {
-            console.log('[gbp-external] Agent finished after ' + loopCount + ' loops');
+          // end_turn = model is done writing
+          if (apiResp.stop_reason === 'end_turn') {
+            console.log('[gbp-external] Agent finished after ' + loopCount + ' loops, report: ' + finalReport.length + ' chars');
             break;
           }
 
-          // Continue the conversation with tool results (for any manual tool handling)
-          messages.push({ role: 'assistant', content: apiResp.content });
-          // Web search is server-side, so tool_result comes back automatically
-          // But if there are tool_use blocks that need responses, provide them
-          const toolResults = toolUses.map(tu => ({
-            type: 'tool_result', tool_use_id: tu.id, content: 'Search completed.'
-          }));
-          if (toolResults.length > 0) {
-            messages.push({ role: 'user', content: toolResults });
+          // pause_turn = model did web searches and wants to continue
+          // Push assistant response and a continue prompt
+          if (apiResp.stop_reason === 'pause_turn') {
+            console.log('[gbp-external] pause_turn — continuing...');
+            messages.push({ role: 'assistant', content: apiResp.content });
+            messages.push({ role: 'user', content: 'Continue your analysis. Keep going with the remaining research tasks and complete the full report.' });
+            continue;
           }
+
+          // Any other stop reason — done
+          console.log('[gbp-external] Stop: ' + apiResp.stop_reason + ', ending loop');
+          break;
         }
 
         if (!finalReport) {
