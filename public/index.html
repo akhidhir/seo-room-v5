@@ -10618,8 +10618,18 @@
       }
 
       function resolveComment(id, action, reply) {
-        updateComments(comments.map(c => c.id === id ? { ...c, resolved: true, resolution: action || 'resolved', reply: reply || null, resolvedAt: new Date().toISOString() } : c));
+        console.log('[comment] Resolving:', id, action, 'from', comments.length, 'comments');
+        const updated = comments.map(c => {
+          if (String(c.id) === String(id)) {
+            console.log('[comment] Found match, marking as', action);
+            return { ...c, resolved: true, resolution: action || 'resolved', reply: reply || null, resolvedAt: new Date().toISOString() };
+          }
+          return c;
+        });
+        updateComments(updated);
         if (activeComment === id) setActiveComment(null);
+        // Re-apply highlights to remove the resolved comment's highlight
+        if (quillRef.current) setTimeout(() => applyCommentHighlights(quillRef.current, updated), 50);
       }
 
       function deleteComment(id) {
