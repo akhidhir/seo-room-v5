@@ -2129,6 +2129,9 @@
       const allActionableRef = React.useRef({});
       const removedKeysRef = React.useRef(new Set());
       const pollRef = React.useRef(null);
+      const [gbpFindings, setGbpFindings] = useState([]);
+      const [findingsAddedMap, setFindingsAddedMap] = useState({});
+      const [findingsAddingId, setFindingsAddingId] = useState(null);
 
       // Reset addedActions and checkedKeys when section changes
       useEffect(() => {
@@ -2171,6 +2174,26 @@
           } catch (e) { console.error('Failed to load action items:', e); }
         })();
       }, [project?.id, pillar]);
+
+      // Load Haiku-extracted findings for GBP sections
+      useEffect(() => {
+        if (!project?.id || pillar !== 'gbp_external') return;
+        (async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audit-findings?pillar=gbp_external`);
+            if (Array.isArray(data)) {
+              setGbpFindings(data.filter(f => f.status !== 'rejected'));
+              // Pre-populate addedMap from findings that already have action items
+              const alreadyAdded = {};
+              for (const f of data) {
+                const matchingAi = savedActionItems.find(ai => ai.finding_id === f.id || (ai.title && f.title && ai.title.toLowerCase().trim() === f.title.toLowerCase().trim()));
+                if (matchingAi) alreadyAdded[f.id] = { actionId: matchingAi.id, status: matchingAi.status };
+              }
+              setFindingsAddedMap(alreadyAdded);
+            }
+          } catch (e) { console.error('Failed to load GBP findings:', e); }
+        })();
+      }, [project?.id, pillar, report, savedActionItems]);
 
       // When report + savedActionItems are both ready, map saved items to table row keys
       useEffect(() => {
@@ -2897,6 +2920,11 @@
             }
             if (inPlanTable && /^#{2,3}/.test(t) && !/30.?Day|Ranking Plan|Action Plan/i.test(t)) inPlanTable = false;
           }
+          // Fallback: sum individual scores if TOTAL row wasn't found
+          if (totalScore === 0 && scores.length > 0) {
+            totalScore = scores.reduce((s, x) => s + x.score, 0);
+            totalMax = scores.reduce((s, x) => s + x.max, 0);
+          }
           return { scores, totalScore, totalMax, criticals: criticals.slice(0, 8), weeks };
         };
 
@@ -2946,27 +2974,31 @@
             {/* Score cards grid */}
             {summary.scores.length > 0 && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 24 }}>
-                {summary.scores.map((s, i) => (
-                  <div key={i} style={{
-                    background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px',
-                    cursor: 'pointer', transition: 'border-color 0.15s'
-                  }} onClick={() => {
-                    const sectionMap = {
-                      'Profile Completeness': 'Profile Completeness', 'NAP Consistency': 'NAP Consistency',
-                      'Reviews & Reputation': 'Reviews & Reputation', 'Competitor Gap': 'Competitor Analysis',
-                      'Directory & Citations': 'Directory & Citations', 'Photos & Media': 'Photos & Media',
-                      'Suburb Coverage': 'Suburb Coverage', 'Website Alignment': 'Website Alignment'
-                    };
-                    const target = sectionMap[s.name] || s.name;
-                    if (setActiveTab) setActiveTab(target);
-                  }}>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{s.name.length > 18 ? s.name.slice(0, 16) + '…' : s.name}</div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                      <span style={{ fontSize: 28, fontWeight: 700, color: scoreColor(s.score, s.max) }}>{s.score}</span>
-                      <span style={{ fontSize: 13, color: 'var(--text3)' }}>/{s.max}</span>
+                {summary.scores.map((s, i) => {
+                  const sectionMap = {
+                    'Profile Completeness': 'Profile Completeness', 'NAP Consistency': 'NAP Consistency',
+                    'Reviews & Reputation': 'Reviews & Reputation', 'Competitor Gap': 'Competitor Analysis',
+                    'Directory & Citations': 'Directory & Citations', 'Photos & Media': 'Photos & Media',
+                    'Suburb Coverage': 'Suburb Coverage', 'Website Alignment': 'Website Alignment'
+                  };
+                  const target = sectionMap[s.name] || s.name;
+                  const findingCount = gbpFindings.filter(f => (f.category || '').toLowerCase().replace(/[^a-z0-9]/g, '') === target.toLowerCase().replace(/[^a-z0-9]/g, '')).length;
+                  return (
+                    <div key={i} style={{
+                      background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px',
+                      cursor: 'pointer', transition: 'border-color 0.15s'
+                    }} onClick={() => { if (setActiveTab) setActiveTab(target); }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.name.length > 18 ? s.name.slice(0, 16) + '…' : s.name}</span>
+                        {findingCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: scoreColor(s.score, s.max) === '#ef4444' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)', color: scoreColor(s.score, s.max) === '#ef4444' ? '#ef4444' : '#f59e0b' }}>{findingCount} tasks</span>}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                        <span style={{ fontSize: 28, fontWeight: 700, color: scoreColor(s.score, s.max) }}>{s.score}</span>
+                        <span style={{ fontSize: 13, color: 'var(--text3)' }}>/{s.max}</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -3212,6 +3244,161 @@
           const secRowCount = sec.content.filter(l => l.trim().startsWith('|') && !l.trim().startsWith('|--') && !l.trim().startsWith('| --')).length - 1;
           const secHasCritical = sec.content.some(l => /critical|high|fail/i.test(l) && l.includes('|'));
 
+          // GBP findings-based task cards for this section
+          const sectionFindings = pillar === 'gbp_external' ? gbpFindings.filter(f => {
+            const fCat = (f.category || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const secName = sec.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return fCat === secName;
+          }) : [];
+
+          const handleAddFindingToAction = async (finding) => {
+            setFindingsAddingId(finding.id);
+            try {
+              const execInfo = detectExecType(finding.description || finding.title, pillar, finding.category);
+              const resp = await api('/projects/' + project.id + '/action-items', {
+                method: 'POST',
+                body: {
+                  pillar: pillar,
+                  type: 'external_audit',
+                  title: finding.title,
+                  description: (finding.description || '') + (finding.recommendation ? '\n\nRecommendation: ' + finding.recommendation : ''),
+                  severity: finding.severity || 'medium',
+                  current_value: finding.current_value || null,
+                  new_value: finding.recommended_value || null,
+                  category: finding.category,
+                  execution_type: execInfo.type
+                }
+              });
+              const item = resp.action_item || {};
+              setFindingsAddedMap(prev => ({ ...prev, [finding.id]: { actionId: item.id, status: 'pending' } }));
+            } catch (e) { console.error('Failed to add finding to action plan:', e); }
+            setFindingsAddingId(null);
+          };
+
+          const handleAddAllFindings = async () => {
+            setBulkAdding(true);
+            for (const f of sectionFindings) {
+              if (!findingsAddedMap[f.id]) await handleAddFindingToAction(f);
+            }
+            setBulkAdding(false);
+          };
+
+          const sevColors = { Critical: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#22c55e' };
+          const sevBgs = { Critical: 'rgba(239,68,68,0.12)', High: 'rgba(249,115,22,0.12)', Medium: 'rgba(245,158,11,0.12)', Low: 'rgba(34,197,94,0.12)' };
+
+          // If we have findings for this section, show task cards
+          if (sectionFindings.length > 0) {
+            const addedCount = sectionFindings.filter(f => findingsAddedMap[f.id]).length;
+            return (
+              <div>
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{
+                    padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
+                    background: `linear-gradient(135deg, ${sm.color}15, ${sm.color}08)`,
+                    borderBottom: '1px solid var(--border)'
+                  }}>
+                    <i className={sm.icon} style={{ fontSize: 22, color: sm.color }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{sec.title}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{sm.desc}</div>
+                    </div>
+                    <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>{sectionFindings.length} tasks</span>
+                    {addedCount < sectionFindings.length && (
+                      <button onClick={handleAddAllFindings} disabled={bulkAdding} style={{ fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer' }}>
+                        {bulkAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : `Add All ${sectionFindings.length - addedCount} to Action Plan`}
+                      </button>
+                    )}
+                    {addedCount === sectionFindings.length && (
+                      <span style={{ fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                        <i className="fas fa-check" style={{ marginRight: 4 }} />All Added
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {sectionFindings.map((f, i) => {
+                      const sev = (f.severity || 'Medium').charAt(0).toUpperCase() + (f.severity || 'medium').slice(1).toLowerCase();
+                      const isAdded = !!findingsAddedMap[f.id];
+                      const isAdding = findingsAddingId === f.id;
+                      return (
+                        <div key={f.id || i} style={{
+                          background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10,
+                          borderLeft: `4px solid ${sevColors[sev] || '#f59e0b'}`, overflow: 'hidden'
+                        }}>
+                          {/* Task header */}
+                          <div style={{ padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <span style={{
+                                  fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5,
+                                  background: sevBgs[sev] || sevBgs.Medium, color: sevColors[sev] || sevColors.Medium
+                                }}>{sev}</span>
+                                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{f.title}</span>
+                              </div>
+                              {f.description && (
+                                <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 8 }}>{f.description}</div>
+                              )}
+                              {f.recommendation && (
+                                <div style={{
+                                  fontSize: 13, color: '#22c55e', lineHeight: 1.6, padding: '8px 12px',
+                                  background: 'rgba(34,197,94,0.06)', borderRadius: 6, marginBottom: 8,
+                                  borderLeft: '3px solid rgba(34,197,94,0.3)'
+                                }}>
+                                  <i className="fas fa-lightbulb" style={{ marginRight: 6, fontSize: 11 }} />{f.recommendation}
+                                </div>
+                              )}
+                              {(f.current_value || f.recommended_value) && (
+                                <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                                  {f.current_value && (
+                                    <div style={{ padding: '4px 10px', background: 'rgba(239,68,68,0.08)', borderRadius: 4, color: '#ef4444' }}>
+                                      <strong>Current:</strong> {f.current_value}
+                                    </div>
+                                  )}
+                                  {f.recommended_value && (
+                                    <div style={{ padding: '4px 10px', background: 'rgba(34,197,94,0.08)', borderRadius: 4, color: '#22c55e' }}>
+                                      <strong>Target:</strong> {f.recommended_value}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ flexShrink: 0, paddingTop: 2 }}>
+                              {isAdded ? (
+                                <span style={{ fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 6, background: 'rgba(34,197,94,0.12)', color: '#22c55e', whiteSpace: 'nowrap' }}>
+                                  <i className="fas fa-check" style={{ marginRight: 4 }} />Added
+                                </span>
+                              ) : (
+                                <button onClick={() => handleAddFindingToAction(f)} disabled={isAdding}
+                                  style={{ fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                  {isAdding ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add to Action Plan</>}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Show raw report content below for additional context */}
+                <div style={{ marginTop: 16, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                    onClick={() => setExpandedCats(prev => ({ ...prev, ['raw_' + sec.title]: !prev['raw_' + sec.title] }))}>
+                    <i className={`fas fa-chevron-${expandedCats['raw_' + sec.title] ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--text3)' }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)' }}>Agent Report Details</span>
+                  </div>
+                  {expandedCats['raw_' + sec.title] && (
+                    <div style={{ padding: '16px 20px' }}>
+                      {renderSectionContent(sec.content, null, window.__highlightFinding)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          // Fallback: no findings for this section — show original markdown with action buttons
           return (
             <div>
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
