@@ -18157,6 +18157,26 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const gscMap = {};
     for (const g of gscKeywords) gscMap[g.keyword.toLowerCase()] = g;
 
+    // 5b. Indexing results (latest completed audit)
+    const idxR = await pool.query(
+      `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='indexing' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+      [projectId]
+    );
+    const indexingMap = {}; // path -> { verdict, coverageState }
+    let indexingTotal = 0, indexingIndexed = 0, indexingNotIndexed = 0;
+    if (idxR.rows[0]?.audit_data) {
+      const idxData = typeof idxR.rows[0].audit_data === 'string' ? JSON.parse(idxR.rows[0].audit_data) : idxR.rows[0].audit_data;
+      if (Array.isArray(idxData.results)) {
+        indexingTotal = idxData.results.length;
+        for (const r of idxData.results) {
+          const path = (r.path || r.url || '').toLowerCase().replace(/\/+$/, '');
+          indexingMap[path] = { verdict: r.verdict, state: r.coverageState };
+          if (r.verdict === 'PASS') indexingIndexed++;
+          else if (r.verdict === 'FAIL' || r.verdict === 'NEUTRAL') indexingNotIndexed++;
+        }
+      }
+    }
+
     // 6. Reviews stats
     const reviewStats = rc?.reviews_stats || null;
 
@@ -18234,6 +18254,21 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
+    // Match indexing status to suburbs (check if suburb pages are indexed)
+    for (const n of allSuburbNames) {
+      const s = suburbSources[n];
+      if (s.pages?.length) {
+        s.indexing = [];
+        for (const page of s.pages) {
+          const pageUrl = (page.url || '').toLowerCase();
+          let path;
+          try { path = new URL(pageUrl).pathname.replace(/\/+$/, ''); } catch { path = pageUrl.replace(/\/+$/, ''); }
+          const idx = indexingMap[path] || indexingMap[path.toLowerCase()];
+          if (idx) s.indexing.push({ url: page.url, ...idx });
+        }
+      }
+    }
+
     // Build suburb matrix
     const suburbMatrix = Array.from(allSuburbNames).map(n => {
       const s = suburbSources[n];
@@ -18242,6 +18277,10 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (!s.pages?.length) gaps.push('Create suburb landing page');
       if (!s.keywords?.length) gaps.push('Add keyword tracking');
       if (!s.gridScans?.length) gaps.push('Run grid scan');
+      // Indexing status for this suburb's pages
+      const indexedPages = s.indexing?.filter(i => i.verdict === 'PASS').length || 0;
+      const notIndexedPages = s.indexing?.filter(i => i.verdict === 'FAIL' || i.verdict === 'NEUTRAL').length || 0;
+      if (notIndexedPages > 0) gaps.push('Fix indexing issues');
       return {
         suburb: s.original,
         inGbp: !!s.inGbp,
@@ -18254,6 +18293,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         bestSolv: s.gridScans?.length ? Math.max(...s.gridScans.map(g => g.solv || 0)) : null,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
+        indexedPages,
+        notIndexedPages,
+        indexingStatus: notIndexedPages > 0 ? 'issues' : indexedPages > 0 ? 'indexed' : s.pages?.length ? 'unchecked' : null,
         gaps,
         score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 20 : 0) + (s.keywords?.length ? 20 : 0) + (s.gridScans?.length ? 20 : 0) + (s.gsc?.length ? 20 : 0),
       };
@@ -18465,6 +18507,68 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
+    // ============ CROSS-REFERENCE: SUBURB × SERVICE MATRIX ============
+    // For each suburb×service combo, check: has page, has keyword, has grid scan, GSC impressions
+    const matrixRows = [];
+    for (const subN of allSuburbNames) {
+      const sub = suburbSources[subN];
+      const row = { suburb: sub.original, services: {} };
+      for (const svcN of allServiceNames) {
+        const svc = serviceSources[svcN];
+        // Check if any page matches BOTH suburb + service
+        const subSlug = subN.replace(/\s+/g, '-');
+        const svcWords = svcN.split(/\s+/);
+        const svcKey = svcWords.length > 1 ? svcWords.slice(0, 2).join(' ') : svcWords[0];
+        const svcSlug = svcKey.replace(/\s+/g, '-');
+        let hasPage = false, pageUrl = '';
+        for (const page of websitePages) {
+          const slug = normalize(page.slug || page.url || '');
+          if ((slug.includes(subSlug) || slug.includes(subN.replace(/\s+/g, ''))) && slug.includes(svcSlug)) {
+            hasPage = true; pageUrl = page.url; break;
+          }
+        }
+        // Check if any keyword matches both
+        let hasKeyword = false, kwRank = null;
+        for (const kw of rankKeywords) {
+          const kwN = normalize(kw.keyword);
+          if (kwN.includes(subN) && kwN.includes(svcKey)) {
+            hasKeyword = true;
+            const rt = rankMap[kw.keyword.toLowerCase()];
+            if (rt) kwRank = rt.maps_position || rt.serp_position || null;
+            break;
+          }
+        }
+        // Check grid scan
+        let hasGrid = false, gridSolv = null;
+        for (const [kwLower, gs] of Object.entries(gridMap)) {
+          if (kwLower.includes(subN) && kwLower.includes(svcKey)) {
+            hasGrid = true; gridSolv = gs.solv; break;
+          }
+        }
+        // GSC impressions for this combo
+        let gscImp = 0;
+        for (const [kwLower, gsc] of Object.entries(gscMap)) {
+          if (kwLower.includes(subN) && kwLower.includes(svcKey)) gscImp += gsc.impressions || 0;
+        }
+        // Indexing status for this page
+        let isIndexed = null; // null = no page or unchecked, true = indexed, false = not indexed
+        if (hasPage && pageUrl) {
+          let path;
+          try { path = new URL(pageUrl.toLowerCase()).pathname.replace(/\/+$/, ''); } catch { path = pageUrl.toLowerCase().replace(/\/+$/, ''); }
+          const idx = indexingMap[path];
+          if (idx) isIndexed = idx.verdict === 'PASS';
+        }
+        // Score: 0-5 (page + keyword + grid + gsc + indexed)
+        const signals = (hasPage ? 1 : 0) + (hasKeyword ? 1 : 0) + (hasGrid ? 1 : 0) + (gscImp > 0 ? 1 : 0) + (isIndexed === true ? 1 : 0);
+        row.services[svc.original] = { hasPage, pageUrl, hasKeyword, kwRank, hasGrid, gridSolv, gscImp, isIndexed, signals };
+      }
+      matrixRows.push(row);
+    }
+    // Matrix summary: total combos, covered (signals>0), fully covered (signals>=4)
+    const totalCombos = allSuburbNames.size * allServiceNames.size;
+    const coveredCombos = matrixRows.reduce((sum, r) => sum + Object.values(r.services).filter(s => s.signals > 0).length, 0);
+    const fullyCovered = matrixRows.reduce((sum, r) => sum + Object.values(r.services).filter(s => s.signals >= 4).length, 0);
+
     // Summary scores — average coverage across all suburbs/services
     const suburbCoverage = suburbMatrix.length ? Math.round(suburbMatrix.reduce((sum, s) => sum + s.score, 0) / suburbMatrix.length) : 0;
     const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.reduce((sum, s) => sum + s.score, 0) / serviceMatrix.length) : 0;
@@ -18490,10 +18594,18 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         gbpCategories,
         gbpPostCount: gbpPosts.length,
         competitorCount: topCompetitors.length,
+        totalCombos,
+        coveredCombos,
+        fullyCovered,
+        indexingTotal,
+        indexingIndexed,
+        indexingNotIndexed,
       },
       suburbs: suburbMatrix,
       services: serviceMatrix,
       competitors: topCompetitors,
+      matrix: matrixRows,
+      serviceNames: Array.from(allServiceNames).map(n => serviceSources[n].original),
       recommendations: recommendations.sort((a, b) => { const pri = { critical: 0, high: 1, medium: 2, low: 3 }; return (pri[a.priority] || 4) - (pri[b.priority] || 4); }),
     });
   } catch (e) {
