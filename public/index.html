@@ -3674,11 +3674,37 @@
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>Auto-generate keywords from services × suburbs, and queue missing suburb pages for copywriting</div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {/* Generate Keywords with count selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderRadius: 8, overflow: 'hidden' }}>
+                    <select value={fixing === 'kw_count' ? '' : ''} onChange={() => {}} ref={el => { if (el) el._kwSelect = el; }}
+                      id="kw-count-select"
+                      style={{ padding: '8px 10px', border: 'none', background: '#f59e0b22', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', borderRight: '1px solid #f59e0b44', appearance: 'auto' }}
+                      defaultValue="20"
+                    >
+                      {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <button disabled={!!fixing} title="Creates service+suburb keyword combos for rank tracking"
+                      onClick={async () => {
+                        const count = parseInt(document.getElementById('kw-count-select').value) || 20;
+                        setFixing('generate_keywords'); setFixResult(null);
+                        try {
+                          const r = await api(`/projects/${project.id}/local-intel/fix-gaps`, { method: 'POST', body: { action: 'generate_keywords', keyword_limit: count } });
+                          setFixResult(r);
+                          const d = await api(`/projects/${project.id}/local-intel`);
+                          setData(d);
+                        } catch (e) { setFixResult({ error: e.message }); }
+                        setFixing(null);
+                      }}
+                      style={{ padding: '8px 16px', border: 'none', background: '#f59e0b22', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: fixing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <i className={fixing === 'generate_keywords' ? 'fas fa-spinner fa-spin' : 'fas fa-search'} style={{ fontSize: 11 }} />
+                      Generate Keywords
+                    </button>
+                  </div>
+                  {/* Queue Suburb Pages */}
                   {[
-                    { action: 'generate_keywords', label: 'Generate Keywords', icon: 'fas fa-search', color: '#f59e0b', desc: 'Creates service+suburb keyword combos for rank tracking' },
                     { action: 'queue_pages', label: 'Queue Suburb Pages', icon: 'fas fa-file-alt', color: '#3b82f6', desc: 'Adds missing suburb landing pages to copywriter queue' },
-                    { action: 'all', label: 'Fix Everything', icon: 'fas fa-bolt', color: '#8b5cf6', desc: 'Keywords + pages in one go' },
                   ].map(btn => (
                     <button key={btn.action} disabled={!!fixing} title={btn.desc}
                       onClick={async () => {
@@ -3686,15 +3712,12 @@
                         try {
                           const r = await api(`/projects/${project.id}/local-intel/fix-gaps`, { method: 'POST', body: { action: btn.action } });
                           setFixResult(r);
-                          // Refresh data
                           const d = await api(`/projects/${project.id}/local-intel`);
                           setData(d);
                         } catch (e) { setFixResult({ error: e.message }); }
                         setFixing(null);
                       }}
-                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: fixing === btn.action ? btn.color + '44' : btn.color + '22', color: btn.color, fontWeight: 700, fontSize: 12, cursor: fixing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'background 0.15s' }}
-                      onMouseEnter={e => { if (!fixing) e.target.style.background = btn.color + '44'; }}
-                      onMouseLeave={e => { if (!fixing) e.target.style.background = btn.color + '22'; }}
+                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: btn.color + '22', color: btn.color, fontWeight: 700, fontSize: 12, cursor: fixing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                     >
                       <i className={fixing === btn.action ? 'fas fa-spinner fa-spin' : btn.icon} style={{ fontSize: 11 }} />
                       {btn.label}

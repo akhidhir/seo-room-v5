@@ -18497,7 +18497,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 // ==================== LOCAL INTEL — BULK FIX GAPS ====================
 app.post('/api/projects/:id/local-intel/fix-gaps', async (req, res) => {
   const projectId = req.params.id;
-  const { action } = req.body; // 'generate_keywords' | 'queue_pages' | 'all'
+  const { action, keyword_limit } = req.body; // 'generate_keywords' | 'queue_pages' | 'all'
+  const kwLimit = Math.min(Math.max(parseInt(keyword_limit) || 20, 5), 100);
   try {
     const projR = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
@@ -18558,27 +18559,35 @@ app.post('/api/projects/:id/local-intel/fix-gaps', async (req, res) => {
       if (profile?.categories?.primaryCategory?.displayName) {
         keywordRoots.unshift(profile.categories.primaryCategory.displayName.toLowerCase());
       }
-      // Limit to top 5 roots to keep it manageable
-      const roots = [...new Set(keywordRoots)].slice(0, 5);
+      const roots = [...new Set(keywordRoots)].slice(0, 10);
       const location = (project.location || '').trim();
+      const suburbArr = [...suburbs];
 
-      for (const suburb of suburbs) {
-        for (const root of roots) {
-          const keyword = `${root} ${suburb}`.trim();
-          if (existingSet.has(keyword.toLowerCase())) {
-            results.keywords_skipped++;
-            continue;
-          }
-          try {
-            await pool.query(
-              'INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-              [projectId, keyword, location || suburb]
-            );
-            existingSet.add(keyword.toLowerCase());
-            results.keywords_added++;
-          } catch (e) {
-            console.log(`[fix-gaps] Skip keyword "${keyword}": ${e.message}`);
-          }
+      // Generate combos prioritising: primary category first, then each root across suburbs
+      const combos = [];
+      for (const root of roots) {
+        for (const suburb of suburbArr) {
+          combos.push(`${root} ${suburb}`.trim());
+        }
+      }
+      // Cap at kwLimit, skipping existing
+      let added = 0;
+      for (const keyword of combos) {
+        if (added >= kwLimit) break;
+        if (existingSet.has(keyword.toLowerCase())) {
+          results.keywords_skipped++;
+          continue;
+        }
+        try {
+          await pool.query(
+            'INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+            [projectId, keyword, location || keyword.split(' ').pop()]
+          );
+          existingSet.add(keyword.toLowerCase());
+          results.keywords_added++;
+          added++;
+        } catch (e) {
+          console.log(`[fix-gaps] Skip keyword "${keyword}": ${e.message}`);
         }
       }
     }
