@@ -18457,9 +18457,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Summary scores
-    const suburbCoverage = suburbMatrix.length ? Math.round(suburbMatrix.filter(s => s.score >= 60).length / suburbMatrix.length * 100) : 0;
-    const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.filter(s => s.score >= 60).length / serviceMatrix.length * 100) : 0;
+    // Summary scores — average coverage across all suburbs/services
+    const suburbCoverage = suburbMatrix.length ? Math.round(suburbMatrix.reduce((sum, s) => sum + s.score, 0) / suburbMatrix.length) : 0;
+    const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.reduce((sum, s) => sum + s.score, 0) / serviceMatrix.length) : 0;
     const totalGaps = recommendations.reduce((sum, r) => sum + (r.items?.length || 1), 0);
 
     res.json({

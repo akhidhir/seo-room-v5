@@ -3636,8 +3636,8 @@
           {/* Coverage bars */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
             {[
-              { label: 'Suburb Coverage', pct: s.suburbCoverage, desc: `${s.pagesWithSuburb}/${s.suburbCount} suburbs have pages + keywords` },
-              { label: 'Service Coverage', pct: s.serviceCoverage, desc: `${s.pagesWithService}/${s.serviceCount} services have pages + keywords` },
+              { label: 'Suburb Coverage', pct: s.suburbCoverage, desc: `Avg across ${s.suburbCount} suburbs — GBP, pages, keywords, grid, GSC` },
+              { label: 'Service Coverage', pct: s.serviceCoverage, desc: `Avg across ${s.serviceCount} services — GBP, pages, keywords, posts, GSC` },
             ].map((b, i) => (
               <div key={i} style={{ background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
