@@ -16550,10 +16550,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
     const totalPoints = gridSizeInt * gridSizeInt;
     const totalCalls = keywords.length * totalPoints;
 
-    console.log(`[grid-scan] Starting: ${keywords.length} keywords × ${totalPoints} points = ${totalCalls} API calls, grid=${gridSizeInt}×${gridSizeInt}, radius=${radiusFloat}km, center=${centerGps.lat},${centerGps.lng}`);
-
-    // Generate grid points
-    const gridPoints = generateGrid(centerGps.lat, centerGps.lng, radiusFloat, gridSizeInt);
+    console.log(`[grid-scan] Starting: ${keywords.length} keywords × ${totalPoints} points = ${totalCalls} API calls, grid=${gridSizeInt}×${gridSizeInt}, radius=${radiusFloat}km, defaultCenter=${centerGps.lat},${centerGps.lng}`);
 
     const results = [];
     const nameLower = businessName.toLowerCase();
@@ -16562,6 +16559,16 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
 
     // Process keywords sequentially, grid points in parallel batches of 5
     for (const kw of keywords) {
+      // Per-keyword grid center: detect suburb in keyword and use its GPS
+      const kwLower = (kw.keyword || '').toLowerCase();
+      let kwCenter = centerGps;
+      const suburbKeys = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length); // longest first to match "east cannington" before "cannington"
+      for (const sub of suburbKeys) {
+        if (kwLower.includes(sub)) { kwCenter = SUBURB_GPS[sub]; break; }
+      }
+      const gridPoints = generateGrid(kwCenter.lat, kwCenter.lng, radiusFloat, gridSizeInt);
+      console.log(`[grid-scan] Keyword "${kw.keyword}" center: ${kwCenter.lat},${kwCenter.lng}`);
+
       const kwLabel = `${kw.keyword} ${kw.location}`;
       const pointResults = [];
       let ourBusiness = null;
@@ -16693,7 +16700,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
       await pool.query(
         `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, scanned_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
-        [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat,
+        [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, kwCenter.lat, kwCenter.lng, radiusFloat,
          JSON.stringify(pointResults), JSON.stringify({ top: competitors.slice(0, 3), our_business: ourBusiness }), arp, atrp, solv, foundCount, totalScanned]
       );
 
