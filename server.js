@@ -14649,7 +14649,7 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     let internalFindings = [];
     try {
       const f = await pool.query(
-        `SELECT title, description, severity, category, current_value, new_value FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') ORDER BY severity DESC LIMIT 30`,
+        `SELECT title, description, severity, category, current_value, recommended_value FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') ORDER BY severity DESC LIMIT 30`,
         [projectId]
       );
       internalFindings = f.rows;
@@ -18124,7 +18124,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // 4b. External audit competitor findings
     const extR = await pool.query(`
-      SELECT title, description, severity, category, current_value, new_value
+      SELECT title, description, severity, category, current_value, recommended_value
       FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') AND category='Competitor Analysis'
       ORDER BY severity DESC
     `, [projectId]);
