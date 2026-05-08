@@ -3584,6 +3584,8 @@
       const [newService, setNewService] = useState('');
       const [addingSuburb, setAddingSuburb] = useState(false);
       const [addingService, setAddingService] = useState(false);
+      const [editingSuburb, setEditingSuburb] = useState(null); // { old: 'X', val: 'Y' }
+      const [editingService, setEditingService] = useState(null);
 
       const reload = (silent) => {
         if (!silent) setLoading(true);
@@ -3626,6 +3628,24 @@
           reload(true);
         } catch (e) { alert(e.message); }
         setAddingService(false);
+      };
+
+      const handleRenameSuburb = async () => {
+        if (!editingSuburb || !editingSuburb.val.trim() || editingSuburb.val.trim() === editingSuburb.old) { setEditingSuburb(null); return; }
+        try {
+          await api(`/projects/${project.id}/local-intel/suburbs/${encodeURIComponent(editingSuburb.old)}`, { method: 'PUT', body: { name: editingSuburb.val.trim() } });
+          setEditingSuburb(null);
+          reload(true);
+        } catch (e) { alert(e.message); }
+      };
+
+      const handleRenameService = async () => {
+        if (!editingService || !editingService.val.trim() || editingService.val.trim() === editingService.old) { setEditingService(null); return; }
+        try {
+          await api(`/projects/${project.id}/local-intel/services/${encodeURIComponent(editingService.old)}`, { method: 'PUT', body: { name: editingService.val.trim() } });
+          setEditingService(null);
+          reload(true);
+        } catch (e) { alert(e.message); }
       };
 
       useEffect(() => {
@@ -4061,7 +4081,17 @@
                 <tbody>
                   {suburbs.map((s, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
-                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)' }}>{s.suburb}</td>
+                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)' }}>
+                        {editingSuburb?.old === s.suburb ? (
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <input value={editingSuburb.val} onChange={e => setEditingSuburb({ ...editingSuburb, val: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') handleRenameSuburb(); if (e.key === 'Escape') setEditingSuburb(null); }} autoFocus style={{ padding: '4px 8px', border: '1px solid var(--accent)', borderRadius: 4, background: 'var(--bg)', color: 'var(--text1)', fontSize: 14, fontWeight: 600, width: 160 }} />
+                            <button onClick={handleRenameSuburb} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>✓</button>
+                            <button onClick={() => setEditingSuburb(null)} style={{ background: 'var(--card)', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>✕</button>
+                          </div>
+                        ) : (
+                          <span onDoubleClick={() => setEditingSuburb({ old: s.suburb, val: s.suburb })} style={{ cursor: 'pointer' }} title="Double-click to rename">{s.suburb}</span>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 18 }}><Check ok={s.inGbp} /></td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
@@ -4070,7 +4100,10 @@
                       <td style={{ textAlign: 'center', padding: '14px 8px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 14 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                       <td style={{ textAlign: 'center', padding: '14px 8px' }}><ScorePill score={s.score} /></td>
                       <td style={{ padding: '14px 14px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
-                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><button onClick={() => handleDeleteSuburb(s.suburb)} title="Remove suburb" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}>
+                        <button onClick={() => setEditingSuburb({ old: s.suburb, val: s.suburb })} title="Rename" style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: 4, marginRight: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-pen" /></button>
+                        <button onClick={() => handleDeleteSuburb(s.suburb)} title="Remove suburb" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button>
+                      </td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: '2px solid var(--border)' }}>
@@ -4107,7 +4140,17 @@
                 <tbody>
                   {services.map((s, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
-                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.service}</td>
+                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)', maxWidth: 250 }}>
+                        {editingService?.old === s.service ? (
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <input value={editingService.val} onChange={e => setEditingService({ ...editingService, val: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') handleRenameService(); if (e.key === 'Escape') setEditingService(null); }} autoFocus style={{ padding: '4px 8px', border: '1px solid var(--accent)', borderRadius: 4, background: 'var(--bg)', color: 'var(--text1)', fontSize: 14, fontWeight: 600, width: 200 }} />
+                            <button onClick={handleRenameService} style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>✓</button>
+                            <button onClick={() => setEditingService(null)} style={{ background: 'var(--card)', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>✕</button>
+                          </div>
+                        ) : (
+                          <span onDoubleClick={() => setEditingService({ old: s.service, val: s.service })} style={{ cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }} title="Double-click to rename">{s.service}</span>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 18 }}><Check ok={s.inGbp} /></td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
                       <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
@@ -4115,7 +4158,10 @@
                       <td style={{ textAlign: 'center', padding: '14px 8px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 14 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                       <td style={{ textAlign: 'center', padding: '14px 8px' }}><ScorePill score={s.score} /></td>
                       <td style={{ padding: '14px 14px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
-                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><button onClick={() => handleDeleteService(s.service)} title="Remove service" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}>
+                        <button onClick={() => setEditingService({ old: s.service, val: s.service })} title="Rename" style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: 4, marginRight: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-pen" /></button>
+                        <button onClick={() => handleDeleteService(s.service)} title="Remove service" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button>
+                      </td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: '2px solid var(--border)' }}>

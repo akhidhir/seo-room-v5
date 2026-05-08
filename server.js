@@ -18899,6 +18899,45 @@ app.delete('/api/projects/:id/local-intel/suburbs/:name', async (req, res) => {
   }
 });
 
+// Rename suburb
+app.put('/api/projects/:id/local-intel/suburbs/:name', async (req, res) => {
+  const projectId = req.params.id;
+  const oldName = decodeURIComponent(req.params.name).trim().toLowerCase();
+  const { name: newName } = req.body;
+  if (!newName || !newName.trim()) return res.status(400).json({ error: 'New name required' });
+  try {
+    const projR = await pool.query('SELECT service_areas FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    let sa = projR.rows[0].service_areas || [];
+    if (typeof sa === 'string') sa = JSON.parse(sa);
+    if (!Array.isArray(sa)) sa = [];
+    sa = sa.map(s => {
+      const val = typeof s === 'string' ? s : s.name || '';
+      return val.trim().toLowerCase() === oldName ? newName.trim() : val;
+    });
+    await pool.query('UPDATE projects SET service_areas=$1 WHERE id=$2', [JSON.stringify(sa), projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Rename service
+app.put('/api/projects/:id/local-intel/services/:name', async (req, res) => {
+  const projectId = req.params.id;
+  const oldName = decodeURIComponent(req.params.name).trim().toLowerCase();
+  const { name: newName } = req.body;
+  if (!newName || !newName.trim()) return res.status(400).json({ error: 'New name required' });
+  try {
+    const rcR = await pool.query("SELECT id, config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    if (!rcR.rows.length) return res.status(404).json({ error: 'No RC profile found' });
+    let config = rcR.rows[0].config;
+    if (typeof config === 'string') config = JSON.parse(config);
+    if (!config.custom_services) config.custom_services = [];
+    config.custom_services = config.custom_services.map(s => s.toLowerCase() === oldName ? newName.trim() : s);
+    await pool.query('UPDATE project_integrations SET config=$1 WHERE id=$2', [JSON.stringify(config), rcR.rows[0].id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:id/local-intel/services', async (req, res) => {
   const projectId = req.params.id;
   const { name } = req.body;
