@@ -3567,9 +3567,11 @@
     }
 
     // ============ LOCAL INTEL — CONSOLIDATION PAGE ============
+    const _localIntelCache = {};
     function LocalIntelPage({ project, onNavigate }) {
-      const [data, setData] = useState(null);
-      const [loading, setLoading] = useState(true);
+      const cached = project?.id ? _localIntelCache[project.id] : null;
+      const [data, setData] = useState(cached || null);
+      const [loading, setLoading] = useState(!cached);
       const [activeTab, setActiveTab] = useState('suburbs');
       const [expandedRec, setExpandedRec] = useState(null);
       const [fixing, setFixing] = useState(null);
@@ -3579,13 +3581,16 @@
       const [addingSuburb, setAddingSuburb] = useState(false);
       const [addingService, setAddingService] = useState(false);
 
-      const reload = () => api(`/projects/${project.id}/local-intel`).then(d => setData(d));
+      const reload = (silent) => {
+        if (!silent) setLoading(true);
+        return api(`/projects/${project.id}/local-intel`).then(d => { setData(d); _localIntelCache[project.id] = d; setLoading(false); }).catch(() => setLoading(false));
+      };
 
       const handleDeleteSuburb = async (name) => {
         if (!confirm(`Remove "${name}" from suburbs?`)) return;
         try {
           await api(`/projects/${project.id}/local-intel/suburbs/${encodeURIComponent(name)}`, { method: 'DELETE' });
-          reload();
+          reload(true);
         } catch (e) { alert(e.message); }
       };
 
@@ -3595,7 +3600,7 @@
         try {
           await api(`/projects/${project.id}/local-intel/suburbs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newSuburb.trim() }) });
           setNewSuburb('');
-          reload();
+          reload(true);
         } catch (e) { alert(e.message); }
         setAddingSuburb(false);
       };
@@ -3604,7 +3609,7 @@
         if (!confirm(`Remove "${name}" from services?`)) return;
         try {
           await api(`/projects/${project.id}/local-intel/services/${encodeURIComponent(name)}`, { method: 'DELETE' });
-          reload();
+          reload(true);
         } catch (e) { alert(e.message); }
       };
 
@@ -3614,15 +3619,16 @@
         try {
           await api(`/projects/${project.id}/local-intel/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newService.trim() }) });
           setNewService('');
-          reload();
+          reload(true);
         } catch (e) { alert(e.message); }
         setAddingService(false);
       };
 
       useEffect(() => {
         if (!project?.id) return;
+        if (_localIntelCache[project.id]) { setData(_localIntelCache[project.id]); setLoading(false); return; }
         setLoading(true);
-        api(`/projects/${project.id}/local-intel`).then(d => { setData(d); setLoading(false); }).catch(() => setLoading(false));
+        api(`/projects/${project.id}/local-intel`).then(d => { setData(d); _localIntelCache[project.id] = d; setLoading(false); }).catch(() => setLoading(false));
       }, [project?.id]);
 
       if (loading) return (
