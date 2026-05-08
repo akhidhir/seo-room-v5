@@ -13468,7 +13468,6 @@ QUALITY RULES FOR GBP FINDINGS:
 - Suburb findings: ONE finding per suburb with current ranking position
 - Review findings: include actual review count, rating, response rate numbers
 - Photo findings: include actual photo count
-- Google Updates: include the specific update name and date
 - 30-Day Strategy: include week number and specific daily tasks
 - NO generic advice like "improve your profile" — every finding must say EXACTLY what to do with real data
 - MAX 5 findings per category (prioritize by impact). Total max 30 findings.
@@ -13512,7 +13511,7 @@ Quality check before outputting: remove any finding where current_value or descr
 
 // Valid categories per pillar — findings MUST map to one of these
 const PILLAR_CATEGORIES = {
-  gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'],
+  gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
   website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
   gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
   gsc: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],

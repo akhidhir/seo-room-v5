@@ -1783,7 +1783,7 @@
     // Allowed sections per audit type (whitelist)
     const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'];
     const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
-    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'];
+    const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'];
 
     // Detect execution type / assignee from action text + category context
     // AUTOMATED = system can actually execute (Yoast, schema, redirects, compression, robots, sitemap)
@@ -1900,12 +1900,6 @@
         'suburb coverage': 'Suburb Coverage',
         'service area coverage': 'Suburb Coverage',
         'suburb targeting': 'Suburb Coverage',
-        'google updates': 'Google Updates',
-        'google algorithm updates': 'Google Updates',
-        'algorithm intelligence': 'Google Updates',
-        'google algorithm intelligence': 'Google Updates',
-        'ranking factor updates': 'Google Updates',
-        'core updates': 'Google Updates',
         '30-day strategy': '30-Day Strategy',
         '30 day strategy': '30-Day Strategy',
         '30-day action plan': '30-Day Strategy',
@@ -2866,218 +2860,135 @@
         );
       }
 
-      // ===== GBP SUMMARY DASHBOARD VIEW =====
-      // When no section selected (or 'full'), show visual dashboard for GBP audit
+      // ===== GBP AUDIT DIRECTORY VIEW =====
+      // Always show for gbp_external when no section selected — findings-based, not markdown-based
       if (pillar === 'gbp_external' && (!section || section === 'full') && report) {
-        const parseSummaryData = (text) => {
-          const lines = text.split('\n');
-          // Extract health score table
-          const scores = [];
-          let totalScore = 0, totalMax = 0;
-          for (let i = 0; i < lines.length; i++) {
-            const t = lines[i].trim();
-            if (!t.startsWith('|')) continue;
-            const cells = t.split('|').slice(1, -1).map(c => c.trim());
-            if (cells.length >= 4 && /^\d+$/.test(cells[1]) && /^\d+$/.test(cells[2])) {
-              const name = cells[0].replace(/\*\*/g, '');
-              const score = parseInt(cells[1]);
-              const max = parseInt(cells[2]);
-              if (/total/i.test(name)) { totalScore = score; totalMax = max; }
-              else scores.push({ name, score, max, status: cells[3] || '' });
-            }
-          }
-          // Extract critical gaps — lines with ❌ Critical or 🔴 Critical
-          const criticals = [];
-          for (let i = 0; i < lines.length; i++) {
-            const t = lines[i].trim();
-            if ((t.includes('❌ Critical') || t.includes('🔴 Critical')) && t.startsWith('|')) {
-              const cells = t.split('|').slice(1, -1).map(c => c.trim());
-              if (cells.length >= 2) {
-                const name = cells[0].replace(/\*\*/g, '').trim();
-                const fix = cells[cells.length - 1].replace(/\*\*/g, '').trim();
-                if (name && name.length > 3 && !/^[\s:-]+$/.test(name)) {
-                  criticals.push({ name, fix: fix.length > 10 ? fix : '' });
-                }
-              }
-            }
-          }
-          // Extract week plan — find Week 1-4 rows in 30-day plan table
-          const weeks = { 1: [], 2: [], 3: [], 4: [] };
-          let inPlanTable = false;
-          for (let i = 0; i < lines.length; i++) {
-            const t = lines[i].trim();
-            if (/30.?Day|Ranking Plan|Action Plan/i.test(t) && /^#{2,3}/.test(t)) inPlanTable = true;
-            if (inPlanTable && t.startsWith('|')) {
-              const cells = t.split('|').slice(1, -1).map(c => c.trim());
-              if (cells.length >= 3) {
-                const weekMatch = cells[0].match(/Week\s*(\d)/i);
-                if (weekMatch) {
-                  const w = parseInt(weekMatch[1]);
-                  const action = (cells[2] || cells[1] || '').replace(/\*\*/g, '').trim();
-                  if (w >= 1 && w <= 4 && action.length > 5) weeks[w].push(action);
-                }
-              }
-            }
-            if (inPlanTable && /^#{2,3}/.test(t) && !/30.?Day|Ranking Plan|Action Plan/i.test(t)) inPlanTable = false;
-          }
-          // Fallback: sum individual scores if TOTAL row wasn't found
-          if (totalScore === 0 && scores.length > 0) {
-            totalScore = scores.reduce((s, x) => s + x.score, 0);
-            totalMax = scores.reduce((s, x) => s + x.max, 0);
-          }
-          return { scores, totalScore, totalMax, criticals: criticals.slice(0, 8), weeks };
+        const gbpSections = (allowedSections || GBP_ALLOWED_SECTIONS).filter(s => s !== 'Summary');
+        const sectionIcons = {
+          'Profile Completeness': 'fas fa-id-card', 'NAP Consistency': 'fas fa-map-marker-alt',
+          'Reviews & Reputation': 'fas fa-star', 'Competitor Analysis': 'fas fa-users',
+          'Directory & Citations': 'fas fa-list-alt', 'Photos & Media': 'fas fa-camera',
+          'Suburb Coverage': 'fas fa-map', '30-Day Strategy': 'fas fa-calendar-check',
+        };
+        const sectionColors = {
+          'Profile Completeness': '#22c55e', 'NAP Consistency': '#ef4444',
+          'Reviews & Reputation': '#f59e0b', 'Competitor Analysis': '#8b5cf6',
+          'Directory & Citations': '#3b82f6', 'Photos & Media': '#06b6d4',
+          'Suburb Coverage': '#10b981', '30-Day Strategy': '#22c55e',
+        };
+        const sectionDescs = {
+          'Profile Completeness': 'How complete and optimized is the GBP listing',
+          'NAP Consistency': 'Name, Address, Phone consistency across web',
+          'Reviews & Reputation': 'Review quantity, quality, and response rate',
+          'Competitor Analysis': 'Top local competitors and what they do better',
+          'Directory & Citations': 'Directory presence across key platforms',
+          'Photos & Media': 'Photo quantity and quality vs competitors',
+          'Suburb Coverage': 'Service area suburb targeting',
+          '30-Day Strategy': 'Week-by-week action plan to reach top 3',
         };
 
-        const summary = parseSummaryData(report);
-        const scoreColor = (score, max) => {
-          const pct = max > 0 ? score / max : 0;
-          if (pct >= 0.7) return '#22c55e';
-          if (pct >= 0.4) return '#f59e0b';
-          return '#ef4444';
-        };
-        const statusLabel = summary.totalMax > 0 ? (
-          summary.totalScore / summary.totalMax >= 0.7 ? 'STRONG' :
-          summary.totalScore / summary.totalMax >= 0.4 ? 'AT RISK' : 'CRITICAL'
-        ) : 'N/A';
-        const statusBg = statusLabel === 'STRONG' ? 'rgba(34,197,94,0.15)' : statusLabel === 'AT RISK' ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)';
-        const statusFg = statusLabel === 'STRONG' ? '#22c55e' : statusLabel === 'AT RISK' ? '#f59e0b' : '#ef4444';
-
-        const weekColors = [
-          { bg: 'rgba(239,68,68,0.08)', border: '#ef4444', label: 'Foundation' },
-          { bg: 'rgba(245,158,11,0.08)', border: '#f59e0b', label: 'Optimization' },
-          { bg: 'rgba(59,130,246,0.08)', border: '#3b82f6', label: 'Growth' },
-          { bg: 'rgba(34,197,94,0.08)', border: '#22c55e', label: 'Advanced' },
-        ];
+        // Group findings by category
+        const findingsBySection = {};
+        gbpSections.forEach(name => {
+          findingsBySection[name] = gbpFindings.filter(f => {
+            const fCat = (f.category || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return fCat === name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          });
+        });
+        const totalFindings = gbpFindings.length;
+        const criticalFindings = gbpFindings.filter(f => /critical/i.test(f.severity));
+        const highFindings = gbpFindings.filter(f => /high/i.test(f.severity));
 
         return (
           <div>
-            {/* Header with overall score */}
+            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
-              <div style={{
-                width: 72, height: 72, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: statusBg, border: `3px solid ${statusFg}`, flexShrink: 0
-              }}>
-                <span style={{ fontSize: 26, fontWeight: 700, color: statusFg }}>{summary.totalScore || '?'}</span>
-              </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{project?.business_name || 'GBP Health Score'}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text1)' }}>{project?.business_name || 'GBP Audit'}</div>
                 <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{project?.location || ''}</div>
-                <div style={{ marginTop: 6, display: 'inline-block', padding: '3px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: statusBg, color: statusFg, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  {statusLabel} — {summary.totalScore}/{summary.totalMax}
-                </div>
               </div>
               <button className="btn btn-primary" onClick={runAudit} style={{ fontSize: 13, padding: '8px 16px' }}>
                 <i className="fas fa-sync-alt" style={{ marginRight: 6 }} />Re-run
               </button>
             </div>
 
-            {/* Score cards grid */}
-            {summary.scores.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 24 }}>
-                {summary.scores.map((s, i) => {
-                  const sectionMap = {
-                    'Profile Completeness': 'Profile Completeness', 'NAP Consistency': 'NAP Consistency',
-                    'Reviews & Reputation': 'Reviews & Reputation', 'Competitor Gap': 'Competitor Analysis',
-                    'Directory & Citations': 'Directory & Citations', 'Photos & Media': 'Photos & Media',
-                    'Suburb Coverage': 'Suburb Coverage', 'Website Alignment': 'Website Alignment'
-                  };
-                  const target = sectionMap[s.name] || s.name;
-                  const findingCount = gbpFindings.filter(f => (f.category || '').toLowerCase().replace(/[^a-z0-9]/g, '') === target.toLowerCase().replace(/[^a-z0-9]/g, '')).length;
-                  return (
-                    <div key={i} style={{
-                      background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px',
-                      cursor: 'pointer', transition: 'border-color 0.15s'
-                    }} onClick={() => { if (setActiveTab) setActiveTab(target); }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.name.length > 18 ? s.name.slice(0, 16) + '…' : s.name}</span>
-                        {findingCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: scoreColor(s.score, s.max) === '#ef4444' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)', color: scoreColor(s.score, s.max) === '#ef4444' ? '#ef4444' : '#f59e0b' }}>{findingCount} tasks</span>}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                        <span style={{ fontSize: 28, fontWeight: 700, color: scoreColor(s.score, s.max) }}>{s.score}</span>
-                        <span style={{ fontSize: 13, color: 'var(--text3)' }}>/{s.max}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+            {/* Stats row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#818cf8' }}>{gbpSections.length}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Categories</div>
               </div>
-            )}
-
-            {/* Critical gaps */}
-            {summary.criticals.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>
-                  <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', marginRight: 8, fontSize: 14 }} />
-                  Critical gaps
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {summary.criticals.map((c, i) => (
-                    <div key={i} style={{
-                      background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid #ef4444',
-                      borderRadius: '0 8px 8px 0', padding: '10px 16px'
-                    }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{c.name}</div>
-                      {c.fix && <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 3 }}>{c.fix.slice(0, 200)}</div>}
-                    </div>
-                  ))}
-                </div>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{totalFindings}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Tasks</div>
               </div>
-            )}
-
-            {/* 30-Day Plan Overview */}
-            {(summary.weeks[1].length > 0 || summary.weeks[2].length > 0) && (
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>
-                  <i className="fas fa-calendar-check" style={{ color: '#22c55e', marginRight: 8, fontSize: 14 }} />
-                  30-day plan overview
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                  {[1, 2, 3, 4].map(w => (
-                    <div key={w} style={{
-                      background: weekColors[w-1].bg, border: `1px solid ${weekColors[w-1].border}20`,
-                      borderRadius: 10, padding: '12px 14px'
-                    }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: weekColors[w-1].border, marginBottom: 6 }}>
-                        Week {w} — {weekColors[w-1].label}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
-                        {summary.weeks[w].slice(0, 4).map((a, j) => (
-                          <div key={j} style={{ marginBottom: 4 }}>• {a.length > 80 ? a.slice(0, 77) + '…' : a}</div>
-                        ))}
-                        {summary.weeks[w].length === 0 && <div style={{ color: 'var(--text3)', fontStyle: 'italic' }}>See detailed plan</div>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#ef4444' }}>{criticalFindings.length}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Critical</div>
               </div>
-            )}
-
-            {/* Sections quick-nav */}
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>
-              <i className="fas fa-th-list" style={{ color: '#818cf8', marginRight: 8, fontSize: 14 }} />
-              Detailed sections
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#f97316' }}>{highFindings.length}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>High</div>
+              </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
-              {(allowedSections || GBP_ALLOWED_SECTIONS).filter(s => s !== 'Summary').map((name, i) => {
-                const icons = {
-                  'Profile Completeness': 'fas fa-id-card', 'NAP Consistency': 'fas fa-map-marker-alt',
-                  'Reviews & Reputation': 'fas fa-star', 'Competitor Analysis': 'fas fa-users',
-                  'Directory & Citations': 'fas fa-list-alt', 'Photos & Media': 'fas fa-camera',
-                  'Suburb Coverage': 'fas fa-map', 'Google Updates': 'fas fa-satellite-dish',
-                  '30-Day Strategy': 'fas fa-calendar-check',
-                };
+
+            {/* Section cards — 2 column grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {gbpSections.map((name, i) => {
+                const findings = findingsBySection[name] || [];
+                const critCount = findings.filter(f => /critical/i.test(f.severity)).length;
+                const highCount = findings.filter(f => /high/i.test(f.severity)).length;
+                const color = sectionColors[name] || '#818cf8';
+                const icon = sectionIcons[name] || 'fas fa-clipboard';
                 return (
                   <div key={i} onClick={() => setActiveTab && setActiveTab(name)} style={{
                     background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10,
-                    padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14,
                     transition: 'border-color 0.15s'
                   }}>
-                    <i className={icons[name] || 'fas fa-clipboard'} style={{ color: '#818cf8', fontSize: 16 }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{name}</span>
-                    <i className="fas fa-chevron-right" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }} />
+                    <i className={icon} style={{ color, fontSize: 20, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sectionDescs[name] || ''}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: findings.length > 0 ? color : 'var(--text3)' }}>{findings.length}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>tasks</span>
+                      {critCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>{critCount} critical</span>}
+                      {critCount === 0 && highCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(249,115,22,0.15)', color: '#f97316', textTransform: 'uppercase' }}>{highCount} high</span>}
+                      <i className="fas fa-chevron-right" style={{ fontSize: 11, color: 'var(--text3)' }} />
+                    </div>
                   </div>
                 );
               })}
             </div>
+
+            {/* Critical findings preview */}
+            {criticalFindings.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>
+                  <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', marginRight: 8, fontSize: 14 }} />
+                  Critical tasks
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {criticalFindings.slice(0, 6).map((f, i) => (
+                    <div key={i} style={{
+                      background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid #ef4444',
+                      borderRadius: '0 8px 8px 0', padding: '10px 16px', cursor: 'pointer'
+                    }} onClick={() => {
+                      const cat = (f.category || '').replace(/[^a-zA-Z0-9&\s]/g, '').trim();
+                      if (setActiveTab && cat) setActiveTab(cat);
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.12)', color: '#ef4444', textTransform: 'uppercase' }}>{f.category}</span>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{f.title}</span>
+                      </div>
+                      {f.description && <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>{f.description.slice(0, 200)}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -3236,7 +3147,6 @@
             'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
             'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
             'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
-            'Google Updates': { icon: 'fas fa-satellite-dish', color: '#f97316', desc: 'Latest Google Maps algorithm changes affecting rankings' },
             '30-Day Strategy': { icon: 'fas fa-calendar-check', color: '#22c55e', desc: 'Week-by-week action plan to reach top 3' },
             'PageSpeed Scores': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Full PageSpeed performance scores per page' },
           };
@@ -3459,7 +3369,6 @@
         'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
         'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
         'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
-        'Google Updates': { icon: 'fas fa-satellite-dish', color: '#f97316', desc: 'Latest Google Maps algorithm changes affecting rankings' },
         '30-Day Strategy': { icon: 'fas fa-calendar-check', color: '#22c55e', desc: 'Week-by-week action plan to reach top 3' },
         'PageSpeed Scores': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Full PageSpeed performance scores per page' },
       };
@@ -6950,7 +6859,7 @@
       };
 
       const PILLAR_VALID_CATS = {
-        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', 'Google Updates', '30-Day Strategy'],
+        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
         GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
         Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
       };
