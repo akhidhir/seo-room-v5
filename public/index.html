@@ -2887,7 +2887,7 @@
           '30-Day Strategy': 'Week-by-week action plan to reach top 3',
         };
 
-        // Group findings by category
+        // Group findings by category (from Haiku extraction)
         const findingsBySection = {};
         gbpSections.forEach(name => {
           findingsBySection[name] = gbpFindings.filter(f => {
@@ -2895,9 +2895,41 @@
             return fCat === name.toLowerCase().replace(/[^a-z0-9]/g, '');
           });
         });
-        const totalFindings = gbpFindings.length;
-        const criticalFindings = gbpFindings.filter(f => /critical/i.test(f.severity));
-        const highFindings = gbpFindings.filter(f => /high/i.test(f.severity));
+        const hasFindings = gbpFindings.length > 0;
+
+        // Fallback: count items from parsed markdown sections when no findings exist
+        const parsedSections = parseReportSections(report);
+        const mdCountBySection = {};
+        let mdTotalItems = 0, mdTotalCritical = 0;
+        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        parsedSections.forEach(sec => {
+          const dataRows = sec.content.filter(l => {
+            const t = l.trim();
+            return t.startsWith('|') && !t.startsWith('|--') && !t.startsWith('| --');
+          });
+          const rowCount = Math.max(0, dataRows.length - 1);
+          const critCount = sec.content.filter(l => /critical|high/i.test(l) && l.includes('|')).length;
+          mdCountBySection[norm(sec.title)] = { items: rowCount, critical: critCount };
+          if (norm(sec.title) !== 'summary') { mdTotalItems += rowCount; mdTotalCritical += critCount; }
+        });
+
+        // Use findings if available, otherwise markdown counts
+        const getCount = (name) => {
+          if (hasFindings) return findingsBySection[name]?.length || 0;
+          return mdCountBySection[norm(name)]?.items || 0;
+        };
+        const getCritical = (name) => {
+          if (hasFindings) return (findingsBySection[name] || []).filter(f => /critical/i.test(f.severity)).length;
+          return mdCountBySection[norm(name)]?.critical || 0;
+        };
+        const getHigh = (name) => {
+          if (hasFindings) return (findingsBySection[name] || []).filter(f => /high/i.test(f.severity)).length;
+          return 0;
+        };
+        const totalItems = hasFindings ? gbpFindings.length : mdTotalItems;
+        const totalCritical = hasFindings ? gbpFindings.filter(f => /critical/i.test(f.severity)).length : mdTotalCritical;
+        const totalHigh = hasFindings ? gbpFindings.filter(f => /high/i.test(f.severity)).length : 0;
+        const itemLabel = hasFindings ? 'Tasks' : 'Items';
 
         return (
           <div>
@@ -2919,15 +2951,15 @@
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Categories</div>
               </div>
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{totalFindings}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Tasks</div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{totalItems}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>{itemLabel}</div>
               </div>
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#ef4444' }}>{criticalFindings.length}</div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#ef4444' }}>{totalCritical}</div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Critical</div>
               </div>
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px', textAlign: 'center' }}>
-                <div style={{ fontSize: 32, fontWeight: 800, color: '#f97316' }}>{highFindings.length}</div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: '#f97316' }}>{totalHigh}</div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>High</div>
               </div>
             </div>
@@ -2935,9 +2967,9 @@
             {/* Section cards — 2 column grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {gbpSections.map((name, i) => {
-                const findings = findingsBySection[name] || [];
-                const critCount = findings.filter(f => /critical/i.test(f.severity)).length;
-                const highCount = findings.filter(f => /high/i.test(f.severity)).length;
+                const count = getCount(name);
+                const critCount = getCritical(name);
+                const highCount = getHigh(name);
                 const color = sectionColors[name] || '#818cf8';
                 const icon = sectionIcons[name] || 'fas fa-clipboard';
                 return (
@@ -2952,8 +2984,8 @@
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{sectionDescs[name] || ''}</div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      <span style={{ fontSize: 22, fontWeight: 800, color: findings.length > 0 ? color : 'var(--text3)' }}>{findings.length}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>tasks</span>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: count > 0 ? color : 'var(--text3)' }}>{count}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>{hasFindings ? 'tasks' : 'items'}</span>
                       {critCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.15)', color: '#ef4444', textTransform: 'uppercase' }}>{critCount} critical</span>}
                       {critCount === 0 && highCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(249,115,22,0.15)', color: '#f97316', textTransform: 'uppercase' }}>{highCount} high</span>}
                       <i className="fas fa-chevron-right" style={{ fontSize: 11, color: 'var(--text3)' }} />
@@ -2963,15 +2995,15 @@
               })}
             </div>
 
-            {/* Critical findings preview */}
-            {criticalFindings.length > 0 && (
+            {/* Critical findings preview — only when findings exist */}
+            {hasFindings && gbpFindings.filter(f => /critical/i.test(f.severity)).length > 0 && (
               <div style={{ marginTop: 24 }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>
                   <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', marginRight: 8, fontSize: 14 }} />
                   Critical tasks
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {criticalFindings.slice(0, 6).map((f, i) => (
+                  {gbpFindings.filter(f => /critical/i.test(f.severity)).slice(0, 6).map((f, i) => (
                     <div key={i} style={{
                       background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid #ef4444',
                       borderRadius: '0 8px 8px 0', padding: '10px 16px', cursor: 'pointer'
@@ -3147,7 +3179,6 @@
             'Directory & Citations': { icon: 'fas fa-list-alt', color: '#3b82f6', desc: 'Directory presence across key platforms' },
             'Photos & Media': { icon: 'fas fa-camera', color: '#06b6d4', desc: 'Photo quantity and quality vs competitors' },
             'Suburb Coverage': { icon: 'fas fa-map', color: '#10b981', desc: 'Service area suburb targeting' },
-            '30-Day Strategy': { icon: 'fas fa-calendar-check', color: '#22c55e', desc: 'Week-by-week action plan to reach top 3' },
             'PageSpeed Scores': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Full PageSpeed performance scores per page' },
           };
           const sm = secMeta[sec.title] || { icon: iconClass, color: '#818cf8', desc: '' };
