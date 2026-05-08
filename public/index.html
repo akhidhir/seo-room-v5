@@ -3644,10 +3644,10 @@
       if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
 
       const { summary: s, suburbs, services, recommendations, competitors = [] } = data;
-      const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{ok ? '✓' : '✗'}</span>;
+      const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 18 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
-        return <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 12, background: color + '22', color, fontWeight: 700, fontSize: 12 }}>{score}%</span>;
+        return <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 12, background: color + '22', color, fontWeight: 700, fontSize: 14 }}>{score}%</span>;
       };
       const PriBadge = ({ priority }) => {
         const colors = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' };
@@ -3662,7 +3662,7 @@
       };
       const GapChip = ({ text }) => {
         const target = gapNav[text];
-        return <span onClick={target && onNavigate ? () => onNavigate(target) : undefined} style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 11, fontWeight: 600, marginRight: 6, marginBottom: 4, cursor: target ? 'pointer' : 'default', transition: 'background 0.15s' }} onMouseEnter={e => { if (target) e.target.style.background = '#ef444444'; }} onMouseLeave={e => { if (target) e.target.style.background = '#ef444422'; }}>{text}</span>;
+        return <span onClick={target && onNavigate ? () => onNavigate(target) : undefined} style={{ display: 'inline-block', padding: '5px 12px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 13, fontWeight: 600, marginRight: 6, marginBottom: 4, cursor: target ? 'pointer' : 'default', transition: 'background 0.15s' }} onMouseEnter={e => { if (target) e.target.style.background = '#ef444444'; }} onMouseLeave={e => { if (target) e.target.style.background = '#ef444422'; }}>{text}</span>;
       };
 
       return (
@@ -3813,32 +3813,32 @@
           {/* SUBURBS TAB */}
           {activeTab === 'suburbs' && (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Suburb</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GBP</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Pages</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Keywords</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Grid</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
-                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
-                    <th style={{ width: 40, padding: '8px 6px' }}></th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Suburb</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>GBP</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Pages</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Keywords</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Grid</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>GSC</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Score</th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Gaps</th>
+                    <th style={{ width: 44, padding: '12px 8px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {suburbs.map((s, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text1)' }}>{s.suburb}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><Check ok={s.inGbp} /></td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gridScanCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.bestSolv != null ? Math.round(s.bestSolv) + '%' : s.gridScanCount}</span> : <Check ok={false} />}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
-                      <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><button onClick={() => handleDeleteSuburb(s.suburb)} title="Remove suburb" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
+                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)' }}>{s.suburb}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 18 }}><Check ok={s.inGbp} /></td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.gridScanCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.bestSolv != null ? Math.round(s.bestSolv) + '%' : s.gridScanCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 14 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><ScorePill score={s.score} /></td>
+                      <td style={{ padding: '14px 14px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><button onClick={() => handleDeleteSuburb(s.suburb)} title="Remove suburb" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: '2px solid var(--border)' }}>
@@ -3858,32 +3858,32 @@
           {/* SERVICES TAB */}
           {activeTab === 'services' && (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Service</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GBP</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Pages</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Keywords</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Posts</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
-                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
-                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
-                    <th style={{ width: 40, padding: '8px 6px' }}></th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Service</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>GBP</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Pages</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Keywords</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Posts</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>GSC</th>
+                    <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Score</th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Gaps</th>
+                    <th style={{ width: 44, padding: '12px 8px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {services.map((s, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text1)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.service}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><Check ok={s.inGbp} /></td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.postCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.postCount}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
-                      <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
-                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><button onClick={() => handleDeleteService(s.service)} title="Remove service" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
+                      <td style={{ padding: '14px 14px', fontWeight: 600, fontSize: 15, color: 'var(--text1)', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.service}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 18 }}><Check ok={s.inGbp} /></td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px', fontSize: 15 }}>{s.postCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.postCount}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 14 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><ScorePill score={s.score} /></td>
+                      <td style={{ padding: '14px 14px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                      <td style={{ textAlign: 'center', padding: '14px 8px' }}><button onClick={() => handleDeleteService(s.service)} title="Remove service" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
                     </tr>
                   ))}
                   <tr style={{ borderTop: '2px solid var(--border)' }}>
