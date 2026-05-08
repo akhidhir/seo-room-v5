@@ -3650,8 +3650,10 @@
 
       useEffect(() => {
         if (!project?.id) return;
-        if (_localIntelCache[project.id]) { setData(_localIntelCache[project.id]); setLoading(false); return; }
-        setLoading(true);
+        const cached = _localIntelCache[project.id];
+        if (cached) { setData(cached); setLoading(false); }
+        else { setLoading(true); }
+        // Always fetch fresh in background
         api(`/projects/${project.id}/local-intel`).then(d => { setData(d); _localIntelCache[project.id] = d; setLoading(false); }).catch(() => setLoading(false));
       }, [project?.id]);
 
