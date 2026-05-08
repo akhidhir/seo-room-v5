@@ -3315,6 +3315,272 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
   }
 });
 
+// ==================== RATING CAPTAIN SYNC ====================
+
+// Accept Rating Captain data and generate internal GBP audit findings
+app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
+  const { projectId } = req.params;
+  const { location_id, profile, healthcheck, reviews_stats, posts, rc_location_id } = req.body;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const businessName = project.business_name || project.name || '';
+
+    console.log(`[rc-sync] Syncing Rating Captain data for project ${projectId} (${businessName})`);
+
+    // 1. Store RC profile data in project_integrations
+    const rcData = { location_id, profile, healthcheck, reviews_stats, posts, synced_at: new Date().toISOString() };
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+       VALUES ($1, 'rc_profile', $2, 'connected', NOW())
+       ON CONFLICT (project_id, kind)
+       DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [projectId, JSON.stringify(rcData)]
+    );
+
+    // 2. Also update gbp_profile with RC data (richer than extension)
+    if (profile) {
+      const hours = (profile.regularHours?.periods || []);
+      const serviceItems = (profile.serviceItems || []);
+      const serviceAreas = (profile.serviceArea?.places?.placeInfos || []);
+      const gbpProfile = {
+        business: { name: profile.title || businessName },
+        source: 'rating_captain',
+        address: [
+          ...(profile.storefrontAddress?.addressLines || []),
+          profile.storefrontAddress?.locality,
+          profile.storefrontAddress?.administrativeArea,
+          profile.storefrontAddress?.postalCode
+        ].filter(Boolean).join(', '),
+        phone: profile.phoneNumbers?.primaryPhone || null,
+        website: profile.websiteUri || null,
+        description: profile.profile?.description || null,
+        categories: [
+          profile.categories?.primaryCategory?.displayName,
+          ...(profile.categories?.additionalCategories || []).map(c => c.displayName)
+        ].filter(Boolean),
+        hours: hours.map(h => ({ day: h.openDay, hours: `${h.openTime?.hours || 0}:${String(h.openTime?.minutes || 0).padStart(2,'0')}-${h.closeTime?.hours || 0}:${String(h.closeTime?.minutes || 0).padStart(2,'0')}` })),
+        services: serviceItems.map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean),
+        service_areas: serviceAreas.map(s => s.placeName),
+        place_id: profile.metadata?.placeId || null,
+        maps_uri: profile.metadata?.mapsUri || null,
+        reviews: reviews_stats || {},
+        posts_count: posts?.published_posts?.length || 0,
+        last_post_date: posts?.published_posts?.[0]?.createTime || null,
+        opening_date: profile.openInfo?.openingDate ? `${profile.openInfo.openingDate.year}-${String(profile.openInfo.openingDate.month).padStart(2,'0')}-${String(profile.openInfo.openingDate.day).padStart(2,'0')}` : null,
+      };
+      await pool.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+         VALUES ($1, 'gbp_profile', $2, 'connected', NOW())
+         ON CONFLICT (project_id, kind)
+         DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+        [projectId, JSON.stringify(gbpProfile)]
+      );
+    }
+
+    // 3. Store RC location_id in project settings if provided
+    if (rc_location_id) {
+      await pool.query('UPDATE projects SET gbp_location_id=$1 WHERE id=$2', [rc_location_id, projectId]);
+    }
+
+    // 4. Generate findings from healthcheck + profile analysis
+    const findings = [];
+    const hcItems = Array.isArray(healthcheck) ? healthcheck : [];
+    const hours = (profile?.regularHours?.periods || []);
+    const serviceItems = (profile?.serviceItems || []);
+    const additionalCats = (profile?.categories?.additionalCategories || []);
+    const serviceAreas = (profile?.serviceArea?.places?.placeInfos || []);
+    const description = profile?.profile?.description || '';
+    const totalReviews = reviews_stats?.total_reviews || 0;
+    const avgRating = reviews_stats?.average_rating || 0;
+    const replyRate = reviews_stats?.reply_rate || 0;
+    const unreplied = reviews_stats?.unreplied_count || 0;
+    const postsList = posts?.published_posts || [];
+    const lastPostDate = postsList[0]?.createTime ? new Date(postsList[0].createTime) : null;
+    const daysSincePost = lastPostDate ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : 999;
+
+    // Helper to add finding
+    const addFinding = (category, title, desc, recommendation, severity, current, target) => {
+      findings.push({ category, title, description: desc, recommendation, severity, current_value: current, recommended_value: target });
+    };
+
+    // -- Profile Completeness --
+    if (!description || description.length < 50) {
+      addFinding('Relevance > Description', 'Business description missing or too short',
+        description ? `Current description is only ${description.length} characters.` : 'No business description set on GBP profile.',
+        'Write a keyword-rich 750-character description including primary services, location, and unique selling points.',
+        'Critical', description ? `${description.length} chars` : 'Empty', '500-750 chars');
+    } else if (description.length < 250) {
+      addFinding('Relevance > Description', 'Business description could be longer',
+        `Current description is ${description.length} characters. Google allows up to 750.`,
+        'Expand description to use more of the 750 character limit with relevant keywords and service details.',
+        'Medium', `${description.length} chars`, '500-750 chars');
+    }
+
+    if (additionalCats.length === 0) {
+      addFinding('Relevance > Categories', 'No additional categories set',
+        `Only primary category "${profile?.categories?.primaryCategory?.displayName || 'unknown'}" is set. Additional categories help Google understand your business.`,
+        'Add 2-5 relevant additional categories (e.g., "Computer support and services", "Laptop repair service", "Data recovery service").',
+        'High', '0 additional categories', '2-5 categories');
+    }
+
+    if (hours.length < 5) {
+      const dayNames = hours.map(h => h.openDay);
+      const missingDays = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
+      addFinding('Relevance > Hours', 'Limited opening hours',
+        `Only open ${hours.length} days/week (${dayNames.join(', ')}). Missing: ${missingDays.join(', ')}.`,
+        'Consider extending hours or at minimum adding Friday hours. Businesses open 5+ days rank better in local search.',
+        'High', `${hours.length} days/week`, '5-7 days/week');
+    }
+
+    // Check short hours (e.g. 10-14 = 4 hours)
+    for (const period of hours) {
+      const openH = period.openTime?.hours || 0;
+      const closeH = period.closeTime?.hours || 0;
+      const duration = closeH - openH;
+      if (duration > 0 && duration < 6) {
+        addFinding('Relevance > Hours', `Short hours on ${period.openDay}`,
+          `Open only ${duration} hours (${openH}:00 - ${closeH}:00) on ${period.openDay}.`,
+          'Consider extending hours. Short operating hours reduce visibility in "open now" searches.',
+          'Medium', `${duration}h (${openH}:00-${closeH}:00)`, '8+ hours');
+        break; // Only flag once
+      }
+    }
+
+    if (serviceItems.length < 5) {
+      addFinding('Relevance > Services', 'Few services listed',
+        `Only ${serviceItems.length} services listed on GBP profile.`,
+        'Add all services your business offers. Each service is a keyword signal for Google.',
+        serviceItems.length === 0 ? 'Critical' : 'Medium', `${serviceItems.length} services`, '10+ services');
+    }
+
+    if (serviceAreas.length < 5) {
+      addFinding('Proximity > Service Areas', 'Limited service areas defined',
+        `Only ${serviceAreas.length} service area suburbs listed: ${serviceAreas.map(s => s.placeName).join(', ')}.`,
+        'Add all suburbs you service. Each service area signals relevance for local searches in that area.',
+        serviceAreas.length === 0 ? 'High' : 'Medium', `${serviceAreas.length} suburbs`, '10-15 suburbs');
+    }
+
+    // -- Reviews --
+    if (totalReviews < 50) {
+      const hcAvg = hcItems.find(h => h.type === 'avg_reviews');
+      const competitorAvg = hcAvg?.data?.avg || 50;
+      const competitorMax = hcAvg?.data?.to || 100;
+      addFinding('Prominence > Reviews', 'Review count below competitors',
+        `${totalReviews} reviews. Competitor average: ${competitorAvg}, top competitor: ${competitorMax}.`,
+        `Target ${Math.max(competitorAvg, 50)} reviews. Implement a systematic review request process: send review links via SMS after every job.`,
+        totalReviews < 20 ? 'Critical' : 'High', `${totalReviews} reviews`, `${competitorAvg}+ reviews`);
+    }
+
+    if (unreplied > 0) {
+      addFinding('Prominence > Reviews', `${unreplied} unreplied reviews`,
+        `Reply rate is ${replyRate}%. ${unreplied} reviews without a response.`,
+        'Reply to all reviews within 24 hours. Use location keywords in responses. Thank positive reviewers, address concerns in negative ones.',
+        unreplied > 3 ? 'High' : 'Medium', `${replyRate}% reply rate`, '100% reply rate');
+    }
+
+    if (avgRating < 4.5) {
+      addFinding('Prominence > Reviews', 'Average rating below 4.5',
+        `Current rating: ${avgRating}. Ratings below 4.5 reduce click-through from Maps.`,
+        'Focus on service quality and proactively request reviews from satisfied customers.',
+        'High', `${avgRating} stars`, '4.5+ stars');
+    }
+
+    // -- Posts --
+    if (daysSincePost > 30) {
+      addFinding('Prominence > Posts', 'No recent GBP posts',
+        daysSincePost > 365 ? `Last post was over ${Math.round(daysSincePost/365)} year(s) ago.` : `Last post was ${daysSincePost} days ago.`,
+        'Post weekly on GBP: service highlights, tips, offers, team photos. Each post signals activity to Google.',
+        daysSincePost > 90 ? 'Critical' : 'High', `${daysSincePost} days since last post`, 'Weekly posts');
+    }
+
+    if (postsList.length < 10) {
+      addFinding('Prominence > Posts', 'Low total post count',
+        `Only ${postsList.length} posts total on GBP profile.`,
+        'Build a content calendar with 2-3 posts per week. Mix service updates, tips, before/after photos, and seasonal offers.',
+        'Medium', `${postsList.length} total posts`, '50+ posts');
+    }
+
+    // -- Healthcheck items --
+    for (const hc of hcItems) {
+      if (hc.valid || !hc.show) continue;
+      switch (hc.type) {
+        case 'nap_data':
+          addFinding('Relevance > NAP', 'NAP data needs attention',
+            'Name, Address, and Phone number data flagged as inconsistent or incomplete.',
+            'Ensure NAP is identical across GBP, website, and all directory listings. Use exact same format everywhere.',
+            hc.attention_needed ? 'Critical' : 'High', 'Inconsistent', 'Consistent across all platforms');
+          break;
+        case 'localized_content':
+          addFinding('Relevance > Content', 'Missing localized content',
+            'GBP profile lacks location-specific content signals.',
+            'Add suburb names and "near me" variations to your business description, posts, and service descriptions.',
+            'Medium', 'No localized content', 'Location keywords in description & posts');
+          break;
+        case 'sentiment':
+          if (hc.data?.negative > 0) {
+            addFinding('Prominence > Reviews', `${hc.data.negative} negative review sentiment(s)`,
+              `Sentiment analysis found ${hc.data.negative} negative and ${hc.data.positive} positive signals.`,
+              'Address negative feedback publicly with empathetic responses. Take specific complaints offline to resolve.',
+              hc.data.negative > 3 ? 'High' : 'Medium', `${hc.data.negative} negative`, '0 negative');
+          }
+          break;
+        case 'page_speed':
+          addFinding('Relevance > Website', 'Website speed issues detected',
+            'GBP-linked website has speed problems that may affect user experience from Maps clicks.',
+            'Run PageSpeed Insights on your website and fix Core Web Vitals issues.',
+            'Medium', 'Slow', 'Green CWV scores');
+          break;
+        case 'last_review':
+          addFinding('Prominence > Reviews', 'Stale review activity',
+            'No recent reviews detected. Google values fresh review signals.',
+            'Implement an automated review request flow: send SMS with Google review link after each service.',
+            'High', 'Stale', 'New reviews weekly');
+          break;
+        case 'media':
+          if (!hc.valid) {
+            addFinding('Prominence > Photos', 'Insufficient photos',
+              'GBP profile needs more photos. Businesses with 100+ photos get 520% more calls.',
+              'Upload: exterior (3+), interior (5+), team (3+), work samples (10+), before/after (5+). Add geo-tags to photos.',
+              'High', 'Insufficient', '25+ owner photos');
+          }
+          break;
+        case 'review_widget':
+          addFinding('Prominence > Reviews', 'No review widget on website',
+            'No review collection widget detected on the business website.',
+            'Add a review widget to your website to collect and display Google reviews. This builds social proof and encourages more reviews.',
+            'Low', 'Not installed', 'Widget active on website');
+          break;
+      }
+    }
+
+    // 5. Clear old internal findings and save new ones
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp', 'completed', NOW(), NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    for (const f of findings) {
+      await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+         VALUES ($1, $2, 'gbp', $3, $4, $5, $6, $7, $8, $9, 'active')`,
+        [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+    }
+
+    console.log(`[rc-sync] Generated ${findings.length} findings for project ${projectId}`);
+    res.json({ ok: true, findings_count: findings.length, synced_at: new Date().toISOString() });
+
+  } catch (e) {
+    console.error('[rc-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== GBP PROFILE (from Chrome Extension) ====================
 
 // Store GBP profile data scraped by the extension
@@ -3349,6 +3615,237 @@ app.get('/api/projects/:projectId/gbp-profile', async (req, res) => {
     const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
     res.json({ profile: config, updated_at: result.rows[0].updated_at });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get stored Rating Captain profile data (richer than gbp_profile)
+app.get('/api/projects/:projectId/rc-profile', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ data: null });
+    const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
+    res.json({ data: config, updated_at: result.rows[0].updated_at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Re-run internal GBP audit from stored RC data (on-demand)
+app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    // Load stored RC data from project_integrations
+    const rcResult = await pool.query(
+      `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
+      [projectId]
+    );
+    if (rcResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No Rating Captain data found. Run a sync first (scheduled task or Cowork).' });
+    }
+    const rcData = typeof rcResult.rows[0].config === 'string' ? JSON.parse(rcResult.rows[0].config) : rcResult.rows[0].config;
+    const { profile, healthcheck, reviews_stats, posts } = rcData;
+
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const businessName = project.business_name || project.name || '';
+
+    console.log(`[gbp-internal] Re-running internal audit from stored RC data for project ${projectId} (${businessName})`);
+
+    // Generate findings (same logic as rc-sync)
+    const findings = [];
+    const hcItems = Array.isArray(healthcheck) ? healthcheck : [];
+    const hours = (profile?.regularHours?.periods || []);
+    const serviceItems = (profile?.serviceItems || []);
+    const additionalCats = (profile?.categories?.additionalCategories || []);
+    const serviceAreas = (profile?.serviceArea?.places?.placeInfos || []);
+    const description = profile?.profile?.description || '';
+    const totalReviews = reviews_stats?.total_reviews || 0;
+    const avgRating = reviews_stats?.average_rating || 0;
+    const replyRate = reviews_stats?.reply_rate || 0;
+    const unreplied = reviews_stats?.unreplied_count || 0;
+    const postsList = posts?.published_posts || [];
+    const lastPostDate = postsList[0]?.createTime ? new Date(postsList[0].createTime) : null;
+    const daysSincePost = lastPostDate ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : 999;
+
+    const addFinding = (category, title, desc, recommendation, severity, current, target) => {
+      findings.push({ category, title, description: desc, recommendation, severity, current_value: current, recommended_value: target });
+    };
+
+    // -- Profile Completeness --
+    if (!description || description.length < 50) {
+      addFinding('Relevance > Description', 'Business description missing or too short',
+        description ? `Current description is only ${description.length} characters.` : 'No business description set on GBP profile.',
+        'Write a keyword-rich 750-character description including primary services, location, and unique selling points.',
+        'Critical', description ? `${description.length} chars` : 'Empty', '500-750 chars');
+    } else if (description.length < 250) {
+      addFinding('Relevance > Description', 'Business description could be longer',
+        `Current description is ${description.length} characters. Google allows up to 750.`,
+        'Expand description to use more of the 750 character limit with relevant keywords and service details.',
+        'Medium', `${description.length} chars`, '500-750 chars');
+    }
+
+    if (additionalCats.length === 0) {
+      addFinding('Relevance > Categories', 'No additional categories set',
+        `Only primary category "${profile?.categories?.primaryCategory?.displayName || 'unknown'}" is set.`,
+        'Add 2-5 relevant additional categories.',
+        'High', '0 additional categories', '2-5 categories');
+    }
+
+    if (hours.length < 5) {
+      const dayNames = hours.map(h => h.openDay);
+      const missingDays = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
+      addFinding('Relevance > Hours', 'Limited opening hours',
+        `Only open ${hours.length} days/week. Missing: ${missingDays.join(', ')}.`,
+        'Businesses open 5+ days rank better in local search.',
+        'High', `${hours.length} days/week`, '5-7 days/week');
+    }
+
+    for (const period of hours) {
+      const openH = period.openTime?.hours || 0;
+      const closeH = period.closeTime?.hours || 0;
+      const duration = closeH - openH;
+      if (duration > 0 && duration < 6) {
+        addFinding('Relevance > Hours', `Short hours on ${period.openDay}`,
+          `Open only ${duration} hours (${openH}:00 - ${closeH}:00) on ${period.openDay}.`,
+          'Consider extending hours. Short operating hours reduce visibility in "open now" searches.',
+          'Medium', `${duration}h (${openH}:00-${closeH}:00)`, '8+ hours');
+        break;
+      }
+    }
+
+    if (serviceItems.length < 5) {
+      addFinding('Relevance > Services', 'Few services listed',
+        `Only ${serviceItems.length} services listed on GBP profile.`,
+        'Add all services your business offers. Each service is a keyword signal for Google.',
+        serviceItems.length === 0 ? 'Critical' : 'Medium', `${serviceItems.length} services`, '10+ services');
+    }
+
+    if (serviceAreas.length < 5) {
+      addFinding('Proximity > Service Areas', 'Limited service areas defined',
+        `Only ${serviceAreas.length} service area suburbs listed.`,
+        'Add all suburbs you service.',
+        serviceAreas.length === 0 ? 'High' : 'Medium', `${serviceAreas.length} suburbs`, '10-15 suburbs');
+    }
+
+    // -- Reviews --
+    if (totalReviews < 50) {
+      const hcAvg = hcItems.find(h => h.type === 'avg_reviews');
+      const competitorAvg = hcAvg?.data?.avg || 50;
+      addFinding('Prominence > Reviews', 'Review count below competitors',
+        `${totalReviews} reviews. Competitor average: ${competitorAvg}.`,
+        `Target ${Math.max(competitorAvg, 50)} reviews. Implement systematic review requests.`,
+        totalReviews < 20 ? 'Critical' : 'High', `${totalReviews} reviews`, `${competitorAvg}+ reviews`);
+    }
+
+    if (unreplied > 0) {
+      addFinding('Prominence > Reviews', `${unreplied} unreplied reviews`,
+        `Reply rate is ${replyRate}%. ${unreplied} reviews without a response.`,
+        'Reply to all reviews within 24 hours. Use location keywords in responses.',
+        unreplied > 3 ? 'High' : 'Medium', `${replyRate}% reply rate`, '100% reply rate');
+    }
+
+    if (avgRating < 4.5) {
+      addFinding('Prominence > Reviews', 'Average rating below 4.5',
+        `Current rating: ${avgRating}. Ratings below 4.5 reduce click-through from Maps.`,
+        'Focus on service quality and proactively request reviews from satisfied customers.',
+        'High', `${avgRating} stars`, '4.5+ stars');
+    }
+
+    // -- Posts --
+    if (daysSincePost > 30) {
+      addFinding('Prominence > Posts', 'No recent GBP posts',
+        daysSincePost > 365 ? `Last post was over ${Math.round(daysSincePost/365)} year(s) ago.` : `Last post was ${daysSincePost} days ago.`,
+        'Post weekly on GBP: service highlights, tips, offers, team photos.',
+        daysSincePost > 90 ? 'Critical' : 'High', `${daysSincePost} days since last post`, 'Weekly posts');
+    }
+
+    if (postsList.length < 10) {
+      addFinding('Prominence > Posts', 'Low total post count',
+        `Only ${postsList.length} posts total on GBP profile.`,
+        'Build a content calendar with 2-3 posts per week.',
+        'Medium', `${postsList.length} total posts`, '50+ posts');
+    }
+
+    // -- Healthcheck items --
+    for (const hc of hcItems) {
+      if (hc.valid || !hc.show) continue;
+      switch (hc.type) {
+        case 'nap_data':
+          addFinding('Relevance > NAP', 'NAP data needs attention',
+            'Name, Address, and Phone number data flagged as inconsistent or incomplete.',
+            'Ensure NAP is identical across GBP, website, and all directory listings.',
+            hc.attention_needed ? 'Critical' : 'High', 'Inconsistent', 'Consistent across all platforms');
+          break;
+        case 'localized_content':
+          addFinding('Relevance > Content', 'Missing localized content',
+            'GBP profile lacks location-specific content signals.',
+            'Add suburb names and "near me" variations to description, posts, and service descriptions.',
+            'Medium', 'No localized content', 'Location keywords in description & posts');
+          break;
+        case 'sentiment':
+          if (hc.data?.negative > 0) {
+            addFinding('Prominence > Reviews', `${hc.data.negative} negative review sentiment(s)`,
+              `Sentiment analysis found ${hc.data.negative} negative and ${hc.data.positive} positive signals.`,
+              'Address negative feedback publicly with empathetic responses.',
+              hc.data.negative > 3 ? 'High' : 'Medium', `${hc.data.negative} negative`, '0 negative');
+          }
+          break;
+        case 'page_speed':
+          addFinding('Relevance > Website', 'Website speed issues detected',
+            'GBP-linked website has speed problems.',
+            'Run PageSpeed Insights and fix Core Web Vitals issues.',
+            'Medium', 'Slow', 'Green CWV scores');
+          break;
+        case 'last_review':
+          addFinding('Prominence > Reviews', 'Stale review activity',
+            'No recent reviews detected. Google values fresh review signals.',
+            'Implement automated review request flow: send SMS with Google review link after each service.',
+            'High', 'Stale', 'New reviews weekly');
+          break;
+        case 'media':
+          if (!hc.valid) {
+            addFinding('Prominence > Photos', 'Insufficient photos',
+              'GBP profile needs more photos. Businesses with 100+ photos get 520% more calls.',
+              'Upload: exterior (3+), interior (5+), team (3+), work samples (10+).',
+              'High', 'Insufficient', '25+ owner photos');
+          }
+          break;
+        case 'review_widget':
+          addFinding('Prominence > Reviews', 'No review widget on website',
+            'No review collection widget detected on the business website.',
+            'Add a review widget to collect and display Google reviews.',
+            'Low', 'Not installed', 'Widget active on website');
+          break;
+      }
+    }
+
+    // Clear old internal findings and save new ones
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp'`, [projectId]);
+
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp', 'completed', NOW(), NOW()) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    for (const f of findings) {
+      await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+         VALUES ($1, $2, 'gbp', $3, $4, $5, $6, $7, $8, $9, 'active')`,
+        [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      );
+    }
+
+    console.log(`[gbp-internal] Generated ${findings.length} findings for project ${projectId}`);
+    res.json({ ok: true, findings_count: findings.length });
+
+  } catch (e) {
+    console.error('[gbp-internal] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

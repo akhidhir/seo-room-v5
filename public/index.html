@@ -3580,6 +3580,9 @@
       const [sortCol, setSortCol] = useState('severity');
       const [sortDir, setSortDir] = useState('asc');
       const [profileSummary, setProfileSummary] = useState(null);
+      const [rcProfile, setRcProfile] = useState(null);
+      const [rcSyncedAt, setRcSyncedAt] = useState(null);
+      const [showProfile, setShowProfile] = useState(true);
 
       const loadFindings = async () => {
         setLoading(true); setError('');
@@ -3590,9 +3593,17 @@
         finally { setLoading(false); }
       };
 
+      const loadRcProfile = async () => {
+        try {
+          const d = await api(`/projects/${project.id}/rc-profile`);
+          if (d && d.data) { setRcProfile(d.data); setRcSyncedAt(d.updated_at); }
+        } catch (e) { /* no RC data yet */ }
+      };
+
       useEffect(() => {
         if (project) {
           loadFindings();
+          loadRcProfile();
           api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
         }
       }, [project?.id]);
@@ -3600,8 +3611,7 @@
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
-          await api(`/projects/${project.id}/audits/gbp/run`, { method: 'POST' });
-          // Reload findings after audit completes
+          const res = await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST' });
           await loadFindings();
         } catch (err) { setError(err.message); setLoading(false); }
       };
@@ -3734,29 +3744,42 @@
         );
       }
 
+      // Helper to format RC time ago
+      const timeAgo = (dateStr) => {
+        if (!dateStr) return 'Never';
+        const d = new Date(dateStr);
+        const mins = Math.round((Date.now() - d.getTime()) / 60000);
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        const days = Math.round(hrs / 24);
+        return `${days}d ago`;
+      };
+
+      // Build profile display data from RC or gbp_profile
+      const p = rcProfile?.profile || null;
+      const prof = profileSummary?.profile || profileSummary || null;
+      const rcReviews = rcProfile?.reviews_stats || {};
+      const rcPosts = rcProfile?.posts?.published_posts || [];
+      const rcHours = p?.regularHours?.periods || [];
+      const rcServices = (p?.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean);
+      const rcAreas = (p?.serviceArea?.places?.placeInfos || []).map(s => s.placeName);
+      const rcCats = [p?.categories?.primaryCategory?.displayName, ...(p?.categories?.additionalCategories || []).map(c => c.displayName)].filter(Boolean);
+      const rcDesc = p?.profile?.description || prof?.description || '';
+
       return (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
-              <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Issues
-              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} items</span>
+              <i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />GBP Internal Audit
+              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} issues</span>
             </h2>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button className="btn btn-secondary" onClick={async () => {
-                try {
-                  // Tell the extension to collect GBP data via dashboard bridge
-                  const token = localStorage.getItem('token');
-                  window.postMessage({ source: 'seo-room-dashboard', type: 'GBP_COLLECT', projectId: project.id, authToken: token }, '*');
-                  // Also try direct extension message
-                  if (chrome?.runtime?.sendMessage) {
-                    chrome.runtime.sendMessage({ type: 'DASHBOARD_GBP_COLLECT', projectId: project.id, authToken: token });
-                  }
-                } catch (e) { console.error('Extension sync:', e); }
-              }} style={{ fontSize: 14, padding: '10px 16px' }}>
-                <i className="fas fa-sync" style={{ marginRight: 6 }} /> Sync GBP
-              </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {rcSyncedAt && <span style={{ fontSize: 13, color: 'var(--text3)' }}>
+                <i className="fas fa-clock" style={{ marginRight: 4 }} />Synced {timeAgo(rcSyncedAt)}
+              </span>}
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
-                <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Running...' : 'Re-run'}
+                <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Analyzing...' : 'Re-run Audit'}
               </button>
             </div>
           </div>
@@ -3764,31 +3787,125 @@
           {loading && (
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
-              <div className="audit-loading-text">Running GBP Audit</div>
-              <div className="audit-loading-sub">Analyzing profile, reviews, competitors, and maps rankings...</div>
+              <div className="audit-loading-text">Running Internal Audit</div>
+              <div className="audit-loading-sub">Analyzing profile data from Rating Captain...</div>
             </div>
           )}
 
           {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
 
-          {profileSummary && !loading && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 18, fontWeight: 700 }}><i className="fas fa-store" style={{ marginRight: 8, color: 'var(--accent)' }} />{profileSummary.name || project.business_name}</span>
-                {profileSummary.rating && <span style={{ fontSize: 17, fontWeight: 700, color: '#f59e0b' }}>{profileSummary.rating} ★</span>}
-                {profileSummary.review_count != null && <span style={{ fontSize: 15, color: 'var(--text2)' }}><i className="fas fa-comments" style={{ marginRight: 4, fontSize: 13 }} />{profileSummary.review_count} reviews</span>}
-                {profileSummary.address && <span style={{ fontSize: 14, color: 'var(--text3)' }}><i className="fas fa-map-marker-alt" style={{ marginRight: 4, fontSize: 12 }} />{profileSummary.address}</span>}
-                {profileSummary.has_description && <span style={{ fontSize: 13, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />Description</span>}
-                {profileSummary.has_hours && <span style={{ fontSize: 13, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />Hours</span>}
-                {profileSummary.photo_count > 0 && <span style={{ fontSize: 13, color: 'var(--text2)' }}><i className="fas fa-camera" style={{ marginRight: 4 }} />{profileSummary.photo_count} photos</span>}
+          {/* No RC data state */}
+          {!rcProfile && !loading && findings.length === 0 && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '40px 28px', textAlign: 'center', marginBottom: 20 }}>
+              <i className="fas fa-database" style={{ fontSize: 40, color: 'var(--text3)', marginBottom: 16 }} />
+              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>No Rating Captain Data Yet</div>
+              <div style={{ fontSize: 15, color: 'var(--text3)', maxWidth: 500, margin: '0 auto', lineHeight: 1.6 }}>
+                The internal audit uses Rating Captain for direct GBP API data. Run the RC sync from Cowork (scheduled weekly) or trigger it manually.
               </div>
-              {profileSummary.categories && profileSummary.categories.length > 0 && (
-                <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                  {profileSummary.categories.map((cat, i) => (
-                    <span key={i} style={{ fontSize: 13, padding: '3px 12px', borderRadius: 6, background: i === 0 ? 'rgba(99,102,241,0.15)' : 'var(--bg)', color: i === 0 ? 'var(--accent)' : 'var(--text3)', fontWeight: i === 0 ? 600 : 400 }}>
-                      {i === 0 && <i className="fas fa-star" style={{ marginRight: 4, fontSize: 10 }} />}{cat}
-                    </span>
-                  ))}
+            </div>
+          )}
+
+          {/* Profile overview card — RC data */}
+          {(rcProfile || prof) && !loading && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' }}>
+              <div onClick={() => setShowProfile(!showProfile)} style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, borderBottom: showProfile ? '1px solid var(--border)' : 'none' }}>
+                <i className="fas fa-store" style={{ fontSize: 18, color: 'var(--accent)' }} />
+                <span style={{ fontSize: 18, fontWeight: 700 }}>{p?.title || prof?.business?.name || prof?.name || project.business_name}</span>
+                {(rcReviews.average_rating || prof?.reviews?.averageRating) && <span style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>{rcReviews.average_rating || prof?.reviews?.averageRating} ★</span>}
+                {(rcReviews.total_reviews || prof?.reviews?.totalCount) != null && <span style={{ fontSize: 14, color: 'var(--text2)' }}>{rcReviews.total_reviews || prof?.reviews?.totalCount || 0} reviews</span>}
+                <span style={{ marginLeft: 'auto', fontSize: 13, color: rcProfile ? '#22c55e' : 'var(--text3)' }}>
+                  <i className={`fas fa-${rcProfile ? 'check-circle' : 'info-circle'}`} style={{ marginRight: 4 }} />
+                  {rcProfile ? 'Rating Captain' : 'Cached Profile'}
+                </span>
+                <i className={`fas fa-chevron-${showProfile ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 13 }} />
+              </div>
+
+              {showProfile && (
+                <div style={{ padding: '16px 20px' }}>
+                  {/* Stats row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 16 }}>
+                    {[
+                      { label: 'Categories', value: rcCats.length || (prof?.categories || []).length, icon: 'fas fa-tags', color: '#6366f1' },
+                      { label: 'Services', value: rcServices.length || (prof?.services || []).length, icon: 'fas fa-cogs', color: '#22c55e' },
+                      { label: 'Service Areas', value: rcAreas.length || (prof?.service_areas || []).length, icon: 'fas fa-map', color: '#f59e0b' },
+                      { label: 'Hours/Week', value: rcHours.length || (prof?.hours || []).length, icon: 'fas fa-clock', color: '#3b82f6' },
+                      { label: 'Posts', value: rcPosts.length || prof?.posts_count || 0, icon: 'fas fa-newspaper', color: '#ec4899' },
+                    ].map((s, i) => (
+                      <div key={i} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', textAlign: 'center' }}>
+                        <i className={s.icon} style={{ color: s.color, fontSize: 16, marginBottom: 6, display: 'block' }} />
+                        <div style={{ fontSize: 24, fontWeight: 700 }}>{s.value}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Categories */}
+                  {rcCats.length > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Categories</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {rcCats.map((cat, i) => (
+                          <span key={i} style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, background: i === 0 ? 'rgba(99,102,241,0.15)' : 'var(--bg)', color: i === 0 ? 'var(--accent)' : 'var(--text2)', fontWeight: i === 0 ? 600 : 400 }}>
+                            {i === 0 && <i className="fas fa-star" style={{ marginRight: 4, fontSize: 10 }} />}{cat}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Description */}
+                  {rcDesc && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Description ({rcDesc.length}/750 chars)</div>
+                      <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, maxHeight: 80, overflow: 'auto' }}>{rcDesc}</div>
+                    </div>
+                  )}
+
+                  {/* Hours + Contact in 2 columns */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+                    {rcHours.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Opening Hours</div>
+                        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
+                          {rcHours.map((h, i) => <div key={i}><span style={{ fontWeight: 600, display: 'inline-block', width: 90 }}>{h.openDay}</span> {h.openTime?.hours || 0}:{String(h.openTime?.minutes || 0).padStart(2,'0')} - {h.closeTime?.hours || 0}:{String(h.closeTime?.minutes || 0).padStart(2,'0')}</div>)}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Contact</div>
+                      <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 2 }}>
+                        {(p?.phoneNumbers?.primaryPhone || prof?.phone) && <div><i className="fas fa-phone" style={{ width: 16, marginRight: 8, color: 'var(--text3)' }} />{p?.phoneNumbers?.primaryPhone || prof?.phone}</div>}
+                        {(p?.websiteUri || prof?.website) && <div><i className="fas fa-globe" style={{ width: 16, marginRight: 8, color: 'var(--text3)' }} />{(p?.websiteUri || prof?.website || '').replace(/^https?:\/\//, '').substring(0, 40)}</div>}
+                        {(p?.storefrontAddress?.addressLines || []).length > 0 && <div><i className="fas fa-map-marker-alt" style={{ width: 16, marginRight: 8, color: 'var(--text3)' }} />{[...(p.storefrontAddress.addressLines || []), p.storefrontAddress?.locality].filter(Boolean).join(', ')}</div>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Services (collapsible) */}
+                  {rcServices.length > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Services ({rcServices.length})</div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {rcServices.slice(0, 20).map((s, i) => (
+                          <span key={i} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text2)' }}>{s}</span>
+                        ))}
+                        {rcServices.length > 20 && <span style={{ fontSize: 12, padding: '3px 10px', color: 'var(--text3)' }}>+{rcServices.length - 20} more</span>}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Service Areas */}
+                  {rcAreas.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Service Areas ({rcAreas.length})</div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {rcAreas.slice(0, 15).map((a, i) => (
+                          <span key={i} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 4, background: 'rgba(245,158,11,0.1)', color: '#f59e0b' }}>{a}</span>
+                        ))}
+                        {rcAreas.length > 15 && <span style={{ fontSize: 12, padding: '3px 10px', color: 'var(--text3)' }}>+{rcAreas.length - 15} more</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
