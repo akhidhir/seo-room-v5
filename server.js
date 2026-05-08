@@ -1280,6 +1280,21 @@ app.put('/api/projects/:id', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
+
+    // If rc_location_id changed, clear stale rc_profile so next scheduled sync fetches fresh data
+    if (rc_location_id !== undefined) {
+      console.log(`[project-update] rc_location_id changed to ${rc_location_id} for project ${req.params.id}, clearing stale rc_profile`);
+      await pool.query(
+        `DELETE FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
+        [req.params.id]
+      ).catch(e => console.error('[project-update] Failed to clear rc_profile:', e.message));
+      // Also clear stale gbp_profile from RC source
+      await pool.query(
+        `DELETE FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile' AND config::text LIKE '%rating_captain%'`,
+        [req.params.id]
+      ).catch(e => console.error('[project-update] Failed to clear gbp_profile:', e.message));
+    }
+
     res.json({ project: result.rows[0] });
   } catch (e) {
     console.error('[project-update] Error:', e.message, e.stack);
@@ -18010,6 +18025,346 @@ app.get('/api/debug/outbound-ip', async (req, res) => {
     const ip = await r.text();
     res.json({ outbound_ip: ip });
   } catch (e) { res.json({ error: e.message }); }
+});
+
+// ==================== LOCAL INTEL — CONSOLIDATION ====================
+
+app.get('/api/projects/:id/local-intel', async (req, res) => {
+  const projectId = req.params.id;
+  try {
+    const projR = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = projR.rows[0];
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '').toLowerCase();
+
+    // 1. RC profile (GBP data)
+    const rcR = await pool.query("SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    const rc = rcR.rows[0]?.config ? (typeof rcR.rows[0].config === 'string' ? JSON.parse(rcR.rows[0].config) : rcR.rows[0].config) : null;
+    const profile = rc?.profile || null;
+
+    // Extract GBP suburbs from service areas
+    const gbpSuburbs = [];
+    if (profile?.serviceArea?.places?.placeInfos) {
+      for (const p of profile.serviceArea.places.placeInfos) {
+        const name = (p.placeName || '').replace(/,?\s*(WA|Australia|VIC|NSW|QLD|SA|NT|TAS|ACT)\s*/gi, '').replace(/\d{4}/, '').trim();
+        if (name) gbpSuburbs.push(name);
+      }
+    }
+    // Also pull from project service_areas
+    const projSuburbs = [];
+    if (project.service_areas) {
+      const sa = typeof project.service_areas === 'string' ? JSON.parse(project.service_areas) : project.service_areas;
+      if (Array.isArray(sa)) sa.forEach(s => { const n = (typeof s === 'string' ? s : s.name || '').trim(); if (n) projSuburbs.push(n); });
+    }
+
+    // Extract GBP services
+    const gbpServices = [];
+    if (profile?.serviceItems) {
+      for (const si of profile.serviceItems) {
+        const label = si.freeFormServiceItem?.label?.displayName || si.structuredServiceItem?.serviceTypeId || '';
+        if (label) gbpServices.push(label);
+      }
+    }
+
+    // Extract GBP categories
+    const gbpCategories = [];
+    if (profile?.categories?.primaryCategory) gbpCategories.push(profile.categories.primaryCategory.displayName);
+    if (profile?.categories?.additionalCategories) {
+      for (const c of profile.categories.additionalCategories) gbpCategories.push(c.displayName);
+    }
+
+    // Extract GBP posts topics
+    const gbpPosts = [];
+    if (rc?.posts?.published_posts) {
+      for (const p of rc.posts.published_posts) {
+        gbpPosts.push({ summary: (p.summary || '').substring(0, 120), state: p.state, url: p.callToAction?.url || '' });
+      }
+    }
+
+    // 2. Website pages (from onpage_audit_cache)
+    const opR = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+    const websitePages = [];
+    if (opR.rows[0]?.results) {
+      const results = typeof opR.rows[0].results === 'string' ? JSON.parse(opR.rows[0].results) : opR.rows[0].results;
+      if (Array.isArray(results)) {
+        for (const p of results) {
+          websitePages.push({
+            url: p.url || p.link || '',
+            title: p.title || p.yoast_title || '',
+            slug: (p.slug || p.url || '').toLowerCase(),
+            type: p.type || 'page',
+            wordCount: p.wordCount || p.word_count || 0,
+          });
+        }
+      }
+    }
+
+    // 3. Rank keywords
+    const kwR = await pool.query('SELECT id, keyword, location, search_volume FROM rank_keywords WHERE project_id=$1', [projectId]);
+    const rankKeywords = kwR.rows;
+
+    // Latest rank tracking per keyword
+    const rtR = await pool.query(`
+      SELECT DISTINCT ON (keyword) keyword, serp_position, maps_position, serp_url, checked_at
+      FROM rank_tracking WHERE project_id=$1 ORDER BY keyword, checked_at DESC
+    `, [projectId]);
+    const rankMap = {};
+    for (const r of rtR.rows) rankMap[r.keyword.toLowerCase()] = r;
+
+    // 4. Grid scans (latest per keyword)
+    const gsR = await pool.query(`
+      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, scanned_at
+      FROM grid_scans WHERE project_id=$1 ORDER BY keyword, scanned_at DESC
+    `, [projectId]);
+    const gridMap = {};
+    for (const g of gsR.rows) gridMap[g.keyword.toLowerCase()] = g;
+
+    // 5. GSC keywords
+    const gscR = await pool.query('SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC LIMIT 500', [projectId]);
+    const gscKeywords = gscR.rows;
+    const gscMap = {};
+    for (const g of gscKeywords) gscMap[g.keyword.toLowerCase()] = g;
+
+    // 6. Reviews stats
+    const reviewStats = rc?.reviews_stats || null;
+
+    // ============ CROSS-REFERENCE: SUBURBS ============
+    // Collect all unique suburbs from all sources
+    const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const allSuburbNames = new Set();
+    const suburbSources = {}; // normalized -> { original, inGbp, inProject, pages, keywords, gridScans, gsc }
+
+    // From GBP service areas
+    for (const s of gbpSuburbs) { allSuburbNames.add(normalize(s)); suburbSources[normalize(s)] = { original: s, inGbp: true }; }
+    // From project service areas
+    for (const s of projSuburbs) {
+      const n = normalize(s);
+      if (!suburbSources[n]) { allSuburbNames.add(n); suburbSources[n] = { original: s, inGbp: false }; }
+      suburbSources[n].inProject = true;
+    }
+
+    // Identify suburb pages from website (URL contains suburb name)
+    for (const page of websitePages) {
+      const slug = normalize(page.slug || page.url || '');
+      const title = normalize(page.title || '');
+      for (const n of allSuburbNames) {
+        if (slug.includes(n.replace(/\s+/g, '-')) || slug.includes(n.replace(/\s+/g, '')) || title.includes(n)) {
+          if (!suburbSources[n].pages) suburbSources[n].pages = [];
+          suburbSources[n].pages.push({ url: page.url, title: page.title });
+        }
+      }
+    }
+    // Also find suburb pages that aren't in any known suburb list (detect new suburbs from URLs)
+    const suburbPagePattern = /\/(plumber|electrician|gasfitter|service|services|areas?)-?(in-?)?([a-z-]+)\/?$/i;
+    for (const page of websitePages) {
+      const url = (page.url || page.slug || '').toLowerCase();
+      // Check if page URL contains any suburb-like pattern not yet tracked
+      for (const s of projSuburbs.concat(gbpSuburbs)) {
+        const n = normalize(s);
+        const slugForm = n.replace(/\s+/g, '-');
+        if (url.includes(slugForm) && !suburbSources[n]?.pages?.find(p => p.url === page.url)) {
+          if (!suburbSources[n]) { suburbSources[n] = { original: s, inGbp: false }; allSuburbNames.add(n); }
+          if (!suburbSources[n].pages) suburbSources[n].pages = [];
+          suburbSources[n].pages.push({ url: page.url, title: page.title });
+        }
+      }
+    }
+
+    // Match keywords to suburbs
+    for (const kw of rankKeywords) {
+      const kwN = normalize(kw.keyword);
+      for (const n of allSuburbNames) {
+        if (kwN.includes(n)) {
+          if (!suburbSources[n].keywords) suburbSources[n].keywords = [];
+          const rt = rankMap[kw.keyword.toLowerCase()];
+          suburbSources[n].keywords.push({ keyword: kw.keyword, volume: kw.search_volume, serp: rt?.serp_position, maps: rt?.maps_position });
+        }
+      }
+    }
+
+    // Match grid scans to suburbs
+    for (const [kwLower, gs] of Object.entries(gridMap)) {
+      for (const n of allSuburbNames) {
+        if (kwLower.includes(n)) {
+          if (!suburbSources[n].gridScans) suburbSources[n].gridScans = [];
+          suburbSources[n].gridScans.push({ keyword: kwLower, arp: gs.arp, solv: gs.solv });
+        }
+      }
+    }
+
+    // Match GSC data to suburbs
+    for (const [kwLower, gsc] of Object.entries(gscMap)) {
+      for (const n of allSuburbNames) {
+        if (kwLower.includes(n)) {
+          if (!suburbSources[n].gsc) suburbSources[n].gsc = [];
+          suburbSources[n].gsc.push({ keyword: kwLower, clicks: gsc.clicks, impressions: gsc.impressions });
+        }
+      }
+    }
+
+    // Build suburb matrix
+    const suburbMatrix = Array.from(allSuburbNames).map(n => {
+      const s = suburbSources[n];
+      const gaps = [];
+      if (!s.inGbp) gaps.push('Add to GBP service areas');
+      if (!s.pages?.length) gaps.push('Create suburb landing page');
+      if (!s.keywords?.length) gaps.push('Add keyword tracking');
+      if (!s.gridScans?.length) gaps.push('Run grid scan');
+      return {
+        suburb: s.original,
+        inGbp: !!s.inGbp,
+        inProject: !!s.inProject,
+        pageCount: s.pages?.length || 0,
+        pages: (s.pages || []).slice(0, 3),
+        keywordCount: s.keywords?.length || 0,
+        keywords: (s.keywords || []).slice(0, 5),
+        gridScanCount: s.gridScans?.length || 0,
+        bestSolv: s.gridScans?.length ? Math.max(...s.gridScans.map(g => g.solv || 0)) : null,
+        gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
+        gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
+        gaps,
+        score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 20 : 0) + (s.keywords?.length ? 20 : 0) + (s.gridScans?.length ? 20 : 0) + (s.gsc?.length ? 20 : 0),
+      };
+    }).sort((a, b) => b.score - a.score);
+
+    // ============ CROSS-REFERENCE: SERVICES ============
+    const allServiceNames = new Set();
+    const serviceSources = {};
+
+    for (const s of gbpServices) {
+      const n = normalize(s);
+      allServiceNames.add(n);
+      serviceSources[n] = { original: s, inGbp: true };
+    }
+
+    // Match website pages to services
+    for (const page of websitePages) {
+      const slug = normalize(page.slug || page.url || '');
+      const title = normalize(page.title || '');
+      for (const n of allServiceNames) {
+        const words = n.split(/\s+/);
+        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
+        if (slug.includes(keyPart.replace(/\s+/g, '-')) || title.includes(keyPart)) {
+          if (!serviceSources[n].pages) serviceSources[n].pages = [];
+          serviceSources[n].pages.push({ url: page.url, title: page.title });
+        }
+      }
+    }
+
+    // Match keywords to services
+    for (const kw of rankKeywords) {
+      const kwN = normalize(kw.keyword);
+      for (const n of allServiceNames) {
+        const words = n.split(/\s+/);
+        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
+        if (kwN.includes(keyPart)) {
+          if (!serviceSources[n].keywords) serviceSources[n].keywords = [];
+          const rt = rankMap[kw.keyword.toLowerCase()];
+          serviceSources[n].keywords.push({ keyword: kw.keyword, volume: kw.search_volume, serp: rt?.serp_position, maps: rt?.maps_position });
+        }
+      }
+    }
+
+    // Match GBP posts to services
+    for (const post of gbpPosts) {
+      const postText = normalize(post.summary);
+      for (const n of allServiceNames) {
+        const words = n.split(/\s+/);
+        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
+        if (postText.includes(keyPart)) {
+          if (!serviceSources[n].posts) serviceSources[n].posts = [];
+          serviceSources[n].posts.push(post);
+        }
+      }
+    }
+
+    // Match GSC to services
+    for (const [kwLower, gsc] of Object.entries(gscMap)) {
+      for (const n of allServiceNames) {
+        const words = n.split(/\s+/);
+        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
+        if (kwLower.includes(keyPart)) {
+          if (!serviceSources[n].gsc) serviceSources[n].gsc = [];
+          serviceSources[n].gsc.push({ keyword: kwLower, clicks: gsc.clicks, impressions: gsc.impressions });
+        }
+      }
+    }
+
+    const serviceMatrix = Array.from(allServiceNames).map(n => {
+      const s = serviceSources[n];
+      const gaps = [];
+      if (!s.pages?.length) gaps.push('Create service page');
+      if (!s.keywords?.length) gaps.push('Add keyword tracking');
+      if (!s.posts?.length) gaps.push('Write GBP post');
+      return {
+        service: s.original,
+        inGbp: !!s.inGbp,
+        pageCount: s.pages?.length || 0,
+        pages: (s.pages || []).slice(0, 3),
+        keywordCount: s.keywords?.length || 0,
+        postCount: s.posts?.length || 0,
+        gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
+        gaps,
+        score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 25 : 0) + (s.keywords?.length ? 20 : 0) + (s.posts?.length ? 15 : 0) + (s.gsc?.length ? 20 : 0),
+      };
+    }).sort((a, b) => b.score - a.score);
+
+    // ============ GENERATE RECOMMENDATIONS ============
+    const recommendations = [];
+    const suburbsNotInGbp = suburbMatrix.filter(s => !s.inGbp && s.pageCount > 0);
+    if (suburbsNotInGbp.length) recommendations.push({ priority: 'high', type: 'gbp', icon: 'fas fa-map-marker-alt', title: `Add ${suburbsNotInGbp.length} suburb${suburbsNotInGbp.length > 1 ? 's' : ''} to GBP service areas`, detail: `You have pages for ${suburbsNotInGbp.map(s => s.suburb).join(', ')} but they're not in your GBP service areas.`, items: suburbsNotInGbp.map(s => s.suburb) });
+
+    const suburbsNoPage = suburbMatrix.filter(s => s.inGbp && s.pageCount === 0);
+    if (suburbsNoPage.length) recommendations.push({ priority: 'critical', type: 'website', icon: 'fas fa-file-alt', title: `Create ${suburbsNoPage.length} suburb landing page${suburbsNoPage.length > 1 ? 's' : ''}`, detail: `GBP lists ${suburbsNoPage.map(s => s.suburb).join(', ')} but you have no matching pages on your website.`, items: suburbsNoPage.map(s => s.suburb) });
+
+    const servicesNoPage = serviceMatrix.filter(s => s.inGbp && s.pageCount === 0);
+    if (servicesNoPage.length > 0) {
+      const top10 = servicesNoPage.slice(0, 10);
+      recommendations.push({ priority: 'high', type: 'website', icon: 'fas fa-wrench', title: `Create pages for ${servicesNoPage.length} GBP services without website pages`, detail: `Services like ${top10.map(s => s.service).join(', ')} are listed in GBP but have no dedicated page.`, items: servicesNoPage.map(s => s.service) });
+    }
+
+    const suburbsNoKeywords = suburbMatrix.filter(s => (s.inGbp || s.pageCount > 0) && s.keywordCount === 0);
+    if (suburbsNoKeywords.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-search', title: `Track keywords for ${suburbsNoKeywords.length} suburbs`, detail: `No rank tracking for ${suburbsNoKeywords.map(s => s.suburb).slice(0, 5).join(', ')}${suburbsNoKeywords.length > 5 ? '...' : ''}.`, items: suburbsNoKeywords.map(s => s.suburb) });
+
+    const suburbsNoGrid = suburbMatrix.filter(s => s.inGbp && s.gridScanCount === 0);
+    if (suburbsNoGrid.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-th', title: `Run grid scans for ${suburbsNoGrid.length} GBP suburbs`, detail: `No Maps grid coverage data for ${suburbsNoGrid.map(s => s.suburb).slice(0, 5).join(', ')}${suburbsNoGrid.length > 5 ? '...' : ''}.`, items: suburbsNoGrid.map(s => s.suburb) });
+
+    const servicesNoPost = serviceMatrix.filter(s => s.inGbp && s.pageCount > 0 && s.postCount === 0).slice(0, 10);
+    if (servicesNoPost.length) recommendations.push({ priority: 'low', type: 'gbp', icon: 'fas fa-calendar-alt', title: `Write GBP posts for ${servicesNoPost.length} services`, detail: `Services with pages but no GBP post: ${servicesNoPost.map(s => s.service).join(', ')}.`, items: servicesNoPost.map(s => s.service) });
+
+    // Summary scores
+    const suburbCoverage = suburbMatrix.length ? Math.round(suburbMatrix.filter(s => s.score >= 60).length / suburbMatrix.length * 100) : 0;
+    const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.filter(s => s.score >= 60).length / serviceMatrix.length * 100) : 0;
+    const totalGaps = recommendations.reduce((sum, r) => sum + (r.items?.length || 1), 0);
+
+    res.json({
+      project: { id: project.id, name: project.name, business_name: project.business_name, domain: project.domain },
+      summary: {
+        suburbCount: suburbMatrix.length,
+        serviceCount: serviceMatrix.length,
+        gbpSuburbCount: suburbMatrix.filter(s => s.inGbp).length,
+        gbpServiceCount: serviceMatrix.filter(s => s.inGbp).length,
+        pagesWithSuburb: suburbMatrix.filter(s => s.pageCount > 0).length,
+        pagesWithService: serviceMatrix.filter(s => s.pageCount > 0).length,
+        trackedKeywords: rankKeywords.length,
+        gridScans: Object.keys(gridMap).length,
+        totalWebPages: websitePages.length,
+        totalGscKeywords: gscKeywords.length,
+        suburbCoverage,
+        serviceCoverage,
+        totalGaps,
+        reviewStats,
+        gbpCategories,
+        gbpPostCount: gbpPosts.length,
+      },
+      suburbs: suburbMatrix,
+      services: serviceMatrix,
+      recommendations: recommendations.sort((a, b) => { const pri = { critical: 0, high: 1, medium: 2, low: 3 }; return (pri[a.priority] || 4) - (pri[b.priority] || 4); }),
+    });
+  } catch (e) {
+    console.error('[local-intel] Error:', e.message, e.stack);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Static files
