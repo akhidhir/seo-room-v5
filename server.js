@@ -18354,25 +18354,24 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     // ============ GENERATE RECOMMENDATIONS ============
     const recommendations = [];
     const suburbsNotInGbp = suburbMatrix.filter(s => !s.inGbp && s.pageCount > 0);
-    if (suburbsNotInGbp.length) recommendations.push({ priority: 'high', type: 'gbp', icon: 'fas fa-map-marker-alt', title: `Add ${suburbsNotInGbp.length} suburb${suburbsNotInGbp.length > 1 ? 's' : ''} to GBP service areas`, detail: `You have pages for ${suburbsNotInGbp.map(s => s.suburb).join(', ')} but they're not in your GBP service areas.`, items: suburbsNotInGbp.map(s => s.suburb) });
+    if (suburbsNotInGbp.length) recommendations.push({ priority: 'high', type: 'gbp', icon: 'fas fa-map-marker-alt', title: `Add ${suburbsNotInGbp.length} suburbs to GBP service areas`, detail: `These suburbs have website pages but aren't listed in your GBP service areas. Adding them improves Maps visibility.`, items: suburbsNotInGbp.map(s => s.suburb) });
 
     const suburbsNoPage = suburbMatrix.filter(s => s.inGbp && s.pageCount === 0);
-    if (suburbsNoPage.length) recommendations.push({ priority: 'critical', type: 'website', icon: 'fas fa-file-alt', title: `Create ${suburbsNoPage.length} suburb landing page${suburbsNoPage.length > 1 ? 's' : ''}`, detail: `GBP lists ${suburbsNoPage.map(s => s.suburb).join(', ')} but you have no matching pages on your website.`, items: suburbsNoPage.map(s => s.suburb) });
+    if (suburbsNoPage.length) recommendations.push({ priority: 'critical', type: 'website', icon: 'fas fa-file-alt', title: `Create ${suburbsNoPage.length} suburb landing pages`, detail: `These suburbs are in your GBP service areas but have no matching page on your website. Create dedicated landing pages to rank locally.`, items: suburbsNoPage.map(s => s.suburb) });
 
     const servicesNoPage = serviceMatrix.filter(s => s.inGbp && s.pageCount === 0);
     if (servicesNoPage.length > 0) {
-      const top10 = servicesNoPage.slice(0, 10);
-      recommendations.push({ priority: 'high', type: 'website', icon: 'fas fa-wrench', title: `Create pages for ${servicesNoPage.length} GBP services without website pages`, detail: `Services like ${top10.map(s => s.service).join(', ')} are listed in GBP but have no dedicated page.`, items: servicesNoPage.map(s => s.service) });
+      recommendations.push({ priority: 'high', type: 'website', icon: 'fas fa-wrench', title: `Create pages for ${servicesNoPage.length} GBP services`, detail: `These services are listed on your GBP profile but have no dedicated website page. Each service should have its own page for better rankings.`, items: servicesNoPage.map(s => s.service) });
     }
 
     const suburbsNoKeywords = suburbMatrix.filter(s => (s.inGbp || s.pageCount > 0) && s.keywordCount === 0);
-    if (suburbsNoKeywords.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-search', title: `Track keywords for ${suburbsNoKeywords.length} suburbs`, detail: `No rank tracking for ${suburbsNoKeywords.map(s => s.suburb).slice(0, 5).join(', ')}${suburbsNoKeywords.length > 5 ? '...' : ''}.`, items: suburbsNoKeywords.map(s => s.suburb) });
+    if (suburbsNoKeywords.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-search', title: `Track keywords for ${suburbsNoKeywords.length} suburbs`, detail: `No rank tracking set up for these suburbs. Add keywords to monitor your SERP and Maps positions.`, items: suburbsNoKeywords.map(s => s.suburb) });
 
     const suburbsNoGrid = suburbMatrix.filter(s => s.inGbp && s.gridScanCount === 0);
-    if (suburbsNoGrid.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-th', title: `Run grid scans for ${suburbsNoGrid.length} GBP suburbs`, detail: `No Maps grid coverage data for ${suburbsNoGrid.map(s => s.suburb).slice(0, 5).join(', ')}${suburbsNoGrid.length > 5 ? '...' : ''}.`, items: suburbsNoGrid.map(s => s.suburb) });
+    if (suburbsNoGrid.length) recommendations.push({ priority: 'medium', type: 'tracking', icon: 'fas fa-th', title: `Run grid scans for ${suburbsNoGrid.length} GBP suburbs`, detail: `No Maps grid coverage data for these suburbs. Grid scans show your exact position from multiple points around each area.`, items: suburbsNoGrid.map(s => s.suburb) });
 
     const servicesNoPost = serviceMatrix.filter(s => s.inGbp && s.pageCount > 0 && s.postCount === 0).slice(0, 10);
-    if (servicesNoPost.length) recommendations.push({ priority: 'low', type: 'gbp', icon: 'fas fa-calendar-alt', title: `Write GBP posts for ${servicesNoPost.length} services`, detail: `Services with pages but no GBP post: ${servicesNoPost.map(s => s.service).join(', ')}.`, items: servicesNoPost.map(s => s.service) });
+    if (servicesNoPost.length) recommendations.push({ priority: 'low', type: 'gbp', icon: 'fas fa-calendar-alt', title: `Write GBP posts for ${servicesNoPost.length} services`, detail: `These services have website pages but no GBP posts. Regular posts boost engagement and visibility in Maps.`, items: servicesNoPost.map(s => s.service) });
 
     // ============ GSC → GBP INSIGHTS ============
     // 1. GSC queries with suburb names NOT in GBP service areas → add to GBP
@@ -18392,8 +18391,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     if (gscSuburbsNotInGbp.length) {
       recommendations.push({ priority: 'high', type: 'gsc_gbp', icon: 'fas fa-chart-line',
         title: `GSC shows traffic for ${gscSuburbsNotInGbp.length} suburbs not in GBP`,
-        detail: `Google sends impressions for ${gscSuburbsNotInGbp.map(s => `${s.suburb} (${s.impressions} imp)`).join(', ')} but these aren't in your GBP service areas. Adding them could boost Maps visibility.`,
-        items: gscSuburbsNotInGbp.map(s => s.suburb)
+        detail: `Google sends impressions for these suburbs but they aren't in your GBP service areas. Adding them could boost Maps visibility.`,
+        items: gscSuburbsNotInGbp.map(s => `${s.suburb} (${s.impressions} imp)`)
       });
     }
 
@@ -18425,10 +18424,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
     if (unmatchedGscServices.length > 0) {
-      const top5 = unmatchedGscServices.slice(0, 5);
       recommendations.push({ priority: 'medium', type: 'gsc_gbp', icon: 'fas fa-plus-circle',
         title: `${unmatchedGscServices.length} GSC queries don't match any GBP service`,
-        detail: `You rank for queries like "${top5.map(g => g.keyword).join('", "')}" but these aren't listed as GBP services. Consider adding them.`,
+        detail: `You rank for these queries in Google but they aren't listed as GBP services. Consider adding them to your profile.`,
         items: unmatchedGscServices.slice(0, 15).map(g => `${g.keyword} (${g.impressions} imp, pos ${Math.round(g.position)})`)
       });
     }
@@ -18438,7 +18436,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     if (servicesZeroGsc.length) {
       recommendations.push({ priority: 'medium', type: 'gsc_gbp', icon: 'fas fa-eye-slash',
         title: `${servicesZeroGsc.length} GBP services have pages but zero GSC visibility`,
-        detail: `Services like ${servicesZeroGsc.slice(0, 5).map(s => s.service).join(', ')} have website pages but get no impressions in Search Console. Pages may need better content or internal linking.`,
+        detail: `These services have website pages but get zero impressions in Search Console. Pages may need better content or internal linking.`,
         items: servicesZeroGsc.map(s => s.service)
       });
     }
@@ -18449,8 +18447,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (dominant.length) {
         recommendations.push({ priority: 'high', type: 'competitor', icon: 'fas fa-shield-alt',
           title: `${dominant.length} competitors dominate across multiple keywords`,
-          detail: `${dominant.map(c => `${c.name} (${c.reviews || '?'} reviews, ${c.avgDominance}% dominance)`).join('; ')}. Compare their GBP profile to find gaps.`,
-          items: dominant.map(c => `${c.name}: ${c.keywords} keywords, ${c.top1} #1 positions, ${c.reviews || '?'} reviews`)
+          detail: `These competitors have over 30% dominance in grid scans. Compare their GBP profiles to find gaps you can close.`,
+          items: dominant.map(c => `${c.name} — ${c.reviews || '?'} reviews, ${c.avgDominance}% dominance`)
         });
       }
     }
@@ -18461,8 +18459,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (criticals.length) {
         recommendations.push({ priority: 'high', type: 'competitor', icon: 'fas fa-users',
           title: `${criticals.length} competitor threats from GBP audit`,
-          detail: criticals.map(f => f.title).slice(0, 3).join('. '),
-          items: criticals.map(f => `${f.title}: ${(f.description || '').substring(0, 100)}`)
+          detail: `Critical competitor issues identified in your GBP external audit that need attention.`,
+          items: criticals.map(f => f.title)
         });
       }
     }
