@@ -18195,6 +18195,28 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       suburbSources[n].inProject = true;
     }
 
+    // Auto-discover suburbs from tracked keywords + grid scans using SUBURB_GPS
+    const knownSuburbs = Object.keys(SUBURB_GPS || {});
+    for (const kw of rankKeywords) {
+      const kwN = normalize(kw.keyword);
+      for (const sub of knownSuburbs) {
+        if (kwN.includes(sub) && !allSuburbNames.has(sub)) {
+          allSuburbNames.add(sub);
+          const cap = sub.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          suburbSources[sub] = { original: cap, inGbp: false, inProject: false, fromKeyword: true };
+        }
+      }
+    }
+    for (const kwLower of Object.keys(gridMap)) {
+      for (const sub of knownSuburbs) {
+        if (kwLower.includes(sub) && !allSuburbNames.has(sub)) {
+          allSuburbNames.add(sub);
+          const cap = sub.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          suburbSources[sub] = { original: cap, inGbp: false, inProject: false, fromKeyword: true };
+        }
+      }
+    }
+
     // Identify suburb pages from website (URL contains suburb name)
     for (const page of websitePages) {
       const slug = normalize(page.slug || page.url || '');
@@ -18604,15 +18626,15 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           if (normalize(post.summary).includes(svcKey)) { hasGbpPost = true; break; }
         }
 
-        // Primary rank = maps rank (most important for local SEO), fallback to SERP
-        const rank = mapsRank || serpRank || null;
+        // Maps-only rank for the matrix (this page is Maps-focused)
+        const rank = mapsRank || null;
 
         // Build diagnosis — what's helping and what's hurting
         const actions = [];
         if (!hasPage) actions.push({ type: 'critical', text: 'Create landing page', nav: 'ow-queue' });
         else if (isIndexed === false) actions.push({ type: 'critical', text: 'Page not indexed — fix indexing', nav: 'indexing' });
         else if (pageWordCount > 0 && pageWordCount < 500) actions.push({ type: 'high', text: `Page only ${pageWordCount} words — expand content`, nav: 'ow-queue' });
-        if (!mapsRank && !serpRank) actions.push({ type: 'high', text: 'No rank data — run grid scan or track keyword', nav: 'maps-rankings' });
+        if (!mapsRank) actions.push({ type: 'high', text: 'No Maps rank — run grid scan', nav: 'maps-rankings' });
         if (rank && rank > 3 && !hasGbpPost) actions.push({ type: 'medium', text: 'Write GBP post about this service', nav: 'gbp-posts' });
         if (rank && rank > 3 && topCompetitor && topCompetitor.reviews > (reviewStats?.total_reviews || 0)) {
           actions.push({ type: 'medium', text: `Top competitor has ${topCompetitor.reviews} reviews vs your ${reviewStats?.total_reviews || 0}` });

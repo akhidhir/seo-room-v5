@@ -3848,8 +3848,9 @@
                   </div>
                   <div style={{ fontSize: 16, color: 'var(--text2)', lineHeight: 1.6 }}>
                     When someone searches "<strong style={{ color: 'var(--text1)' }}>plumber leeming</strong>" on Google Maps, where do you appear?
-                    This grid shows your <strong style={{ color: 'var(--text1)' }}>Maps ranking</strong> for every service you offer in every suburb you cover.
-                    Click any cell to see <strong style={{ color: '#8b5cf6' }}>why</strong> you're at that position and <strong style={{ color: '#22c55e' }}>what to do</strong> about it.
+                    This grid shows your <strong style={{ color: 'var(--text1)' }}>Google Maps ranking</strong> for every service × suburb combo.
+                    Suburbs auto-discovered from your tracked keywords, GBP service areas, and project settings.
+                    Click any cell to see <strong style={{ color: '#8b5cf6' }}>why</strong> and <strong style={{ color: '#22c55e' }}>what to do</strong>.
                   </div>
                 </div>
 
@@ -3960,8 +3961,8 @@
                                               {svc} in {row.suburb}
                                             </div>
                                             <div style={{ fontSize: 15, color: rc.color, fontWeight: 700, marginTop: 4 }}>
-                                              {cell.rank ? `Maps rank: #${cell.rank}` : cell.hasPage ? 'Rank unknown — not scanned yet' : 'No landing page for this combo'}
-                                              {cell.serpRank && cell.serpRank !== cell.mapsRank ? ` · SERP: #${cell.serpRank}` : ''}
+                                              {cell.mapsRank ? `Maps rank: #${cell.mapsRank}` : cell.hasPage ? 'No Maps rank — run a grid scan' : 'No landing page for this combo'}
+                                              {cell.serpRank ? <span style={{ color: 'var(--text3)', marginLeft: 8 }}>SERP: #{cell.serpRank}</span> : ''}
                                               {cell.kwVolume ? <span style={{ color: '#3b82f6', marginLeft: 8 }}>· {cell.kwVolume.toLocaleString()} searches/mo</span> : ''}
                                             </div>
                                           </div>
