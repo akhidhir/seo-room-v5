@@ -4154,11 +4154,11 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       const srYoast = pg.seoroom_yoast || {};
       const pgMeta = pg.meta || {};
 
-      // Elementor fix: content.rendered is often empty/minimal for Elementor pages.
-      // Fetch the actual rendered HTML from the live page to get real word count.
+      // Live fetch fix: WP REST content.rendered is often empty/minimal for page builders
+      // (Elementor, Divi, ACF, etc.) — fetch live HTML when word count seems too low.
       let prelimPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       let prelimWords = prelimPlain.split(/\s+/).filter(Boolean).length;
-      if (isElementor && prelimWords < 50 && url) {
+      if (prelimWords < 300 && url) {
         try {
           const liveResp = await fetch(url, { signal: AbortSignal.timeout(10000) });
           if (liveResp.ok) {
@@ -4174,10 +4174,10 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
               const bodyMatch = liveHtml.match(/<body[\s\S]*?<\/body>/i);
               if (bodyMatch) content = bodyMatch[0];
             }
-            console.log(`[onpage-audit] Elementor page ${slug}: fetched live HTML, content length ${content.length}`);
+            console.log(`[onpage-audit] ${slug}: REST had ${prelimWords} words, fetched live HTML (${content.length} chars)`);
           }
         } catch (e) {
-          console.log(`[onpage-audit] Failed to fetch live page ${slug}: ${e.message}`);
+          console.log(`[onpage-audit] Failed to fetch live ${slug}: ${e.message}`);
         }
       }
 
