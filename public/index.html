@@ -3782,16 +3782,11 @@
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: '#8b5cf618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-building" style={{ color: '#8b5cf6', fontSize: 16 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Business</span>
+                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Business Level KPIs</span>
                 </div>
                 <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(bizScore) }}>{bizScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 10 }}>Global signals that affect all suburbs — your GBP profile, reviews, rating, citations</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: gbpComplete ? '#22c55e18' : '#ef444418', color: gbpComplete ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 11 }}>GBP {gbpComplete ? 'Done' : `${gbpC.filledCount || 0}/${gbpC.totalFields || 8}`}</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: myReviews >= (compB.avgReviews || 0) ? '#22c55e18' : '#ef444418', color: myReviews >= (compB.avgReviews || 0) ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 11 }}>{myReviews} reviews</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: '#3b82f618', color: '#3b82f6', fontWeight: 700, fontSize: 11 }}>{myRating} rating</span>
-              </div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Global signals that affect all suburbs — your GBP profile, reviews, rating, citations</div>
             </div>
 
             {/* SERVICE CARD */}
@@ -3804,16 +3799,11 @@
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 16 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Services</span>
+                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Service Level KPIs</span>
                 </div>
                 <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(svcScore) }}>{svcScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 10 }}>Per-service signals — does each service have a page, GBP listing, and post?</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: servicesWithPages === services.length ? '#22c55e18' : '#ef444418', color: servicesWithPages === services.length ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 11 }}>{servicesWithPages}/{services.length} pages</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: '#3b82f618', color: '#3b82f6', fontWeight: 700, fontSize: 11 }}>{servicesInGbp}/{services.length} GBP</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: '#8b5cf618', color: '#8b5cf6', fontWeight: 700, fontSize: 11 }}>{servicesWithPosts}/{services.length} posts</span>
-              </div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Per-service signals — does each service have a page, GBP listing, and post?</div>
             </div>
 
             {/* SUBURB CARD */}
@@ -3826,16 +3816,11 @@
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 16 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Suburbs</span>
+                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Suburb Level KPIs</span>
                 </div>
                 <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 10 }}>Per-suburb signals — landing page, indexed, in GBP service areas, keyword tracked</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: suburbsWithPages === suburbs.length ? '#22c55e18' : '#ef444418', color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 11 }}>{suburbsWithPages}/{suburbs.length} pages</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: '#3b82f618', color: '#3b82f6', fontWeight: 700, fontSize: 11 }}>{suburbsInGbp}/{suburbs.length} GBP</span>
-                <span style={{ padding: '3px 10px', borderRadius: 6, background: '#f59e0b18', color: '#f59e0b', fontWeight: 700, fontSize: 11 }}>{suburbsTracked}/{suburbs.length} tracked</span>
-              </div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Per-suburb signals — landing page, indexed, in GBP service areas, keyword tracked</div>
             </div>
           </div>
 
