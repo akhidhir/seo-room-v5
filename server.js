@@ -18494,6 +18494,147 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
   }
 });
 
+// ==================== LOCAL INTEL — BULK FIX GAPS ====================
+app.post('/api/projects/:id/local-intel/fix-gaps', async (req, res) => {
+  const projectId = req.params.id;
+  const { action } = req.body; // 'generate_keywords' | 'queue_pages' | 'all'
+  try {
+    const projR = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = projR.rows[0];
+
+    // Get RC profile for services + suburbs
+    const rcR = await pool.query("SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    const rc = rcR.rows[0]?.config ? (typeof rcR.rows[0].config === 'string' ? JSON.parse(rcR.rows[0].config) : rcR.rows[0].config) : null;
+    const profile = rc?.profile || null;
+
+    // Extract suburbs from GBP + project
+    const suburbs = new Set();
+    if (profile?.serviceArea?.places?.placeInfos) {
+      for (const p of profile.serviceArea.places.placeInfos) {
+        const name = (p.placeName || '').replace(/,?\s*(WA|Australia|VIC|NSW|QLD|SA|NT|TAS|ACT)\s*/gi, '').replace(/\d{4}/, '').trim();
+        if (name) suburbs.add(name);
+      }
+    }
+    if (project.service_areas) {
+      const sa = typeof project.service_areas === 'string' ? JSON.parse(project.service_areas) : project.service_areas;
+      if (Array.isArray(sa)) sa.forEach(s => { const n = (typeof s === 'string' ? s : s.name || '').trim(); if (n) suburbs.add(n); });
+    }
+
+    // Extract services from GBP
+    const services = [];
+    if (profile?.serviceItems) {
+      for (const si of profile.serviceItems) {
+        const label = si.freeFormServiceItem?.label?.displayName || '';
+        if (label) services.push(label);
+      }
+    }
+
+    // Get existing keywords to avoid duplicates
+    const existingKw = await pool.query('SELECT keyword FROM rank_keywords WHERE project_id=$1', [projectId]);
+    const existingSet = new Set(existingKw.rows.map(r => r.keyword.toLowerCase()));
+
+    // Get existing content queue items to avoid duplicates
+    const existingCq = await pool.query('SELECT page_title FROM content_queue WHERE project_id=$1', [projectId]);
+    const existingCqSet = new Set(existingCq.rows.map(r => (r.page_title || '').toLowerCase()));
+
+    const results = { keywords_added: 0, pages_queued: 0, keywords_skipped: 0, pages_skipped: 0 };
+
+    // 1. Generate keywords: top 3 services × all suburbs
+    if (action === 'generate_keywords' || action === 'all') {
+      // Pick top service terms (short, generic ones work best as keyword roots)
+      const keywordRoots = [];
+      const industry = (project.industry || '').toLowerCase();
+
+      // Use business-relevant short service names as keyword roots
+      for (const svc of services) {
+        const lower = svc.toLowerCase();
+        // Skip long compound services, keep short actionable ones
+        if (lower.split(/\s+/).length <= 4 && !lower.includes('&') && !lower.includes('and')) {
+          keywordRoots.push(lower);
+        }
+      }
+      // Also add industry/category as root
+      if (profile?.categories?.primaryCategory?.displayName) {
+        keywordRoots.unshift(profile.categories.primaryCategory.displayName.toLowerCase());
+      }
+      // Limit to top 5 roots to keep it manageable
+      const roots = [...new Set(keywordRoots)].slice(0, 5);
+      const location = (project.location || '').trim();
+
+      for (const suburb of suburbs) {
+        for (const root of roots) {
+          const keyword = `${root} ${suburb}`.trim();
+          if (existingSet.has(keyword.toLowerCase())) {
+            results.keywords_skipped++;
+            continue;
+          }
+          try {
+            await pool.query(
+              'INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+              [projectId, keyword, location || suburb]
+            );
+            existingSet.add(keyword.toLowerCase());
+            results.keywords_added++;
+          } catch (e) {
+            console.log(`[fix-gaps] Skip keyword "${keyword}": ${e.message}`);
+          }
+        }
+      }
+    }
+
+    // 2. Queue suburb landing pages in content_queue
+    if (action === 'queue_pages' || action === 'all') {
+      // Check which suburbs already have pages
+      const opR = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      const existingPages = [];
+      if (opR.rows[0]?.results) {
+        const results2 = typeof opR.rows[0].results === 'string' ? JSON.parse(opR.rows[0].results) : opR.rows[0].results;
+        if (Array.isArray(results2)) {
+          for (const p of results2) existingPages.push((p.url || p.slug || '').toLowerCase());
+        }
+      }
+
+      const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+      const primaryService = profile?.categories?.primaryCategory?.displayName || project.industry || 'services';
+
+      for (const suburb of suburbs) {
+        const n = normalize(suburb);
+        const slugForm = n.replace(/\s+/g, '-');
+        // Check if any existing page URL contains this suburb
+        const hasPage = existingPages.some(url => url.includes(slugForm) || url.includes(n.replace(/\s+/g, '')));
+        if (hasPage) {
+          results.pages_skipped++;
+          continue;
+        }
+        // Check if already in content queue
+        const pageTitle = `${primaryService} ${suburb}`;
+        if (existingCqSet.has(pageTitle.toLowerCase())) {
+          results.pages_skipped++;
+          continue;
+        }
+        try {
+          await pool.query(
+            `INSERT INTO content_queue (project_id, page_title, content_type, source, priority, brief, stage)
+             VALUES ($1, $2, 'new_page', 'local-intel', 'medium', $3, 'queue')`,
+            [projectId, pageTitle, `Create a suburb landing page for ${suburb}. Target keywords: ${primaryService.toLowerCase()} ${suburb.toLowerCase()}. Include local suburb info, service descriptions, and a clear CTA.`]
+          );
+          existingCqSet.add(pageTitle.toLowerCase());
+          results.pages_queued++;
+        } catch (e) {
+          console.log(`[fix-gaps] Skip page "${pageTitle}": ${e.message}`);
+        }
+      }
+    }
+
+    console.log(`[fix-gaps] Project ${projectId}: +${results.keywords_added} keywords, +${results.pages_queued} pages queued`);
+    res.json({ ok: true, ...results });
+  } catch (e) {
+    console.error('[fix-gaps] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Static files
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }));
 

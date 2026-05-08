@@ -3572,6 +3572,8 @@
       const [loading, setLoading] = useState(true);
       const [activeTab, setActiveTab] = useState('suburbs');
       const [expandedRec, setExpandedRec] = useState(null);
+      const [fixing, setFixing] = useState(null);
+      const [fixResult, setFixResult] = useState(null);
 
       useEffect(() => {
         if (!project?.id) return;
@@ -3661,6 +3663,62 @@
               </div>
             ))}
           </div>
+
+          {/* Fix All Gaps */}
+          {s.totalGaps > 0 && (
+            <div style={{ background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text1)', marginBottom: 4 }}>
+                    <i className="fas fa-magic" style={{ color: '#8b5cf6', marginRight: 8 }} />Fix All Gaps
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>Auto-generate keywords from services × suburbs, and queue missing suburb pages for copywriting</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {[
+                    { action: 'generate_keywords', label: 'Generate Keywords', icon: 'fas fa-search', color: '#f59e0b', desc: 'Creates service+suburb keyword combos for rank tracking' },
+                    { action: 'queue_pages', label: 'Queue Suburb Pages', icon: 'fas fa-file-alt', color: '#3b82f6', desc: 'Adds missing suburb landing pages to copywriter queue' },
+                    { action: 'all', label: 'Fix Everything', icon: 'fas fa-bolt', color: '#8b5cf6', desc: 'Keywords + pages in one go' },
+                  ].map(btn => (
+                    <button key={btn.action} disabled={!!fixing} title={btn.desc}
+                      onClick={async () => {
+                        setFixing(btn.action); setFixResult(null);
+                        try {
+                          const r = await api(`/projects/${project.id}/local-intel/fix-gaps`, { method: 'POST', body: { action: btn.action } });
+                          setFixResult(r);
+                          // Refresh data
+                          const d = await api(`/projects/${project.id}/local-intel`);
+                          setData(d);
+                        } catch (e) { setFixResult({ error: e.message }); }
+                        setFixing(null);
+                      }}
+                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: fixing === btn.action ? btn.color + '44' : btn.color + '22', color: btn.color, fontWeight: 700, fontSize: 12, cursor: fixing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'background 0.15s' }}
+                      onMouseEnter={e => { if (!fixing) e.target.style.background = btn.color + '44'; }}
+                      onMouseLeave={e => { if (!fixing) e.target.style.background = btn.color + '22'; }}
+                    >
+                      <i className={fixing === btn.action ? 'fas fa-spinner fa-spin' : btn.icon} style={{ fontSize: 11 }} />
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {fixResult && !fixResult.error && (
+                <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: '#22c55e18', border: '1px solid #22c55e44', fontSize: 12, color: '#22c55e' }}>
+                  <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
+                  {fixResult.keywords_added > 0 && <span style={{ marginRight: 12 }}><strong>+{fixResult.keywords_added}</strong> keywords added</span>}
+                  {fixResult.keywords_skipped > 0 && <span style={{ marginRight: 12, color: 'var(--text3)' }}>({fixResult.keywords_skipped} already existed)</span>}
+                  {fixResult.pages_queued > 0 && <span style={{ marginRight: 12 }}><strong>+{fixResult.pages_queued}</strong> pages queued for copywriting</span>}
+                  {fixResult.pages_skipped > 0 && <span style={{ color: 'var(--text3)' }}>({fixResult.pages_skipped} already had pages)</span>}
+                  {fixResult.keywords_added === 0 && fixResult.pages_queued === 0 && <span>All gaps already covered!</span>}
+                </div>
+              )}
+              {fixResult?.error && (
+                <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: '#ef444418', border: '1px solid #ef444444', fontSize: 12, color: '#ef4444' }}>
+                  <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{fixResult.error}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--border)', marginBottom: 20 }}>
