@@ -18111,13 +18111,45 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const rankMap = {};
     for (const r of rtR.rows) rankMap[r.keyword.toLowerCase()] = r;
 
-    // 4. Grid scans (latest per keyword)
+    // 4. Grid scans (latest per keyword) — include competitors
     const gsR = await pool.query(`
-      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, scanned_at
+      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, competitors, scanned_at
       FROM grid_scans WHERE project_id=$1 ORDER BY keyword, scanned_at DESC
     `, [projectId]);
     const gridMap = {};
-    for (const g of gsR.rows) gridMap[g.keyword.toLowerCase()] = g;
+    for (const g of gsR.rows) {
+      const comps = typeof g.competitors === 'string' ? JSON.parse(g.competitors) : (g.competitors || {});
+      gridMap[g.keyword.toLowerCase()] = { ...g, competitors: comps };
+    }
+
+    // 4b. External audit competitor findings
+    const extR = await pool.query(`
+      SELECT title, description, severity, category, current_value, new_value
+      FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') AND category='Competitor Analysis'
+      ORDER BY severity DESC
+    `, [projectId]);
+    const extCompetitorFindings = extR.rows;
+
+    // 4c. Aggregate top competitors across all grid scans
+    const competitorAgg = {};
+    for (const [, gs] of Object.entries(gridMap)) {
+      const top = gs.competitors?.top || [];
+      for (const c of top) {
+        const n = (c.name || c.title || '').toLowerCase().trim();
+        if (!n) continue;
+        if (!competitorAgg[n]) competitorAgg[n] = { name: c.name || c.title, rating: c.rating, reviews: c.reviews, type: c.type, keywords: 0, top1: 0, top3: 0, totalDominance: 0 };
+        competitorAgg[n].keywords++;
+        competitorAgg[n].top1 += c.top1 || 0;
+        competitorAgg[n].top3 += c.top3 || 0;
+        competitorAgg[n].totalDominance += c.dominance || 0;
+        if (c.rating) competitorAgg[n].rating = c.rating;
+        if (c.reviews) competitorAgg[n].reviews = Math.max(competitorAgg[n].reviews || 0, c.reviews);
+      }
+    }
+    const topCompetitors = Object.values(competitorAgg)
+      .map(c => ({ ...c, avgDominance: c.keywords ? Math.round(c.totalDominance / c.keywords) : 0 }))
+      .sort((a, b) => b.keywords - a.keywords)
+      .slice(0, 10);
 
     // 5. GSC keywords
     const gscR = await pool.query('SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC LIMIT 500', [projectId]);
@@ -18332,6 +18364,99 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const servicesNoPost = serviceMatrix.filter(s => s.inGbp && s.pageCount > 0 && s.postCount === 0).slice(0, 10);
     if (servicesNoPost.length) recommendations.push({ priority: 'low', type: 'gbp', icon: 'fas fa-calendar-alt', title: `Write GBP posts for ${servicesNoPost.length} services`, detail: `Services with pages but no GBP post: ${servicesNoPost.map(s => s.service).join(', ')}.`, items: servicesNoPost.map(s => s.service) });
 
+    // ============ GSC → GBP INSIGHTS ============
+    // 1. GSC queries with suburb names NOT in GBP service areas → add to GBP
+    const gscSuburbsNotInGbp = [];
+    for (const gsc of gscKeywords) {
+      const kwN = normalize(gsc.keyword);
+      // Check if this GSC query mentions a suburb not in GBP
+      for (const s of projSuburbs) {
+        const n = normalize(s);
+        if (kwN.includes(n) && !gbpSuburbs.some(g => normalize(g) === n) && gsc.impressions >= 10) {
+          if (!gscSuburbsNotInGbp.find(x => x.suburb === s)) {
+            gscSuburbsNotInGbp.push({ suburb: s, keyword: gsc.keyword, impressions: gsc.impressions, clicks: gsc.clicks });
+          }
+        }
+      }
+    }
+    if (gscSuburbsNotInGbp.length) {
+      recommendations.push({ priority: 'high', type: 'gsc_gbp', icon: 'fas fa-chart-line',
+        title: `GSC shows traffic for ${gscSuburbsNotInGbp.length} suburbs not in GBP`,
+        detail: `Google sends impressions for ${gscSuburbsNotInGbp.map(s => `${s.suburb} (${s.impressions} imp)`).join(', ')} but these aren't in your GBP service areas. Adding them could boost Maps visibility.`,
+        items: gscSuburbsNotInGbp.map(s => s.suburb)
+      });
+    }
+
+    // 2. High impression, low CTR suburb keywords → meta title missing suburb name
+    const lowCtrSuburbKws = gscKeywords.filter(g => {
+      const kwN = normalize(g.keyword);
+      return g.impressions >= 50 && g.ctr < 0.03 && allSuburbNames.has([...allSuburbNames].find(n => kwN.includes(n)));
+    }).slice(0, 10);
+    if (lowCtrSuburbKws.length) {
+      recommendations.push({ priority: 'high', type: 'gsc_gbp', icon: 'fas fa-mouse-pointer',
+        title: `${lowCtrSuburbKws.length} local keywords have high impressions but low CTR (<3%)`,
+        detail: `Keywords like "${lowCtrSuburbKws[0]?.keyword}" get impressions but few clicks. Add suburb names to meta titles and descriptions to improve CTR.`,
+        items: lowCtrSuburbKws.map(g => `${g.keyword} (${g.impressions} imp, ${(g.ctr * 100).toFixed(1)}% CTR)`)
+      });
+    }
+
+    // 3. GSC queries that don't match any GBP service → potential new services
+    const unmatchedGscServices = [];
+    for (const gsc of gscKeywords.slice(0, 100)) {
+      const kwN = normalize(gsc.keyword);
+      if (gsc.impressions < 20) continue;
+      const matchesService = [...allServiceNames].some(n => {
+        const words = n.split(/\s+/);
+        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
+        return kwN.includes(keyPart);
+      });
+      if (!matchesService && !kwN.includes(normalize(project.business_name || '')) && kwN.length > 5) {
+        unmatchedGscServices.push({ keyword: gsc.keyword, impressions: gsc.impressions, clicks: gsc.clicks, position: gsc.position });
+      }
+    }
+    if (unmatchedGscServices.length > 0) {
+      const top5 = unmatchedGscServices.slice(0, 5);
+      recommendations.push({ priority: 'medium', type: 'gsc_gbp', icon: 'fas fa-plus-circle',
+        title: `${unmatchedGscServices.length} GSC queries don't match any GBP service`,
+        detail: `You rank for queries like "${top5.map(g => g.keyword).join('", "')}" but these aren't listed as GBP services. Consider adding them.`,
+        items: unmatchedGscServices.slice(0, 15).map(g => `${g.keyword} (${g.impressions} imp, pos ${Math.round(g.position)})`)
+      });
+    }
+
+    // 4. GBP services with zero GSC visibility → content gap
+    const servicesZeroGsc = serviceMatrix.filter(s => s.inGbp && s.gscImpressions === 0 && s.pageCount > 0);
+    if (servicesZeroGsc.length) {
+      recommendations.push({ priority: 'medium', type: 'gsc_gbp', icon: 'fas fa-eye-slash',
+        title: `${servicesZeroGsc.length} GBP services have pages but zero GSC visibility`,
+        detail: `Services like ${servicesZeroGsc.slice(0, 5).map(s => s.service).join(', ')} have website pages but get no impressions in Search Console. Pages may need better content or internal linking.`,
+        items: servicesZeroGsc.map(s => s.service)
+      });
+    }
+
+    // 5. Competitor threats from grid scans
+    if (topCompetitors.length > 0) {
+      const dominant = topCompetitors.filter(c => c.avgDominance > 30);
+      if (dominant.length) {
+        recommendations.push({ priority: 'high', type: 'competitor', icon: 'fas fa-shield-alt',
+          title: `${dominant.length} competitors dominate across multiple keywords`,
+          detail: `${dominant.map(c => `${c.name} (${c.reviews || '?'} reviews, ${c.avgDominance}% dominance)`).join('; ')}. Compare their GBP profile to find gaps.`,
+          items: dominant.map(c => `${c.name}: ${c.keywords} keywords, ${c.top1} #1 positions, ${c.reviews || '?'} reviews`)
+        });
+      }
+    }
+
+    // 6. External audit competitor findings
+    if (extCompetitorFindings.length) {
+      const criticals = extCompetitorFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
+      if (criticals.length) {
+        recommendations.push({ priority: 'high', type: 'competitor', icon: 'fas fa-users',
+          title: `${criticals.length} competitor threats from GBP audit`,
+          detail: criticals.map(f => f.title).slice(0, 3).join('. '),
+          items: criticals.map(f => `${f.title}: ${(f.description || '').substring(0, 100)}`)
+        });
+      }
+    }
+
     // Summary scores
     const suburbCoverage = suburbMatrix.length ? Math.round(suburbMatrix.filter(s => s.score >= 60).length / suburbMatrix.length * 100) : 0;
     const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.filter(s => s.score >= 60).length / serviceMatrix.length * 100) : 0;
@@ -18356,9 +18481,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         reviewStats,
         gbpCategories,
         gbpPostCount: gbpPosts.length,
+        competitorCount: topCompetitors.length,
       },
       suburbs: suburbMatrix,
       services: serviceMatrix,
+      competitors: topCompetitors,
       recommendations: recommendations.sort((a, b) => { const pri = { critical: 0, high: 1, medium: 2, low: 3 }; return (pri[a.priority] || 4) - (pri[b.priority] || 4); }),
     });
   } catch (e) {

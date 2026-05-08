@@ -3588,7 +3588,7 @@
       );
       if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
 
-      const { summary: s, suburbs, services, recommendations } = data;
+      const { summary: s, suburbs, services, recommendations, competitors = [] } = data;
       const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
@@ -3619,7 +3619,9 @@
               { label: 'SERVICES', value: s.gbpServiceCount, sub: `${s.pagesWithService} with pages`, icon: 'fas fa-wrench', color: '#3b82f6' },
               { label: 'WEB PAGES', value: s.totalWebPages, sub: `${s.pagesWithSuburb} suburb pages`, icon: 'fas fa-globe', color: '#22c55e' },
               { label: 'KEYWORDS', value: s.trackedKeywords, sub: `${s.gridScans} grid scans`, icon: 'fas fa-search', color: '#f59e0b' },
+              { label: 'GSC QUERIES', value: s.totalGscKeywords, sub: `organic signals`, icon: 'fas fa-chart-line', color: '#22c55e' },
               { label: 'GBP POSTS', value: s.gbpPostCount, sub: `${s.gbpCategories?.length || 0} categories`, icon: 'fas fa-calendar', color: '#ef4444' },
+              { label: 'COMPETITORS', value: s.competitorCount || competitors.length, sub: `from grid scans`, icon: 'fas fa-users', color: '#f97316' },
               { label: 'ACTION GAPS', value: s.totalGaps, sub: `${recommendations.length} recommendations`, icon: 'fas fa-exclamation-triangle', color: s.totalGaps > 10 ? '#ef4444' : s.totalGaps > 5 ? '#f59e0b' : '#22c55e' },
             ].map((c, i) => (
               <div key={i} style={{ background: 'var(--card)', borderRadius: 10, padding: '16px 14px', textAlign: 'center', border: '1px solid var(--border)' }}>
@@ -3655,6 +3657,7 @@
             {[
               { id: 'suburbs', label: `Suburbs (${suburbs.length})`, icon: 'fas fa-map-pin' },
               { id: 'services', label: `Services (${services.length})`, icon: 'fas fa-wrench' },
+              { id: 'competitors', label: `Competitors (${competitors.length})`, icon: 'fas fa-users' },
               { id: 'recommendations', label: `Actions (${recommendations.length})`, icon: 'fas fa-bolt' },
             ].map(t => (
               <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ padding: '10px 20px', background: 'none', border: 'none', borderBottom: activeTab === t.id ? '2px solid #8b5cf6' : '2px solid transparent', color: activeTab === t.id ? '#8b5cf6' : 'var(--text2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: -2 }}>
@@ -3730,6 +3733,58 @@
                   {services.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No services found. Sync GBP data via Rating Captain first.</td></tr>}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* COMPETITORS TAB */}
+          {activeTab === 'competitors' && (
+            <div style={{ overflowX: 'auto' }}>
+              {competitors.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Competitor</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Rating</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Reviews</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Keywords</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>#1 Pos</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Top 3</th>
+                      <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Dominance</th>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Type</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {competitors.map((c, i) => {
+                      const domColor = c.avgDominance > 50 ? '#ef4444' : c.avgDominance > 30 ? '#f59e0b' : '#22c55e';
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
+                          <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text1)' }}>{c.name}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}>{c.rating ? <span style={{ color: '#f59e0b', fontWeight: 700 }}>{c.rating}</span> : '—'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: 'var(--text1)' }}>{c.reviews || '—'}</td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}><span style={{ color: '#3b82f6', fontWeight: 700 }}>{c.keywords}</span></td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}><span style={{ color: c.top1 > 0 ? '#ef4444' : 'var(--text3)', fontWeight: 700 }}>{c.top1}</span></td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}><span style={{ color: c.top3 > 0 ? '#f97316' : 'var(--text3)', fontWeight: 700 }}>{c.top3}</span></td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}><span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 12, background: domColor + '22', color: domColor, fontWeight: 700, fontSize: 12 }}>{c.avgDominance}%</span></td>
+                          <td style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text2)' }}>{c.type || '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No competitor data yet. Run grid scans to discover competitors in Maps results.</div>
+              )}
+              {s.reviewStats && (
+                <div style={{ marginTop: 20, background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text1)', marginBottom: 10 }}>Your Position</div>
+                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                    <div><span style={{ fontSize: 24, fontWeight: 800, color: '#f59e0b' }}>{s.reviewStats.average_rating}</span><span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>rating</span></div>
+                    <div><span style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{s.reviewStats.total_reviews}</span><span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>reviews</span></div>
+                    <div><span style={{ fontSize: 24, fontWeight: 800, color: s.reviewStats.reply_rate > 70 ? '#22c55e' : '#f59e0b' }}>{s.reviewStats.reply_rate}%</span><span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>reply rate</span></div>
+                    <div><span style={{ fontSize: 24, fontWeight: 800, color: '#8b5cf6' }}>{s.reviewStats.unreplied_count}</span><span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>unreplied</span></div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
