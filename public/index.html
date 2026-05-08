@@ -3587,8 +3587,9 @@
       const loadFindings = async () => {
         setLoading(true); setError('');
         try {
-          const data = await api(`/projects/${project.id}/audit-findings?pillar=gbp`);
-          if (Array.isArray(data)) setFindings(data);
+          const data = await api(`/projects/${project.id}/audit-findings?pillar=gbp_internal`);
+          const list = Array.isArray(data) ? data : (data?.findings || []);
+          setFindings(list.filter(f => f.pillar === 'gbp_internal'));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       };

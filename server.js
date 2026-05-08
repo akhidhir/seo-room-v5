@@ -1522,12 +1522,14 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
 
     const PILLAR_MAP = {
       gbp_external: 'gbp_external', gbp: 'gbp_external',
+      gbp_internal: 'gbp_internal',
       gsc_agent: 'gsc_agent', gsc: 'gsc_agent',
       website: 'website', technical: 'website',
     };
-    const PILLAR_DISPLAY = { gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website' };
+    const PILLAR_DISPLAY = { gbp_external: 'GBP', gbp_internal: 'GBP_Internal', gsc_agent: 'GSC', website: 'Website' };
     const VALID_CATS = {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
+      GBP_Internal: ['Relevance > Description', 'Relevance > Categories', 'Relevance > Hours', 'Relevance > Services', 'Relevance > NAP', 'Relevance > Content', 'Relevance > Website', 'Proximity > Service Areas', 'Prominence > Reviews', 'Prominence > Posts', 'Prominence > Photos'],
       GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
       Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
     };
@@ -3556,10 +3558,10 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     }
 
     // 5. Clear old internal findings and save new ones
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp'`, [projectId]);
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp_internal'`, [projectId]);
 
     const auditRes = await pool.query(
-      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp', 'completed', NOW(), NOW()) RETURNING id`,
+      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp_internal', 'completed', NOW(), NOW()) RETURNING id`,
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
@@ -3567,7 +3569,7 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     for (const f of findings) {
       await pool.query(
         `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-         VALUES ($1, $2, 'gbp', $3, $4, $5, $6, $7, $8, $9, 'active')`,
+         VALUES ($1, $2, 'gbp_internal', $3, $4, $5, $6, $7, $8, $9, 'active')`,
         [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
       );
     }
@@ -3825,10 +3827,10 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
     }
 
     // Clear old internal findings and save new ones
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp'`, [projectId]);
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp_internal'`, [projectId]);
 
     const auditRes = await pool.query(
-      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp', 'completed', NOW(), NOW()) RETURNING id`,
+      `INSERT INTO audits (project_id, pillar, status, started_at, completed_at) VALUES ($1, 'gbp_internal', 'completed', NOW(), NOW()) RETURNING id`,
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
@@ -3836,7 +3838,7 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
     for (const f of findings) {
       await pool.query(
         `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-         VALUES ($1, $2, 'gbp', $3, $4, $5, $6, $7, $8, $9, 'active')`,
+         VALUES ($1, $2, 'gbp_internal', $3, $4, $5, $6, $7, $8, $9, 'active')`,
         [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
       );
     }
