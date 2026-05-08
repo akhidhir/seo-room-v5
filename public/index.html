@@ -3602,7 +3602,7 @@
         if (!newSuburb.trim()) return;
         setAddingSuburb(true);
         try {
-          await api(`/projects/${project.id}/local-intel/suburbs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newSuburb.trim() }) });
+          await api(`/projects/${project.id}/local-intel/suburbs`, { method: 'POST', body: { name: newSuburb.trim() } });
           setNewSuburb('');
           reload(true);
         } catch (e) { alert(e.message); }
@@ -3621,7 +3621,7 @@
         if (!newService.trim()) return;
         setAddingService(true);
         try {
-          await api(`/projects/${project.id}/local-intel/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newService.trim() }) });
+          await api(`/projects/${project.id}/local-intel/services`, { method: 'POST', body: { name: newService.trim() } });
           setNewService('');
           reload(true);
         } catch (e) { alert(e.message); }
