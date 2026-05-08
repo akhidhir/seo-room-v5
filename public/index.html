@@ -3944,33 +3944,60 @@
           )}
 
           {/* RECOMMENDATIONS TAB */}
-          {activeTab === 'recommendations' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {recommendations.map((r, i) => (
-                <div key={i} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                  <div onClick={() => setExpandedRec(expandedRec === i ? null : i)} style={{ padding: '14px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <i className={r.icon} style={{ color: '#8b5cf6', fontSize: 16, width: 20, textAlign: 'center' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text1)' }}>{r.title}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{r.detail}</div>
+          {activeTab === 'recommendations' && (() => {
+            const grouped = { critical: [], high: [], medium: [], low: [] };
+            recommendations.forEach(r => { (grouped[r.priority] || grouped.medium).push(r); });
+            const priOrder = ['critical', 'high', 'medium', 'low'];
+            const priColors = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#3b82f6' };
+            const priLabels = { critical: 'Critical', high: 'High Priority', medium: 'Medium', low: 'Low Priority' };
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {priOrder.filter(p => grouped[p].length > 0).map(p => (
+                  <div key={p}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: priColors[p], display: 'inline-block' }} />
+                      <span style={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: priColors[p], letterSpacing: 0.5 }}>{priLabels[p]}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>({grouped[p].length})</span>
                     </div>
-                    <PriBadge priority={r.priority} />
-                    <i className={`fas fa-chevron-${expandedRec === i ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {grouped[p].map((r, i) => {
+                        const key = p + i;
+                        const isExp = expandedRec === key;
+                        const shortDetail = r.items?.length ? `${r.items.length} items — click to see details` : '';
+                        return (
+                          <div key={key} style={{ background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `3px solid ${priColors[p]}` }}>
+                            <div onClick={() => setExpandedRec(isExp ? null : key)} style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <i className={r.icon} style={{ color: priColors[p], fontSize: 14, width: 18, textAlign: 'center', flexShrink: 0 }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text1)' }}>{r.title}</div>
+                                {!isExp && shortDetail && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{shortDetail}</div>}
+                              </div>
+                              {r.items?.length > 0 && <span style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--bg)', padding: '2px 8px', borderRadius: 10, fontWeight: 600, flexShrink: 0 }}>{r.items.length}</span>}
+                              <i className={`fas fa-chevron-${isExp ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 10, flexShrink: 0 }} />
+                            </div>
+                            {isExp && (
+                              <div style={{ padding: '0 14px 12px', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                                <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: r.items?.length ? 10 : 0, lineHeight: 1.5 }}>{r.detail}</div>
+                                {r.items?.length > 0 && (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                                    {r.items.slice(0, 30).map((item, j) => (
+                                      <span key={j} style={{ padding: '3px 10px', borderRadius: 5, background: priColors[p] + '15', border: `1px solid ${priColors[p]}33`, fontSize: 11, color: 'var(--text1)', fontWeight: 500 }}>{item}</span>
+                                    ))}
+                                    {r.items.length > 30 && <span style={{ padding: '3px 10px', fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>+{r.items.length - 30} more</span>}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  {expandedRec === i && r.items?.length > 0 && (
-                    <div style={{ padding: '0 16px 14px', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {r.items.map((item, j) => (
-                          <span key={j} style={{ padding: '4px 12px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text1)', fontWeight: 500 }}>{item}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-              {recommendations.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No action gaps found — excellent local SEO coverage!</div>}
-            </div>
-          )}
+                ))}
+                {recommendations.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No action gaps found — excellent local SEO coverage!</div>}
+              </div>
+            );
+          })()}
         </div>
       );
     }
