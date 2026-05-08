@@ -18572,10 +18572,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
             break;
           }
         }
-        // SERP rank from rank_tracking
+        // SERP rank from rank_tracking + search volume
+        let kwVolume = null, kwName = null;
         for (const kw of rankKeywords) {
           const kwN = normalize(kw.keyword);
           if (kwN.includes(subN) && kwN.includes(svcKey)) {
+            kwName = kw.keyword;
+            kwVolume = kw.search_volume || null;
             const rt = rankMap[kw.keyword.toLowerCase()];
             if (rt) {
               if (rt.maps_position) mapsRank = mapsRank || rt.maps_position;
@@ -18621,6 +18624,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           rank, mapsRank, serpRank, gridSolv, gridArp,
           hasPage, pageUrl, pageWordCount, isIndexed,
           gscImp, gscClicks, gscCtr,
+          kwName, kwVolume,
           hasGbpPost, topCompetitor,
           actions, signals,
         };

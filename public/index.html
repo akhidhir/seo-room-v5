@@ -3945,6 +3945,7 @@
                                             <div style={{ fontSize: 15, color: rc.color, fontWeight: 700, marginTop: 4 }}>
                                               {cell.rank ? `Maps rank: #${cell.rank}` : cell.hasPage ? 'Rank unknown — not scanned yet' : 'No landing page for this combo'}
                                               {cell.serpRank && cell.serpRank !== cell.mapsRank ? ` · SERP: #${cell.serpRank}` : ''}
+                                              {cell.kwVolume ? <span style={{ color: '#3b82f6', marginLeft: 8 }}>· {cell.kwVolume.toLocaleString()} searches/mo</span> : ''}
                                             </div>
                                           </div>
                                           <button onClick={(e) => { e.stopPropagation(); setExpandedCell(null); }} style={{ background: 'none', border: 'none', fontSize: 18, color: 'var(--text3)', cursor: 'pointer', padding: 4 }}>✕</button>
@@ -3958,6 +3959,10 @@
                                           </div>
                                           <div style={{ fontSize: 14, color: cell.isIndexed === true ? '#22c55e' : cell.isIndexed === false ? '#ef4444' : '#94a3b8', fontWeight: 600 }}>
                                             {cell.isIndexed === true ? '✓ Indexed in Google' : cell.isIndexed === false ? '✗ NOT indexed in Google' : '— Indexing not checked'}
+                                          </div>
+                                          <div style={{ fontSize: 14, color: cell.kwName ? '#22c55e' : '#94a3b8', fontWeight: 600 }}>
+                                            {cell.kwName ? `✓ Tracking: "${cell.kwName}"` : '— No keyword tracked'}
+                                            {cell.kwVolume ? <span style={{ color: '#3b82f6' }}> · {cell.kwVolume.toLocaleString()} searches/mo</span> : ''}
                                           </div>
                                           <div style={{ fontSize: 14, color: cell.gridSolv != null ? '#22c55e' : '#94a3b8', fontWeight: 600 }}>
                                             {cell.gridSolv != null ? `✓ Grid scan — ${Math.round(cell.gridSolv)}% top-3 visibility` : '— No grid scan run'}
