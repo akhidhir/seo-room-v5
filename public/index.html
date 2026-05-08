@@ -3574,6 +3574,50 @@
       const [expandedRec, setExpandedRec] = useState(null);
       const [fixing, setFixing] = useState(null);
       const [fixResult, setFixResult] = useState(null);
+      const [newSuburb, setNewSuburb] = useState('');
+      const [newService, setNewService] = useState('');
+      const [addingSuburb, setAddingSuburb] = useState(false);
+      const [addingService, setAddingService] = useState(false);
+
+      const reload = () => api(`/projects/${project.id}/local-intel`).then(d => setData(d));
+
+      const handleDeleteSuburb = async (name) => {
+        if (!confirm(`Remove "${name}" from suburbs?`)) return;
+        try {
+          await api(`/projects/${project.id}/local-intel/suburbs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          reload();
+        } catch (e) { alert(e.message); }
+      };
+
+      const handleAddSuburb = async () => {
+        if (!newSuburb.trim()) return;
+        setAddingSuburb(true);
+        try {
+          await api(`/projects/${project.id}/local-intel/suburbs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newSuburb.trim() }) });
+          setNewSuburb('');
+          reload();
+        } catch (e) { alert(e.message); }
+        setAddingSuburb(false);
+      };
+
+      const handleDeleteService = async (name) => {
+        if (!confirm(`Remove "${name}" from services?`)) return;
+        try {
+          await api(`/projects/${project.id}/local-intel/services/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          reload();
+        } catch (e) { alert(e.message); }
+      };
+
+      const handleAddService = async () => {
+        if (!newService.trim()) return;
+        setAddingService(true);
+        try {
+          await api(`/projects/${project.id}/local-intel/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newService.trim() }) });
+          setNewService('');
+          reload();
+        } catch (e) { alert(e.message); }
+        setAddingService(false);
+      };
 
       useEffect(() => {
         if (!project?.id) return;
@@ -3771,6 +3815,7 @@
                     <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
                     <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
                     <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
+                    <th style={{ width: 40, padding: '8px 6px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3784,9 +3829,18 @@
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
                       <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><button onClick={() => handleDeleteSuburb(s.suburb)} title="Remove suburb" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
                     </tr>
                   ))}
-                  {suburbs.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No suburbs found. Add service areas to your project or sync GBP data.</td></tr>}
+                  <tr style={{ borderTop: '2px solid var(--border)' }}>
+                    <td colSpan={9} style={{ padding: '8px 12px' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input value={newSuburb} onChange={e => setNewSuburb(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddSuburb()} placeholder="Add suburb..." style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 260 }} />
+                        <button onClick={handleAddSuburb} disabled={addingSuburb || !newSuburb.trim()} style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: addingSuburb || !newSuburb.trim() ? 0.5 : 1 }}>{addingSuburb ? 'Adding...' : '+ Add'}</button>
+                      </div>
+                    </td>
+                  </tr>
+                  {suburbs.length === 0 && <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No suburbs found. Add service areas to your project or sync GBP data.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -3806,6 +3860,7 @@
                     <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
                     <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
                     <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
+                    <th style={{ width: 40, padding: '8px 6px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3819,9 +3874,18 @@
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
                       <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><button onClick={() => handleDeleteService(s.service)} title="Remove service" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 4, borderRadius: 4, opacity: 0.6 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}><i className="fas fa-trash" /></button></td>
                     </tr>
                   ))}
-                  {services.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No services found. Sync GBP data via Rating Captain first.</td></tr>}
+                  <tr style={{ borderTop: '2px solid var(--border)' }}>
+                    <td colSpan={9} style={{ padding: '8px 12px' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input value={newService} onChange={e => setNewService(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddService()} placeholder="Add service..." style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 260 }} />
+                        <button onClick={handleAddService} disabled={addingService || !newService.trim()} style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: addingService || !newService.trim() ? 0.5 : 1 }}>{addingService ? 'Adding...' : '+ Add'}</button>
+                      </div>
+                    </td>
+                  </tr>
+                  {services.length === 0 && <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No services found. Sync GBP data via Rating Captain first.</td></tr>}
                 </tbody>
               </table>
             </div>

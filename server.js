@@ -18268,6 +18268,16 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       allServiceNames.add(n);
       serviceSources[n] = { original: s, inGbp: true };
     }
+    // Include custom services added via Local Intel
+    if (rc?.custom_services) {
+      for (const s of rc.custom_services) {
+        const n = normalize(s);
+        if (!allServiceNames.has(n)) {
+          allServiceNames.add(n);
+          serviceSources[n] = { original: s, inGbp: false };
+        }
+      }
+    }
 
     // Match website pages to services
     for (const page of websitePages) {
@@ -18640,6 +18650,99 @@ app.post('/api/projects/:id/local-intel/fix-gaps', async (req, res) => {
     res.json({ ok: true, ...results });
   } catch (e) {
     console.error('[fix-gaps] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== LOCAL INTEL — ADD/DELETE SUBURBS & SERVICES ====================
+app.post('/api/projects/:id/local-intel/suburbs', async (req, res) => {
+  const projectId = req.params.id;
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Suburb name required' });
+  try {
+    const projR = await pool.query('SELECT service_areas FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    let sa = projR.rows[0].service_areas || [];
+    if (typeof sa === 'string') sa = JSON.parse(sa);
+    if (!Array.isArray(sa)) sa = [];
+    const trimmed = name.trim();
+    const exists = sa.some(s => (typeof s === 'string' ? s : s.name || '').toLowerCase() === trimmed.toLowerCase());
+    if (exists) return res.status(409).json({ error: 'Suburb already exists' });
+    sa.push(trimmed);
+    await pool.query('UPDATE projects SET service_areas=$1 WHERE id=$2', [JSON.stringify(sa), projectId]);
+    res.json({ ok: true, service_areas: sa });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/projects/:id/local-intel/suburbs/:name', async (req, res) => {
+  const projectId = req.params.id;
+  const suburbName = decodeURIComponent(req.params.name).trim().toLowerCase();
+  try {
+    const projR = await pool.query('SELECT service_areas FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    let sa = projR.rows[0].service_areas || [];
+    if (typeof sa === 'string') sa = JSON.parse(sa);
+    if (!Array.isArray(sa)) sa = [];
+    const filtered = sa.filter(s => (typeof s === 'string' ? s : s.name || '').trim().toLowerCase() !== suburbName);
+    await pool.query('UPDATE projects SET service_areas=$1 WHERE id=$2', [JSON.stringify(filtered), projectId]);
+    res.json({ ok: true, service_areas: filtered });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/projects/:id/local-intel/services', async (req, res) => {
+  const projectId = req.params.id;
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Service name required' });
+  try {
+    // Services are stored in RC profile → serviceItems. We'll also store custom services in project_integrations config
+    const rcR = await pool.query("SELECT id, config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    if (!rcR.rows.length) return res.status(404).json({ error: 'No RC profile found. Sync RC data first.' });
+    let config = rcR.rows[0].config;
+    if (typeof config === 'string') config = JSON.parse(config);
+    if (!config.custom_services) config.custom_services = [];
+    const trimmed = name.trim();
+    const allServices = [];
+    if (config.profile?.serviceItems) {
+      for (const si of config.profile.serviceItems) {
+        allServices.push((si.freeFormServiceItem?.label?.displayName || '').toLowerCase());
+      }
+    }
+    allServices.push(...config.custom_services.map(s => s.toLowerCase()));
+    if (allServices.includes(trimmed.toLowerCase())) return res.status(409).json({ error: 'Service already exists' });
+    config.custom_services.push(trimmed);
+    await pool.query('UPDATE project_integrations SET config=$1 WHERE id=$2', [JSON.stringify(config), rcR.rows[0].id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/projects/:id/local-intel/services/:name', async (req, res) => {
+  const projectId = req.params.id;
+  const serviceName = decodeURIComponent(req.params.name).trim().toLowerCase();
+  try {
+    const rcR = await pool.query("SELECT id, config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    if (!rcR.rows.length) return res.status(404).json({ error: 'No RC profile found' });
+    let config = rcR.rows[0].config;
+    if (typeof config === 'string') config = JSON.parse(config);
+    // Remove from custom_services if present
+    if (config.custom_services) {
+      config.custom_services = config.custom_services.filter(s => s.trim().toLowerCase() !== serviceName);
+    }
+    // Remove from GBP serviceItems if present
+    if (config.profile?.serviceItems) {
+      config.profile.serviceItems = config.profile.serviceItems.filter(si => {
+        const label = (si.freeFormServiceItem?.label?.displayName || '').trim().toLowerCase();
+        return label !== serviceName;
+      });
+    }
+    await pool.query('UPDATE project_integrations SET config=$1 WHERE id=$2', [JSON.stringify(config), rcR.rows[0].id]);
+    res.json({ ok: true });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
