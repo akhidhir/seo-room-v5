@@ -3566,6 +3566,205 @@
       return [...GBP_ALLOWED_SECTIONS];
     }
 
+    // ============ LOCAL INTEL — CONSOLIDATION PAGE ============
+    function LocalIntelPage({ project }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [activeTab, setActiveTab] = useState('suburbs');
+      const [expandedRec, setExpandedRec] = useState(null);
+
+      useEffect(() => {
+        if (!project?.id) return;
+        setLoading(true);
+        api(`/projects/${project.id}/local-intel`).then(d => { setData(d); setLoading(false); }).catch(() => setLoading(false));
+      }, [project?.id]);
+
+      if (loading) return (
+        <div className="audit-loading-overlay">
+          <div className="spinner-large"></div>
+          <div className="audit-loading-title">Building Local Intelligence</div>
+          <div className="audit-loading-text">Cross-referencing GBP, website, keywords, and rankings...</div>
+        </div>
+      );
+      if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
+
+      const { summary: s, suburbs, services, recommendations } = data;
+      const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{ok ? '✓' : '✗'}</span>;
+      const ScorePill = ({ score }) => {
+        const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
+        return <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 12, background: color + '22', color, fontWeight: 700, fontSize: 12 }}>{score}%</span>;
+      };
+      const PriBadge = ({ priority }) => {
+        const colors = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' };
+        return <span style={{ padding: '2px 8px', borderRadius: 6, background: (colors[priority] || '#888') + '22', color: colors[priority] || '#888', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>{priority}</span>;
+      };
+      const GapChip = ({ text }) => <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 11, fontWeight: 600, marginRight: 6, marginBottom: 4 }}>{text}</span>;
+
+      return (
+        <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <i className="fas fa-brain" style={{ color: '#8b5cf6' }} /> Local Intel
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Cross-referencing GBP, website pages, keywords, grid scans, and search console data</div>
+            </div>
+          </div>
+
+          {/* Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 24 }}>
+            {[
+              { label: 'SUBURBS', value: s.suburbCount, sub: `${s.gbpSuburbCount} in GBP`, icon: 'fas fa-map-pin', color: '#8b5cf6' },
+              { label: 'SERVICES', value: s.gbpServiceCount, sub: `${s.pagesWithService} with pages`, icon: 'fas fa-wrench', color: '#3b82f6' },
+              { label: 'WEB PAGES', value: s.totalWebPages, sub: `${s.pagesWithSuburb} suburb pages`, icon: 'fas fa-globe', color: '#22c55e' },
+              { label: 'KEYWORDS', value: s.trackedKeywords, sub: `${s.gridScans} grid scans`, icon: 'fas fa-search', color: '#f59e0b' },
+              { label: 'GBP POSTS', value: s.gbpPostCount, sub: `${s.gbpCategories?.length || 0} categories`, icon: 'fas fa-calendar', color: '#ef4444' },
+              { label: 'ACTION GAPS', value: s.totalGaps, sub: `${recommendations.length} recommendations`, icon: 'fas fa-exclamation-triangle', color: s.totalGaps > 10 ? '#ef4444' : s.totalGaps > 5 ? '#f59e0b' : '#22c55e' },
+            ].map((c, i) => (
+              <div key={i} style={{ background: 'var(--card)', borderRadius: 10, padding: '16px 14px', textAlign: 'center', border: '1px solid var(--border)' }}>
+                <i className={c.icon} style={{ color: c.color, fontSize: 16, marginBottom: 6, display: 'block' }} />
+                <div style={{ fontSize: 28, fontWeight: 800, color: c.color }}>{c.value}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{c.label}</div>
+                <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4 }}>{c.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Coverage bars */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
+            {[
+              { label: 'Suburb Coverage', pct: s.suburbCoverage, desc: `${s.pagesWithSuburb}/${s.suburbCount} suburbs have pages + keywords` },
+              { label: 'Service Coverage', pct: s.serviceCoverage, desc: `${s.pagesWithService}/${s.serviceCount} services have pages + keywords` },
+            ].map((b, i) => (
+              <div key={i} style={{ background: 'var(--card)', borderRadius: 10, padding: 16, border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text1)' }}>{b.label}</span>
+                  <span style={{ fontWeight: 800, fontSize: 13, color: b.pct >= 80 ? '#22c55e' : b.pct >= 50 ? '#f59e0b' : '#ef4444' }}>{b.pct}%</span>
+                </div>
+                <div style={{ height: 8, borderRadius: 4, background: 'var(--bg)', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: b.pct + '%', borderRadius: 4, background: b.pct >= 80 ? '#22c55e' : b.pct >= 50 ? '#f59e0b' : '#ef4444', transition: 'width 0.5s' }} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>{b.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--border)', marginBottom: 20 }}>
+            {[
+              { id: 'suburbs', label: `Suburbs (${suburbs.length})`, icon: 'fas fa-map-pin' },
+              { id: 'services', label: `Services (${services.length})`, icon: 'fas fa-wrench' },
+              { id: 'recommendations', label: `Actions (${recommendations.length})`, icon: 'fas fa-bolt' },
+            ].map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ padding: '10px 20px', background: 'none', border: 'none', borderBottom: activeTab === t.id ? '2px solid #8b5cf6' : '2px solid transparent', color: activeTab === t.id ? '#8b5cf6' : 'var(--text2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: -2 }}>
+                <i className={t.icon} style={{ fontSize: 12 }} /> {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* SUBURBS TAB */}
+          {activeTab === 'suburbs' && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Suburb</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GBP</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Pages</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Keywords</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Grid</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suburbs.map((s, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
+                      <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text1)' }}>{s.suburb}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><Check ok={s.inGbp} /></td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gridScanCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.bestSolv != null ? Math.round(s.bestSolv) + '%' : s.gridScanCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
+                      <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                    </tr>
+                  ))}
+                  {suburbs.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No suburbs found. Add service areas to your project or sync GBP data.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SERVICES TAB */}
+          {activeTab === 'services' && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Service</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GBP</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Pages</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Keywords</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Posts</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>GSC</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Score</th>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text3)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>Gaps</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {services.map((s, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
+                      <td style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--text1)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.service}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><Check ok={s.inGbp} /></td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.pageCount > 0 ? <span style={{ color: '#22c55e', fontWeight: 700 }}>{s.pageCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.keywordCount > 0 ? <span style={{ color: '#3b82f6', fontWeight: 700 }}>{s.keywordCount}</span> : <Check ok={false} />}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.postCount > 0 ? <span style={{ color: '#8b5cf6', fontWeight: 700 }}>{s.postCount}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}>{s.gscImpressions > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: 12 }}>{s.gscImpressions.toLocaleString()}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                      <td style={{ textAlign: 'center', padding: '10px 6px' }}><ScorePill score={s.score} /></td>
+                      <td style={{ padding: '10px 12px' }}>{s.gaps.map((g, j) => <GapChip key={j} text={g} />)}</td>
+                    </tr>
+                  ))}
+                  {services.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No services found. Sync GBP data via Rating Captain first.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* RECOMMENDATIONS TAB */}
+          {activeTab === 'recommendations' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {recommendations.map((r, i) => (
+                <div key={i} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div onClick={() => setExpandedRec(expandedRec === i ? null : i)} style={{ padding: '14px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <i className={r.icon} style={{ color: '#8b5cf6', fontSize: 16, width: 20, textAlign: 'center' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text1)' }}>{r.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{r.detail}</div>
+                    </div>
+                    <PriBadge priority={r.priority} />
+                    <i className={`fas fa-chevron-${expandedRec === i ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 12 }} />
+                  </div>
+                  {expandedRec === i && r.items?.length > 0 && (
+                    <div style={{ padding: '0 16px 14px', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {r.items.map((item, j) => (
+                          <span key={j} style={{ padding: '4px 12px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text1)', fontWeight: 500 }}>{item}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {recommendations.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No action gaps found — excellent local SEO coverage!</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============
     function InternalGBPAuditPage({ project }) {
       const [findings, setFindings] = useState([]);
@@ -3887,10 +4086,9 @@
                     <div style={{ marginBottom: 14 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Services ({rcServices.length})</div>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {rcServices.slice(0, 20).map((s, i) => (
+                        {rcServices.map((s, i) => (
                           <span key={i} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text2)' }}>{s}</span>
                         ))}
-                        {rcServices.length > 20 && <span style={{ fontSize: 12, padding: '3px 10px', color: 'var(--text3)' }}>+{rcServices.length - 20} more</span>}
                       </div>
                     </div>
                   )}
@@ -3900,10 +4098,9 @@
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Service Areas ({rcAreas.length})</div>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {rcAreas.slice(0, 15).map((a, i) => (
+                        {rcAreas.map((a, i) => (
                           <span key={i} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 4, background: 'rgba(245,158,11,0.1)', color: '#f59e0b' }}>{a}</span>
                         ))}
-                        {rcAreas.length > 15 && <span style={{ fontSize: 12, padding: '3px 10px', color: 'var(--text3)' }}>+{rcAreas.length - 15} more</span>}
                       </div>
                     </div>
                   )}
@@ -19151,6 +19348,8 @@
               return <NewWebsiteSetupPage project={buildProject} buildMode={true} onUpdate={(updated) => { setActiveBuild(updated); setAllBuilds(prev => prev.map(b => b.id === updated.id ? updated : b)); }} />;
             }
             return <NewWebsiteSetupPage project={project} />;
+          case 'local-intel':
+            return <LocalIntelPage project={project} />;
           case 'gbp-audit':
           case 'gbp-audit-internal':
             return <InternalGBPAuditPage project={project} />;
@@ -19238,6 +19437,7 @@ case 'action-plan':
 
       const allNavItems = [
         { section: 'AUDIT', items: [
+          { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true },
           { id: 'gbp-audit', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true, expandable: true, children: [
             { id: 'gbp-audit-internal', label: 'Internal Audit', icon: 'fas fa-database' },
             { id: 'gbp-audit-external', label: 'External Audit', icon: 'fas fa-globe', expandable: true },
