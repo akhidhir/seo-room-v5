@@ -18305,10 +18305,20 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const allServiceNames = new Set();
     const serviceSources = {};
 
+    // Include GBP categories as services (e.g. "Plumber" primary category)
+    for (const cat of gbpCategories) {
+      const n = normalize(cat);
+      if (!allServiceNames.has(n)) {
+        allServiceNames.add(n);
+        serviceSources[n] = { original: cat, inGbp: true, isCategory: true };
+      }
+    }
     for (const s of gbpServices) {
       const n = normalize(s);
-      allServiceNames.add(n);
-      serviceSources[n] = { original: s, inGbp: true };
+      if (!allServiceNames.has(n)) {
+        allServiceNames.add(n);
+        serviceSources[n] = { original: s, inGbp: true };
+      }
     }
     // Include custom services added via Local Intel
     if (rc?.custom_services) {
