@@ -3817,14 +3817,14 @@
             // Matrix stats
             const matrixCovPct = s.totalCombos ? Math.round((s.coveredCombos / s.totalCombos) * 100) : 0;
             const fullPct = s.totalCombos ? Math.round((s.fullyCovered / s.totalCombos) * 100) : 0;
-            // Color function: 0=red, 1=orange, 2=amber, 3=lime, 4=green, 5=emerald
+            // Color function: 0=red bg, 1-5=green text with intensifying green bg
             const cellColor = (signals) => {
               if (signals === 0) return { bg: '#ef444420', color: '#ef4444', border: '#ef444440' };
-              if (signals === 1) return { bg: '#f9731625', color: '#fb923c', border: '#f9731640' };
-              if (signals === 2) return { bg: '#f59e0b25', color: '#fbbf24', border: '#f59e0b40' };
-              if (signals === 3) return { bg: '#84cc1625', color: '#a3e635', border: '#84cc1640' };
-              if (signals === 4) return { bg: '#22c55e25', color: '#4ade80', border: '#22c55e40' };
-              return { bg: '#16a34a30', color: '#34d399', border: '#16a34a50' };
+              if (signals === 1) return { bg: '#22c55e10', color: '#4ade80', border: '#22c55e25' };
+              if (signals === 2) return { bg: '#22c55e18', color: '#4ade80', border: '#22c55e30' };
+              if (signals === 3) return { bg: '#22c55e25', color: '#4ade80', border: '#22c55e40' };
+              if (signals === 4) return { bg: '#22c55e35', color: '#4ade80', border: '#22c55e50' };
+              return { bg: '#22c55e45', color: '#4ade80', border: '#22c55e60' };
             };
             const tooltipText = (cell) => {
               const parts = [];
@@ -3841,8 +3841,8 @@
               else parts.push('✗ No GSC data');
               return parts.join('\n');
             };
-            // Truncate long service names for column headers
-            const shortSvc = (name) => name.length > 18 ? name.substring(0, 16) + '…' : name;
+            // Show full service names
+            const shortSvc = (name) => name;
 
             return (
               <div>
@@ -3871,30 +3871,33 @@
                 </div>
 
                 {/* Legend */}
-                <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', marginBottom: 20 }}>
-                  <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text1)' }}>Each cell = signals out of 5:</span>
+                <div style={{ background: 'var(--card)', borderRadius: 10, padding: '18px 24px', border: '1px solid var(--border)', marginBottom: 20 }}>
+                  <div style={{ fontSize: 16, color: 'var(--text1)', fontWeight: 700, marginBottom: 10, lineHeight: 1.5 }}>
+                    Each cell shows how visible you are for a specific <strong style={{ color: '#8b5cf6' }}>service + suburb</strong> combo (e.g. "Plumber Leeming").
+                    The number is how many SEO signals you have — <span style={{ color: '#ef4444' }}>0 = invisible</span>, <span style={{ color: '#4ade80' }}>5 = fully covered</span>.
+                  </div>
+                  <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
                     {[
-                      { label: '0 — None', ...cellColor(0) },
+                      { label: '0 — Red = gap', ...cellColor(0) },
                       { label: '1', ...cellColor(1) },
                       { label: '2', ...cellColor(2) },
                       { label: '3', ...cellColor(3) },
                       { label: '4', ...cellColor(4) },
-                      { label: '5 — All', ...cellColor(5) },
+                      { label: '5 — Full', ...cellColor(5) },
                     ].map((l, i) => (
-                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, color: 'var(--text2)', fontWeight: 600 }}>
-                        <span style={{ width: 28, height: 28, borderRadius: 6, background: l.bg, border: `2px solid ${l.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: l.color }}>{i}</span>
+                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15, color: 'var(--text2)', fontWeight: 600 }}>
+                        <span style={{ width: 32, height: 32, borderRadius: 6, background: l.bg, border: `2px solid ${l.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 800, color: l.color }}>{i}</span>
                         {l.label}
                       </span>
                     ))}
                   </div>
-                  <div style={{ marginTop: 10, fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
-                    <strong style={{ color: 'var(--text1)' }}>5 signals:</strong>{' '}
-                    <span style={{ color: '#4ade80' }}>● Page exists</span>{' · '}
-                    <span style={{ color: '#22d3ee' }}>● Indexed in Google</span>{' · '}
-                    <span style={{ color: '#fbbf24' }}>● Keyword tracked</span>{' · '}
-                    <span style={{ color: '#c084fc' }}>● Grid scan done</span>{' · '}
-                    <span style={{ color: '#fb923c' }}>● GSC impressions</span>
+                  <div style={{ fontSize: 15, color: 'var(--text2)', lineHeight: 1.6 }}>
+                    <strong style={{ color: 'var(--text1)' }}>The 5 signals:</strong>{' '}
+                    <span style={{ color: '#4ade80' }}>① Landing page exists</span>{' · '}
+                    <span style={{ color: '#22d3ee' }}>② Indexed in Google</span>{' · '}
+                    <span style={{ color: '#fbbf24' }}>③ Keyword being tracked</span>{' · '}
+                    <span style={{ color: '#c084fc' }}>④ Grid scan (Maps position)</span>{' · '}
+                    <span style={{ color: '#fb923c' }}>⑤ GSC impressions (organic)</span>
                   </div>
                 </div>
 
@@ -3908,8 +3911,8 @@
                             SUBURB
                           </th>
                           {serviceNames.map((svc, i) => (
-                            <th key={i} style={{ padding: '10px 4px', textAlign: 'center', fontWeight: 700, fontSize: 12, color: 'var(--text3)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap' }} title={svc}>
-                              <div style={{ writingMode: 'vertical-lr', transform: 'rotate(180deg)', minHeight: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>
+                            <th key={i} style={{ padding: '10px 6px', textAlign: 'center', fontWeight: 700, fontSize: 14, color: 'var(--text2)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap' }} title={svc}>
+                              <div style={{ writingMode: 'vertical-lr', transform: 'rotate(180deg)', minHeight: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
                                 {shortSvc(svc)}
                               </div>
                             </th>
