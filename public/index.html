@@ -3567,7 +3567,7 @@
     }
 
     // ============ LOCAL INTEL — CONSOLIDATION PAGE ============
-    function LocalIntelPage({ project }) {
+    function LocalIntelPage({ project, onNavigate }) {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [activeTab, setActiveTab] = useState('suburbs');
@@ -3598,7 +3598,17 @@
         const colors = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' };
         return <span style={{ padding: '2px 8px', borderRadius: 6, background: (colors[priority] || '#888') + '22', color: colors[priority] || '#888', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>{priority}</span>;
       };
-      const GapChip = ({ text }) => <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 11, fontWeight: 600, marginRight: 6, marginBottom: 4 }}>{text}</span>;
+      const gapNav = {
+        'Add keyword tracking': 'maps-rankings',
+        'Run grid scan': 'maps-rankings',
+        'Create suburb landing page': 'ow-queue',
+        'Create service page': 'ow-queue',
+        'Write GBP post': 'gbp-posts',
+      };
+      const GapChip = ({ text }) => {
+        const target = gapNav[text];
+        return <span onClick={target && onNavigate ? () => onNavigate(target) : undefined} style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, background: '#ef444422', color: '#ef4444', fontSize: 11, fontWeight: 600, marginRight: 6, marginBottom: 4, cursor: target ? 'pointer' : 'default', transition: 'background 0.15s' }} onMouseEnter={e => { if (target) e.target.style.background = '#ef444444'; }} onMouseLeave={e => { if (target) e.target.style.background = '#ef444422'; }}>{text}</span>;
+      };
 
       return (
         <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
@@ -3615,16 +3625,16 @@
           {/* Summary Cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 24 }}>
             {[
-              { label: 'SUBURBS', value: s.suburbCount, sub: `${s.gbpSuburbCount} in GBP`, icon: 'fas fa-map-pin', color: '#8b5cf6' },
-              { label: 'SERVICES', value: s.gbpServiceCount, sub: `${s.pagesWithService} with pages`, icon: 'fas fa-wrench', color: '#3b82f6' },
-              { label: 'WEB PAGES', value: s.totalWebPages, sub: `${s.pagesWithSuburb} suburb pages`, icon: 'fas fa-globe', color: '#22c55e' },
-              { label: 'KEYWORDS', value: s.trackedKeywords, sub: `${s.gridScans} grid scans`, icon: 'fas fa-search', color: '#f59e0b' },
-              { label: 'GSC QUERIES', value: s.totalGscKeywords, sub: `organic signals`, icon: 'fas fa-chart-line', color: '#22c55e' },
-              { label: 'GBP POSTS', value: s.gbpPostCount, sub: `${s.gbpCategories?.length || 0} categories`, icon: 'fas fa-calendar', color: '#ef4444' },
-              { label: 'COMPETITORS', value: s.competitorCount || competitors.length, sub: `from grid scans`, icon: 'fas fa-users', color: '#f97316' },
-              { label: 'ACTION GAPS', value: s.totalGaps, sub: `${recommendations.length} recommendations`, icon: 'fas fa-exclamation-triangle', color: s.totalGaps > 10 ? '#ef4444' : s.totalGaps > 5 ? '#f59e0b' : '#22c55e' },
+              { label: 'SUBURBS', value: s.suburbCount, sub: `${s.gbpSuburbCount} in GBP`, icon: 'fas fa-map-pin', color: '#8b5cf6', tab: 'suburbs' },
+              { label: 'SERVICES', value: s.gbpServiceCount, sub: `${s.pagesWithService} with pages`, icon: 'fas fa-wrench', color: '#3b82f6', tab: 'services' },
+              { label: 'WEB PAGES', value: s.totalWebPages, sub: `${s.pagesWithSuburb} suburb pages`, icon: 'fas fa-globe', color: '#22c55e', nav: 'onpage-audit' },
+              { label: 'KEYWORDS', value: s.trackedKeywords, sub: `${s.gridScans} grid scans`, icon: 'fas fa-search', color: '#f59e0b', nav: 'maps-rankings' },
+              { label: 'GSC QUERIES', value: s.totalGscKeywords, sub: `organic signals`, icon: 'fas fa-chart-line', color: '#22c55e', nav: 'gsc-audit' },
+              { label: 'GBP POSTS', value: s.gbpPostCount, sub: `${s.gbpCategories?.length || 0} categories`, icon: 'fas fa-calendar', color: '#ef4444', nav: 'gbp-posts' },
+              { label: 'COMPETITORS', value: s.competitorCount || competitors.length, sub: `from grid scans`, icon: 'fas fa-users', color: '#f97316', tab: 'competitors' },
+              { label: 'ACTION GAPS', value: s.totalGaps, sub: `${recommendations.length} recommendations`, icon: 'fas fa-exclamation-triangle', color: s.totalGaps > 10 ? '#ef4444' : s.totalGaps > 5 ? '#f59e0b' : '#22c55e', tab: 'recommendations' },
             ].map((c, i) => (
-              <div key={i} style={{ background: 'var(--card)', borderRadius: 10, padding: '16px 14px', textAlign: 'center', border: '1px solid var(--border)' }}>
+              <div key={i} onClick={() => c.nav ? onNavigate?.(c.nav) : c.tab ? setActiveTab(c.tab) : null} style={{ background: 'var(--card)', borderRadius: 10, padding: '16px 14px', textAlign: 'center', border: '1px solid var(--border)', cursor: 'pointer', transition: 'border-color 0.15s' }} onMouseEnter={e => e.currentTarget.style.borderColor = c.color} onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
                 <i className={c.icon} style={{ color: c.color, fontSize: 16, marginBottom: 6, display: 'block' }} />
                 <div style={{ fontSize: 28, fontWeight: 800, color: c.color }}>{c.value}</div>
                 <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{c.label}</div>
@@ -19404,7 +19414,7 @@
             }
             return <NewWebsiteSetupPage project={project} />;
           case 'local-intel':
-            return <LocalIntelPage project={project} />;
+            return <LocalIntelPage project={project} onNavigate={(tab) => setActiveTab(tab)} />;
           case 'gbp-audit':
           case 'gbp-audit-internal':
             return <InternalGBPAuditPage project={project} />;
