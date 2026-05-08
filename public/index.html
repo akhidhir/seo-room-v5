@@ -3885,6 +3885,18 @@
                       {l.text}
                     </span>
                   ))}
+                  <span style={{ width: 1, height: 24, background: 'var(--border)', margin: '0 4px' }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginRight: 4 }}>Volume:</span>
+                  {[
+                    { color: '#f59e0b', label: 'High (500+)' },
+                    { color: '#3b82f6', label: 'Med (100-499)' },
+                    { color: '#64748b', label: 'Low (<100)' },
+                  ].map((v, i) => (
+                    <span key={'v'+i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, color: 'var(--text2)', fontWeight: 600 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: v.color, opacity: i === 2 ? 0.5 : i === 1 ? 0.8 : 1 }} />
+                      {v.label}
+                    </span>
+                  ))}
                 </div>
 
                 {/* Matrix grid */}
@@ -3896,13 +3908,17 @@
                           <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--card)', padding: '14px 18px', textAlign: 'left', fontWeight: 800, fontSize: 15, color: 'var(--text3)', borderBottom: '2px solid var(--border)', borderRight: '2px solid var(--border)', minWidth: 170, textTransform: 'uppercase', letterSpacing: 1 }}>
                             SUBURB
                           </th>
-                          {serviceNames.map((svc, i) => (
-                            <th key={i} style={{ padding: '10px 6px', textAlign: 'center', fontWeight: 700, fontSize: 14, color: 'var(--text2)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap' }} title={svc}>
+                          {serviceNames.map((svc, i) => {
+                            const maxVol = Math.max(0, ...matrix.map(r => (r.services[svc] || {}).kwVolume || 0));
+                            const volColor = maxVol >= 500 ? '#f59e0b' : maxVol >= 100 ? '#3b82f6' : maxVol > 0 ? '#64748b' : null;
+                            return (
+                            <th key={i} style={{ padding: '10px 6px', textAlign: 'center', fontWeight: 700, fontSize: 14, color: volColor || 'var(--text2)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap' }} title={svc + (maxVol > 0 ? ` (up to ${maxVol} searches/mo)` : '')}>
                               <div style={{ writingMode: 'vertical-lr', transform: 'rotate(180deg)', minHeight: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
                                 {svc}
                               </div>
                             </th>
-                          ))}
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
@@ -3920,8 +3936,9 @@
                                   const isOpen = expandedCell === cellKey(svc);
                                   return (
                                     <td key={ci} style={{ textAlign: 'center', padding: '5px 3px', background: ri % 2 === 0 ? 'transparent' : 'var(--bg)', cursor: 'pointer' }} onClick={() => setExpandedCell(isOpen ? null : cellKey(svc))}>
-                                      <div style={{ width: 42, height: 42, borderRadius: 8, background: isOpen ? rc.color + '30' : rc.bg, border: `2px solid ${isOpen ? rc.color : rc.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, color: rc.color, fontWeight: 800, transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; e.currentTarget.style.borderColor = rc.color; }} onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; if (!isOpen) e.currentTarget.style.borderColor = rc.border; }}>
-                                        {rc.display}
+                                      <div style={{ width: 42, height: 50, borderRadius: 8, background: isOpen ? rc.color + '30' : rc.bg, border: `2px solid ${isOpen ? rc.color : rc.border}`, display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, transition: 'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; e.currentTarget.style.borderColor = rc.color; }} onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; if (!isOpen) e.currentTarget.style.borderColor = rc.border; }}>
+                                        <span style={{ fontSize: 16, color: rc.color, fontWeight: 800, lineHeight: 1 }}>{rc.display}</span>
+                                        {cell.kwVolume > 0 && <span style={{ width: 6, height: 6, borderRadius: '50%', background: cell.kwVolume >= 500 ? '#f59e0b' : cell.kwVolume >= 100 ? '#3b82f6' : '#64748b', opacity: cell.kwVolume >= 500 ? 1 : cell.kwVolume >= 100 ? 0.8 : 0.5 }} title={`${cell.kwVolume} searches/mo`} />}
                                       </div>
                                     </td>
                                   );
