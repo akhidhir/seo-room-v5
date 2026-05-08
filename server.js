@@ -18508,59 +18508,112 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     // ============ CROSS-REFERENCE: SUBURB × SERVICE MATRIX ============
-    // For each suburb×service combo, check: has page, has keyword, has grid scan, GSC impressions
+    // For each suburb×service combo: actual rank position + diagnostic data
     const matrixRows = [];
     for (const subN of allSuburbNames) {
       const sub = suburbSources[subN];
       const row = { suburb: sub.original, services: {} };
       for (const svcN of allServiceNames) {
         const svc = serviceSources[svcN];
-        // Check if any page matches BOTH suburb + service
         const subSlug = subN.replace(/\s+/g, '-');
         const svcWords = svcN.split(/\s+/);
         const svcKey = svcWords.length > 1 ? svcWords.slice(0, 2).join(' ') : svcWords[0];
         const svcSlug = svcKey.replace(/\s+/g, '-');
-        let hasPage = false, pageUrl = '';
+
+        // 1. Check if page exists for this combo
+        let hasPage = false, pageUrl = '', pageWordCount = 0;
         for (const page of websitePages) {
           const slug = normalize(page.slug || page.url || '');
           if ((slug.includes(subSlug) || slug.includes(subN.replace(/\s+/g, ''))) && slug.includes(svcSlug)) {
-            hasPage = true; pageUrl = page.url; break;
+            hasPage = true; pageUrl = page.url; pageWordCount = page.wordCount || 0; break;
           }
         }
-        // Check if any keyword matches both
-        let hasKeyword = false, kwRank = null;
-        for (const kw of rankKeywords) {
-          const kwN = normalize(kw.keyword);
-          if (kwN.includes(subN) && kwN.includes(svcKey)) {
-            hasKeyword = true;
-            const rt = rankMap[kw.keyword.toLowerCase()];
-            if (rt) kwRank = rt.maps_position || rt.serp_position || null;
-            break;
+        // Also check for suburb-only pages (e.g. /plumber-murdoch/)
+        if (!hasPage) {
+          for (const page of websitePages) {
+            const slug = normalize(page.slug || page.url || '');
+            if (slug.includes(subSlug) || slug.includes(subN.replace(/\s+/g, ''))) {
+              hasPage = true; pageUrl = page.url; pageWordCount = page.wordCount || 0; break;
+            }
           }
         }
-        // Check grid scan
-        let hasGrid = false, gridSolv = null;
-        for (const [kwLower, gs] of Object.entries(gridMap)) {
-          if (kwLower.includes(subN) && kwLower.includes(svcKey)) {
-            hasGrid = true; gridSolv = gs.solv; break;
-          }
-        }
-        // GSC impressions for this combo
-        let gscImp = 0;
-        for (const [kwLower, gsc] of Object.entries(gscMap)) {
-          if (kwLower.includes(subN) && kwLower.includes(svcKey)) gscImp += gsc.impressions || 0;
-        }
-        // Indexing status for this page
-        let isIndexed = null; // null = no page or unchecked, true = indexed, false = not indexed
+
+        // 2. Indexing status
+        let isIndexed = null;
         if (hasPage && pageUrl) {
           let path;
           try { path = new URL(pageUrl.toLowerCase()).pathname.replace(/\/+$/, ''); } catch { path = pageUrl.toLowerCase().replace(/\/+$/, ''); }
           const idx = indexingMap[path];
           if (idx) isIndexed = idx.verdict === 'PASS';
         }
-        // Score: 0-5 (page + keyword + grid + gsc + indexed)
-        const signals = (hasPage ? 1 : 0) + (hasKeyword ? 1 : 0) + (hasGrid ? 1 : 0) + (gscImp > 0 ? 1 : 0) + (isIndexed === true ? 1 : 0);
-        row.services[svc.original] = { hasPage, pageUrl, hasKeyword, kwRank, hasGrid, gridSolv, gscImp, isIndexed, signals };
+
+        // 3. Rank data — Maps position from grid scan is primary, SERP tracking as fallback
+        let mapsRank = null, serpRank = null, gridSolv = null, gridArp = null;
+        let topCompetitor = null;
+        for (const [kwLower, gs] of Object.entries(gridMap)) {
+          if (kwLower.includes(subN) && kwLower.includes(svcKey)) {
+            gridSolv = gs.solv;
+            gridArp = gs.arp;
+            // ARP is the average rank where found — use as maps rank indicator
+            if (gs.arp) mapsRank = Math.round(gs.arp);
+            // Get top competitor for this keyword
+            const tops = gs.competitors?.top || [];
+            if (tops.length > 0) topCompetitor = { name: tops[0].name || tops[0].title, rating: tops[0].rating, reviews: tops[0].reviews, dominance: tops[0].dominance };
+            break;
+          }
+        }
+        // SERP rank from rank_tracking
+        for (const kw of rankKeywords) {
+          const kwN = normalize(kw.keyword);
+          if (kwN.includes(subN) && kwN.includes(svcKey)) {
+            const rt = rankMap[kw.keyword.toLowerCase()];
+            if (rt) {
+              if (rt.maps_position) mapsRank = mapsRank || rt.maps_position;
+              if (rt.serp_position) serpRank = rt.serp_position;
+            }
+            break;
+          }
+        }
+
+        // 4. GSC impressions
+        let gscImp = 0, gscClicks = 0, gscCtr = 0;
+        for (const [kwLower, gsc] of Object.entries(gscMap)) {
+          if (kwLower.includes(subN) && kwLower.includes(svcKey)) {
+            gscImp += gsc.impressions || 0;
+            gscClicks += gsc.clicks || 0;
+            if (gsc.ctr) gscCtr = Math.max(gscCtr, gsc.ctr);
+          }
+        }
+
+        // 5. GBP post exists for this service?
+        let hasGbpPost = false;
+        for (const post of gbpPosts) {
+          if (normalize(post.summary).includes(svcKey)) { hasGbpPost = true; break; }
+        }
+
+        // Primary rank = maps rank (most important for local SEO), fallback to SERP
+        const rank = mapsRank || serpRank || null;
+
+        // Build diagnosis — what's helping and what's hurting
+        const actions = [];
+        if (!hasPage) actions.push({ type: 'critical', text: 'Create landing page', nav: 'ow-queue' });
+        else if (isIndexed === false) actions.push({ type: 'critical', text: 'Page not indexed — fix indexing', nav: 'indexing' });
+        else if (pageWordCount > 0 && pageWordCount < 500) actions.push({ type: 'high', text: `Page only ${pageWordCount} words — expand content`, nav: 'ow-queue' });
+        if (!mapsRank && !serpRank) actions.push({ type: 'high', text: 'No rank data — run grid scan or track keyword', nav: 'maps-rankings' });
+        if (rank && rank > 3 && !hasGbpPost) actions.push({ type: 'medium', text: 'Write GBP post about this service', nav: 'gbp-posts' });
+        if (rank && rank > 3 && topCompetitor && topCompetitor.reviews > (reviewStats?.total_reviews || 0)) {
+          actions.push({ type: 'medium', text: `Top competitor has ${topCompetitor.reviews} reviews vs your ${reviewStats?.total_reviews || 0}` });
+        }
+        if (gscImp > 50 && gscCtr < 0.03) actions.push({ type: 'medium', text: 'Low CTR — improve meta title/description' });
+
+        const signals = (hasPage ? 1 : 0) + (isIndexed === true ? 1 : 0) + (rank != null ? 1 : 0) + (gridSolv != null ? 1 : 0) + (gscImp > 0 ? 1 : 0);
+        row.services[svc.original] = {
+          rank, mapsRank, serpRank, gridSolv, gridArp,
+          hasPage, pageUrl, pageWordCount, isIndexed,
+          gscImp, gscClicks, gscCtr,
+          hasGbpPost, topCompetitor,
+          actions, signals,
+        };
       }
       matrixRows.push(row);
     }
