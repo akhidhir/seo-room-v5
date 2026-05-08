@@ -7853,7 +7853,7 @@
               </button>
               {pendingSeoRoomCount > 0 && (
                 <button className="btn" onClick={handleExecuteAll} disabled={executing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
-                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run All Automated ({pendingSeoRoomCount})</>}
+                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Start All Automated ({pendingSeoRoomCount})</>}
                 </button>
               )}
             </div>
@@ -7885,15 +7885,15 @@
               { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
             ];
             return (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${auditStats.length}, 1fr)`, gap: 12, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${auditStats.length}, 1fr)`, gap: 8, marginBottom: 14 }}>
                 {auditStats.map(s => (
-                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: '16px 20px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.count}</div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 4 }}>
-                      <i className={s.icon} style={{ marginRight: 4, fontSize: 9 }} />{s.label}
+                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', padding: '10px 12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.count}</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 2 }}>
+                      <i className={s.icon} style={{ marginRight: 4, fontSize: 8 }} />{s.label}
                     </div>
                     {s.pending > 0 && s.label !== 'PENDING' && s.label !== 'DONE' && (
-                      <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>{s.pending} pending</div>
+                      <div style={{ fontSize: 9, color: '#f59e0b', marginTop: 1 }}>{s.pending} pending</div>
                     )}
                   </div>
                 ))}
@@ -7902,13 +7902,13 @@
           })()}
 
           {/* Pillar tabs */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             {pillars.map(p => (
               <button key={p.id} onClick={() => setActivePillar(p.id)}
-                style={{ padding: '8px 16px', borderRadius: 8, border: activePillar === p.id ? `2px solid ${p.color}` : '1px solid var(--border)',
-                  background: activePillar === p.id ? `${p.color}15` : 'var(--card)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                  color: activePillar === p.id ? p.color : 'var(--text2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <i className={p.icon} style={{ fontSize: 12 }} />{p.label}
+                style={{ padding: '6px 12px', borderRadius: 6, border: activePillar === p.id ? `2px solid ${p.color}` : '1px solid var(--border)',
+                  background: activePillar === p.id ? `${p.color}15` : 'var(--card)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  color: activePillar === p.id ? p.color : 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <i className={p.icon} style={{ fontSize: 11 }} />{p.label}
                 <span style={{ fontSize: 11, opacity: 0.7 }}>
                   ({p.id === 'all' ? items.length : items.filter(i => (i._pillar || i.pillar) === p.id).length})
                 </span>
@@ -7917,7 +7917,7 @@
           </div>
 
           {/* Filter bar */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginRight: 4 }}><i className="fas fa-filter" style={{ marginRight: 4 }} />Filters:</span>
             {[
               { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
@@ -8087,7 +8087,7 @@
                               if (canExec) return (
                                 <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
                                   style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
-                                  {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Run</>}
+                                  {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Start</>}
                                 </button>
                               );
                               // Non-executable automated items: send to copywriter or start manually
