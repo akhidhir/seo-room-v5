@@ -17675,6 +17675,7 @@
         gscProperty: '',
         gbpLocationId: '',
         gbpLocationName: '',
+        rcLocationId: '',
         toneOfVoice: '',
         writerVoice: '',
         customerPersona: '',
@@ -17723,6 +17724,7 @@
               gscProperty: data.project.gsc_property || '',
               gbpLocationId: data.project.gbp_location_id || '',
               gbpLocationName: data.project.gbp_location_name || '',
+              rcLocationId: data.project.rc_location_id || '',
               toneOfVoice: data.project.tone_of_voice || '',
               writerVoice: data.project.writer_voice || '',
               customerPersona: data.project.customer_persona || '',
@@ -18118,6 +18120,23 @@
               />
               <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
                 Find your business on Google Maps → click Share → Copy link → paste here. The system will use this to fetch your exact profile data.
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: 12 }}>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span><i className="fas fa-shield-alt" style={{ marginRight: 6, color: '#8b5cf6' }} />Rating Captain Location</span>
+                {formData.rcLocationId && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, background: 'rgba(139,92,246,0.15)', color: '#8b5cf6', fontWeight: 600 }}>Linked</span>}
+              </label>
+              <input
+                type="number"
+                className="form-input"
+                value={formData.rcLocationId}
+                onChange={(e) => setFormData(prev => ({ ...prev, rcLocationId: e.target.value ? parseInt(e.target.value) : '' }))}
+                placeholder="RC db_location_id (e.g. 15047)"
+              />
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+                The Rating Captain location ID used for internal GBP audit sync. Find it in your RC dashboard or Cowork RC locations list.
               </div>
             </div>
           </div>

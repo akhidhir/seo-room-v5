@@ -373,6 +373,10 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gsc_property TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_id TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
+    // Set RC location IDs for known projects (one-time seed, safe to re-run)
+    await client.query(`UPDATE projects SET rc_location_id = 15047 WHERE id = 2 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
@@ -1228,6 +1232,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const page_wireframe = b.page_wireframe ?? b.pageWireframe;
   const customer_persona = b.customer_persona ?? b.customerPersona;
   const writer_voice = b.writer_voice ?? b.writerVoice;
+  const rc_location_id = b.rc_location_id ?? b.rcLocationId;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -1254,7 +1259,8 @@ app.put('/api/projects/:id', async (req, res) => {
            tone_of_voice=$26,
            page_wireframe=$27,
            customer_persona=$28,
-           writer_voice=$29
+           writer_voice=$29,
+           rc_location_id=COALESCE($30, rc_location_id)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1269,7 +1275,8 @@ app.put('/api/projects/:id', async (req, res) => {
        tone_of_voice !== undefined ? tone_of_voice : null,
        page_wireframe !== undefined ? page_wireframe : null,
        customer_persona !== undefined ? customer_persona : null,
-       writer_voice !== undefined ? writer_voice : null]
+       writer_voice !== undefined ? writer_voice : null,
+       rc_location_id !== undefined ? rc_location_id : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -3322,7 +3329,7 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
 // Accept Rating Captain data and generate internal GBP audit findings
 app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
   const { projectId } = req.params;
-  const { location_id, profile, healthcheck, reviews_stats, posts, rc_location_id } = req.body;
+  const { location_id, profile, healthcheck, reviews_stats, posts, rc_location_id, db_location_id } = req.body;
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -3382,6 +3389,9 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     }
 
     // 3. Store RC location_id in project settings if provided
+    if (db_location_id) {
+      await pool.query('UPDATE projects SET rc_location_id=$1 WHERE id=$2', [db_location_id, projectId]);
+    }
     if (rc_location_id) {
       await pool.query('UPDATE projects SET gbp_location_id=$1 WHERE id=$2', [rc_location_id, projectId]);
     }
