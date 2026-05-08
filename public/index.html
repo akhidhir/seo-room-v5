@@ -3647,7 +3647,7 @@
       const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 18 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
-        return <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 12, background: color + '22', color, fontWeight: 700, fontSize: 14 }}>{score}%</span>;
+        return <span style={{ display: 'inline-block', padding: '5px 14px', borderRadius: 12, background: color + '22', color, fontWeight: 800, fontSize: 16 }}>{score}%</span>;
       };
       const PriBadge = ({ priority }) => {
         const colors = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e' };
@@ -3817,14 +3817,14 @@
             // Matrix stats
             const matrixCovPct = s.totalCombos ? Math.round((s.coveredCombos / s.totalCombos) * 100) : 0;
             const fullPct = s.totalCombos ? Math.round((s.fullyCovered / s.totalCombos) * 100) : 0;
-            // Color function: 0=red, 1=orange, 2=amber, 3=light green, 4=green, 5=dark green
+            // Color function: 0=red, 1=orange, 2=amber, 3=lime, 4=green, 5=emerald
             const cellColor = (signals) => {
-              if (signals === 0) return { bg: '#ef444418', color: '#ef4444' };
-              if (signals === 1) return { bg: '#f9731622', color: '#f97316' };
-              if (signals === 2) return { bg: '#f59e0b22', color: '#f59e0b' };
-              if (signals === 3) return { bg: '#84cc1622', color: '#84cc16' };
-              if (signals === 4) return { bg: '#22c55e22', color: '#22c55e' };
-              return { bg: '#16a34a33', color: '#16a34a' };
+              if (signals === 0) return { bg: '#ef444420', color: '#ef4444', border: '#ef444440' };
+              if (signals === 1) return { bg: '#f9731625', color: '#fb923c', border: '#f9731640' };
+              if (signals === 2) return { bg: '#f59e0b25', color: '#fbbf24', border: '#f59e0b40' };
+              if (signals === 3) return { bg: '#84cc1625', color: '#a3e635', border: '#84cc1640' };
+              if (signals === 4) return { bg: '#22c55e25', color: '#4ade80', border: '#22c55e40' };
+              return { bg: '#16a34a30', color: '#34d399', border: '#16a34a50' };
             };
             const tooltipText = (cell) => {
               const parts = [];
@@ -3848,64 +3848,73 @@
               <div>
                 {/* Matrix stats bar */}
                 <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>TOTAL COMBOS</div>
-                    <div style={{ fontSize: 28, fontWeight: 800, color: '#8b5cf6' }}>{s.totalCombos}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>{suburbs.length} suburbs × {serviceNames.length} services</div>
+                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '18px 24px', border: '1px solid var(--border)', flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>TOTAL COMBOS</div>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: '#8b5cf6' }}>{s.totalCombos}</div>
+                    <div style={{ fontSize: 14, color: 'var(--text2)', marginTop: 4 }}>{suburbs.length} suburbs × {serviceNames.length} services</div>
                   </div>
-                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>COVERED</div>
-                    <div style={{ fontSize: 28, fontWeight: 800, color: matrixCovPct >= 60 ? '#22c55e' : matrixCovPct >= 30 ? '#f59e0b' : '#ef4444' }}>{s.coveredCombos} <span style={{ fontSize: 16, fontWeight: 600 }}>({matrixCovPct}%)</span></div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>at least 1 signal (page, indexed, keyword, grid, GSC)</div>
+                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '18px 24px', border: '1px solid var(--border)', flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>COVERED</div>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: matrixCovPct >= 60 ? '#22c55e' : matrixCovPct >= 30 ? '#f59e0b' : '#ef4444' }}>{s.coveredCombos} <span style={{ fontSize: 20, fontWeight: 700 }}>({matrixCovPct}%)</span></div>
+                    <div style={{ fontSize: 14, color: 'var(--text2)', marginTop: 4 }}>at least 1 signal</div>
                   </div>
-                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>FULLY COVERED</div>
-                    <div style={{ fontSize: 28, fontWeight: 800, color: fullPct >= 30 ? '#22c55e' : fullPct >= 10 ? '#f59e0b' : '#ef4444' }}>{s.fullyCovered} <span style={{ fontSize: 16, fontWeight: 600 }}>({fullPct}%)</span></div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>4+ signals — strong coverage</div>
+                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '18px 24px', border: '1px solid var(--border)', flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>FULLY COVERED</div>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: fullPct >= 30 ? '#22c55e' : fullPct >= 10 ? '#f59e0b' : '#ef4444' }}>{s.fullyCovered} <span style={{ fontSize: 20, fontWeight: 700 }}>({fullPct}%)</span></div>
+                    <div style={{ fontSize: 14, color: 'var(--text2)', marginTop: 4 }}>4+ signals — strong</div>
                   </div>
-                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>GAPS</div>
-                    <div style={{ fontSize: 28, fontWeight: 800, color: '#ef4444' }}>{s.totalCombos - s.coveredCombos}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>zero signals — need attention</div>
+                  <div style={{ background: 'var(--card)', borderRadius: 10, padding: '18px 24px', border: '1px solid var(--border)', flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>GAPS</div>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: '#ef4444' }}>{s.totalCombos - s.coveredCombos}</div>
+                    <div style={{ fontSize: 14, color: 'var(--text2)', marginTop: 4 }}>zero signals — need attention</div>
                   </div>
                 </div>
 
                 {/* Legend */}
-                <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)' }}>SIGNALS:</span>
-                  {[
-                    { label: 'None', ...cellColor(0) },
-                    { label: '1', ...cellColor(1) },
-                    { label: '2', ...cellColor(2) },
-                    { label: '3', ...cellColor(3) },
-                    { label: '4', ...cellColor(4) },
-                    { label: 'All 5', ...cellColor(5) },
-                  ].map((l, i) => (
-                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text2)' }}>
-                      <span style={{ width: 18, height: 18, borderRadius: 4, background: l.bg, border: `1px solid ${l.color}33`, display: 'inline-block' }} />
-                      {l.label}
-                    </span>
-                  ))}
-                  <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>Page · Indexed · Keyword · Grid · GSC</span>
+                <div style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 20px', border: '1px solid var(--border)', marginBottom: 20 }}>
+                  <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text1)' }}>Each cell = signals out of 5:</span>
+                    {[
+                      { label: '0 — None', ...cellColor(0) },
+                      { label: '1', ...cellColor(1) },
+                      { label: '2', ...cellColor(2) },
+                      { label: '3', ...cellColor(3) },
+                      { label: '4', ...cellColor(4) },
+                      { label: '5 — All', ...cellColor(5) },
+                    ].map((l, i) => (
+                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, color: 'var(--text2)', fontWeight: 600 }}>
+                        <span style={{ width: 28, height: 28, borderRadius: 6, background: l.bg, border: `2px solid ${l.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: l.color }}>{i}</span>
+                        {l.label}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
+                    <strong style={{ color: 'var(--text1)' }}>5 signals:</strong>{' '}
+                    <span style={{ color: '#4ade80' }}>● Page exists</span>{' · '}
+                    <span style={{ color: '#22d3ee' }}>● Indexed in Google</span>{' · '}
+                    <span style={{ color: '#fbbf24' }}>● Keyword tracked</span>{' · '}
+                    <span style={{ color: '#c084fc' }}>● Grid scan done</span>{' · '}
+                    <span style={{ color: '#fb923c' }}>● GSC impressions</span>
+                  </div>
                 </div>
 
                 {/* Matrix grid */}
                 {matrix.length > 0 && serviceNames.length > 0 ? (
-                  <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 10 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: serviceNames.length * 70 + 160 }}>
+                  <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: serviceNames.length * 56 + 200 }}>
                       <thead>
                         <tr>
-                          <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--card)', padding: '10px 14px', textAlign: 'left', fontWeight: 700, fontSize: 13, color: 'var(--text3)', borderBottom: '2px solid var(--border)', borderRight: '2px solid var(--border)', minWidth: 140 }}>
+                          <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--card)', padding: '14px 18px', textAlign: 'left', fontWeight: 800, fontSize: 15, color: 'var(--text3)', borderBottom: '2px solid var(--border)', borderRight: '2px solid var(--border)', minWidth: 170, textTransform: 'uppercase', letterSpacing: 1 }}>
                             SUBURB
                           </th>
                           {serviceNames.map((svc, i) => (
-                            <th key={i} style={{ padding: '8px 4px', textAlign: 'center', fontWeight: 600, fontSize: 11, color: 'var(--text3)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis' }} title={svc}>
-                              <div style={{ writingMode: serviceNames.length > 6 ? 'vertical-lr' : 'horizontal-tb', transform: serviceNames.length > 6 ? 'rotate(180deg)' : 'none', minHeight: serviceNames.length > 6 ? 80 : 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: serviceNames.length > 10 ? 10 : 11 }}>
+                            <th key={i} style={{ padding: '10px 4px', textAlign: 'center', fontWeight: 700, fontSize: 12, color: 'var(--text3)', borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap' }} title={svc}>
+                              <div style={{ writingMode: 'vertical-lr', transform: 'rotate(180deg)', minHeight: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>
                                 {shortSvc(svc)}
                               </div>
                             </th>
                           ))}
-                          <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--text3)', borderBottom: '2px solid var(--border)', borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap' }}>SCORE</th>
+                          <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 800, fontSize: 13, color: 'var(--text3)', borderBottom: '2px solid var(--border)', borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap', textTransform: 'uppercase', letterSpacing: 1 }}>SCORE</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3914,21 +3923,21 @@
                           const rowScore = subData?.score || 0;
                           return (
                             <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
-                              <td style={{ position: 'sticky', left: 0, zIndex: 1, background: ri % 2 === 0 ? 'var(--card)' : 'var(--bg)', padding: '10px 14px', fontWeight: 600, fontSize: 14, color: 'var(--text1)', borderRight: '2px solid var(--border)', whiteSpace: 'nowrap' }}>
+                              <td style={{ position: 'sticky', left: 0, zIndex: 1, background: ri % 2 === 0 ? 'var(--card)' : 'var(--bg)', padding: '12px 18px', fontWeight: 700, fontSize: 16, color: 'var(--text1)', borderRight: '2px solid var(--border)', whiteSpace: 'nowrap' }}>
                                 {row.suburb}
                               </td>
                               {serviceNames.map((svc, ci) => {
                                 const cell = row.services[svc] || { signals: 0 };
                                 const c = cellColor(cell.signals);
                                 return (
-                                  <td key={ci} title={tooltipText(cell)} style={{ textAlign: 'center', padding: '6px 2px', background: ri % 2 === 0 ? 'transparent' : 'var(--bg)', cursor: 'default' }}>
-                                    <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bg, border: `1px solid ${c.color}33`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: cell.signals > 0 ? 10 : 14, color: c.color, fontWeight: 700 }}>
+                                  <td key={ci} title={tooltipText(cell)} style={{ textAlign: 'center', padding: '5px 3px', background: ri % 2 === 0 ? 'transparent' : 'var(--bg)', cursor: 'default' }}>
+                                    <div style={{ width: 40, height: 40, borderRadius: 8, background: c.bg, border: `2px solid ${c.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: c.color, fontWeight: 800, transition: 'transform 0.1s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.15)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
                                       {cell.signals === 0 ? '—' : cell.signals}
                                     </div>
                                   </td>
                                 );
                               })}
-                              <td style={{ textAlign: 'center', padding: '6px 12px', borderLeft: '2px solid var(--border)', background: ri % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
+                              <td style={{ textAlign: 'center', padding: '8px 16px', borderLeft: '2px solid var(--border)', background: ri % 2 === 0 ? 'transparent' : 'var(--bg)' }}>
                                 <ScorePill score={rowScore} />
                               </td>
                             </tr>
