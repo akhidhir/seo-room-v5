@@ -3954,36 +3954,36 @@
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {priOrder.filter(p => grouped[p].length > 0).map(p => (
                   <div key={p}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                      <span style={{ width: 14, height: 14, borderRadius: '50%', background: priColors[p], display: 'inline-block' }} />
-                      <span style={{ fontWeight: 800, fontSize: 17, textTransform: 'uppercase', color: priColors[p], letterSpacing: 0.5 }}>{priLabels[p]}</span>
-                      <span style={{ fontSize: 15, color: 'var(--text3)', fontWeight: 600 }}>({grouped[p].length})</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                      <span style={{ width: 16, height: 16, borderRadius: '50%', background: priColors[p], display: 'inline-block' }} />
+                      <span style={{ fontWeight: 800, fontSize: 20, textTransform: 'uppercase', color: priColors[p], letterSpacing: 0.5 }}>{priLabels[p]}</span>
+                      <span style={{ fontSize: 18, color: 'var(--text3)', fontWeight: 600 }}>({grouped[p].length})</span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                       {grouped[p].map((r, i) => {
                         const key = p + i;
                         const isExp = expandedRec === key;
                         const shortDetail = r.items?.length ? `${r.items.length} items — click to expand` : '';
                         return (
-                          <div key={key} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', borderLeft: `4px solid ${priColors[p]}` }}>
-                            <div onClick={() => setExpandedRec(isExp ? null : key)} style={{ padding: '18px 22px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14 }}>
-                              <i className={r.icon} style={{ color: priColors[p], fontSize: 22, width: 26, textAlign: 'center', flexShrink: 0 }} />
+                          <div key={key} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', borderLeft: `5px solid ${priColors[p]}` }}>
+                            <div onClick={() => setExpandedRec(isExp ? null : key)} style={{ padding: '20px 24px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16 }}>
+                              <i className={r.icon} style={{ color: priColors[p], fontSize: 26, width: 30, textAlign: 'center', flexShrink: 0 }} />
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text1)' }}>{r.title}</div>
-                                {!isExp && shortDetail && <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 4 }}>{shortDetail}</div>}
+                                <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--text1)' }}>{r.title}</div>
+                                {!isExp && shortDetail && <div style={{ fontSize: 16, color: 'var(--text3)', marginTop: 4 }}>{shortDetail}</div>}
                               </div>
-                              {r.items?.length > 0 && <span style={{ fontSize: 15, color: 'var(--text3)', background: 'var(--bg)', padding: '5px 12px', borderRadius: 12, fontWeight: 700, flexShrink: 0 }}>{r.items.length}</span>}
-                              <i className={`fas fa-chevron-${isExp ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 14, flexShrink: 0 }} />
+                              {r.items?.length > 0 && <span style={{ fontSize: 17, color: 'var(--text3)', background: 'var(--bg)', padding: '6px 14px', borderRadius: 12, fontWeight: 700, flexShrink: 0 }}>{r.items.length}</span>}
+                              <i className={`fas fa-chevron-${isExp ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 16, flexShrink: 0 }} />
                             </div>
                             {isExp && (
-                              <div style={{ padding: '0 22px 18px', borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-                                <div style={{ fontSize: 16, color: 'var(--text2)', marginBottom: r.items?.length ? 14 : 0, lineHeight: 1.6 }}>{r.detail}</div>
+                              <div style={{ padding: '0 24px 20px', borderTop: '1px solid var(--border)', paddingTop: 18 }}>
+                                <div style={{ fontSize: 18, color: 'var(--text2)', marginBottom: r.items?.length ? 16 : 0, lineHeight: 1.6 }}>{r.detail}</div>
                                 {r.items?.length > 0 && (
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                                     {r.items.slice(0, 30).map((item, j) => (
-                                      <span key={j} style={{ padding: '6px 14px', borderRadius: 8, background: priColors[p] + '15', border: `1px solid ${priColors[p]}33`, fontSize: 15, color: 'var(--text1)', fontWeight: 500 }}>{item}</span>
+                                      <span key={j} style={{ padding: '8px 16px', borderRadius: 8, background: priColors[p] + '15', border: `1px solid ${priColors[p]}33`, fontSize: 16, color: 'var(--text1)', fontWeight: 500 }}>{item}</span>
                                     ))}
-                                    {r.items.length > 30 && <span style={{ padding: '6px 14px', fontSize: 15, color: 'var(--text3)', fontWeight: 600 }}>+{r.items.length - 30} more</span>}
+                                    {r.items.length > 30 && <span style={{ padding: '8px 16px', fontSize: 16, color: 'var(--text3)', fontWeight: 600 }}>+{r.items.length - 30} more</span>}
                                   </div>
                                 )}
                               </div>
