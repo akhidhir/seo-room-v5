@@ -18670,6 +18670,57 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const serviceCoverage = serviceMatrix.length ? Math.round(serviceMatrix.reduce((sum, s) => sum + s.score, 0) / serviceMatrix.length) : 0;
     const totalGaps = recommendations.reduce((sum, r) => sum + (r.items?.length || 1), 0);
 
+    // ============ KPI DATA ============
+    // GBP profile completeness
+    const gbpCompleteness = {
+      hasName: !!profile?.title,
+      hasDescription: !!profile?.profile?.description,
+      hasPhone: !!profile?.phoneNumbers?.primaryPhone,
+      hasWebsite: !!profile?.websiteUri,
+      hasHours: !!(profile?.regularHours?.periods?.length),
+      hasCategories: gbpCategories.length > 0,
+      hasPhotos: !!(profile?.media?.length),
+      hasServiceAreas: gbpSuburbs.length > 0,
+      hasServices: gbpServices.length > 0,
+      categoriesCount: gbpCategories.length,
+      photosCount: profile?.media?.length || 0,
+      serviceAreasCount: gbpSuburbs.length,
+      servicesCount: gbpServices.length,
+      description: profile?.profile?.description ? profile.profile.description.substring(0, 200) : null,
+      phone: profile?.phoneNumbers?.primaryPhone || null,
+      website: profile?.websiteUri || null,
+      name: profile?.title || null,
+      primaryCategory: profile?.categories?.primaryCategory?.displayName || null,
+    };
+    const gbpFields = ['hasName', 'hasDescription', 'hasPhone', 'hasWebsite', 'hasHours', 'hasCategories', 'hasServiceAreas', 'hasServices'];
+    const gbpFilledCount = gbpFields.filter(f => gbpCompleteness[f]).length;
+    gbpCompleteness.filledCount = gbpFilledCount;
+    gbpCompleteness.totalFields = gbpFields.length;
+    gbpCompleteness.missingFields = gbpFields.filter(f => !gbpCompleteness[f]).map(f => {
+      const labels = { hasName: 'Business Name', hasDescription: 'Business Description', hasPhone: 'Phone Number', hasWebsite: 'Website URL', hasHours: 'Business Hours', hasCategories: 'Categories', hasServiceAreas: 'Service Areas', hasServices: 'Services List' };
+      return labels[f] || f;
+    });
+
+    // Competitor benchmarks (from grid scan data)
+    const compReviews = topCompetitors.filter(c => c.reviews > 0).map(c => c.reviews);
+    const compRatings = topCompetitors.filter(c => c.rating > 0).map(c => c.rating);
+    const competitorBenchmarks = {
+      avgReviews: compReviews.length ? Math.round(compReviews.reduce((a, b) => a + b, 0) / compReviews.length) : null,
+      maxReviews: compReviews.length ? Math.max(...compReviews) : null,
+      medianReviews: compReviews.length ? compReviews.sort((a, b) => a - b)[Math.floor(compReviews.length / 2)] : null,
+      avgRating: compRatings.length ? +(compRatings.reduce((a, b) => a + b, 0) / compRatings.length).toFixed(1) : null,
+      topCompetitorName: topCompetitors[0]?.name || null,
+      topCompetitorReviews: topCompetitors[0]?.reviews || null,
+      topCompetitorRating: topCompetitors[0]?.rating || null,
+    };
+
+    // Citation/directory data from GBP audit findings
+    const citationFindings = await pool.query(
+      `SELECT title, current_value, recommended_value FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp','gbp_external') AND category='Directory & Citations' AND status != 'dismissed' LIMIT 30`,
+      [projectId]
+    );
+    const citationCount = citationFindings.rows.length;
+
     res.json({
       project: { id: project.id, name: project.name, business_name: project.business_name, domain: project.domain },
       summary: {
@@ -18703,6 +18754,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       matrix: matrixRows,
       serviceNames: Array.from(allServiceNames).map(n => serviceSources[n].original),
       recommendations: recommendations.sort((a, b) => { const pri = { critical: 0, high: 1, medium: 2, low: 3 }; return (pri[a.priority] || 4) - (pri[b.priority] || 4); }),
+      gbpCompleteness,
+      competitorBenchmarks,
+      citationCount,
     });
   } catch (e) {
     console.error('[local-intel] Error:', e.message, e.stack);
