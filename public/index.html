@@ -2108,10 +2108,12 @@
     }
 
     // ============ GENERIC AGENT AUDIT PAGE ============
+    const _agentAuditCache = {};
     function AgentAuditPage({ project, section, setActiveTab, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
       const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
       const skip = skipPatterns || defaultSkip;
-      const [report, setReport] = useState('');
+      const cacheKey = project?.id + ':' + auditKey;
+      const [report, setReport] = useState(_agentAuditCache[cacheKey] || '');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [addedActions, setAddedActions] = useState({});
@@ -2254,7 +2256,7 @@
       const [resumedPolling, setResumedPolling] = useState(false);
 
       useEffect(() => {
-        if (project) checkStatus();
+        if (project && !_agentAuditCache[cacheKey]) checkStatus();
         return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
       }, [project?.id, auditKey]);
 
@@ -2275,7 +2277,7 @@
             const data = await api(`/projects/${pid}/audits/${ak}/status`);
             if (data.status === 'completed') {
               clearInterval(pollRef.current); pollRef.current = null;
-              if (data.report) setReport(data.report);
+              if (data.report) { setReport(data.report); _agentAuditCache[cacheKey] = data.report; }
               setLoading(false);
               setResumedPolling(false);
             } else if (data.status === 'failed') {
@@ -2302,6 +2304,7 @@
             startPolling(project.id, auditKey, true); // resumed=true since we're restoring state
           } else if (data.status === 'completed' && data.report) {
             setReport(data.report);
+            _agentAuditCache[cacheKey] = data.report;
           } else if (data.status === 'failed' && data.error) {
             setError(data.error);
           }
@@ -4009,9 +4012,11 @@
     }
 
     // ============ GBP AUDIT PAGE (with Internal/External tabs) ============
+    const _internalGbpCache = {};
     function InternalGBPAuditPage({ project }) {
-      const [findings, setFindings] = useState([]);
-      const [loading, setLoading] = useState(false);
+      const _ck = project?.id + ':gbp_internal';
+      const [findings, setFindings] = useState(_internalGbpCache[_ck]?.findings || []);
+      const [loading, setLoading] = useState(!_internalGbpCache[_ck]);
       const [error, setError] = useState('');
       const [selected, setSelected] = useState(new Set());
       const [reviewFinding, setReviewFinding] = useState(null);
@@ -4031,7 +4036,10 @@
         try {
           const data = await api(`/projects/${project.id}/audit-findings?pillar=gbp_internal`);
           const list = Array.isArray(data) ? data : (data?.findings || []);
-          setFindings(list.filter(f => f.pillar === 'gbp_internal'));
+          const filtered = list.filter(f => f.pillar === 'gbp_internal');
+          setFindings(filtered);
+          if (!_internalGbpCache[_ck]) _internalGbpCache[_ck] = {};
+          _internalGbpCache[_ck].findings = filtered;
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       };
@@ -4039,16 +4047,27 @@
       const loadRcProfile = async () => {
         try {
           const d = await api(`/projects/${project.id}/rc-profile`);
-          if (d && d.data) { setRcProfile(d.data); setRcSyncedAt(d.updated_at); }
+          if (d && d.data) {
+            setRcProfile(d.data); setRcSyncedAt(d.updated_at);
+            if (!_internalGbpCache[_ck]) _internalGbpCache[_ck] = {};
+            _internalGbpCache[_ck].rc = d.data;
+            _internalGbpCache[_ck].rcAt = d.updated_at;
+          }
         } catch (e) { /* no RC data yet */ }
       };
 
       useEffect(() => {
-        if (project) {
-          loadFindings();
-          loadRcProfile();
-          api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
+        if (!project) return;
+        if (_internalGbpCache[_ck]) {
+          setFindings(_internalGbpCache[_ck].findings);
+          if (_internalGbpCache[_ck].rc) { setRcProfile(_internalGbpCache[_ck].rc); setRcSyncedAt(_internalGbpCache[_ck].rcAt); }
+          if (_internalGbpCache[_ck].profile) setProfileSummary(_internalGbpCache[_ck].profile);
+          setLoading(false);
+          return;
         }
+        loadFindings();
+        loadRcProfile();
+        api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
       }, [project?.id]);
 
       const runAudit = async () => {
@@ -4960,8 +4979,10 @@
     }
 
     // ============ SPEED & IMAGES PAGE (standalone, moved from Technical Audit) ============
+    const _speedCache = {};
     function SpeedAuditPage({ project }) {
-      const [speedResults, setSpeedResults] = useState([]);
+      const _spck = project?.id + ':speed';
+      const [speedResults, setSpeedResults] = useState(_speedCache[_spck] || []);
       const [speedLoading, setSpeedLoading] = useState(false);
       const [speedError, setSpeedError] = useState('');
       const [sortCol, setSortCol] = useState('score');
@@ -4974,7 +4995,9 @@
       const [addingAction, setAddingAction] = useState(null);
 
       useEffect(() => {
-        if (project?.id) loadExisting();
+        if (!project?.id) return;
+        if (_speedCache[_spck]?.length) { setSpeedResults(_speedCache[_spck]); loadExistingActions(); }
+        else loadExisting();
         return () => { if (speedPollRef.current) { clearInterval(speedPollRef.current); speedPollRef.current = null; } };
       }, [project?.id]);
 
@@ -4989,6 +5012,7 @@
             setSpeedError(data.error || 'Speed audit failed. Please run again.');
           } else if (data.results) {
             setSpeedResults(data.results); setSpeedError('');
+            _speedCache[_spck] = data.results;
             loadExistingActions();
           }
         } catch (e) { /* no previous speed audit */ }
@@ -5399,10 +5423,12 @@
 
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     // ============ INDEXING PAGE ============
+    const _indexingCache = {};
     function IndexingPage({ project }) {
-      const [results, setResults] = useState([]);
+      const _ixck = project?.id + ':indexing';
+      const [results, setResults] = useState(_indexingCache[_ixck]?.results || []);
       const [loading, setLoading] = useState(false);
-      const [initialLoading, setInitialLoading] = useState(true);
+      const [initialLoading, setInitialLoading] = useState(!_indexingCache[_ixck]);
       const [error, setError] = useState('');
       const [stats, setStats] = useState({ total: 0, indexed: 0, notIndexed: 0, errors: 0 });
       const [filter, setFilter] = useState('all');
@@ -5411,11 +5437,12 @@
       const pollRef = React.useRef(null);
 
       const handleCompleted = (data) => {
-        setResults(data.results || []);
-        setStats({ total: data.total || (data.results || []).length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 });
+        const r = data.results || [];
+        const st = { total: data.total || r.length, indexed: data.indexed || 0, notIndexed: data.notIndexed || 0, errors: data.errors || 0 };
+        setResults(r); setStats(st);
         setLastChecked(data.completed_at ? new Date(data.completed_at) : new Date());
-        setLoading(false);
-        setProgress(null);
+        setLoading(false); setProgress(null);
+        _indexingCache[_ixck] = { results: r, stats: st, completedAt: data.completed_at };
       };
 
       const startPolling = () => {
@@ -5444,6 +5471,13 @@
       // Load previous results on mount
       useEffect(() => {
         if (!project?.id) { setInitialLoading(false); return; }
+        if (_indexingCache[_ixck]) {
+          setResults(_indexingCache[_ixck].results);
+          setStats(_indexingCache[_ixck].stats);
+          setLastChecked(_indexingCache[_ixck].completedAt ? new Date(_indexingCache[_ixck].completedAt) : null);
+          setInitialLoading(false);
+          return;
+        }
         (async () => {
           try {
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
@@ -6022,8 +6056,10 @@
     }
 
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
+    const _onpageCache = {};
     function OnPageAuditPage({ project }) {
-      const [pages, setPages] = useState([]);
+      const _opck = project?.id + ':onpage';
+      const [pages, setPages] = useState(_onpageCache[_opck]?.pages || []);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [expandedPage, setExpandedPage] = useState(null);
@@ -6070,13 +6106,15 @@
       };
 
       useEffect(() => {
-        if (project) { loadExisting(); loadHistory(); }
+        if (!project) return;
+        if (_onpageCache[_opck]?.pages?.length) { setPages(_onpageCache[_opck].pages); loadHistory(); return; }
+        loadExisting(); loadHistory();
       }, [project?.id]);
 
       const loadExisting = async () => {
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/results`);
-          if (data?.pages) setPages(data.pages);
+          if (data?.pages) { setPages(data.pages); _onpageCache[_opck] = { pages: data.pages }; }
         } catch (e) { /* no previous results */ }
       };
 
@@ -6091,7 +6129,7 @@
         setLoading(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/run`, { method: 'POST' });
-          if (data?.pages) { setPages(data.pages); setSelected(new Set()); }
+          if (data?.pages) { setPages(data.pages); setSelected(new Set()); _onpageCache[_opck] = { pages: data.pages }; }
           else if (data?.error) setError(data.error);
         } catch (err) { setError(err.message); }
         finally { setLoading(false); }
