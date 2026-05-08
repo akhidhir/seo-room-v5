@@ -15731,16 +15731,19 @@
       }, [project.id]);
 
       const handleCheckRankings = async () => {
-        const mapKws = keywords.filter(k => k.location);
+        const allMapKws = keywords.filter(k => k.location);
+        const selectedIds = Object.entries(mapsSelected).filter(([k, v]) => v).map(([k]) => parseInt(k));
+        const mapKws = selectedIds.length > 0 ? allMapKws.filter(k => selectedIds.includes(k.id)) : allMapKws;
         if (mapKws.length === 0) return alert('No maps keywords. Add service + location keywords first.');
         const totalCalls = mapKws.length * gridSize * gridSize;
-        if (!confirm(`Grid scan ${mapKws.length} keywords × ${gridSize}×${gridSize} grid = ${totalCalls} SerpAPI calls.\n\nEstimated cost: ~$${(totalCalls * 0.005).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
+        if (!confirm(`Grid scan ${mapKws.length} keyword${mapKws.length > 1 ? 's' : ''} × ${gridSize}×${gridSize} grid = ${totalCalls} SerpAPI calls.\n\nEstimated cost: ~$${(totalCalls * 0.005).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
         setSyncing(true);
         setScanProgress(`Scanning 0/${mapKws.length} keywords...`);
         try {
+          const kwIds = mapKws.map(k => k.id);
           const r = await api(`/projects/${project.id}/maps/grid-scan`, {
             method: 'POST',
-            body: { grid_size: gridSize, radius_km: gridRadius }
+            body: { grid_size: gridSize, radius_km: gridRadius, keyword_ids: kwIds }
           });
           if (r.ok && r.results) {
             const scanMap = { ...gridScans };
