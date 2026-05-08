@@ -3575,7 +3575,7 @@
       const cached = project?.id ? _localIntelCache[project.id] : null;
       const [data, setData] = useState(cached || null);
       const [loading, setLoading] = useState(!cached);
-      const [activeTab, setActiveTab] = useState('kpi');
+      const [activeTab, setActiveTab] = useState('matrix');
       const [expandedCell, setExpandedCell] = useState(null); // 'suburb:service' key
       const [expandedRec, setExpandedRec] = useState(null);
       const [fixing, setFixing] = useState(null);
@@ -3774,53 +3774,53 @@
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
             {/* BUSINESS CARD */}
             <div onClick={() => setExpandedKpi(expandedKpi === 'business' ? null : 'business')}
-              style={{ background: 'var(--card)', borderRadius: 12, padding: '20px', border: expandedKpi === 'business' ? '2px solid #8b5cf6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'business' ? '2px solid #8b5cf6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
               onMouseEnter={e => { if (expandedKpi !== 'business') e.currentTarget.style.borderColor = '#8b5cf644'; }}
               onMouseLeave={e => { if (expandedKpi !== 'business') e.currentTarget.style.borderColor = 'var(--border)'; }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#8b5cf618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-building" style={{ color: '#8b5cf6', fontSize: 16 }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#8b5cf618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-building" style={{ color: '#8b5cf6', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Business Level KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Business Level KPIs</span>
                 </div>
-                <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(bizScore) }}>{bizScore}%</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(bizScore) }}>{bizScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Global signals that affect all suburbs — your GBP profile, reviews, rating, citations</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Global signals that affect all suburbs — your GBP profile, reviews, rating, citations</div>
             </div>
 
             {/* SERVICE CARD */}
             <div onClick={() => setExpandedKpi(expandedKpi === 'service' ? null : 'service')}
-              style={{ background: 'var(--card)', borderRadius: 12, padding: '20px', border: expandedKpi === 'service' ? '2px solid #3b82f6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'service' ? '2px solid #3b82f6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
               onMouseEnter={e => { if (expandedKpi !== 'service') e.currentTarget.style.borderColor = '#3b82f644'; }}
               onMouseLeave={e => { if (expandedKpi !== 'service') e.currentTarget.style.borderColor = 'var(--border)'; }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 16 }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Service Level KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Service Level KPIs</span>
                 </div>
-                <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(svcScore) }}>{svcScore}%</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(svcScore) }}>{svcScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Per-service signals — does each service have a page, GBP listing, and post?</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-service signals — does each service have a page, GBP listing, and post?</div>
             </div>
 
             {/* SUBURB CARD */}
             <div onClick={() => setExpandedKpi(expandedKpi === 'suburb' ? null : 'suburb')}
-              style={{ background: 'var(--card)', borderRadius: 12, padding: '20px', border: expandedKpi === 'suburb' ? '2px solid #22c55e' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'suburb' ? '2px solid #22c55e' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
               onMouseEnter={e => { if (expandedKpi !== 'suburb') e.currentTarget.style.borderColor = '#22c55e44'; }}
               onMouseLeave={e => { if (expandedKpi !== 'suburb') e.currentTarget.style.borderColor = 'var(--border)'; }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 16 }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--text1)' }}>Suburb Level KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Suburb Level KPIs</span>
                 </div>
-                <span style={{ fontSize: 22, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>Per-suburb signals — landing page, indexed, in GBP service areas, keyword tracked</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-suburb signals — landing page, indexed, in GBP service areas, keyword tracked</div>
             </div>
           </div>
 
@@ -4017,7 +4017,6 @@
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--border)', marginBottom: 20 }}>
             {[
-              { id: 'kpi', label: 'KPI Dashboard', icon: 'fas fa-tachometer-alt' },
               { id: 'matrix', label: `Coverage Matrix`, icon: 'fas fa-th' },
               { id: 'suburbs', label: `Suburbs (${suburbs.length})`, icon: 'fas fa-map-pin' },
               { id: 'services', label: `Services (${services.length})`, icon: 'fas fa-wrench' },
@@ -4029,51 +4028,6 @@
               </button>
             ))}
           </div>
-
-          {/* KPI TAB — the question: "what does a suburb need to rank?" */}
-          {activeTab === 'kpi' && (
-            <div>
-              <div style={{ background: 'var(--card)', borderRadius: 12, padding: '20px 24px', border: '1px solid var(--border)', marginBottom: 20 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text1)', marginBottom: 8 }}>
-                  <i className="fas fa-bullseye" style={{ color: '#8b5cf6', marginRight: 10 }} />
-                  What does a suburb need to rank?
-                </div>
-                <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
-                  Ranking in Google Maps requires signals at 3 levels. <strong style={{ color: 'var(--text1)' }}>Business</strong> signals (reviews, GBP profile) affect every suburb.
-                  <strong style={{ color: 'var(--text1)' }}> Service</strong> signals (service pages, GBP categories) tell Google what you do.
-                  <strong style={{ color: 'var(--text1)' }}> Suburb</strong> signals (landing pages, indexing) tell Google where you do it.
-                  Click the cards above to see exactly what's done and what's missing.
-                </div>
-              </div>
-
-              {/* Quick status grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                {[
-                  { label: 'Reviews', value: myReviews, target: compB.avgReviews, icon: 'fas fa-star', color: '#f59e0b', click: () => setExpandedKpi('business') },
-                  { label: 'Rating', value: myRating + '★', target: compB.avgRating ? compB.avgRating + '★' : null, icon: 'fas fa-star-half-alt', color: '#f59e0b', click: () => setExpandedKpi('business') },
-                  { label: 'GBP Profile', value: gbpComplete ? 'Complete' : `${gbpC.filledCount}/${gbpC.totalFields}`, icon: 'fas fa-id-card', color: gbpComplete ? '#22c55e' : '#ef4444', click: () => setExpandedKpi('business') },
-                  { label: 'Service Pages', value: `${servicesWithPages}/${services.length}`, icon: 'fas fa-file-alt', color: servicesWithPages === services.length ? '#22c55e' : '#ef4444', click: () => setExpandedKpi('service') },
-                  { label: 'Suburb Pages', value: `${suburbsWithPages}/${suburbs.length}`, icon: 'fas fa-map', color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444', click: () => setExpandedKpi('suburb') },
-                  { label: 'Indexed', value: `${suburbsIndexed}/${suburbs.length}`, icon: 'fas fa-check-double', color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b', click: () => setExpandedKpi('suburb') },
-                  { label: 'GBP Posts', value: s.gbpPostCount || 0, icon: 'fas fa-calendar-alt', color: (s.gbpPostCount || 0) >= 3 ? '#22c55e' : '#ef4444', click: () => setExpandedKpi('business') },
-                  { label: 'Keywords Tracked', value: s.trackedKeywords, icon: 'fas fa-search', color: '#3b82f6', click: () => onNavigate?.('maps-rankings') },
-                  { label: 'Grid Scans', value: s.gridScans, icon: 'fas fa-th', color: '#8b5cf6', click: () => onNavigate?.('maps-rankings') },
-                  { label: 'Action Gaps', value: s.totalGaps, icon: 'fas fa-exclamation-triangle', color: s.totalGaps > 10 ? '#ef4444' : s.totalGaps > 5 ? '#f59e0b' : '#22c55e', click: () => setActiveTab('recommendations') },
-                ].map((c, i) => (
-                  <div key={i} onClick={c.click} style={{ background: 'var(--card)', borderRadius: 10, padding: '14px 16px', border: '1px solid var(--border)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, transition: 'border-color 0.15s' }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = c.color}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
-                    <i className={c.icon} style={{ color: c.color, fontSize: 16, width: 20, textAlign: 'center' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{c.label}</div>
-                    </div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: c.color }}>{c.value}</div>
-                    {c.target != null && <span style={{ fontSize: 11, color: 'var(--text3)' }}>/ {c.target}</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* COVERAGE MATRIX TAB */}
           {activeTab === 'matrix' && (() => {
