@@ -18254,65 +18254,58 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const reviewStats = rc?.reviews_stats || null;
 
     // ============ CROSS-REFERENCE: SUBURBS ============
-    // Collect all unique suburbs from all sources
+    // Suburbs come from TWO real sources only:
+    // 1. GBP service areas (what Google shows)
+    // 2. Website /service-areas/ pages (what the client built)
+    // No auto-discovery from keywords or SUBURB_GPS — that adds noise.
     const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
     const allSuburbNames = new Set();
     const suburbSources = {}; // normalized -> { original, inGbp, inProject, pages, keywords, gridScans, gsc }
 
-    // From GBP service areas
+    // Source 1: GBP service areas
     for (const s of gbpSuburbs) { allSuburbNames.add(normalize(s)); suburbSources[normalize(s)] = { original: s, inGbp: true }; }
-    // From project service areas
+    // Also merge project service areas (user-configured)
     for (const s of projSuburbs) {
       const n = normalize(s);
       if (!suburbSources[n]) { allSuburbNames.add(n); suburbSources[n] = { original: s, inGbp: false }; }
       suburbSources[n].inProject = true;
     }
 
-    // Auto-discover suburbs from tracked keywords + grid scans using SUBURB_GPS
-    const knownSuburbs = Object.keys(SUBURB_GPS || {});
-    for (const kw of rankKeywords) {
-      const kwN = normalize(kw.keyword);
-      for (const sub of knownSuburbs) {
-        if (kwN.includes(sub) && !allSuburbNames.has(sub)) {
-          allSuburbNames.add(sub);
-          const cap = sub.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-          suburbSources[sub] = { original: cap, inGbp: false, inProject: false, fromKeyword: true };
-        }
-      }
-    }
-    for (const kwLower of Object.keys(gridMap)) {
-      for (const sub of knownSuburbs) {
-        if (kwLower.includes(sub) && !allSuburbNames.has(sub)) {
-          allSuburbNames.add(sub);
-          const cap = sub.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-          suburbSources[sub] = { original: cap, inGbp: false, inProject: false, fromKeyword: true };
+    // Source 2: Detect suburb pages from website URLs (e.g. /service-areas/car-key-replacement-cockburn/)
+    for (const page of websitePages) {
+      const url = (page.url || page.slug || '').toLowerCase();
+      // Match /service-areas/xxx or /service-area/xxx patterns
+      const saMatch = url.match(/\/service-?areas?\/([\w-]+)\/?$/);
+      if (saMatch) {
+        // Extract suburb name: strip service-type prefixes like "car-key-replacement-"
+        let suburbSlug = saMatch[1];
+        // Remove common service prefixes to get the suburb name
+        suburbSlug = suburbSlug.replace(/^(car-key-replacement-|plumber-|electrician-|locksmith-|gasfitter-|plumbing-)/, '');
+        const suburbName = suburbSlug.replace(/-/g, ' ').trim();
+        const n = normalize(suburbName);
+        if (n && n.length > 1) {
+          if (!suburbSources[n]) {
+            const cap = n.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            allSuburbNames.add(n);
+            suburbSources[n] = { original: cap, inGbp: false, fromWebsite: true };
+          }
+          if (!suburbSources[n].pages) suburbSources[n].pages = [];
+          if (!suburbSources[n].pages.find(p => p.url === page.url)) {
+            suburbSources[n].pages.push({ url: page.url, title: page.title });
+          }
         }
       }
     }
 
-    // Identify suburb pages from website (URL contains suburb name)
+    // Also match existing suburb names against ALL website pages (not just /service-areas/)
     for (const page of websitePages) {
       const slug = normalize(page.slug || page.url || '');
-      const title = normalize(page.title || '');
       for (const n of allSuburbNames) {
-        if (slug.includes(n.replace(/\s+/g, '-')) || slug.includes(n.replace(/\s+/g, '')) || title.includes(n)) {
+        if (slug.includes(n.replace(/\s+/g, '-')) || slug.includes(n.replace(/\s+/g, ''))) {
           if (!suburbSources[n].pages) suburbSources[n].pages = [];
-          suburbSources[n].pages.push({ url: page.url, title: page.title });
-        }
-      }
-    }
-    // Also find suburb pages that aren't in any known suburb list (detect new suburbs from URLs)
-    const suburbPagePattern = /\/(plumber|electrician|gasfitter|service|services|areas?)-?(in-?)?([a-z-]+)\/?$/i;
-    for (const page of websitePages) {
-      const url = (page.url || page.slug || '').toLowerCase();
-      // Check if page URL contains any suburb-like pattern not yet tracked
-      for (const s of projSuburbs.concat(gbpSuburbs)) {
-        const n = normalize(s);
-        const slugForm = n.replace(/\s+/g, '-');
-        if (url.includes(slugForm) && !suburbSources[n]?.pages?.find(p => p.url === page.url)) {
-          if (!suburbSources[n]) { suburbSources[n] = { original: s, inGbp: false }; allSuburbNames.add(n); }
-          if (!suburbSources[n].pages) suburbSources[n].pages = [];
-          suburbSources[n].pages.push({ url: page.url, title: page.title });
+          if (!suburbSources[n].pages.find(p => p.url === page.url)) {
+            suburbSources[n].pages.push({ url: page.url, title: page.title });
+          }
         }
       }
     }
