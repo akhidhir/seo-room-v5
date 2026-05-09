@@ -3646,6 +3646,34 @@ app.get('/api/projects/:projectId/gbp-profile', async (req, res) => {
   }
 });
 
+// Check if seoroom-helper plugin is installed on WordPress site
+app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!projRes.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpUrl) return res.json({ installed: false, reason: 'no_wordpress_url' });
+    const authHeaders = getWpAuthHeaders(project);
+    try {
+      const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1/yoast-scores`, {
+        signal: AbortSignal.timeout(8000),
+        ...(authHeaders ? { headers: authHeaders } : {}),
+      });
+      if (resp.ok || resp.status === 401) {
+        return res.json({ installed: true });
+      }
+      return res.json({ installed: false, reason: 'not_found' });
+    } catch (e) {
+      return res.json({ installed: false, reason: 'unreachable', message: e.message });
+    }
+  } catch (err) {
+    console.error('[plugin-status]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get stored Rating Captain profile data (richer than gbp_profile)
 app.get('/api/projects/:projectId/rc-profile', async (req, res) => {
   try {

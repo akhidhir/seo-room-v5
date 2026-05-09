@@ -20404,6 +20404,14 @@
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
       const [appLoading, setAppLoading] = useState(true);
       const [allProjects, setAllProjects] = useState([]);
+      const [pluginWarning, setPluginWarning] = useState(null); // { installed, reason }
+
+      // Check seoroom-helper plugin status for current project
+      useEffect(() => {
+        if (!project?.id) { setPluginWarning(null); return; }
+        if (!project.wordpress_url) { setPluginWarning({ installed: false, reason: 'no_wordpress_url' }); return; }
+        api(`/projects/${project.id}/plugin-status`).then(d => setPluginWarning(d)).catch(() => setPluginWarning(null));
+      }, [project?.id]);
 
       // On mount: check for existing token, load user + project
       useEffect(() => {
@@ -20891,6 +20899,22 @@ case 'action-plan':
               </div>
             </div>
 
+            {pluginWarning && !pluginWarning.installed && !buildMode && (
+              <div style={{ margin: '0 24px', padding: '14px 20px', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <i className="fas fa-exclamation-triangle" style={{ color: '#d97706', fontSize: 18, flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>SEO Room Plugin Not Detected</div>
+                  <div style={{ fontSize: 13, color: '#92400e', marginTop: 2 }}>
+                    {pluginWarning.reason === 'no_wordpress_url'
+                      ? 'No WordPress URL configured. Set it in Project Settings → WordPress URL.'
+                      : pluginWarning.reason === 'unreachable'
+                      ? `WordPress site unreachable. Check the URL in Project Settings.`
+                      : 'The seoroom-helper plugin is not installed on this WordPress site. Some features (Yoast scores, CWV auto-fixes, schema injection) require it.'}
+                  </div>
+                </div>
+                <button onClick={() => setPluginWarning(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 16, padding: 4 }}><i className="fas fa-times" /></button>
+              </div>
+            )}
             <div className="page-content">
               {renderPage()}
             </div>
