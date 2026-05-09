@@ -3806,143 +3806,161 @@
             </div>
           </div>
 
-          {/* EXPANDED KPI DETAIL */}
+          {/* EXPANDED KPI DETAIL — BUSINESS */}
           {expandedKpi === 'business' && (() => {
             const listedDirs = directoryList.filter(d => d.listed);
-            const pendingDirs = directoryList.filter(d => d.pending);
             const missingDirs = directoryList.filter(d => !d.listed && !d.pending);
-            const uncheckedDirs = directoryList.filter(d => !d.listed && !d.pending); // same as missing until scanned
             const replyRate = s.reviewStats?.reply_rate || 0;
             const unreplied = s.reviewStats?.unreplied_count || 0;
             const totalRevs = s.reviewStats?.total_reviews || 0;
             const replied = totalRevs - unreplied;
+            const reviewTarget = compB.maxReviews ? compB.maxReviews + 1 : null;
+            const reviewGap = reviewTarget ? reviewTarget - myReviews : null;
+            const beating = reviewGap != null && reviewGap <= 0;
+            const createAction = (title, desc, pillar, priority) => {
+              api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
+                title, description: desc, pillar: pillar || 'gbp', priority: priority || 'high', status: 'pending', type: 'manual',
+              }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
+            };
             return (
-            <div style={{ background: 'var(--card)', borderRadius: 14, padding: '28px', border: '1px solid #8b5cf644', marginBottom: 24, borderTop: '3px solid #8b5cf6' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: '#8b5cf618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-building" style={{ color: '#8b5cf6', fontSize: 18 }} />
+            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #8b5cf644', marginBottom: 24, borderTop: '4px solid #8b5cf6' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#8b5cf618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-building" style={{ color: '#8b5cf6', fontSize: 20 }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text1)' }}>Business Level KPIs</div>
-                    <div style={{ fontSize: 13, color: 'var(--text3)' }}>Global signals that affect every suburb you serve</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Business Level KPIs</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Global signals that affect every suburb you serve</div>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: 8 }}>✕</button>
+                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
               </div>
 
-              {/* GBP PROFILE */}
+              {/* ── GBP PROFILE ── */}
               <KpiItem itemKey="gbp-profile" icon="id-card" iconColor="#8b5cf6"
                 title="GBP Profile Completeness"
-                subtitle="All 8 fields need to be filled for maximum visibility"
+                subtitle="All 8 fields must be filled for maximum visibility"
                 badge={`${gbpC.filledCount || 0}/${gbpC.totalFields || 8}`}
                 badgeColor={gbpComplete ? '#22c55e' : '#ef4444'}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
                   {(gbpC.allFields || []).map((f, i) => {
                     const valueMap = { hasName: gbpC.name, hasPhone: gbpC.phone, hasWebsite: gbpC.website, hasDescription: gbpC.description ? gbpC.description.substring(0, 80) + '...' : null, hasCategories: gbpC.primaryCategory, hasServiceAreas: `${gbpC.serviceAreasCount} suburbs`, hasServices: `${gbpC.servicesCount} services`, hasHours: 'Set', hasPhotos: `${gbpC.photosCount} photos` };
                     return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, background: f.done ? '#22c55e08' : '#ef444408', border: `1px solid ${f.done ? '#22c55e' : '#ef4444'}22` }}>
-                        <i className={`fas fa-${f.done ? 'check-circle' : 'times-circle'}`} style={{ color: f.done ? '#22c55e' : '#ef4444', fontSize: 18 }} />
-                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)', minWidth: 140 }}>{f.label}</div>
-                        <div style={{ flex: 1, textAlign: 'right' }}>
-                          {f.done && valueMap[f.key] && <span style={{ fontSize: 15, fontWeight: 700, color: '#22c55e' }}>{valueMap[f.key]}</span>}
-                          {!f.done && <span style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>Missing</span>}
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderRadius: 12, background: f.done ? '#22c55e08' : '#ef444408', border: `1px solid ${f.done ? '#22c55e' : '#ef4444'}25` }}>
+                        <i className={`fas fa-${f.done ? 'check-circle' : 'times-circle'}`} style={{ color: f.done ? '#22c55e' : '#ef4444', fontSize: 20 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{f.label}</div>
+                          {f.done && valueMap[f.key] && <div style={{ fontSize: 14, fontWeight: 600, color: '#22c55e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{valueMap[f.key]}</div>}
                         </div>
+                        {!f.done && (
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Add ${f.label} to GBP`, `Go to business.google.com and add your ${f.label}. This field is currently missing from your Google Business Profile.`, 'gbp', 'high'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        )}
                       </div>
                     );
                   })}
                 </div>
-                {(gbpC.allFields || []).some(f => !f.done) && (
-                  <button onClick={() => {
-                    const missing = (gbpC.allFields || []).filter(f => !f.done).map(f => f.label);
-                    api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
-                      title: `Complete GBP Profile: ${missing.join(', ')}`,
-                      description: `The following GBP profile fields are missing and need to be added:\n${missing.map(m => `• ${m}`).join('\n')}\n\nGo to business.google.com to update your profile.`,
-                      pillar: 'gbp', priority: 'high', status: 'pending', type: 'manual',
-                    }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
-                  }} style={{ marginTop: 12, width: '100%', padding: '10px 16px', borderRadius: 8, background: '#ef444412', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    <i className="fas fa-plus-circle" /> Add Missing Fields to Action Plan
-                  </button>
-                )}
               </KpiItem>
 
-              {/* GBP CATEGORIES */}
+              {/* ── GBP CATEGORIES ── */}
               <KpiItem itemKey="gbp-cats" icon="tags" iconColor="#f59e0b"
                 title="GBP Categories"
                 subtitle={gbpC.primaryCategory ? `Primary: ${gbpC.primaryCategory}` : 'No categories set'}
                 badge={`${gbpC.categoriesCount || 0}`}
                 badgeColor={gbpC.hasCategories ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 14 }}>
                   {(s.gbpCategories || []).length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                       {s.gbpCategories.map((cat, i) => (
-                        <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: i === 0 ? '#f59e0b18' : 'var(--bg)', border: `1px solid ${i === 0 ? '#f59e0b44' : 'var(--border)'}`, fontSize: 14, fontWeight: i === 0 ? 700 : 500, color: i === 0 ? '#f59e0b' : 'var(--text1)' }}>
-                          {i === 0 && <i className="fas fa-star" style={{ marginRight: 6, fontSize: 11 }} />}{cat}
+                        <span key={i} style={{ padding: '8px 18px', borderRadius: 10, background: i === 0 ? '#f59e0b18' : 'var(--bg)', border: `1px solid ${i === 0 ? '#f59e0b44' : 'var(--border)'}`, fontSize: 15, fontWeight: i === 0 ? 800 : 600, color: i === 0 ? '#f59e0b' : 'var(--text1)' }}>
+                          {i === 0 && <i className="fas fa-star" style={{ marginRight: 8, fontSize: 12 }} />}{cat}
                         </span>
                       ))}
                     </div>
                   ) : (
-                    <div style={{ padding: '12px 16px', borderRadius: 10, background: '#ef444410', border: '1px solid #ef444420', color: '#ef4444', fontSize: 14 }}>
-                      <i className="fas fa-exclamation-triangle" style={{ marginRight: 8 }} />
-                      No categories set. Add primary + secondary categories in Google Business Profile to appear for more searches.
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderRadius: 12, background: '#ef444410', border: '1px solid #ef444425' }}>
+                      <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 18 }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444' }}>No categories set</div>
+                        <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 2 }}>Add primary + secondary categories to appear for more searches</div>
+                      </div>
+                      <button onClick={() => createAction('Add GBP Categories', 'Go to business.google.com and add your primary and secondary business categories. Categories help Google understand what your business does.', 'gbp', 'critical')}
+                        style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                      </button>
                     </div>
                   )}
                 </div>
               </KpiItem>
 
-              {/* GBP POSTS */}
+              {/* ── GBP POSTS ── */}
               <KpiItem itemKey="gbp-posts" icon="pen-square" iconColor="#3b82f6"
                 title="GBP Posts"
-                subtitle={`${s.gbpPostCount || 0} published — target at least 3`}
+                subtitle={(s.gbpPostCount || 0) >= 3 ? 'On track — keep posting regularly' : `Need ${3 - (s.gbpPostCount || 0)} more posts`}
                 badge={`${s.gbpPostCount || 0}/3`}
                 badgeColor={(s.gbpPostCount || 0) >= 3 ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 12, padding: '14px 16px', borderRadius: 10, background: (s.gbpPostCount || 0) >= 3 ? '#22c55e08' : '#f59e0b08', border: `1px solid ${(s.gbpPostCount || 0) >= 3 ? '#22c55e' : '#f59e0b'}20` }}>
-                  <div style={{ fontSize: 14, color: 'var(--text1)' }}>
-                    {(s.gbpPostCount || 0) >= 3 ? (
-                      <span><i className="fas fa-check-circle" style={{ color: '#22c55e', marginRight: 8 }} />You have {s.gbpPostCount} posts — meets the minimum. Keep posting regularly for best results.</span>
-                    ) : (
-                      <span><i className="fas fa-arrow-up" style={{ color: '#f59e0b', marginRight: 8 }} />Publish <strong>{3 - (s.gbpPostCount || 0)} more</strong> posts about your services. Posts boost engagement and Maps visibility.</span>
-                    )}
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 14 }}>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, fontWeight: 800, color: (s.gbpPostCount || 0) >= 3 ? '#22c55e' : '#f59e0b' }}>{s.gbpPostCount || 0}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Published</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 22 }}>→</div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, fontWeight: 800, color: '#22c55e' }}>3+</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
+                    </div>
                   </div>
+                  {(s.gbpPostCount || 0) < 3 && (
+                    <button onClick={() => createAction(`Publish ${3 - (s.gbpPostCount || 0)} GBP Posts`, `Create and publish ${3 - (s.gbpPostCount || 0)} Google Business posts about your services. Posts boost engagement and Maps visibility. Currently at ${s.gbpPostCount || 0}/3.`, 'gbp', 'medium')}
+                      style={{ width: '100%', padding: '12px 16px', borderRadius: 10, background: '#3b82f610', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <i className="fas fa-plus-circle" /> Add to Action Plan: Publish {3 - (s.gbpPostCount || 0)} Posts
+                    </button>
+                  )}
                 </div>
               </KpiItem>
 
-              {/* CITATIONS / DIRECTORIES */}
+              {/* ── CITATIONS / DIRECTORIES ── */}
               <KpiItem itemKey="citations" icon="building" iconColor="#06b6d4"
                 title="Citations & Directories"
                 subtitle={`Listed in ${listedDirs.length} of ${directoryList.length} directories`}
                 badge={`${listedDirs.length}/${directoryList.length}`}
-                badgeColor={listedDirs.length >= 10 ? '#22c55e' : listedDirs.length >= 5 ? '#f59e0b' : '#ef4444'}>
-                <div style={{ marginTop: 12 }}>
-                  {/* Listed */}
+                badgeColor={listedDirs.length >= 15 ? '#22c55e' : listedDirs.length >= 8 ? '#f59e0b' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
                   {listedDirs.length > 0 && (
                     <div style={{ marginBottom: 16 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-check" style={{ marginRight: 6 }} />Listed ({listedDirs.length})
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                        <i className="fas fa-check-circle" style={{ marginRight: 8 }} />Listed ({listedDirs.length})
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {listedDirs.map((d, i) => (
-                          <span key={i} style={{ padding: '4px 12px', borderRadius: 6, background: '#22c55e12', border: '1px solid #22c55e25', fontSize: 13, color: '#22c55e', fontWeight: 600 }}>{d.name}</span>
+                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>{d.name}</span>
                         ))}
                       </div>
                     </div>
                   )}
-                  {/* Not Listed */}
                   {missingDirs.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-times" style={{ marginRight: 6 }} />Not Listed ({missingDirs.length})
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 8 }} />Not Listed ({missingDirs.length})
                       </div>
-                      <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      <div style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)' }}>
                         {missingDirs.map((d, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: i < missingDirs.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                            <i className="fas fa-external-link-alt" style={{ color: 'var(--text3)', fontSize: 11 }} />
-                            <div style={{ flex: 1 }}>
-                              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{d.name}</span>
-                              <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>{d.url}</span>
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < missingDirs.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
+                            <i className="fas fa-external-link-alt" style={{ color: 'var(--text3)', fontSize: 12 }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{d.name}</span>
+                              <span style={{ fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>{d.url}</span>
                             </div>
-                            <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: d.type === 'Essential' ? '#ef444418' : d.type === 'Major' ? '#f59e0b18' : '#3b82f618', color: d.type === 'Essential' ? '#ef4444' : d.type === 'Major' ? '#f59e0b' : '#3b82f6' }}>{d.type}</span>
-                            <span style={{ fontSize: 12, color: d.free ? '#22c55e' : '#f59e0b', fontWeight: 600 }}>{d.free ? 'Free' : d.paid_option || 'Paid'}</span>
+                            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 800, background: d.type === 'Essential' ? '#ef444418' : d.type === 'Major' ? '#f59e0b18' : d.type === 'Industry' ? '#8b5cf618' : '#3b82f618', color: d.type === 'Essential' ? '#ef4444' : d.type === 'Major' ? '#f59e0b' : d.type === 'Industry' ? '#8b5cf6' : '#3b82f6' }}>{d.type}</span>
+                            <span style={{ fontSize: 13, color: d.free ? '#22c55e' : '#f59e0b', fontWeight: 700, minWidth: 40, textAlign: 'center' }}>{d.free ? 'Free' : 'Paid'}</span>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`List on ${d.name}`, `Create a business listing on ${d.name} (${d.url}).\nType: ${d.type} | ${d.free ? 'Free' : d.paid_option || 'Paid'} | Difficulty: ${d.difficulty}\n\n${d.description}`, 'gbp', d.type === 'Essential' ? 'critical' : d.type === 'Major' ? 'high' : 'medium'); }}
+                              style={{ padding: '5px 10px', borderRadius: 6, background: '#06b6d415', border: '1px solid #06b6d430', color: '#06b6d4', fontWeight: 700, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                              <i className="fas fa-plus" style={{ marginRight: 3 }} />Action
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -3951,132 +3969,135 @@
                 </div>
               </KpiItem>
 
-              {/* REVIEWS — vs Competition */}
-              {(() => {
-                const reviewTarget = compB.maxReviews ? compB.maxReviews + 1 : null;
-                const reviewGap = reviewTarget ? reviewTarget - myReviews : null;
-                const beating = reviewGap != null && reviewGap <= 0;
-                return (
+              {/* ── REVIEWS vs COMPETITION ── */}
               <KpiItem itemKey="biz-reviews" icon="star" iconColor="#f97316"
                 title="Reviews vs Competition"
-                subtitle={compB.topCompetitorName ? `Top threat: ${compB.topCompetitorName} (${compB.topCompetitorReviews} reviews)` : 'Run a grid scan to discover competitors'}
-                badge={beating ? 'Winning' : reviewGap != null ? `Need ${reviewGap} more` : `${myReviews}`}
+                subtitle={compB.topCompetitorName ? `#1 threat: ${compB.topCompetitorName} (${compB.topCompetitorReviews} reviews)` : 'Run a grid scan to discover competitors'}
+                badge={beating ? 'Winning' : reviewGap != null ? `Need ${reviewGap}` : `${myReviews}`}
                 badgeColor={beating ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 12 }}>
-                  {/* Your stats */}
+                <div style={{ marginTop: 14 }}>
                   <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: beating ? '#22c55e' : 'var(--text1)' }}>{myReviews}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>You</div>
+                    <div style={{ flex: 1, padding: '18px 16px', borderRadius: 14, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
+                      <div style={{ fontSize: 36, fontWeight: 800, color: beating ? '#22c55e' : 'var(--text1)' }}>{myReviews}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4 }}>You</div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 20 }}>→</div>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: beating ? '#22c55e08' : '#ef444408', border: `1px solid ${beating ? '#22c55e' : '#ef4444'}20`, textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: beating ? '#22c55e' : '#ef4444' }}>{reviewTarget || '—'}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Beat #{1} competitor</div>
+                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 24 }}>→</div>
+                    <div style={{ flex: 1, padding: '18px 16px', borderRadius: 14, background: beating ? '#22c55e08' : '#ef444408', border: `1px solid ${beating ? '#22c55e' : '#ef4444'}25`, textAlign: 'center' }}>
+                      <div style={{ fontSize: 36, fontWeight: 800, color: beating ? '#22c55e' : '#ef4444' }}>{reviewTarget || '—'}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4 }}>Target</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Beat #1 competitor</div>
                     </div>
                   </div>
                   {reviewGap != null && !beating && (
-                    <div style={{ padding: '10px 14px', borderRadius: 8, background: '#f9731608', border: '1px solid #f9731620', fontSize: 14, color: '#f97316', marginBottom: 16, fontWeight: 600 }}>
-                      <i className="fas fa-bullseye" style={{ marginRight: 8 }} />
-                      You need <strong>{reviewGap}</strong> more reviews to beat <strong>{compB.topCompetitorName}</strong> and become #1
+                    <div style={{ padding: '14px 18px', borderRadius: 12, background: '#f9731608', border: '1px solid #f9731625', fontSize: 16, color: '#f97316', marginBottom: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <i className="fas fa-bullseye" style={{ fontSize: 18 }} />
+                      <span>You need <strong style={{ fontSize: 20 }}>{reviewGap}</strong> more reviews to beat <strong>{compB.topCompetitorName}</strong></span>
                     </div>
                   )}
-                  {/* Competitor list */}
                   {competitors.length > 0 && (
-                    <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 70px 80px', padding: '8px 14px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Competitor</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Reviews</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Rating</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Gap</span>
+                    <div style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 90px', padding: '10px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase' }}>Competitor</span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Reviews</span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Rating</span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>You vs</span>
                       </div>
                       {competitors.slice(0, 5).map((c, i) => {
                         const gap = c.reviews - myReviews;
                         return (
-                          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 70px 80px', padding: '10px 14px', borderBottom: i < Math.min(competitors.length, 5) - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                            <span style={{ fontSize: 14, fontWeight: 600, color: i === 0 ? '#f97316' : 'var(--text1)' }}>{i === 0 && <i className="fas fa-crown" style={{ color: '#f97316', marginRight: 6, fontSize: 11 }} />}{c.name}</span>
-                            <span style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text1)' }}>{c.reviews}</span>
-                            <span style={{ textAlign: 'center', fontSize: 14, fontWeight: 600, color: c.rating >= 4.5 ? '#22c55e' : '#f59e0b' }}>{c.rating}★</span>
-                            <span style={{ textAlign: 'center', fontSize: 13, fontWeight: 700, color: gap > 0 ? '#ef4444' : '#22c55e' }}>{gap > 0 ? `−${gap}` : `+${Math.abs(gap)}`}</span>
+                          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 90px', padding: '12px 16px', borderBottom: i < Math.min(competitors.length, 5) - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: i === 0 ? '#f97316' : 'var(--text1)' }}>{i === 0 && <i className="fas fa-crown" style={{ color: '#f97316', marginRight: 8, fontSize: 12 }} />}{c.name}</span>
+                            <span style={{ textAlign: 'center', fontSize: 16, fontWeight: 800, color: 'var(--text1)' }}>{c.reviews}</span>
+                            <span style={{ textAlign: 'center', fontSize: 15, fontWeight: 700, color: c.rating >= 4.5 ? '#22c55e' : '#f59e0b' }}>{c.rating}★</span>
+                            <span style={{ textAlign: 'center', fontSize: 15, fontWeight: 800, color: gap > 0 ? '#ef4444' : '#22c55e' }}>{gap > 0 ? `−${gap}` : `+${Math.abs(gap)}`}</span>
                           </div>
                         );
                       })}
                     </div>
                   )}
-                </div>
-              </KpiItem>
-                ); })()}
-
-              {/* RATING */}
-              <KpiItem itemKey="biz-rating" icon="star-half-alt" iconColor="#eab308"
-                title="Rating vs Competition"
-                subtitle={myRating >= (compB.avgRating || 5) ? 'Above competitor average' : `Below competitor average of ${compB.avgRating}★`}
-                badge={`${myRating}★`}
-                badgeColor={myRating >= (compB.avgRating || 5) ? '#22c55e' : '#f59e0b'}>
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#eab30808', border: '1px solid #eab30820', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: myRating >= (compB.avgRating || 5) ? '#22c55e' : '#f59e0b' }}>{myRating}★</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>You</div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 20 }}>→</div>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: '#22c55e' }}>4.8★+</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Stay above 4.8 to rank well</div>
-                    </div>
-                  </div>
-                  {competitors.filter(c => c.rating > 0).length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {competitors.filter(c => c.rating > 0).slice(0, 6).map((c, i) => (
-                        <div key={i} style={{ padding: '8px 14px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 13 }}>
-                          <span style={{ fontWeight: 600, color: 'var(--text1)' }}>{c.name}</span>
-                          <span style={{ marginLeft: 8, fontWeight: 700, color: c.rating >= 4.5 ? '#22c55e' : c.rating >= 4 ? '#f59e0b' : '#ef4444' }}>{c.rating}★</span>
-                          <span style={{ color: 'var(--text3)', marginLeft: 4 }}>({c.reviews})</span>
-                        </div>
-                      ))}
-                    </div>
+                  {!beating && reviewGap != null && (
+                    <button onClick={() => createAction(`Get ${reviewGap} More Reviews`, `You currently have ${myReviews} reviews. Your top competitor (${compB.topCompetitorName}) has ${compB.maxReviews}. You need ${reviewGap} more reviews to become #1.\n\nStrategies:\n• Ask satisfied customers directly after service\n• Send follow-up SMS/email with review link\n• Add review link to email signature\n• Create QR code for review link`, 'gbp', 'critical')}
+                      style={{ width: '100%', padding: '12px 16px', borderRadius: 10, background: '#f9731610', border: '1px solid #f9731630', color: '#f97316', fontWeight: 700, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <i className="fas fa-plus-circle" style={{ fontSize: 16 }} /> Add to Action Plan: Get {reviewGap} More Reviews
+                    </button>
                   )}
                 </div>
               </KpiItem>
 
-              {/* REVIEW REPLIES */}
+              {/* ── RATING ── */}
+              <KpiItem itemKey="biz-rating" icon="star-half-alt" iconColor="#eab308"
+                title="Rating vs Competition"
+                subtitle={myRating >= 4.8 ? 'Excellent — above 4.8★ threshold' : `Below 4.8★ — needs improvement`}
+                badge={`${myRating}★`}
+                badgeColor={myRating >= 4.8 ? '#22c55e' : myRating >= 4.5 ? '#f59e0b' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                    <div style={{ flex: 1, padding: '18px 16px', borderRadius: 14, background: '#eab30808', border: '1px solid #eab30820', textAlign: 'center' }}>
+                      <div style={{ fontSize: 36, fontWeight: 800, color: myRating >= 4.8 ? '#22c55e' : myRating >= 4.5 ? '#f59e0b' : '#ef4444' }}>{myRating}★</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4 }}>You</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 24 }}>→</div>
+                    <div style={{ flex: 1, padding: '18px 16px', borderRadius: 14, background: '#22c55e08', border: '1px solid #22c55e25', textAlign: 'center' }}>
+                      <div style={{ fontSize: 36, fontWeight: 800, color: '#22c55e' }}>4.8★+</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4 }}>Target</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Stay above 4.8 to rank well</div>
+                    </div>
+                  </div>
+                  {competitors.filter(c => c.rating > 0).length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                      {competitors.filter(c => c.rating > 0).slice(0, 6).map((c, i) => (
+                        <div key={i} style={{ padding: '10px 16px', borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 14 }}>
+                          <span style={{ fontWeight: 700, color: 'var(--text1)' }}>{c.name}</span>
+                          <span style={{ marginLeft: 10, fontWeight: 800, fontSize: 16, color: c.rating >= 4.8 ? '#22c55e' : c.rating >= 4.5 ? '#f59e0b' : '#ef4444' }}>{c.rating}★</span>
+                          <span style={{ color: 'var(--text3)', marginLeft: 6, fontSize: 13 }}>({c.reviews} reviews)</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {myRating < 4.8 && (
+                    <button onClick={() => createAction('Improve Google Rating to 4.8★+', `Current rating: ${myRating}★. Target: 4.8★+.\n\nStrategies:\n• Respond professionally to all negative reviews\n• Encourage happy customers to leave 5-star reviews\n• Address service issues mentioned in low-star reviews\n• Follow up with unsatisfied customers to resolve issues`, 'gbp', 'high')}
+                      style={{ width: '100%', marginTop: 14, padding: '12px 16px', borderRadius: 10, background: '#eab30810', border: '1px solid #eab30830', color: '#eab308', fontWeight: 700, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <i className="fas fa-plus-circle" style={{ fontSize: 16 }} /> Add to Action Plan: Improve Rating to 4.8★+
+                    </button>
+                  )}
+                </div>
+              </KpiItem>
+
+              {/* ── REVIEW REPLIES ── */}
               <KpiItem itemKey="biz-replies" icon="reply-all" iconColor="#10b981"
                 title="Review Reply Rate"
-                subtitle={`${replied} replied out of ${totalRevs} total reviews`}
+                subtitle={replyRate >= 100 ? 'All reviews replied — excellent!' : `${unreplied} reviews need a reply`}
                 badge={`${replyRate}%`}
                 badgeColor={replyRate >= 100 ? '#22c55e' : replyRate >= 80 ? '#f59e0b' : '#ef4444'}>
-                <div style={{ marginTop: 12 }}>
-                  {/* Progress bar */}
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>{replied} replied</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: unreplied > 0 ? '#ef4444' : '#22c55e' }}>{unreplied} unreplied</span>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ marginBottom: 18 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: '#22c55e' }}>{replied} replied</span>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: unreplied > 0 ? '#ef4444' : '#22c55e' }}>{unreplied} unreplied</span>
                     </div>
-                    <div style={{ height: 10, borderRadius: 5, background: 'var(--bg)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${replyRate}%`, borderRadius: 5, background: replyRate >= 100 ? '#22c55e' : replyRate >= 80 ? '#f59e0b' : '#ef4444', transition: 'width 0.3s' }} />
+                    <div style={{ height: 14, borderRadius: 7, background: 'var(--bg)', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      <div style={{ height: '100%', width: `${replyRate}%`, borderRadius: 7, background: replyRate >= 100 ? '#22c55e' : replyRate >= 80 ? '#f59e0b' : '#ef4444', transition: 'width 0.3s' }} />
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 16 }}>
-                    <div style={{ flex: 1, padding: '12px 14px', borderRadius: 10, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: '#22c55e' }}>{replied}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>Replied</div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, fontWeight: 800, color: '#22c55e' }}>{replied}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Replied</div>
                     </div>
-                    <div style={{ flex: 1, padding: '12px 14px', borderRadius: 10, background: unreplied > 0 ? '#ef444408' : '#22c55e08', border: `1px solid ${unreplied > 0 ? '#ef4444' : '#22c55e'}20`, textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: unreplied > 0 ? '#ef4444' : '#22c55e' }}>{unreplied}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>Unreplied</div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: unreplied > 0 ? '#ef444408' : '#22c55e08', border: `1px solid ${unreplied > 0 ? '#ef4444' : '#22c55e'}20`, textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, fontWeight: 800, color: unreplied > 0 ? '#ef4444' : '#22c55e' }}>{unreplied}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Unreplied</div>
                     </div>
-                    <div style={{ flex: 1, padding: '12px 14px', borderRadius: 10, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>100%</div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>Target</div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, fontWeight: 800, color: '#3b82f6' }}>100%</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
                     </div>
                   </div>
                   {unreplied > 0 && (
-                    <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: '#f59e0b08', border: '1px solid #f59e0b20', fontSize: 13, color: '#f59e0b' }}>
-                      <i className="fas fa-lightbulb" style={{ marginRight: 8 }} />
-                      Reply to all {unreplied} unreplied reviews — Google rewards businesses that engage with customers.
-                    </div>
+                    <button onClick={() => createAction(`Reply to ${unreplied} Unreplied Reviews`, `You have ${unreplied} reviews without a reply. Google rewards businesses that engage with customers.\n\nTarget: 100% reply rate (currently ${replyRate}%).\n\nGo to business.google.com → Reviews → Reply to each unreplied review professionally.`, 'gbp', unreplied >= 5 ? 'critical' : 'high')}
+                      style={{ width: '100%', marginTop: 14, padding: '12px 16px', borderRadius: 10, background: '#10b98110', border: '1px solid #10b98130', color: '#10b981', fontWeight: 700, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <i className="fas fa-plus-circle" style={{ fontSize: 16 }} /> Add to Action Plan: Reply to {unreplied} Reviews
+                    </button>
                   )}
                 </div>
               </KpiItem>
