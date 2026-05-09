@@ -6453,6 +6453,7 @@
       const [filter, setFilter] = useState('all');
       const [lastChecked, setLastChecked] = useState(null);
       const [progress, setProgress] = useState(null); // { current, total }
+      const [budget, setBudget] = useState(null); // { used, remaining, limit }
       const pollRef = React.useRef(null);
 
       const handleCompleted = (data) => {
@@ -6462,6 +6463,8 @@
         setLastChecked(data.completed_at ? new Date(data.completed_at) : new Date());
         setLoading(false); setProgress(null);
         _indexingCache[_ixck] = { results: r, stats: st, completedAt: data.completed_at };
+        // Refresh budget after scan completes
+        api('/indexing/budget').then(b => { if (b.limit) setBudget(b); }).catch(() => {});
       };
 
       const startPolling = () => {
@@ -6500,6 +6503,8 @@
         // Always check server — a re-check may be running or may have completed since cache was set
         (async () => {
           try {
+            // Fetch budget
+            try { const b = await api('/indexing/budget'); if (b.limit) setBudget(b); } catch {}
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
             if (data.status === 'running') {
               setLoading(true);
@@ -6524,6 +6529,7 @@
         setLoading(true); setError(''); setProgress(null);
         try {
           const data = await api(`/projects/${project.id}/indexing/check`, { method: 'POST' });
+          if (data.budget) setBudget(data.budget);
           if (data.status === 'running') {
             if (data.total) setProgress({ current: 0, total: data.total });
             startPolling();
@@ -6629,8 +6635,9 @@
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Check which pages are indexed by Google — home, services, and suburb pages</p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {budget && <span style={{ fontSize: 11, color: budget.remaining < 100 ? '#ef4444' : 'var(--text3)', background: 'var(--bg2)', padding: '4px 8px', borderRadius: 4 }}>Budget: {budget.remaining.toLocaleString()}/{budget.limit.toLocaleString()} remaining today</span>}
               {lastChecked && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Last checked: {lastChecked.toLocaleDateString()} {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-              <button className="btn btn-primary" onClick={runCheck} disabled={loading} style={{ fontSize: 13 }}>
+              <button className="btn btn-primary" onClick={runCheck} disabled={loading || (budget && budget.remaining <= 0)} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />{results.length > 0 ? 'Re-check' : 'Check Indexing'}</>}
               </button>
             </div>

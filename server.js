@@ -2430,15 +2430,11 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
               extractPagesFromSitemap(subXml);
             }
           } catch (e) { /* skip failed sub-sitemap */ }
-          if (pages.length >= 100) break;
         }
       } else {
         // It's a regular sitemap — extract pages directly
         extractPagesFromSitemap(xml);
       }
-
-      // Cap at 50
-      if (pages.length > 100) pages.length = 100;
     }
   } catch (e) { /* sitemap not available */ }
 
@@ -2447,15 +2443,23 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
     try {
       const wpBase = wpUrl.replace(/\/$/, '');
       const fetchOpts = { signal: AbortSignal.timeout(30000), ...(authHeaders ? { headers: authHeaders } : {}) };
-      const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&status=publish&_fields=id,title,slug,link`, fetchOpts);
-      if (resp.ok) {
-        const wpPages = await resp.json();
-        for (const p of (Array.isArray(wpPages) ? wpPages : [])) {
-          const url = p.link || '';
-          if (!seenUrls.has(url)) {
-            seenUrls.add(url);
-            pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url });
+      // Paginate to get ALL published pages and posts
+      for (const postType of ['pages', 'posts']) {
+        let page = 1;
+        while (true) {
+          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${postType}?per_page=100&page=${page}&status=publish&_fields=id,title,slug,link`, fetchOpts);
+          if (!resp.ok) break;
+          const wpItems = await resp.json();
+          if (!Array.isArray(wpItems) || wpItems.length === 0) break;
+          for (const p of wpItems) {
+            const url = p.link || '';
+            if (!seenUrls.has(url)) {
+              seenUrls.add(url);
+              pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url });
+            }
           }
+          if (wpItems.length < 100) break;
+          page++;
         }
       }
     } catch (e) { console.log('[discoverPages] WP REST API failed:', e.message); }
@@ -3171,6 +3175,18 @@ app.get('/api/projects/:projectId/cwv-fixes', async (req, res) => {
 
 // ==================== INDEXING STATUS CHECK ====================
 
+const DAILY_URL_INSPECTION_BUDGET = 2000;
+
+// Get today's URL Inspection API usage across all projects
+async function getUrlInspectionUsageToday() {
+  const result = await pool.query(
+    `SELECT COALESCE(SUM((audit_data->>'total')::int), 0) as used
+     FROM audits WHERE pillar='indexing' AND status='completed'
+     AND completed_at >= CURRENT_DATE`
+  );
+  return parseInt(result.rows[0]?.used || 0);
+}
+
 // Discover all important pages and check indexing status
 app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
   const { projectId } = req.params;
@@ -3184,6 +3200,11 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     const accessToken = await getGscAccessToken(req.auth?.userId);
     if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
 
+    // Check daily budget
+    const usedToday = await getUrlInspectionUsageToday();
+    const remaining = DAILY_URL_INSPECTION_BUDGET - usedToday;
+    if (remaining <= 0) return res.status(429).json({ error: `Daily URL Inspection budget exhausted (${DAILY_URL_INSPECTION_BUDGET} calls). Try again tomorrow.`, used: usedToday });
+
     // Find matching GSC site
     let matchedSite = gscProperty;
     if (!matchedSite) {
@@ -3196,13 +3217,19 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
 
     const baseUrl = `https://${domain}`;
 
-    // Discover all pages via sitemap + WP REST API (same as PageSpeed/On-Page)
+    // Discover all pages via sitemap + WP REST API
     const authHeaders = getWpAuthHeaders(project);
     const discovered = await discoverPages(baseUrl, project.wordpress_url, authHeaders);
-    const allPages = discovered.map(p => p.url).filter(Boolean);
+    let allPages = discovered.map(p => p.url).filter(Boolean);
     // Ensure homepage is included
     if (!allPages.some(u => u.replace(/\/$/, '') === baseUrl)) allPages.unshift(baseUrl + '/');
-    console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId}`);
+
+    // Cap to remaining daily budget
+    if (allPages.length > remaining) {
+      console.log(`[indexing] Capping ${allPages.length} pages to ${remaining} (daily budget: ${usedToday}/${DAILY_URL_INSPECTION_BUDGET} used)`);
+      allPages = allPages.slice(0, remaining);
+    }
+    console.log(`[indexing] Checking ${allPages.length} pages for project ${projectId} (budget: ${usedToday + allPages.length}/${DAILY_URL_INSPECTION_BUDGET})`);
 
     // Cancel any running indexing audits
     await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='indexing' AND status='running'`, [projectId]);
@@ -3215,7 +3242,7 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     const auditId = auditRes2.rows[0].id;
 
     // Return immediately
-    res.json({ auditId, status: 'running', total: allPages.length });
+    res.json({ auditId, status: 'running', total: allPages.length, budget: { used: usedToday, remaining: remaining - allPages.length, limit: DAILY_URL_INSPECTION_BUDGET } });
 
     // Run in background
     (async () => {
@@ -3337,6 +3364,14 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Get daily URL Inspection budget status
+app.get('/api/indexing/budget', async (req, res) => {
+  try {
+    const used = await getUrlInspectionUsageToday();
+    res.json({ used, remaining: DAILY_URL_INSPECTION_BUDGET - used, limit: DAILY_URL_INSPECTION_BUDGET });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== RATING CAPTAIN SYNC ====================
