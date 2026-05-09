@@ -18714,29 +18714,19 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       topCompetitorRating: topCompetitors[0]?.rating || null,
     };
 
-    // Citation/directory data — check citations table for accurate status
-    let citationStatuses = {};
+    // Citation/directory data — use citations table (same source as /citations endpoint)
+    let citationStatusMap = {};
     try {
       const citR = await pool.query(`SELECT directory_name, status, listing_url FROM citations WHERE project_id=$1`, [projectId]);
-      for (const row of citR.rows) citationStatuses[row.directory_name.toLowerCase()] = { status: row.status, url: row.listing_url };
+      for (const row of citR.rows) citationStatusMap[row.directory_name] = { status: row.status, url: row.listing_url };
     } catch (e) { /* citations table may not exist yet */ }
-    // Also check audit findings as fallback
-    const citationFindings = await pool.query(
-      `SELECT title, current_value, recommended_value, severity FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp','gbp_external') AND category='Directory & Citations' AND status != 'dismissed' LIMIT 50`,
-      [projectId]
-    );
-    const citationCount = Object.values(citationStatuses).filter(c => c.status === 'listed').length ||
-      (AUSTRALIAN_DIRECTORIES.length - citationFindings.rows.length);
-    // Send full directory list with listed/not-listed status
-    const citedGapNames = new Set(citationFindings.rows.map(r => (r.title || '').toLowerCase()));
-    const directoryList = AUSTRALIAN_DIRECTORIES.map(d => {
-      const citStatus = citationStatuses[d.name.toLowerCase()];
-      const listed = citStatus ? citStatus.status === 'listed' : !citedGapNames.has(d.name.toLowerCase());
-      return {
-        name: d.name, url: d.url, type: d.type, free: d.free, paid_option: d.paid_option || null,
-        difficulty: d.difficulty, priority: d.priority, description: d.description, listed,
-      };
-    });
+    const directoryList = AUSTRALIAN_DIRECTORIES.map(d => ({
+      name: d.name, url: d.url, type: d.type, free: d.free, paid_option: d.paid_option || null,
+      difficulty: d.difficulty, priority: d.priority, description: d.description,
+      listed: citationStatusMap[d.name]?.status === 'listed',
+      pending: citationStatusMap[d.name]?.status === 'pending',
+    }));
+    const citationCount = directoryList.filter(d => d.listed).length;
 
     res.json({
       project: { id: project.id, name: project.name, business_name: project.business_name, domain: project.domain },

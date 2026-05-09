@@ -3809,7 +3809,9 @@
           {/* EXPANDED KPI DETAIL */}
           {expandedKpi === 'business' && (() => {
             const listedDirs = directoryList.filter(d => d.listed);
-            const missingDirs = directoryList.filter(d => !d.listed);
+            const pendingDirs = directoryList.filter(d => d.pending);
+            const missingDirs = directoryList.filter(d => !d.listed && !d.pending);
+            const uncheckedDirs = directoryList.filter(d => !d.listed && !d.pending); // same as missing until scanned
             const replyRate = s.reviewStats?.reply_rate || 0;
             const unreplied = s.reviewStats?.unreplied_count || 0;
             const totalRevs = s.reviewStats?.total_reviews || 0;
@@ -3938,27 +3940,36 @@
               </KpiItem>
 
               {/* REVIEWS — vs Competition */}
+              {(() => {
+                const reviewTarget = compB.maxReviews ? compB.maxReviews + 1 : null;
+                const reviewGap = reviewTarget ? reviewTarget - myReviews : null;
+                const beating = reviewGap != null && reviewGap <= 0;
+                return (
               <KpiItem itemKey="biz-reviews" icon="star" iconColor="#f97316"
                 title="Reviews vs Competition"
-                subtitle={compB.topCompetitorName ? `Top threat: ${compB.topCompetitorName}` : 'Run a grid scan to discover competitors'}
-                badge={`${myReviews}`}
-                badgeColor={myReviews >= (compB.avgReviews || 999) ? '#22c55e' : '#ef4444'}>
+                subtitle={compB.topCompetitorName ? `Top threat: ${compB.topCompetitorName} (${compB.topCompetitorReviews} reviews)` : 'Run a grid scan to discover competitors'}
+                badge={beating ? 'Winning' : reviewGap != null ? `Need ${reviewGap} more` : `${myReviews}`}
+                badgeColor={beating ? '#22c55e' : '#ef4444'}>
                 <div style={{ marginTop: 12 }}>
                   {/* Your stats */}
                   <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
                     <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: myReviews >= (compB.avgReviews || 999) ? '#22c55e' : '#ef4444' }}>{myReviews}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Your Reviews</div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: beating ? '#22c55e' : 'var(--text1)' }}>{myReviews}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>You</div>
                     </div>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: '#3b82f6' }}>{compB.avgReviews || '—'}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target (Avg)</div>
-                    </div>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#f9731608', border: '1px solid #f9731620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: '#f97316' }}>{compB.maxReviews || '—'}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Top Competitor</div>
+                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 20 }}>→</div>
+                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: beating ? '#22c55e08' : '#ef444408', border: `1px solid ${beating ? '#22c55e' : '#ef4444'}20`, textAlign: 'center' }}>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: beating ? '#22c55e' : '#ef4444' }}>{reviewTarget || '—'}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Beat #{1} competitor</div>
                     </div>
                   </div>
+                  {reviewGap != null && !beating && (
+                    <div style={{ padding: '10px 14px', borderRadius: 8, background: '#f9731608', border: '1px solid #f9731620', fontSize: 14, color: '#f97316', marginBottom: 16, fontWeight: 600 }}>
+                      <i className="fas fa-bullseye" style={{ marginRight: 8 }} />
+                      You need <strong>{reviewGap}</strong> more reviews to beat <strong>{compB.topCompetitorName}</strong> and become #1
+                    </div>
+                  )}
                   {/* Competitor list */}
                   {competitors.length > 0 && (
                     <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -3983,22 +3994,25 @@
                   )}
                 </div>
               </KpiItem>
+                ); })()}
 
               {/* RATING */}
               <KpiItem itemKey="biz-rating" icon="star-half-alt" iconColor="#eab308"
                 title="Rating vs Competition"
-                subtitle={`Your rating: ${myRating}★ — competitor avg: ${compB.avgRating || '—'}★`}
+                subtitle={myRating >= (compB.avgRating || 5) ? 'Above competitor average' : `Below competitor average of ${compB.avgRating}★`}
                 badge={`${myRating}★`}
                 badgeColor={myRating >= (compB.avgRating || 5) ? '#22c55e' : '#f59e0b'}>
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
                     <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#eab30808', border: '1px solid #eab30820', textAlign: 'center' }}>
                       <div style={{ fontSize: 28, fontWeight: 800, color: myRating >= (compB.avgRating || 5) ? '#22c55e' : '#f59e0b' }}>{myRating}★</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Your Rating</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>You</div>
                     </div>
-                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: '#3b82f6' }}>{compB.avgRating || '—'}★</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target (Avg)</div>
+                    <div style={{ display: 'flex', alignItems: 'center', color: 'var(--text3)', fontSize: 20 }}>→</div>
+                    <div style={{ flex: 1, padding: '14px 16px', borderRadius: 10, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: '#22c55e' }}>4.8★+</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>Target</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Stay above 4.8 to rank well</div>
                     </div>
                   </div>
                   {competitors.filter(c => c.rating > 0).length > 0 && (
