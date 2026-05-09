@@ -4323,7 +4323,7 @@
           {/* EXPANDED KPI DETAIL — SUBURB */}
           {expandedKpi === 'suburb' && (() => {
             const subNoPage = suburbs.filter(sub => sub.pageCount === 0);
-            const subNotIndexed = suburbs.filter(sub => sub.pageCount > 0 && sub.indexingStatus !== 'indexed');
+            const subNotIndexed = suburbs.filter(sub => sub.pageCount > 0 && sub.indexingStatus === 'issues');
             const subNoGbp = suburbs.filter(sub => !sub.inGbp);
             const subNoTrack = suburbs.filter(sub => sub.keywordCount === 0);
             const createAction = (title, desc, pillar, priority) => {
@@ -4450,7 +4450,8 @@
                   {suburbs.map((sub, i) => {
                     const hasPage = sub.pageCount > 0;
                     const isIndexed = sub.indexingStatus === 'indexed';
-                    const hasIssue = hasPage && !isIndexed;
+                    const isUnchecked = sub.indexingStatus === 'unchecked' || (!sub.indexingStatus && hasPage);
+                    const hasIssue = hasPage && !isIndexed && !isUnchecked;
                     const isSkipped = skippedKpiItems.has(`idx-${sub.suburb}`);
                     if (isSkipped) return (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
@@ -4467,8 +4468,8 @@
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: isIndexed ? '#22c55e06' : hasIssue ? '#ef444406' : 'var(--bg)', border: `1px solid ${isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--border)'}18` }}>
                         <i className={`fas fa-${isIndexed ? 'check-circle' : hasIssue ? 'exclamation-triangle' : 'minus-circle'}`} style={{ color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)', fontSize: 18 }} />
                         <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)' }}>
-                          {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : 'No Page'}
+                        <span style={{ fontSize: 14, fontWeight: 700, color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : isUnchecked ? '#f59e0b' : 'var(--text3)' }}>
+                          {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : isUnchecked ? 'Not Checked' : 'No Page'}
                         </span>
                         {hasIssue && (
                           <>
