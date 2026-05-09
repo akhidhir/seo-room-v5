@@ -18430,9 +18430,20 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // Load master suburb list from project.service_areas
     let masterSuburbs = [];
+    let suburbSource = 'settings'; // 'settings', 'website', 'gbp', 'none'
+    let hasLocationPages = false; // whether the website has /service-areas/ pages at all
     if (project.service_areas) {
       const sa = typeof project.service_areas === 'string' ? JSON.parse(project.service_areas) : project.service_areas;
       if (Array.isArray(sa)) masterSuburbs = sa.map(s => (typeof s === 'string' ? s : s.name || '').trim()).filter(Boolean);
+    }
+
+    // Check if website has any location pages (regardless of source of truth)
+    for (const page of websitePages) {
+      const url = (page.url || page.slug || '').toLowerCase();
+      if (/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/.test(url)) {
+        hasLocationPages = true;
+        break;
+      }
     }
 
     if (masterSuburbs.length > 0) {
@@ -18446,6 +18457,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     } else {
       // Fallback: extract suburbs from website /service-areas/ pages
+      suburbSource = 'website';
       for (const page of websitePages) {
         const url = (page.url || page.slug || '').toLowerCase();
         const saMatch = url.match(/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/);
@@ -18478,6 +18490,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
       // If still no suburbs found, fall back to GBP service areas
       if (allSuburbNames.size === 0) {
+        suburbSource = gbpSuburbs.length > 0 ? 'gbp' : 'none';
         for (const s of gbpSuburbs) {
           const n = normalize(s);
           if (n && n.length > 1) {
@@ -19085,6 +19098,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         totalReviews: allReviews.length,
         suburbsWithReviews: suburbMatrix.filter(s => s.reviewMentions > 0).length,
       },
+      suburbSource,
+      hasLocationPages,
       suburbs: suburbMatrix,
       services: serviceMatrix,
       competitors: topCompetitors,

@@ -3684,7 +3684,7 @@
       );
       if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
 
-      const { summary: s, suburbs, services, recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [] } = data;
+      const { summary: s, suburbs, services, recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [], suburbSource = 'settings', hasLocationPages = true } = data;
       const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 18 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
@@ -4400,6 +4400,25 @@
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Reviews</div>
                 </div>
               </div>
+
+              {/* Warning: No location pages on website */}
+              {!hasLocationPages && (
+                <div style={{ background: '#ef444412', border: '1px solid #ef444440', borderRadius: 12, padding: '16px 20px', marginBottom: 20, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                  <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 20, marginTop: 2 }} />
+                  <div>
+                    <div style={{ fontWeight: 800, color: '#ef4444', fontSize: 15, marginBottom: 6 }}>No Location Pages Found</div>
+                    <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
+                      This website has no dedicated suburb/service area pages (e.g. /service-areas/suburb-name/). Google uses location-specific pages as a strong ranking signal for local search. Without them, competitors with suburb pages will rank higher in Maps and local results.
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginTop: 10 }}>
+                      Recommendation: Create a /service-areas/ section with a dedicated page for each target suburb, including unique content about your services in that area.
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 6 }}>
+                      Suburbs below are sourced from {suburbSource === 'gbp' ? 'GBP service areas' : suburbSource === 'settings' ? 'Project Settings' : 'website scan'} instead.
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* ── LANDING PAGES ── */}
               <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
