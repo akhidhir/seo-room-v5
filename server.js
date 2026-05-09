@@ -18388,27 +18388,28 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Match website pages to services
+    // Match website pages to services — use full service name slug, not partial
     for (const page of websitePages) {
       const slug = normalize(page.slug || page.url || '');
       const title = normalize(page.title || '');
       for (const n of allServiceNames) {
-        const words = n.split(/\s+/);
-        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
-        if (slug.includes(keyPart.replace(/\s+/g, '-')) || title.includes(keyPart)) {
+        const fullSlug = n.replace(/\s+/g, '-');
+        const fullCompact = n.replace(/\s+/g, '');
+        if (slug.includes(fullSlug) || slug.includes(fullCompact) || title.includes(n)) {
           if (!serviceSources[n].pages) serviceSources[n].pages = [];
-          serviceSources[n].pages.push({ url: page.url, title: page.title });
+          // Deduplicate
+          if (!serviceSources[n].pages.find(p => p.url === page.url)) {
+            serviceSources[n].pages.push({ url: page.url, title: page.title });
+          }
         }
       }
     }
 
-    // Match keywords to services
+    // Match keywords to services — use full service name
     for (const kw of rankKeywords) {
       const kwN = normalize(kw.keyword);
       for (const n of allServiceNames) {
-        const words = n.split(/\s+/);
-        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
-        if (kwN.includes(keyPart)) {
+        if (kwN.includes(n) || n.includes(kwN)) {
           if (!serviceSources[n].keywords) serviceSources[n].keywords = [];
           const rt = rankMap[kw.keyword.toLowerCase()];
           serviceSources[n].keywords.push({ keyword: kw.keyword, volume: kw.search_volume, serp: rt?.serp_position, maps: rt?.maps_position });
