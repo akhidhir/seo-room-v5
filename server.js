@@ -18092,12 +18092,15 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (Array.isArray(sa)) sa.forEach(s => { const n = (typeof s === 'string' ? s : s.name || '').trim(); if (n) projSuburbs.push(n); });
     }
 
-    // Extract GBP services
+    // Extract GBP services — skip raw serviceTypeId entries (job_type_id:*)
     const gbpServices = [];
     if (profile?.serviceItems) {
       for (const si of profile.serviceItems) {
-        const label = si.freeFormServiceItem?.label?.displayName || si.structuredServiceItem?.serviceTypeId || '';
-        if (label) gbpServices.push(label);
+        const label = si.freeFormServiceItem?.label?.displayName || '';
+        // Only use structuredServiceItem if it has a human-readable displayName, not a raw ID
+        const structLabel = si.structuredServiceItem?.description || '';
+        const finalLabel = label || structLabel;
+        if (finalLabel && !finalLabel.startsWith('job_type_id:')) gbpServices.push(finalLabel);
       }
     }
 
@@ -18388,16 +18391,23 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Match website pages to services — use full service name slug, not partial
+    // Match website pages to services — match full slug OR all significant words present
     for (const page of websitePages) {
       const slug = normalize(page.slug || page.url || '');
       const title = normalize(page.title || '');
       for (const n of allServiceNames) {
         const fullSlug = n.replace(/\s+/g, '-');
-        const fullCompact = n.replace(/\s+/g, '');
-        if (slug.includes(fullSlug) || slug.includes(fullCompact) || title.includes(n)) {
+        // Method 1: full slug match
+        let matched = slug.includes(fullSlug) || title.includes(n);
+        // Method 2: all significant words (3+ chars) present in slug or title
+        if (!matched) {
+          const words = n.split(/\s+/).filter(w => w.length >= 3);
+          if (words.length > 0) {
+            matched = words.every(w => slug.includes(w) || slug.includes(w.replace(/\s+/g, '-')) || title.includes(w));
+          }
+        }
+        if (matched) {
           if (!serviceSources[n].pages) serviceSources[n].pages = [];
-          // Deduplicate
           if (!serviceSources[n].pages.find(p => p.url === page.url)) {
             serviceSources[n].pages.push({ url: page.url, title: page.title });
           }
