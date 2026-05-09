@@ -18303,6 +18303,18 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         });
         if (gbpMatch) {
           suburbSlug = normalize(gbpMatch).replace(/\s+/g, '-');
+        } else if (suburbSlug.includes('-')) {
+          // No GBP match — extract last 1-2 words as suburb (e.g. "car-key-replacement-fremantle" → "fremantle")
+          const parts = suburbSlug.split('-');
+          // Try last 2 words first (e.g. "bibra-lake"), then last 1 word
+          const last2 = parts.slice(-2).join('-');
+          const last1 = parts[parts.length - 1];
+          // Use last2 if it looks like a multi-word suburb (both parts 3+ chars), otherwise last1
+          if (parts.length >= 3 && parts[parts.length - 2].length >= 3 && last1.length >= 3) {
+            suburbSlug = last2;
+          } else {
+            suburbSlug = last1;
+          }
         }
         const suburbName = suburbSlug.replace(/-/g, ' ').trim();
         const n = normalize(suburbName);
