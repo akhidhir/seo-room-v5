@@ -3693,15 +3693,16 @@
       // KPI helpers
       const DoneLabel = ({ done, label, detail, itemKey }) => {
         const isExpanded = expandedKpiItem === itemKey;
+        const hasDetail = !!detail;
         return (
           <div style={{ marginBottom: 2 }}>
-            <div onClick={!done && detail ? () => setExpandedKpiItem(isExpanded ? null : itemKey) : undefined}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, cursor: !done && detail ? 'pointer' : 'default', background: isExpanded ? 'var(--bg)' : 'transparent', transition: 'background 0.15s' }}
-              onMouseEnter={e => { if (!done && detail) e.currentTarget.style.background = 'var(--bg)'; }}
+            <div onClick={hasDetail ? () => setExpandedKpiItem(isExpanded ? null : itemKey) : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, cursor: hasDetail ? 'pointer' : 'default', background: isExpanded ? 'var(--bg)' : 'transparent', transition: 'background 0.15s' }}
+              onMouseEnter={e => { if (hasDetail) e.currentTarget.style.background = 'var(--bg)'; }}
               onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = 'transparent'; }}>
               <span style={{ padding: '2px 10px', borderRadius: 6, background: done ? '#22c55e18' : '#ef444418', color: done ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 12, flexShrink: 0, minWidth: 58, textAlign: 'center' }}>{done ? 'Done' : 'Not Done'}</span>
               <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', flex: 1 }}>{label}</span>
-              {!done && detail && <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />}
+              {hasDetail && <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />}
             </div>
             {isExpanded && detail && (
               <div style={{ padding: '8px 12px 8px 80px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{detail}</div>
@@ -3709,26 +3710,32 @@
           </div>
         );
       };
-      const MeasureRow = ({ label, current, target, competition, unit, goodDirection }) => {
+      const MeasureRow = ({ label, current, target, competition, unit, goodDirection, itemKey, detail }) => {
         const dir = goodDirection || 'higher';
         const isGood = dir === 'higher' ? (current >= target) : (current <= target);
         const currentColor = target == null ? 'var(--text1)' : isGood ? '#22c55e' : current >= target * 0.7 ? '#f59e0b' : '#ef4444';
+        const isExpanded = expandedKpiItem === itemKey;
+        const hasDetail = !!detail;
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 14, fontWeight: 600 }}>
-            <span style={{ flex: 1, color: 'var(--text1)' }}>{label}</span>
-            <span style={{ minWidth: 70, textAlign: 'center' }}>
-              <span style={{ fontSize: 18, fontWeight: 800, color: currentColor }}>{current != null ? current : '—'}</span>
-              {unit && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 2 }}>{unit}</span>}
-            </span>
-            <span style={{ color: 'var(--text3)', fontSize: 12, margin: '0 4px' }}>→</span>
-            <span style={{ minWidth: 70, textAlign: 'center' }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: '#3b82f6' }}>{target != null ? target : '—'}</span>
-              {unit && target != null && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 2 }}>{unit}</span>}
-            </span>
-            {competition != null && (
-              <span style={{ minWidth: 80, textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>
-                Top: <span style={{ fontWeight: 700, color: '#f97316' }}>{competition}</span>{unit && <span> {unit}</span>}
+          <div style={{ marginBottom: 2 }}>
+            <div onClick={hasDetail ? () => setExpandedKpiItem(isExpanded ? null : itemKey) : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: hasDetail ? 'pointer' : 'default', background: isExpanded ? 'var(--bg)' : 'transparent', transition: 'background 0.15s' }}
+              onMouseEnter={e => { if (hasDetail) e.currentTarget.style.background = 'var(--bg)'; }}
+              onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = 'transparent'; }}>
+              <span style={{ flex: 1, color: 'var(--text1)' }}>{label}</span>
+              <span style={{ minWidth: 70, textAlign: 'center' }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: currentColor }}>{current != null ? current : '—'}</span>
+                {unit && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 2 }}>{unit}</span>}
               </span>
+              <span style={{ color: 'var(--text3)', fontSize: 12, margin: '0 4px' }}>→</span>
+              <span style={{ minWidth: 70, textAlign: 'center' }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#3b82f6' }}>{target != null ? target : '—'}</span>
+                {unit && target != null && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 2 }}>{unit}</span>}
+              </span>
+              {hasDetail && <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />}
+            </div>
+            {isExpanded && detail && (
+              <div style={{ padding: '8px 12px 8px 16px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>{detail}</div>
             )}
           </div>
         );
@@ -3837,32 +3844,102 @@
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, padding: '0 12px' }}>Checklist</div>
                   <DoneLabel done={gbpComplete} label={`GBP Profile Complete (${gbpC.filledCount || 0}/${gbpC.totalFields || 8})`} itemKey="gbp-complete"
-                    detail={gbpC.missingFields?.length ? (
-                      <div>{gbpC.missingFields.map((f, i) => <div key={i} style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ color: '#ef4444', fontWeight: 700 }}>Missing:</span> {f}</div>)}</div>
-                    ) : null} />
+                    detail={
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {(gbpC.allFields || []).map((f, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                            <span style={{ padding: '1px 8px', borderRadius: 4, background: f.done ? '#22c55e18' : '#ef444418', color: f.done ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 11, minWidth: 52, textAlign: 'center' }}>{f.done ? 'Done' : 'Missing'}</span>
+                            <span style={{ fontWeight: 500 }}>{f.label}</span>
+                            {f.done && f.key === 'hasName' && gbpC.name && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.name})</span>}
+                            {f.done && f.key === 'hasPhone' && gbpC.phone && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.phone})</span>}
+                            {f.done && f.key === 'hasCategories' && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.categoriesCount})</span>}
+                            {f.done && f.key === 'hasServiceAreas' && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.serviceAreasCount} areas)</span>}
+                            {f.done && f.key === 'hasServices' && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.servicesCount} listed)</span>}
+                            {f.done && f.key === 'hasPhotos' && <span style={{ color: 'var(--text3)', fontSize: 12, marginLeft: 4 }}>({gbpC.photosCount} photos)</span>}
+                          </div>
+                        ))}
+                      </div>
+                    } />
                   <DoneLabel done={!!gbpC.hasCategories} label={`GBP Categories (${gbpC.categoriesCount || 0})`} itemKey="gbp-cats"
-                    detail={<span>Add relevant business categories in your Google Business Profile to appear for more search queries.</span>} />
+                    detail={
+                      <div>
+                        {gbpC.primaryCategory && <div style={{ padding: '3px 0' }}><span style={{ fontWeight: 600 }}>Primary:</span> {gbpC.primaryCategory}</div>}
+                        {(s.gbpCategories || []).length > 0 && <div style={{ padding: '3px 0' }}><span style={{ fontWeight: 600 }}>All:</span> {s.gbpCategories.join(', ')}</div>}
+                        {!gbpC.hasCategories && <div style={{ color: '#ef4444' }}>No categories set. Add your primary and secondary business categories in Google Business Profile.</div>}
+                      </div>
+                    } />
                   <DoneLabel done={(s.gbpPostCount || 0) >= 3} label={`GBP Posts (${s.gbpPostCount || 0} published)`} itemKey="gbp-posts"
-                    detail={<span>Publish at least 3 Google Business posts about your services. Regular posts boost engagement and Maps visibility.</span>} />
+                    detail={
+                      <div>
+                        <div>You have <strong>{s.gbpPostCount || 0}</strong> GBP posts. Target: at least <strong>3</strong> posts about your services.</div>
+                        {(s.gbpPostCount || 0) < 3 && <div style={{ marginTop: 4, color: '#f59e0b' }}>Regular posts boost engagement and Maps visibility. Publish {3 - (s.gbpPostCount || 0)} more.</div>}
+                      </div>
+                    } />
                   <DoneLabel done={citationCount >= 10} label={`Citations (${citationCount} directories)`} itemKey="citations"
-                    detail={<span>List your business in more Australian directories. Target at least 10 quality directories for citation consistency. Go to GBP Audit for the full directory list.</span>} />
+                    detail={
+                      <div>
+                        <div>Listed in <strong>{citationCount}</strong> directories. Target: at least <strong>10</strong> quality directories.</div>
+                        {citationCount < 10 && <div style={{ marginTop: 4, color: '#f59e0b' }}>Need {10 - citationCount} more. Go to GBP Audit → Directory & Citations for the full list with priority rankings.</div>}
+                      </div>
+                    } />
                 </div>
                 {/* Measurables */}
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, padding: '0 12px' }}>
                     Current → Target
-                    <span style={{ fontSize: 11, fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>(targets from competitors)</span>
+                    <span style={{ fontSize: 11, fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>(click for competitor details)</span>
                   </div>
-                  <MeasureRow label="Reviews" current={myReviews} target={compB.avgReviews} competition={compB.maxReviews} />
-                  <MeasureRow label="Rating" current={myRating} target={compB.avgRating} competition={compB.topCompetitorRating} unit="★" />
-                  <MeasureRow label="Reply Rate" current={s.reviewStats?.reply_rate || 0} target={100} unit="%" />
-                  <MeasureRow label="Unreplied" current={s.reviewStats?.unreplied_count || 0} target={0} goodDirection="lower" />
-                  {compB.topCompetitorName && (
-                    <div style={{ padding: '10px 12px', marginTop: 8, borderRadius: 8, background: '#f9731612', border: '1px solid #f9731625', fontSize: 13, color: '#f97316' }}>
-                      <i className="fas fa-shield-alt" style={{ marginRight: 6 }} />
-                      Top threat: <strong>{compB.topCompetitorName}</strong> ({compB.topCompetitorReviews} reviews, {compB.topCompetitorRating}★)
-                    </div>
-                  )}
+                  <MeasureRow label="Reviews" current={myReviews} target={compB.avgReviews} itemKey="biz-reviews"
+                    detail={competitors.length > 0 ? (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--text1)' }}>Competitor Reviews:</div>
+                        {competitors.slice(0, 5).map((c, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                            <span style={{ fontWeight: 600, color: i === 0 ? '#f97316' : 'var(--text1)', minWidth: 160 }}>{i === 0 && <i className="fas fa-crown" style={{ color: '#f97316', marginRight: 6, fontSize: 11 }} />}{c.name}</span>
+                            <span style={{ fontWeight: 700 }}>{c.reviews}</span> <span style={{ color: 'var(--text3)' }}>reviews</span>
+                            <span style={{ color: 'var(--text3)' }}>·</span>
+                            <span>{c.rating}★</span>
+                          </div>
+                        ))}
+                        <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 6, background: '#3b82f612', border: '1px solid #3b82f625', color: '#3b82f6', fontSize: 12 }}>
+                          <strong>Your target: {compB.avgReviews} reviews</strong> (competitor average). Top competitor has {compB.maxReviews}.
+                        </div>
+                      </div>
+                    ) : <span>No competitor data yet. Run a grid scan to discover competitors.</span>} />
+                  <MeasureRow label="Rating" current={myRating} target={compB.avgRating} unit="★" itemKey="biz-rating"
+                    detail={competitors.length > 0 ? (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--text1)' }}>Competitor Ratings:</div>
+                        {competitors.filter(c => c.rating > 0).slice(0, 5).map((c, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--text1)', minWidth: 160 }}>{c.name}</span>
+                            <span style={{ fontWeight: 700, color: c.rating >= 4.5 ? '#22c55e' : c.rating >= 4 ? '#f59e0b' : '#ef4444' }}>{c.rating}★</span>
+                            <span style={{ color: 'var(--text3)' }}>({c.reviews} reviews)</span>
+                          </div>
+                        ))}
+                        <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 6, background: '#3b82f612', border: '1px solid #3b82f625', color: '#3b82f6', fontSize: 12 }}>
+                          <strong>Your target: {compB.avgRating}★</strong> (competitor average).
+                        </div>
+                      </div>
+                    ) : <span>No competitor data yet. Run a grid scan to discover competitors.</span>} />
+                  <MeasureRow label="Reply Rate" current={s.reviewStats?.reply_rate || 0} target={100} unit="%" itemKey="biz-reply"
+                    detail={
+                      <div>
+                        <div>You've replied to <strong>{s.reviewStats?.reply_rate || 0}%</strong> of your reviews.</div>
+                        <div style={{ marginTop: 4 }}>Total reviews: <strong>{s.reviewStats?.total_reviews || 0}</strong> · Replied: <strong>{(s.reviewStats?.total_reviews || 0) - (s.reviewStats?.unreplied_count || 0)}</strong> · Unreplied: <strong style={{ color: (s.reviewStats?.unreplied_count || 0) > 0 ? '#ef4444' : '#22c55e' }}>{s.reviewStats?.unreplied_count || 0}</strong></div>
+                        <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, background: '#3b82f612', border: '1px solid #3b82f625', color: '#3b82f6', fontSize: 12 }}>
+                          <strong>Target: 100%</strong> — reply to every review. Google rewards businesses that engage with customers.
+                        </div>
+                      </div>
+                    } />
+                  <MeasureRow label="Unreplied" current={s.reviewStats?.unreplied_count || 0} target={0} goodDirection="lower" itemKey="biz-unreplied"
+                    detail={
+                      <div>
+                        <div>You have <strong style={{ color: (s.reviewStats?.unreplied_count || 0) > 0 ? '#ef4444' : '#22c55e' }}>{s.reviewStats?.unreplied_count || 0}</strong> unreplied reviews.</div>
+                        {(s.reviewStats?.unreplied_count || 0) > 0 && <div style={{ marginTop: 4, color: '#f59e0b' }}>Reply to all reviews — especially negative ones. This shows Google and customers you're active and responsive.</div>}
+                        {(s.reviewStats?.unreplied_count || 0) === 0 && <div style={{ marginTop: 4, color: '#22c55e' }}>All reviews replied to. Keep it up!</div>}
+                      </div>
+                    } />
                 </div>
               </div>
             </div>
