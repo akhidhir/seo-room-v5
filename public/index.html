@@ -3837,21 +3837,33 @@
                 subtitle="All 8 fields need to be filled for maximum visibility"
                 badge={`${gbpC.filledCount || 0}/${gbpC.totalFields || 8}`}
                 badgeColor={gbpComplete ? '#22c55e' : '#ef4444'}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
                   {(gbpC.allFields || []).map((f, i) => {
-                    const valueMap = { hasName: gbpC.name, hasPhone: gbpC.phone, hasWebsite: gbpC.website, hasDescription: gbpC.description ? gbpC.description.substring(0, 60) + '...' : null, hasCategories: gbpC.primaryCategory, hasServiceAreas: `${gbpC.serviceAreasCount} suburbs`, hasServices: `${gbpC.servicesCount} services`, hasHours: null, hasPhotos: `${gbpC.photosCount} photos` };
+                    const valueMap = { hasName: gbpC.name, hasPhone: gbpC.phone, hasWebsite: gbpC.website, hasDescription: gbpC.description ? gbpC.description.substring(0, 80) + '...' : null, hasCategories: gbpC.primaryCategory, hasServiceAreas: `${gbpC.serviceAreasCount} suburbs`, hasServices: `${gbpC.servicesCount} services`, hasHours: 'Set', hasPhotos: `${gbpC.photosCount} photos` };
                     return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, background: f.done ? '#22c55e08' : '#ef444408', border: `1px solid ${f.done ? '#22c55e' : '#ef4444'}20` }}>
-                        <i className={`fas fa-${f.done ? 'check-circle' : 'times-circle'}`} style={{ color: f.done ? '#22c55e' : '#ef4444', fontSize: 16 }} />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{f.label}</div>
-                          {f.done && valueMap[f.key] && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 1 }}>{valueMap[f.key]}</div>}
-                          {!f.done && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 1 }}>Not set — add in Google Business Profile</div>}
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, background: f.done ? '#22c55e08' : '#ef444408', border: `1px solid ${f.done ? '#22c55e' : '#ef4444'}22` }}>
+                        <i className={`fas fa-${f.done ? 'check-circle' : 'times-circle'}`} style={{ color: f.done ? '#22c55e' : '#ef4444', fontSize: 18 }} />
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)', minWidth: 140 }}>{f.label}</div>
+                        <div style={{ flex: 1, textAlign: 'right' }}>
+                          {f.done && valueMap[f.key] && <span style={{ fontSize: 15, fontWeight: 700, color: '#22c55e' }}>{valueMap[f.key]}</span>}
+                          {!f.done && <span style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>Missing</span>}
                         </div>
                       </div>
                     );
                   })}
                 </div>
+                {(gbpC.allFields || []).some(f => !f.done) && (
+                  <button onClick={() => {
+                    const missing = (gbpC.allFields || []).filter(f => !f.done).map(f => f.label);
+                    api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
+                      title: `Complete GBP Profile: ${missing.join(', ')}`,
+                      description: `The following GBP profile fields are missing and need to be added:\n${missing.map(m => `• ${m}`).join('\n')}\n\nGo to business.google.com to update your profile.`,
+                      pillar: 'gbp', priority: 'high', status: 'pending', type: 'manual',
+                    }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
+                  }} style={{ marginTop: 12, width: '100%', padding: '10px 16px', borderRadius: 8, background: '#ef444412', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <i className="fas fa-plus-circle" /> Add Missing Fields to Action Plan
+                  </button>
+                )}
               </KpiItem>
 
               {/* GBP CATEGORIES */}
