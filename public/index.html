@@ -4105,81 +4105,341 @@
             );
           })()}
 
-          {expandedKpi === 'service' && (
-            <div style={{ background: 'var(--card)', borderRadius: 12, padding: '24px', border: '1px solid #3b82f644', marginBottom: 24, borderTop: '3px solid #3b82f6' }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text1)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <i className="fas fa-wrench" style={{ color: '#3b82f6' }} /> Service Signals
-                <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text3)' }}>— each service needs a page, GBP listing, and post</span>
-                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16, padding: 4 }}>✕</button>
-              </div>
-              {/* Summary row */}
-              <div style={{ display: 'flex', gap: 24, marginBottom: 16, padding: '0 12px' }}>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Service Page: <strong style={{ color: servicesWithPages === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPages}/{services.length}</strong></span>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>In GBP: <strong style={{ color: servicesInGbp === services.length ? '#22c55e' : '#f59e0b' }}>{servicesInGbp}/{services.length}</strong></span>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>GBP Post: <strong style={{ color: servicesWithPosts === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPosts}/{services.length}</strong></span>
-              </div>
-              {/* Per-service rows */}
-              <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px', padding: '8px 14px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Service</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Page</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>GBP</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Post</span>
-                </div>
-                {services.map((svc, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px', padding: '10px 14px', borderBottom: i < services.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.service}</span>
-                    <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: svc.pageCount > 0 ? '#22c55e' : '#ef4444' }}>{svc.pageCount > 0 ? 'Done' : 'Not Done'}</span>
-                    <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: svc.inGbp ? '#22c55e' : '#ef4444' }}>{svc.inGbp ? 'Done' : 'Not Done'}</span>
-                    <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: svc.postCount > 0 ? '#22c55e' : '#ef4444' }}>{svc.postCount > 0 ? 'Done' : 'Not Done'}</span>
+          {/* EXPANDED KPI DETAIL — SERVICE */}
+          {expandedKpi === 'service' && (() => {
+            const svcNoPage = services.filter(svc => svc.pageCount === 0);
+            const svcNoGbp = services.filter(svc => !svc.inGbp);
+            const svcNoPost = services.filter(svc => svc.postCount === 0);
+            const createAction = (title, desc, pillar, priority) => {
+              api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
+                title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
+              }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
+            };
+            return (
+            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #3b82f644', marginBottom: 24, borderTop: '4px solid #3b82f6' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 20 }} />
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {expandedKpi === 'suburb' && (
-            <div style={{ background: 'var(--card)', borderRadius: 12, padding: '24px', border: '1px solid #22c55e44', marginBottom: 24, borderTop: '3px solid #22c55e' }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text1)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <i className="fas fa-map-pin" style={{ color: '#22c55e' }} /> Suburb Signals
-                <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text3)' }}>— each suburb needs a landing page, indexing, GBP listing, and keyword tracking</span>
-                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16, padding: 4 }}>✕</button>
-              </div>
-              {/* Summary row */}
-              <div style={{ display: 'flex', gap: 24, marginBottom: 16, padding: '0 12px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Landing Page: <strong style={{ color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsWithPages}/{suburbs.length}</strong></span>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Indexed: <strong style={{ color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsIndexed}/{suburbs.length}</strong></span>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>In GBP: <strong style={{ color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsInGbp}/{suburbs.length}</strong></span>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Tracked: <strong style={{ color: suburbsTracked === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsTracked}/{suburbs.length}</strong></span>
-              </div>
-              {/* Per-suburb rows */}
-              <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px 100px', padding: '8px 14px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Suburb</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Page</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Indexed</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>GBP</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Tracked</span>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Service Level KPIs</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Each service needs a dedicated page, GBP listing, and GBP post</div>
+                  </div>
                 </div>
-                {suburbs.map((sub, i) => {
-                  const hasPage = sub.pageCount > 0;
-                  const isIndexed = sub.indexingStatus === 'indexed';
-                  const noIndex = sub.indexingStatus === 'issues';
-                  const indexLabel = hasPage ? (isIndexed ? 'Done' : noIndex ? 'Not Done' : '—') : '—';
-                  const indexColor = isIndexed ? '#22c55e' : noIndex ? '#ef4444' : 'var(--text3)';
-                  return (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px 100px', padding: '10px 14px', borderBottom: i < suburbs.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{sub.suburb}</span>
-                      <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: hasPage ? '#22c55e' : '#ef4444' }}>{hasPage ? 'Done' : 'Not Done'}</span>
-                      <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: indexColor }}>{indexLabel}</span>
-                      <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: sub.inGbp ? '#22c55e' : '#ef4444' }}>{sub.inGbp ? 'Done' : 'Not Done'}</span>
-                      <span style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: sub.keywordCount > 0 ? '#22c55e' : '#ef4444' }}>{sub.keywordCount > 0 ? 'Done' : 'Not Done'}</span>
-                    </div>
-                  );
-                })}
+                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
               </div>
+
+              {/* Summary stat boxes */}
+              <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithPages === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPages}/{services.length}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Have a Page</div>
+                </div>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesInGbp === services.length ? '#22c55e' : '#f59e0b' }}>{servicesInGbp}/{services.length}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>In GBP</div>
+                </div>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithPosts === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPosts}/{services.length}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Have a Post</div>
+                </div>
+              </div>
+
+              {/* ── SERVICE PAGES ── */}
+              <KpiItem itemKey="svc-pages" icon="file-alt" iconColor="#8b5cf6"
+                title="Service Pages"
+                subtitle={svcNoPage.length === 0 ? 'All services have a dedicated page' : `${svcNoPage.length} services missing a page`}
+                badge={`${servicesWithPages}/${services.length}`}
+                badgeColor={svcNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  {services.map((svc, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: svc.pageCount > 0 ? '#22c55e06' : '#ef444406', border: `1px solid ${svc.pageCount > 0 ? '#22c55e' : '#ef4444'}18` }}>
+                      <i className={`fas fa-${svc.pageCount > 0 ? 'check-circle' : 'times-circle'}`} style={{ color: svc.pageCount > 0 ? '#22c55e' : '#ef4444', fontSize: 18 }} />
+                      <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                      {svc.pageCount > 0 ? (
+                        <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{svc.pageCount} page{svc.pageCount > 1 ? 's' : ''}</span>
+                      ) : (
+                        <button onClick={(e) => { e.stopPropagation(); createAction(`Create Service Page: ${svc.service}`, `Create a dedicated landing page for "${svc.service}". Each service needs its own page optimized for that service keyword + location.\n\nPage should include:\n• Service description (500+ words)\n• Pricing/process info\n• Service area suburbs\n• Customer testimonials\n• Call to action`, 'website', 'high'); }}
+                          style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </KpiItem>
+
+              {/* ── GBP LISTINGS ── */}
+              <KpiItem itemKey="svc-gbp" icon="map-marker-alt" iconColor="#3b82f6"
+                title="Services in GBP"
+                subtitle={svcNoGbp.length === 0 ? 'All services listed in Google Business Profile' : `${svcNoGbp.length} services not in GBP`}
+                badge={`${servicesInGbp}/${services.length}`}
+                badgeColor={svcNoGbp.length === 0 ? '#22c55e' : '#f59e0b'}>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: servicesInGbp > 0 ? 14 : 0 }}>
+                    {services.filter(svc => svc.inGbp).map((svc, i) => (
+                      <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
+                        <i className="fas fa-check" style={{ marginRight: 6, fontSize: 11 }} />{svc.service}
+                      </span>
+                    ))}
+                  </div>
+                  {svcNoGbp.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 8 }} />Not in GBP ({svcNoGbp.length})
+                      </div>
+                      {svcNoGbp.map((svc, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.\n\nThis helps Google understand what you offer and show you for relevant searches.`, 'gbp', 'medium'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </KpiItem>
+
+              {/* ── GBP POSTS ── */}
+              <KpiItem itemKey="svc-posts" icon="pen-square" iconColor="#f59e0b"
+                title="GBP Posts per Service"
+                subtitle={svcNoPost.length === 0 ? 'All services have a GBP post' : `${svcNoPost.length} services without a post`}
+                badge={`${servicesWithPosts}/${services.length}`}
+                badgeColor={svcNoPost.length === 0 ? '#22c55e' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: servicesWithPosts > 0 ? 14 : 0 }}>
+                    {services.filter(svc => svc.postCount > 0).map((svc, i) => (
+                      <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
+                        <i className="fas fa-check" style={{ marginRight: 6, fontSize: 11 }} />{svc.service} ({svc.postCount})
+                      </span>
+                    ))}
+                  </div>
+                  {svcNoPost.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 8 }} />No Post ({svcNoPost.length})
+                      </div>
+                      {svcNoPost.map((svc, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Write GBP Post: ${svc.service}`, `Create a Google Business post about your "${svc.service}" service.\n\nPost should include:\n• What the service involves\n• Why customers choose you\n• Call to action (call/book now)\n• Relevant photo if available\n\nPublish via business.google.com → Posts.`, 'gbp', 'medium'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </KpiItem>
             </div>
-          )}
+            );
+          })()}
+
+          {/* EXPANDED KPI DETAIL — SUBURB */}
+          {expandedKpi === 'suburb' && (() => {
+            const subNoPage = suburbs.filter(sub => sub.pageCount === 0);
+            const subNotIndexed = suburbs.filter(sub => sub.pageCount > 0 && sub.indexingStatus !== 'indexed');
+            const subNoGbp = suburbs.filter(sub => !sub.inGbp);
+            const subNoTrack = suburbs.filter(sub => sub.keywordCount === 0);
+            const createAction = (title, desc, pillar, priority) => {
+              api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
+                title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
+              }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
+            };
+            return (
+            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #22c55e44', marginBottom: 24, borderTop: '4px solid #22c55e' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Suburb Level KPIs</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Each suburb needs a landing page, indexing, GBP service area, and keyword tracking</div>
+                  </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
+              </div>
+
+              {/* Summary stat boxes */}
+              <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsWithPages}/{suburbs.length}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Landing Page</div>
+                </div>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsIndexed}/{suburbs.length}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Indexed</div>
+                </div>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsInGbp}/{suburbs.length}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>In GBP</div>
+                </div>
+                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#f59e0b08', border: '1px solid #f59e0b20', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsTracked === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsTracked}/{suburbs.length}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Tracked</div>
+                </div>
+              </div>
+
+              {/* ── LANDING PAGES ── */}
+              <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
+                title="Suburb Landing Pages"
+                subtitle={subNoPage.length === 0 ? 'All suburbs have a landing page' : `${subNoPage.length} suburbs missing a page`}
+                badge={`${suburbsWithPages}/${suburbs.length}`}
+                badgeColor={subNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  {/* Done chips */}
+                  {suburbsWithPages > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />Have Page ({suburbsWithPages})
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {suburbs.filter(sub => sub.pageCount > 0).map((sub, i) => (
+                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>{sub.suburb}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Missing list */}
+                  {subNoPage.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />No Page ({subNoPage.length})
+                      </div>
+                      {subNoPage.map((sub, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${sub.suburb}`, `Create a suburb landing page for "${sub.suburb}".\n\nPage should target "[service] ${sub.suburb}" keywords and include:\n• Suburb-specific content (500+ words)\n• Services offered in this area\n• Local landmarks/references\n• Google Maps embed\n• Customer testimonials from ${sub.suburb}`, 'website', 'high'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </KpiItem>
+
+              {/* ── INDEXING ── */}
+              <KpiItem itemKey="sub-index" icon="search" iconColor="#3b82f6"
+                title="Indexing Status"
+                subtitle={subNotIndexed.length === 0 && suburbsWithPages === suburbs.length ? 'All pages indexed by Google' : subNotIndexed.length > 0 ? `${subNotIndexed.length} pages not indexed` : `${subNoPage.length} suburbs need a page first`}
+                badge={`${suburbsIndexed}/${suburbs.length}`}
+                badgeColor={suburbsIndexed === suburbs.length ? '#22c55e' : suburbsIndexed >= suburbs.length * 0.7 ? '#f59e0b' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  {suburbs.map((sub, i) => {
+                    const hasPage = sub.pageCount > 0;
+                    const isIndexed = sub.indexingStatus === 'indexed';
+                    const hasIssue = hasPage && !isIndexed;
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: isIndexed ? '#22c55e06' : hasIssue ? '#ef444406' : 'var(--bg)', border: `1px solid ${isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--border)'}18` }}>
+                        <i className={`fas fa-${isIndexed ? 'check-circle' : hasIssue ? 'exclamation-triangle' : 'minus-circle'}`} style={{ color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)', fontSize: 18 }} />
+                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)' }}>
+                          {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : 'No Page'}
+                        </span>
+                        {hasIssue && (
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Fix Indexing: ${sub.suburb}`, `The landing page for "${sub.suburb}" exists but is not indexed by Google.\n\nSteps to fix:\n1. Check Google Search Console for indexing errors\n2. Submit URL for indexing via URL Inspection tool\n3. Ensure page has proper meta robots (no noindex)\n4. Check for canonical tag issues\n5. Verify internal links point to this page`, 'website', 'high'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </KpiItem>
+
+              {/* ── GBP SERVICE AREAS ── */}
+              <KpiItem itemKey="sub-gbp" icon="map-marker-alt" iconColor="#22c55e"
+                title="Suburbs in GBP Service Areas"
+                subtitle={subNoGbp.length === 0 ? 'All suburbs listed as service areas' : `${subNoGbp.length} suburbs not in GBP`}
+                badge={`${suburbsInGbp}/${suburbs.length}`}
+                badgeColor={subNoGbp.length === 0 ? '#22c55e' : '#f59e0b'}>
+                <div style={{ marginTop: 14 }}>
+                  {suburbsInGbp > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />In GBP ({suburbsInGbp})
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {suburbs.filter(sub => sub.inGbp).map((sub, i) => (
+                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>{sub.suburb}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {subNoGbp.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />Not in GBP ({subNoGbp.length})
+                      </div>
+                      {subNoGbp.map((sub, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Add ${sub.suburb} to GBP Service Areas`, `Add "${sub.suburb}" as a service area in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Location & Areas → Service Areas → Add "${sub.suburb}".`, 'gbp', 'medium'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#22c55e15', border: '1px solid #22c55e30', color: '#22c55e', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </KpiItem>
+
+              {/* ── KEYWORD TRACKING ── */}
+              <KpiItem itemKey="sub-track" icon="chart-line" iconColor="#f59e0b"
+                title="Keyword Tracking"
+                subtitle={subNoTrack.length === 0 ? 'All suburbs have keyword tracking' : `${subNoTrack.length} suburbs not being tracked`}
+                badge={`${suburbsTracked}/${suburbs.length}`}
+                badgeColor={subNoTrack.length === 0 ? '#22c55e' : '#ef4444'}>
+                <div style={{ marginTop: 14 }}>
+                  {suburbsTracked > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />Tracked ({suburbsTracked})
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {suburbs.filter(sub => sub.keywordCount > 0).map((sub, i) => (
+                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
+                            {sub.suburb} <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.8 }}>({sub.keywordCount} kw)</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {subNoTrack.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />Not Tracked ({subNoTrack.length})
+                      </div>
+                      {subNoTrack.map((sub, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                          <button onClick={(e) => { e.stopPropagation(); onNavigate && onNavigate('maps-rankings'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Add Keywords
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </KpiItem>
+            </div>
+            );
+          })()}
 
           {/* Content only shows when a KPI card is expanded — matrix/tabs moved inside each level */}
 
