@@ -3588,6 +3588,10 @@
       const [editingService, setEditingService] = useState(null);
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
+      const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
+      const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
+      const resetItem = (key) => setSkippedKpiItems(prev => { const s = new Set(prev); s.delete(key); return s; });
+      const resetAllSkipped = () => setSkippedKpiItems(new Set());
 
       const reload = (silent) => {
         if (!silent) setLoading(true);
@@ -4153,20 +4157,47 @@
                 badge={`${servicesWithPages}/${services.length}`}
                 badgeColor={svcNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
-                  {services.map((svc, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: svc.pageCount > 0 ? '#22c55e06' : '#ef444406', border: `1px solid ${svc.pageCount > 0 ? '#22c55e' : '#ef4444'}18` }}>
-                      <i className={`fas fa-${svc.pageCount > 0 ? 'check-circle' : 'times-circle'}`} style={{ color: svc.pageCount > 0 ? '#22c55e' : '#ef4444', fontSize: 18 }} />
-                      <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                      {svc.pageCount > 0 ? (
-                        <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{svc.pageCount} page{svc.pageCount > 1 ? 's' : ''}</span>
-                      ) : (
-                        <button onClick={(e) => { e.stopPropagation(); createAction(`Create Service Page: ${svc.service}`, `Create a dedicated landing page for "${svc.service}". Each service needs its own page optimized for that service keyword + location.\n\nPage should include:\n• Service description (500+ words)\n• Pricing/process info\n• Service area suburbs\n• Customer testimonials\n• Call to action`, 'website', 'high'); }}
-                          style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                          <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                        </button>
-                      )}
+                  {services.some(svc => svc.pageCount === 0 && skippedKpiItems.has(`svcpg-${svc.service}`)) && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                      <button onClick={() => services.forEach(svc => resetItem(`svcpg-${svc.service}`))}
+                        style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                        <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All Ignored
+                      </button>
                     </div>
-                  ))}
+                  )}
+                  {services.map((svc, i) => {
+                    const isSkipped = svc.pageCount === 0 && skippedKpiItems.has(`svcpg-${svc.service}`);
+                    if (isSkipped) return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
+                        <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
+                        <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
+                        <button onClick={(e) => { e.stopPropagation(); resetItem(`svcpg-${svc.service}`); }}
+                          style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                          <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
+                        </button>
+                      </div>
+                    );
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: svc.pageCount > 0 ? '#22c55e06' : '#ef444406', border: `1px solid ${svc.pageCount > 0 ? '#22c55e' : '#ef4444'}18` }}>
+                        <i className={`fas fa-${svc.pageCount > 0 ? 'check-circle' : 'times-circle'}`} style={{ color: svc.pageCount > 0 ? '#22c55e' : '#ef4444', fontSize: 18 }} />
+                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                        {svc.pageCount > 0 ? (
+                          <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{svc.pageCount} page{svc.pageCount > 1 ? 's' : ''}</span>
+                        ) : (
+                          <>
+                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcpg-${svc.service}`); }}
+                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
+                              <i className="fas fa-forward" />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`Create Service Page: ${svc.service}`, `Create a dedicated landing page for "${svc.service}". Each service needs its own page optimized for that service keyword + location.\n\nPage should include:\n• Service description (500+ words)\n• Pricing/process info\n• Service area suburbs\n• Customer testimonials\n• Call to action`, 'website', 'high'); }}
+                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </KpiItem>
 
@@ -4186,19 +4217,43 @@
                   </div>
                   {svcNoGbp.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 8 }} />Not in GBP ({svcNoGbp.length})
-                      </div>
-                      {svcNoGbp.map((svc, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                          <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.\n\nThis helps Google understand what you offer and show you for relevant searches.`, 'gbp', 'medium'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
+                          <i className="fas fa-times-circle" style={{ marginRight: 8 }} />Not in GBP ({svcNoGbp.filter(s => !skippedKpiItems.has(`svcgbp-${s.service}`)).length})
                         </div>
-                      ))}
+                        {svcNoGbp.some(s => skippedKpiItems.has(`svcgbp-${s.service}`)) && (
+                          <button onClick={() => svcNoGbp.forEach(s => resetItem(`svcgbp-${s.service}`))}
+                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
+                          </button>
+                        )}
+                      </div>
+                      {svcNoGbp.map((svc, i) => {
+                        if (skippedKpiItems.has(`svcgbp-${svc.service}`)) return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
+                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
+                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
+                            <button onClick={(e) => { e.stopPropagation(); resetItem(`svcgbp-${svc.service}`); }}
+                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
+                            </button>
+                          </div>
+                        );
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcgbp-${svc.service}`); }}
+                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
+                              <i className="fas fa-forward" />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.\n\nThis helps Google understand what you offer and show you for relevant searches.`, 'gbp', 'medium'); }}
+                              style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -4220,19 +4275,43 @@
                   </div>
                   {svcNoPost.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 8 }} />No Post ({svcNoPost.length})
-                      </div>
-                      {svcNoPost.map((svc, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                          <button onClick={(e) => { e.stopPropagation(); createAction(`Write GBP Post: ${svc.service}`, `Create a Google Business post about your "${svc.service}" service.\n\nPost should include:\n• What the service involves\n• Why customers choose you\n• Call to action (call/book now)\n• Relevant photo if available\n\nPublish via business.google.com → Posts.`, 'gbp', 'medium'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
+                          <i className="fas fa-times-circle" style={{ marginRight: 8 }} />No Post ({svcNoPost.filter(s => !skippedKpiItems.has(`svcpost-${s.service}`)).length})
                         </div>
-                      ))}
+                        {svcNoPost.some(s => skippedKpiItems.has(`svcpost-${s.service}`)) && (
+                          <button onClick={() => svcNoPost.forEach(s => resetItem(`svcpost-${s.service}`))}
+                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
+                          </button>
+                        )}
+                      </div>
+                      {svcNoPost.map((svc, i) => {
+                        if (skippedKpiItems.has(`svcpost-${svc.service}`)) return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
+                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
+                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
+                            <button onClick={(e) => { e.stopPropagation(); resetItem(`svcpost-${svc.service}`); }}
+                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
+                            </button>
+                          </div>
+                        );
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcpost-${svc.service}`); }}
+                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
+                              <i className="fas fa-forward" />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`Write GBP Post: ${svc.service}`, `Create a Google Business post about your "${svc.service}" service.\n\nPost should include:\n• What the service involves\n• Why customers choose you\n• Call to action (call/book now)\n• Relevant photo if available\n\nPublish via business.google.com → Posts.`, 'gbp', 'medium'); }}
+                              style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -4310,19 +4389,44 @@
                   {/* Missing list */}
                   {subNoPage.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />No Page ({subNoPage.length})
-                      </div>
-                      {subNoPage.map((sub, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                          <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${sub.suburb}`, `Create a suburb landing page for "${sub.suburb}".\n\nPage should target "[service] ${sub.suburb}" keywords and include:\n• Suburb-specific content (500+ words)\n• Services offered in this area\n• Local landmarks/references\n• Google Maps embed\n• Customer testimonials from ${sub.suburb}`, 'website', 'high'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
+                          <i className="fas fa-times-circle" style={{ marginRight: 6 }} />No Page ({subNoPage.filter(s => !skippedKpiItems.has(`subpg-${s.suburb}`)).length})
                         </div>
-                      ))}
+                        {subNoPage.some(s => skippedKpiItems.has(`subpg-${s.suburb}`)) && (
+                          <button onClick={() => subNoPage.forEach(s => resetItem(`subpg-${s.suburb}`))}
+                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
+                          </button>
+                        )}
+                      </div>
+                      {subNoPage.map((sub, i) => {
+                        const isSkipped = skippedKpiItems.has(`subpg-${sub.suburb}`);
+                        if (isSkipped) return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
+                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
+                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{sub.suburb}</span>
+                            <button onClick={(e) => { e.stopPropagation(); resetItem(`subpg-${sub.suburb}`); }}
+                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
+                            </button>
+                          </div>
+                        );
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
+                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
+                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                            <button onClick={(e) => { e.stopPropagation(); skipItem(`subpg-${sub.suburb}`); }}
+                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
+                              <i className="fas fa-forward" />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${sub.suburb}`, `Create a suburb landing page for "${sub.suburb}".\n\nPage should target "[service] ${sub.suburb}" keywords and include:\n• Suburb-specific content (500+ words)\n• Services offered in this area\n• Local landmarks/references\n• Google Maps embed\n• Customer testimonials from ${sub.suburb}`, 'website', 'high'); }}
+                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -4335,10 +4439,30 @@
                 badge={`${suburbsIndexed}/${suburbs.length}`}
                 badgeColor={suburbsIndexed === suburbs.length ? '#22c55e' : suburbsIndexed >= suburbs.length * 0.7 ? '#f59e0b' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
+                  {skippedKpiItems.size > 0 && suburbs.some(sub => skippedKpiItems.has(`idx-${sub.suburb}`)) && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                      <button onClick={() => suburbs.forEach(sub => resetItem(`idx-${sub.suburb}`))}
+                        style={{ fontSize: 12, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+                        <i className="fas fa-undo" style={{ marginRight: 4 }} />Reset All Ignored
+                      </button>
+                    </div>
+                  )}
                   {suburbs.map((sub, i) => {
                     const hasPage = sub.pageCount > 0;
                     const isIndexed = sub.indexingStatus === 'indexed';
                     const hasIssue = hasPage && !isIndexed;
+                    const isSkipped = skippedKpiItems.has(`idx-${sub.suburb}`);
+                    if (isSkipped) return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
+                        <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
+                        <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{sub.suburb}</span>
+                        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Ignored</span>
+                        <button onClick={(e) => { e.stopPropagation(); resetItem(`idx-${sub.suburb}`); }}
+                          style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
+                          <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
+                        </button>
+                      </div>
+                    );
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: isIndexed ? '#22c55e06' : hasIssue ? '#ef444406' : 'var(--bg)', border: `1px solid ${isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--border)'}18` }}>
                         <i className={`fas fa-${isIndexed ? 'check-circle' : hasIssue ? 'exclamation-triangle' : 'minus-circle'}`} style={{ color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)', fontSize: 18 }} />
@@ -4347,10 +4471,17 @@
                           {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : 'No Page'}
                         </span>
                         {hasIssue && (
-                          <button onClick={(e) => { e.stopPropagation(); createAction(`Fix Indexing: ${sub.suburb}`, `The landing page for "${sub.suburb}" exists but is not indexed by Google.\n\nSteps to fix:\n1. Check Google Search Console for indexing errors\n2. Submit URL for indexing via URL Inspection tool\n3. Ensure page has proper meta robots (no noindex)\n4. Check for canonical tag issues\n5. Verify internal links point to this page`, 'website', 'high'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
+                          <>
+                            <button onClick={(e) => { e.stopPropagation(); skipItem(`idx-${sub.suburb}`); }}
+                              title="Ignore this item"
+                              style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
+                              <i className="fas fa-forward" />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); createAction(`Fix Indexing: ${sub.suburb}`, `The landing page for "${sub.suburb}" exists but is not indexed by Google.\n\nSteps to fix:\n1. Check Google Search Console for indexing errors\n2. Submit URL for indexing via URL Inspection tool\n3. Ensure page has proper meta robots (no noindex)\n4. Check for canonical tag issues\n5. Verify internal links point to this page`, 'website', 'high'); }}
+                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
+                            </button>
+                          </>
                         )}
                       </div>
                     );
