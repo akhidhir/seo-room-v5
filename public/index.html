@@ -6490,13 +6490,14 @@
       // Load previous results on mount
       useEffect(() => {
         if (!project?.id) { setInitialLoading(false); return; }
+        // Load from cache immediately for instant display
         if (_indexingCache[_ixck]) {
           setResults(_indexingCache[_ixck].results);
           setStats(_indexingCache[_ixck].stats);
           setLastChecked(_indexingCache[_ixck].completedAt ? new Date(_indexingCache[_ixck].completedAt) : null);
           setInitialLoading(false);
-          return;
         }
+        // Always check server — a re-check may be running or may have completed since cache was set
         (async () => {
           try {
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
@@ -6505,8 +6506,13 @@
               if (data.progress != null && data.total) setProgress({ current: data.progress, total: data.total });
               startPolling();
             } else if (data.results && data.results.length > 0) {
-              handleCompleted(data);
-            } else if (data.status === 'failed') {
+              // Update if server has newer data than cache
+              const serverTime = data.completed_at ? new Date(data.completed_at).getTime() : 0;
+              const cacheTime = _indexingCache[_ixck]?.completedAt ? new Date(_indexingCache[_ixck].completedAt).getTime() : 0;
+              if (!_indexingCache[_ixck] || serverTime > cacheTime) {
+                handleCompleted(data);
+              }
+            } else if (data.status === 'failed' && !_indexingCache[_ixck]) {
               setError(data.error || 'Last indexing check failed. Please run again.');
             }
           } catch (err) { console.error('[indexing] Failed to load:', err.message); }
