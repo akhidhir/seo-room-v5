@@ -19032,6 +19032,149 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     // All fields with status for detail view
     gbpCompleteness.allFields = gbpFields.map(f => ({ key: f, label: gbpFieldLabels[f] || f, done: !!gbpCompleteness[f] }));
 
+    // ============ GBP AUDIT CHECKS (based on Google's official ranking documentation) ============
+    const gbpAuditChecks = [];
+
+    // 1. Verified status
+    const isVerified = !!profile?.metadata?.hasVoiceOfMerchant;
+    gbpAuditChecks.push({
+      id: 'verified',
+      title: 'Business Verification',
+      status: isVerified ? 'pass' : 'critical',
+      value: isVerified ? 'Verified' : 'Not verified',
+      recommendation: isVerified ? null : 'Verify your business on Google. Unverified businesses are far less likely to appear in search results.',
+    });
+
+    // 2. Review response rate
+    const replyRate = reviewStats?.reply_rate ?? null;
+    const unrepliedCount = reviewStats?.unreplied_count ?? null;
+    gbpAuditChecks.push({
+      id: 'review-response',
+      title: 'Review Response Rate',
+      status: replyRate === 100 ? 'pass' : replyRate >= 80 ? 'warning' : replyRate !== null ? 'critical' : 'unknown',
+      value: replyRate !== null ? `${replyRate}% (${unrepliedCount} unreplied)` : 'No data',
+      recommendation: replyRate === 100 ? null : replyRate !== null
+        ? `Respond to all ${unrepliedCount} unreplied reviews. Google says responding to reviews improves local ranking.`
+        : 'Sync reviews to check response rate.',
+    });
+
+    // 3. Business name compliance — check for keyword stuffing, location info, taglines
+    const bizName = profile?.title || '';
+    const nameIssues = [];
+    // Check if name contains category keywords
+    for (const cat of gbpCategories) {
+      if (bizName.toLowerCase().includes(cat.toLowerCase()) && cat.toLowerCase() !== bizName.toLowerCase()) {
+        // Allow if it's genuinely part of the name (e.g. "Joe's Plumbing" for a Plumber)
+        // Flag if the full category name appears (e.g. "Best Locksmith Perth" contains "Locksmith")
+      }
+    }
+    // Check for common stuffing patterns
+    if (/\b(best|top|#1|number one|cheapest|affordable|leading|premier|expert)\b/i.test(bizName)) {
+      nameIssues.push('Contains marketing terms (e.g. "best", "top", "cheapest")');
+    }
+    if (/[®™©]/.test(bizName)) {
+      nameIssues.push('Contains trademark/registered signs (®, ™, ©)');
+    }
+    if (/\b(LLC|LTD|INC|PTY|CO\b|CORP)\b/i.test(bizName)) {
+      nameIssues.push('Contains legal terms (LLC, LTD, etc.) — only allowed if consistently shown on signage');
+    }
+    if (/\d{4,}/.test(bizName) && !/\d{4}/.test(bizName.replace(/\d{10,}/, ''))) {
+      // phone number in name
+      nameIssues.push('May contain phone number');
+    }
+    gbpAuditChecks.push({
+      id: 'name-compliance',
+      title: 'Business Name Compliance',
+      status: nameIssues.length === 0 ? 'pass' : 'warning',
+      value: nameIssues.length === 0 ? `"${bizName}" — compliant` : `"${bizName}" — ${nameIssues.length} issue(s)`,
+      issues: nameIssues,
+      recommendation: nameIssues.length ? `Google prohibits keyword stuffing in business names. Issues: ${nameIssues.join('; ')}` : null,
+    });
+
+    // 4. Category optimization — fewest + most specific
+    const totalCategories = gbpCategories.length;
+    const catIssues = [];
+    if (totalCategories > 5) catIssues.push(`${totalCategories} categories — Google says use fewest possible`);
+    if (totalCategories === 0) catIssues.push('No categories set');
+    // Check for redundant/broad categories (primary should be most specific)
+    gbpAuditChecks.push({
+      id: 'category-optimization',
+      title: 'Category Optimization',
+      status: catIssues.length === 0 ? 'pass' : totalCategories === 0 ? 'critical' : 'warning',
+      value: `${totalCategories} categories — Primary: ${profile?.categories?.primaryCategory?.displayName || 'None'}`,
+      categories: gbpCategories,
+      issues: catIssues,
+      recommendation: catIssues.length ? `Google says: "Use as few categories as possible, choose the most specific." ${catIssues.join('. ')}` : null,
+    });
+
+    // 5. Service area boundary — max ~2 hours driving from base
+    const saIssues = [];
+    if (gbpSuburbs.length > 20) {
+      saIssues.push(`${gbpSuburbs.length} service areas — Google allows max 20`);
+    }
+    if (gbpSuburbs.length === 0 && !gbpAddress) {
+      saIssues.push('No service area and no address set — Google needs at least one');
+    }
+    // Check for very distant areas using SUBURB_GPS if available
+    const businessLat = profile?.latlng?.latitude || null;
+    const businessLng = profile?.latlng?.longitude || null;
+    gbpAuditChecks.push({
+      id: 'service-area-boundary',
+      title: 'Service Area Boundary',
+      status: saIssues.length === 0 ? 'pass' : 'warning',
+      value: `${gbpSuburbs.length} service areas set`,
+      serviceAreas: gbpSuburbs,
+      issues: saIssues,
+      recommendation: saIssues.length ? `Google says service area shouldn't extend farther than ~2 hours driving. ${saIssues.join('. ')}` : null,
+    });
+
+    // 6. Hours freshness — check if hours cover all 7 days, check for gaps
+    const hoursPeriods = profile?.regularHours?.periods || [];
+    const daysWithHours = new Set(hoursPeriods.map(p => p.openDay));
+    const allDays = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+    const missingDays = allDays.filter(d => !daysWithHours.has(d));
+    const hoursIssues = [];
+    if (hoursPeriods.length === 0) {
+      hoursIssues.push('No business hours set');
+    } else if (missingDays.length > 0) {
+      hoursIssues.push(`Missing hours for: ${missingDays.map(d => d.charAt(0) + d.slice(1).toLowerCase()).join(', ')} — if closed, mark as closed`);
+    }
+    const hasSpecialHours = !!profile?.specialHours?.specialHourPeriods?.length;
+    if (!hasSpecialHours && hoursPeriods.length > 0) {
+      hoursIssues.push('No special hours set — add holiday hours to keep profile accurate');
+    }
+    gbpAuditChecks.push({
+      id: 'hours-completeness',
+      title: 'Hours Completeness',
+      status: hoursIssues.length === 0 ? 'pass' : hoursPeriods.length === 0 ? 'critical' : 'warning',
+      value: hoursPeriods.length > 0 ? `${daysWithHours.size}/7 days set${hasSpecialHours ? ', has special hours' : ', no special hours'}` : 'Not set',
+      missingDays: missingDays.map(d => d.charAt(0) + d.slice(1).toLowerCase()),
+      issues: hoursIssues,
+      recommendation: hoursIssues.length ? `Google says keep hours up to date including special hours. ${hoursIssues.join('. ')}` : null,
+    });
+
+    // 7. Photo benchmarks — compare to competitors
+    const photoCount = profile?.media?.length || 0;
+    const compPhotos = topCompetitors.filter(c => c.photos > 0).map(c => c.photos);
+    const avgCompPhotos = compPhotos.length ? Math.round(compPhotos.reduce((a, b) => a + b, 0) / compPhotos.length) : null;
+    const photoIssues = [];
+    if (photoCount === 0) {
+      photoIssues.push('No photos uploaded — Google says photos help customers and improve ranking');
+    } else if (photoCount < 5) {
+      photoIssues.push(`Only ${photoCount} photos — aim for at least 10-20 photos showing your business`);
+    }
+    if (avgCompPhotos && photoCount < avgCompPhotos) {
+      photoIssues.push(`Competitors average ${avgCompPhotos} photos, you have ${photoCount}`);
+    }
+    gbpAuditChecks.push({
+      id: 'photo-benchmarks',
+      title: 'Photos & Media',
+      status: photoIssues.length === 0 ? 'pass' : photoCount === 0 ? 'critical' : 'warning',
+      value: `${photoCount} photos${avgCompPhotos ? ` (competitors avg: ${avgCompPhotos})` : ''}`,
+      issues: photoIssues,
+      recommendation: photoIssues.length ? `Google says photos and videos show what you offer. ${photoIssues.join('. ')}` : null,
+    });
+
     // Competitor benchmarks (from grid scan data)
     const compReviews = topCompetitors.filter(c => c.reviews > 0).map(c => c.reviews);
     const compRatings = topCompetitors.filter(c => c.rating > 0).map(c => c.rating);
@@ -19115,6 +19258,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       serviceNames: Array.from(allServiceNames).map(n => serviceSources[n].original),
       recommendations: recommendations.sort((a, b) => { const pri = { critical: 0, high: 1, medium: 2, low: 3 }; return (pri[a.priority] || 4) - (pri[b.priority] || 4); }),
       gbpCompleteness,
+      gbpAuditChecks,
       competitorBenchmarks,
       citationCount,
       citationScanned,
