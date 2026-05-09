@@ -18306,21 +18306,40 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
             suburbSources[n] = { original: cap, inGbp: false, fromWebsite: true };
           }
           if (!suburbSources[n].pages) suburbSources[n].pages = [];
-          if (!suburbSources[n].pages.find(p => p.url === page.url)) {
+          const normUrl = (page.url || '').replace(/\/+$/, '');
+          if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
             suburbSources[n].pages.push({ url: page.url, title: page.title });
           }
         }
       }
     }
 
-    // Also match existing suburb names against ALL website pages (not just /service-areas/)
+    // Match existing suburb names against /service-areas/ pages and dedicated suburb pages only
+    // Skip blog posts that merely mention a suburb — they inflate counts (e.g. "Perth" = 200+ matches)
     for (const page of websitePages) {
-      const slug = normalize(page.slug || page.url || '');
+      const url = (page.slug || page.url || '').toLowerCase();
+      // Only match: /service-areas/*, /suburbs/*, or pages where suburb IS the slug (e.g. /mandurah/)
+      const isServiceAreaPage = url.includes('/service-area');
+      const isSuburbPage = url.includes('/suburb');
       for (const n of allSuburbNames) {
-        if (slug.includes(n.replace(/\s+/g, '-')) || slug.includes(n.replace(/\s+/g, ''))) {
+        const dashN = n.replace(/\s+/g, '-');
+        // For service-area pages, match suburb in URL
+        if ((isServiceAreaPage || isSuburbPage) && (url.includes(dashN) || url.includes(n.replace(/\s+/g, '')))) {
           if (!suburbSources[n].pages) suburbSources[n].pages = [];
-          if (!suburbSources[n].pages.find(p => p.url === page.url)) {
+          const normUrl = (page.url || '').replace(/\/+$/, '');
+          if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
             suburbSources[n].pages.push({ url: page.url, title: page.title });
+          }
+        }
+        // For non-service-area pages, only match if suburb IS the entire slug (e.g. /mandurah/ not /blog-about-mandurah/)
+        if (!isServiceAreaPage && !isSuburbPage) {
+          const lastSegment = url.replace(/\/+$/, '').split('/').pop() || '';
+          if (lastSegment === dashN || lastSegment === n.replace(/\s+/g, '')) {
+            if (!suburbSources[n].pages) suburbSources[n].pages = [];
+            const normUrl = (page.url || '').replace(/\/+$/, '');
+            if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
+              suburbSources[n].pages.push({ url: page.url, title: page.title });
+            }
           }
         }
       }
