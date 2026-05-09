@@ -8082,29 +8082,44 @@
                             const status = (item.status || 'pending').toLowerCase();
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'skipped') return <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 10, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
                               return (
-                                <button onClick={() => handleStatusChange(item.id, 'done')}
-                                  style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run
-                                </button>
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center' }}>
+                                  <button onClick={() => handleStatusChange(item.id, 'done')}
+                                    style={{ padding: '4px 12px', fontSize: 11, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className="fas fa-play" style={{ marginRight: 4, fontSize: 9 }} />Run
+                                  </button>
+                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip"
+                                    style={{ padding: '4px 8px', fontSize: 11, background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', color: 'var(--text3)' }}>
+                                    <i className="fas fa-forward" />
+                                  </button>
+                                </div>
                               );
                             }
                             if (assigneeLabel === 'Copywriter Current' || assigneeLabel === 'Copywriter New') {
                               if (status === 'done') return <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'skipped') return <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 10, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
                               if (status === 'in-progress') return <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-spinner fa-spin" style={{ fontSize: 10 }} /> Writing</span>;
                               return (
-                                <button onClick={() => handleStatusChange(item.id, 'in-progress')}
-                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: assigneeLabel === 'Copywriter New' ? '#a855f7' : '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className={assigneeLabel === 'Copywriter New' ? 'fas fa-file-circle-plus' : 'fas fa-pen-fancy'} style={{ marginRight: 5, fontSize: 13 }} />Send
-                                </button>
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center' }}>
+                                  <button onClick={() => handleStatusChange(item.id, 'in-progress')}
+                                    style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: assigneeLabel === 'Copywriter New' ? '#a855f7' : '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className={assigneeLabel === 'Copywriter New' ? 'fas fa-file-circle-plus' : 'fas fa-pen-fancy'} style={{ marginRight: 5, fontSize: 13 }} />Send
+                                  </button>
+                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip"
+                                    style={{ padding: '5px 8px', fontSize: 11, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
+                                    <i className="fas fa-forward" />
+                                  </button>
+                                </div>
                               );
                             }
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
+                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'skipped' ? '#94a3b8' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
+                                <option value="skipped">Skip</option>
                                 <option value="ignored">Ignore</option>
                               </select>
                             );
@@ -8401,7 +8416,7 @@
 
       const filtered = useMemo(() => {
         const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        const statusOrder = { pending: 0, 'in-progress': 1, done: 2, completed: 2 };
+        const statusOrder = { pending: 0, 'in-progress': 1, done: 2, completed: 2, skipped: 3, ignored: 4 };
         const result = itemsWithAssignee.filter(i => {
           if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
           if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
@@ -8436,10 +8451,11 @@
         const critical = base.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
         const high = base.filter(i => (i.severity || '').toLowerCase() === 'high').length;
         const ignored = base.filter(i => i.status === 'ignored').length;
+        const skipped = base.filter(i => i.status === 'skipped').length;
         const pending = base.filter(i => i.status === 'pending').length;
         const done = base.filter(i => i.status === 'done' || i.status === 'completed').length;
         const inProgress = base.filter(i => i.status === 'in-progress').length;
-        return { total, critical, high, pending, done, inProgress, ignored };
+        return { total, critical, high, pending, done, inProgress, ignored, skipped };
       }, [itemsWithAssignee, activePillar]);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
@@ -8491,7 +8507,7 @@
               { label: 'WEBSITE AUDIT', icon: 'fas fa-spider', color: '#8b5cf6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit' && (i.status || 'pending') === 'pending').length },
               { label: 'PENDING', icon: 'fas fa-clock', color: '#f59e0b', count: stats.pending, pending: stats.pending },
               { label: 'DONE', icon: 'fas fa-check-circle', color: '#22c55e', count: stats.done, pending: 0 },
-              { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
+              { label: 'SKIPPED', icon: 'fas fa-forward', color: '#94a3b8', count: stats.skipped, pending: 0 },
               { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
             ];
             return (
@@ -8533,7 +8549,7 @@
               { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
               { value: filterCategory, set: setFilterCategory, label: 'Category', options: filterOptions.categories },
               { value: filterAssignee, set: setFilterAssignee, label: 'Type', options: filterOptions.assignees },
-              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done', 'ignored'] },
+              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done', 'skipped', 'ignored'] },
             ].map(f => (
               <select key={f.label} value={f.value} onChange={e => f.set(e.target.value)}
                 style={{ fontSize: 12, padding: '5px 8px', background: f.value !== 'all' ? 'var(--accent)' : 'var(--card)', border: '1px solid var(--border)', borderRadius: 6,
@@ -8692,13 +8708,20 @@
                             // AUTOMATED: Run button or Done checkmark
                             if (assigneeLabel === 'Automated') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
                               if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-cog fa-spin" style={{ fontSize: 11 }} /> Running</span>;
                               const canExec = canAutoExecute(item);
                               if (canExec) return (
-                                <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
-                                  style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
-                                  {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Start</>}
-                                </button>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
+                                  <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
+                                    style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
+                                    {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Start</>}
+                                  </button>
+                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
+                                    style={{ padding: '7px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
+                                    <i className="fas fa-forward" />
+                                  </button>
+                                </div>
                               );
                               // Non-executable automated items: send to copywriter or start manually
                               return (
@@ -8717,6 +8740,7 @@
                                     <option value="not-started">Not Started</option>
                                     <option value="in-progress">In Progress</option>
                                     <option value="done">Done</option>
+                                    <option value="skipped">Skip</option>
                                     <option value="ignored">Ignore</option>
                                   </select>
                                 </div>
@@ -8725,42 +8749,57 @@
                             // COPYWRITER CURRENT: Send to content queue
                             if (assigneeLabel === 'Copywriter Current') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
                               if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 11 }} /> Queued</span>;
                               return (
-                                <button onClick={async () => {
-                                  try {
-                                    await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
-                                  } catch(err) { console.error('Send to copywriter:', err); }
-                                }}
-                                  style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
-                                </button>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
+                                  <button onClick={async () => {
+                                    try {
+                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
+                                    } catch(err) { console.error('Send to copywriter:', err); }
+                                  }}
+                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
+                                  </button>
+                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
+                                    style={{ padding: '5px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
+                                    <i className="fas fa-forward" />
+                                  </button>
+                                </div>
                               );
                             }
                             // COPYWRITER NEW: Send to site_pages (new website)
                             if (assigneeLabel === 'Copywriter New') {
                               if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
+                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
                               if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-file-circle-plus" style={{ fontSize: 11 }} /> Queued</span>;
                               return (
-                                <button onClick={async () => {
-                                  try {
-                                    await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
-                                  } catch(err) { console.error('Send to copywriter:', err); }
-                                }}
-                                  style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
-                                </button>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
+                                  <button onClick={async () => {
+                                    try {
+                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
+                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
+                                    } catch(err) { console.error('Send to copywriter:', err); }
+                                  }}
+                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
+                                  </button>
+                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
+                                    style={{ padding: '5px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
+                                    <i className="fas fa-forward" />
+                                  </button>
+                                </div>
                               );
                             }
                             // MANUAL: status dropdown (Not Started / In Progress / Done)
                             return (
                               <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
+                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'skipped' ? '#94a3b8' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
                                 <option value="not-started">Not Started</option>
                                 <option value="in-progress">In Progress</option>
                                 <option value="done">Done</option>
+                                <option value="skipped">Skip</option>
                                 <option value="ignored">Ignore</option>
                               </select>
                             );
