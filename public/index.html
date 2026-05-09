@@ -3813,7 +3813,8 @@
           {/* EXPANDED KPI DETAIL — BUSINESS */}
           {expandedKpi === 'business' && (() => {
             const listedDirs = directoryList.filter(d => d.listed);
-            const missingDirs = directoryList.filter(d => !d.listed && !d.pending);
+            const missingDirs = directoryList.filter(d => !d.listed && !d.pending && !d.notChecked);
+            const notCheckedDirs = directoryList.filter(d => d.notChecked);
             const replyRate = s.reviewStats?.reply_rate || 0;
             const unreplied = s.reviewStats?.unreplied_count || 0;
             const totalRevs = s.reviewStats?.total_reviews || 0;
@@ -3930,9 +3931,9 @@
               {/* ── CITATIONS / DIRECTORIES ── */}
               <KpiItem itemKey="citations" icon="building" iconColor="#06b6d4"
                 title="Citations & Directories"
-                subtitle={`Listed in ${listedDirs.length} of ${directoryList.length} directories`}
-                badge={`${listedDirs.length}/${directoryList.length}`}
-                badgeColor={listedDirs.length >= 15 ? '#22c55e' : listedDirs.length >= 8 ? '#f59e0b' : '#ef4444'}>
+                subtitle={notCheckedDirs.length === directoryList.length ? 'Run a citation scan to check listings' : `Listed in ${listedDirs.length} of ${directoryList.length - notCheckedDirs.length} checked directories${notCheckedDirs.length > 0 ? ` (${notCheckedDirs.length} not checked)` : ''}`}
+                badge={notCheckedDirs.length === directoryList.length ? '—' : `${listedDirs.length}/${directoryList.length - notCheckedDirs.length}`}
+                badgeColor={notCheckedDirs.length === directoryList.length ? '#64748b' : listedDirs.length >= 15 ? '#22c55e' : listedDirs.length >= 8 ? '#f59e0b' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
                   {listedDirs.length > 0 && (
                     <div style={{ marginBottom: 16 }}>
@@ -3967,6 +3968,13 @@
                             </button>
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+                  {notCheckedDirs.length > 0 && (
+                    <div style={{ marginTop: 16 }}>
+                      <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>
+                        <i className="fas fa-question-circle" style={{ marginRight: 6 }} />{notCheckedDirs.length} directories not yet checked — <span style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => onNavigate && onNavigate('citations')}>run a citation scan</span>
                       </div>
                     </div>
                   )}
@@ -6884,6 +6892,7 @@
         listed: dirs.filter(d => d.status === 'listed').length,
         pending: dirs.filter(d => d.status === 'pending').length,
         not_listed: dirs.filter(d => d.status === 'not_listed').length,
+        not_checked: dirs.filter(d => d.status === 'not_checked').length,
       });
 
       const updateStatus = async (dir, newStatus) => {
@@ -6914,7 +6923,7 @@
       };
 
       const typeColor = { Essential: '#22c55e', Major: '#3b82f6', Industry: '#f59e0b', Standard: '#64748b' };
-      const statusColor = { listed: '#22c55e', pending: '#f59e0b', not_listed: '#64748b' };
+      const statusColor = { listed: '#22c55e', pending: '#f59e0b', not_listed: '#ef4444', not_checked: '#64748b' };
 
       const tiers = [
         { key: 'Essential', label: 'Essential Platforms', desc: 'Must-have listings — direct ranking impact', icon: 'fas fa-star' },
@@ -6957,8 +6966,8 @@
             {[
               { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
               { id: 'listed', label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
-              { id: 'pending', label: 'Pending', value: stats.pending, color: '#f59e0b', icon: 'fas fa-clock' },
               { id: 'not_listed', label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
+              { id: 'not_checked', label: 'Not Checked', value: stats.not_checked || 0, color: '#64748b', icon: 'fas fa-question-circle' },
             ].map(s => (
               <div key={s.id} onClick={() => setFilter(s.id)} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: filter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', opacity: filter === 'all' || filter === s.id ? 1 : 0.5, transition: 'all 0.2s' }}>
                 <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
@@ -6971,18 +6980,18 @@
           {/* Progress bar */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
-              <span>Citation Coverage</span>
-              <span>{stats.total > 0 ? Math.round((stats.listed / stats.total) * 100) : 0}%</span>
+              <span>Citation Coverage {(stats.not_checked || 0) > 0 ? `(${stats.total - (stats.not_checked || 0)} scanned)` : ''}</span>
+              <span>{(() => { const scanned = stats.total - (stats.not_checked || 0); return scanned > 0 ? Math.round((stats.listed / scanned) * 100) : 0; })()}%</span>
             </div>
             <div style={{ height: 8, background: 'var(--bg)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${stats.total > 0 ? (stats.listed / stats.total) * 100 : 0}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 4, transition: 'width 0.3s' }} />
+              <div style={{ height: '100%', width: `${(() => { const scanned = stats.total - (stats.not_checked || 0); return scanned > 0 ? (stats.listed / scanned) * 100 : 0; })()}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 4, transition: 'width 0.3s' }} />
             </div>
           </div>
 
           {/* Directory tiers */}
           {filter !== 'all' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
-              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : 'Not Listed'}</strong></span>
+              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : filter === 'not_checked' ? 'Not Checked' : 'Not Listed'}</strong></span>
               <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>Clear filter</button>
             </div>
           )}
@@ -7043,6 +7052,7 @@
                                 borderRadius: 6, padding: '5px 8px', fontSize: 12, fontWeight: 600, cursor: 'pointer', width: '100%',
                               }}
                             >
+                              <option value="not_checked">Not Checked</option>
                               <option value="not_listed">Not Listed</option>
                               <option value="pending">Pending</option>
                               <option value="listed">Listed</option>
@@ -17018,7 +17028,8 @@
                       const citDirs = Array.isArray(auditInsights.citations) ? auditInsights.citations : [];
                       const listedDirs = citDirs.filter(d => d.status === 'listed');
                       const unlistedDirs = citDirs.filter(d => d.status === 'not_listed');
-                      const hasCitationData = citDirs.length > 0;
+                      const uncheckedDirs = citDirs.filter(d => d.status === 'not_checked');
+                      const hasCitationData = citDirs.length > 0 && uncheckedDirs.length < citDirs.length;
 
                       const ok = (text, link) => ({ text, color: '#22c55e', link });
                       const bad = (text, link) => ({ text, color: '#ef4444', link });

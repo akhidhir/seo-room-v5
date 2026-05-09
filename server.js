@@ -3955,7 +3955,7 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
     }
     const directories = AUSTRALIAN_DIRECTORIES.map(d => ({
       ...d,
-      status: statusMap[d.name]?.status || 'not_listed',
+      status: statusMap[d.name]?.status || 'not_checked',
       listing_url: statusMap[d.name]?.listing_url || '',
       notes: statusMap[d.name]?.notes || '',
       updated_at: statusMap[d.name]?.updated_at || null,
@@ -4049,32 +4049,38 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           continue;
         }
 
-        // Standard site: search for regular directories
+        // Search Google for business name + directory domain (more reliable than site: operator)
+        // Google's site: operator misses many directory pages — broader search catches them
+        const locationShort = (location || '').split(',')[0].trim();
         const searchData = await serpApiSearch({
           engine: 'google',
-          q: `site:${dir.url} "${businessName}"`,
-          num: 3,
+          q: `"${businessName}" ${dir.url} ${locationShort}`,
+          num: 5,
           api_key: SERPAPI_KEY,
         });
 
         const organicResults = searchData.organic_results || [];
-        let found = organicResults.length > 0;
-        let listingUrl = found ? organicResults[0].link : null;
-        let snippet = found ? (organicResults[0].snippet || '') : '';
+        // Match: result URL must contain the directory domain
+        const dirDomain = dir.url.replace(/^www\./, '');
+        let match = organicResults.find(r => r.link && r.link.includes(dirDomain));
+        let found = !!match;
+        let listingUrl = found ? match.link : null;
+        let snippet = found ? (match.snippet || match.title || '') : '';
 
-        // Backup: search by domain
+        // Backup: search by website domain instead of business name
         if (!found && domain) {
           const domainSearch = await serpApiSearch({
             engine: 'google',
-            q: `site:${dir.url} "${domain}"`,
-            num: 3,
+            q: `"${domain}" ${dir.url}`,
+            num: 5,
             api_key: SERPAPI_KEY,
           });
           const domainResults = domainSearch.organic_results || [];
-          if (domainResults.length > 0) {
+          match = domainResults.find(r => r.link && r.link.includes(dirDomain));
+          if (match) {
             found = true;
-            listingUrl = domainResults[0].link;
-            snippet = `Found via domain. ${domainResults[0].snippet || ''}`.trim();
+            listingUrl = match.link;
+            snippet = `Found via domain. ${match.snippet || match.title || ''}`.trim();
           }
         }
 
@@ -18781,17 +18787,35 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       topCompetitorRating: topCompetitors[0]?.rating || null,
     };
 
-    // Citation/directory data — use citations table (same source as /citations endpoint)
+    // Citation/directory data — use citations table + auto-detect from existing data
     let citationStatusMap = {};
+    let citationScanned = false;
     try {
       const citR = await pool.query(`SELECT directory_name, status, listing_url FROM citations WHERE project_id=$1`, [projectId]);
+      citationScanned = citR.rows.length > 0;
       for (const row of citR.rows) citationStatusMap[row.directory_name] = { status: row.status, url: row.listing_url };
     } catch (e) { /* citations table may not exist yet */ }
+
+    // Auto-detect known listings from data we already have (no scan needed)
+    if (!citationStatusMap['Google Business Profile'] && (project.gbp_location_id || profile)) {
+      const placeId = project.gbp_location_id;
+      citationStatusMap['Google Business Profile'] = {
+        status: 'listed',
+        url: placeId ? `https://www.google.com/maps/place/?q=place_id:${placeId}` : 'https://business.google.com',
+      };
+    }
+    // Detect Facebook from RC profile if available
+    if (!citationStatusMap['Facebook Business'] && rc?.profile?.facebookUrl) {
+      citationStatusMap['Facebook Business'] = { status: 'listed', url: rc.profile.facebookUrl };
+    }
+
     const directoryList = AUSTRALIAN_DIRECTORIES.map(d => ({
       name: d.name, url: d.url, type: d.type, free: d.free, paid_option: d.paid_option || null,
       difficulty: d.difficulty, priority: d.priority, description: d.description,
       listed: citationStatusMap[d.name]?.status === 'listed',
       pending: citationStatusMap[d.name]?.status === 'pending',
+      notChecked: !citationStatusMap[d.name] || citationStatusMap[d.name]?.status === 'not_checked',
+      listingUrl: citationStatusMap[d.name]?.url || null,
     }));
     const citationCount = directoryList.filter(d => d.listed).length;
 
@@ -18831,6 +18855,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       gbpCompleteness,
       competitorBenchmarks,
       citationCount,
+      citationScanned,
       directoryList,
     });
   } catch (e) {
