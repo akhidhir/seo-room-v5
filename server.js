@@ -18160,23 +18160,39 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // 2. Website pages (from onpage_audit_cache)
+    // 2. Website pages (from onpage_audit_cache + discoverPages for full coverage)
     const opR = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
     const websitePages = [];
+    const seenUrls = new Set();
     if (opR.rows[0]?.results) {
       const results = typeof opR.rows[0].results === 'string' ? JSON.parse(opR.rows[0].results) : opR.rows[0].results;
       if (Array.isArray(results)) {
         for (const p of results) {
+          const url = p.url || p.link || '';
           websitePages.push({
-            url: p.url || p.link || '',
+            url,
             title: p.title || p.yoast_title || '',
             slug: (p.slug || p.url || '').toLowerCase(),
             type: p.type || 'page',
             wordCount: p.wordCount || p.word_count || 0,
           });
+          if (url) seenUrls.add(url.toLowerCase().replace(/\/+$/, ''));
         }
       }
     }
+    // Also discover pages from sitemap/WP REST to catch /service-areas/ pages not in onpage cache
+    try {
+      const projectUrl = project.domain?.startsWith('http') ? project.domain : `https://${project.domain}`;
+      const discovered = await discoverPages(projectUrl, project.wordpress_url);
+      for (const dp of discovered) {
+        const dpUrl = (dp.url || dp.loc || '').replace(/\/+$/, '');
+        if (dpUrl && !seenUrls.has(dpUrl.toLowerCase())) {
+          seenUrls.add(dpUrl.toLowerCase());
+          const slug = dpUrl.replace(/^https?:\/\/[^/]+/, '');
+          websitePages.push({ url: slug || dpUrl, title: dp.title || '', slug: slug.toLowerCase(), type: 'page', wordCount: 0 });
+        }
+      }
+    } catch (e) { console.log('[local-intel] discoverPages fallback error:', e.message); }
 
     // 3. Rank keywords
     const kwR = await pool.query('SELECT id, keyword, location, search_volume FROM rank_keywords WHERE project_id=$1', [projectId]);
