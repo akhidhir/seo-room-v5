@@ -3606,6 +3606,18 @@
         } catch (e) { alert(e.message); }
       };
 
+      const [discoveringSuburbs, setDiscoveringSuburbs] = useState(false);
+      const handleDiscoverSuburbs = async () => {
+        if (!confirm('Scan the website for location pages and populate Project Settings with discovered suburbs? This will replace current suburbs.')) return;
+        setDiscoveringSuburbs(true);
+        try {
+          const result = await api(`/projects/${project.id}/discover-suburbs`, { method: 'POST' });
+          alert(`Found ${result.count} suburbs from ${result.source === 'gbp' ? 'GBP service areas (no location pages found)' : 'website location pages'}`);
+          reload(true);
+        } catch (e) { alert('Error: ' + e.message); }
+        setDiscoveringSuburbs(false);
+      };
+
       const handleAddSuburb = async () => {
         if (!newSuburb.trim()) return;
         setAddingSuburb(true);
@@ -3724,10 +3736,11 @@
       const myReviews = s.reviewStats?.total_reviews || 0;
       const myRating = s.reviewStats?.average_rating || 0;
       const gbpComplete = gbpC.filledCount === gbpC.totalFields;
-      const suburbsWithPages = suburbs.filter(sub => sub.pageCount > 0).length;
+      const suburbsWithPages = suburbs.filter(sub => sub.hasPage).length;
       const suburbsIndexed = suburbs.filter(sub => sub.indexingStatus === 'indexed').length;
       const suburbsInGbp = suburbs.filter(sub => sub.inGbp).length;
       const suburbsTracked = suburbs.filter(sub => sub.keywordCount > 0).length;
+      const suburbsWithReviews = suburbs.filter(sub => sub.reviewMentions > 0).length;
       const servicesWithPages = services.filter(svc => svc.pageCount > 0).length;
       const servicesInGbp = services.filter(svc => svc.inGbp).length;
       const servicesWithPosts = services.filter(svc => svc.postCount > 0).length;
@@ -3738,10 +3751,9 @@
       // Service KPI score
       const svcTotal = services.length || 1;
       const svcScore = Math.round(((servicesWithPages + servicesInGbp + servicesWithPosts) / (svcTotal * 3)) * 100);
-      // Suburb KPI score
+      // Suburb KPI score — 3 core signals: has landing page, in GBP, mentioned in reviews
       const subTotal = suburbs.length || 1;
-      const suburbsWithReviews = suburbs.filter(sub => sub.reviewMentions > 0).length;
-      const subScore = Math.round(((suburbsWithPages + suburbsInGbp + suburbsTracked + suburbsIndexed + suburbsWithReviews) / (subTotal * 5)) * 100);
+      const subScore = Math.round(((suburbsWithPages + suburbsInGbp + suburbsWithReviews) / (subTotal * 3)) * 100);
 
       const kpiScoreColor = (score) => score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
 
@@ -3807,7 +3819,7 @@
                 </div>
                 <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-suburb signals — landing page, indexed, in GBP service areas, keyword tracked, review mentions</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-suburb signals — has landing page, listed in GBP service areas, mentioned in a Google review</div>
             </div>
           </div>
 
@@ -4331,8 +4343,8 @@
 
           {/* EXPANDED KPI DETAIL — SUBURB */}
           {expandedKpi === 'suburb' && (() => {
-            const subNoPage = suburbs.filter(sub => sub.pageCount === 0);
-            const subNotIndexed = suburbs.filter(sub => sub.pageCount > 0 && sub.indexingStatus === 'issues');
+            const subNoPage = suburbs.filter(sub => !sub.hasPage);
+            const subNotIndexed = suburbs.filter(sub => sub.hasPage && sub.indexingStatus === 'issues');
             const subNoGbp = suburbs.filter(sub => !sub.inGbp);
             const subNoTrack = suburbs.filter(sub => sub.keywordCount === 0);
             const subWithReviews = suburbs.filter(sub => sub.reviewMentions > 0);
@@ -4351,17 +4363,25 @@
                   </div>
                   <div>
                     <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Suburb Level KPIs</div>
-                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Each suburb needs a landing page, indexing, GBP service area, and keyword tracking</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>3 signals per suburb: has landing page, listed in GBP service areas, mentioned in a review</div>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button onClick={(e) => { e.stopPropagation(); handleDiscoverSuburbs(); }}
+                    disabled={discoveringSuburbs}
+                    style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: discoveringSuburbs ? 'wait' : 'pointer', opacity: discoveringSuburbs ? 0.6 : 1 }}>
+                    <i className={discoveringSuburbs ? 'fas fa-spinner fa-spin' : 'fas fa-search'} style={{ marginRight: 6 }} />
+                    {discoveringSuburbs ? 'Scanning...' : 'Discover Suburbs'}
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
+                </div>
               </div>
 
-              {/* Summary stat boxes */}
+              {/* Summary stat boxes — 3 core signals */}
               <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
                 <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 800, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsWithPages}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Landing Page</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Has Page</div>
                 </div>
                 <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 800, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsIndexed}/{suburbs.length}</div>
