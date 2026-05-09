@@ -18693,13 +18693,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       primaryCategory: profile?.categories?.primaryCategory?.displayName || null,
     };
     const gbpFields = ['hasName', 'hasDescription', 'hasPhone', 'hasWebsite', 'hasHours', 'hasCategories', 'hasServiceAreas', 'hasServices'];
+    const gbpFieldLabels = { hasName: 'Business Name', hasDescription: 'Business Description', hasPhone: 'Phone Number', hasWebsite: 'Website URL', hasHours: 'Business Hours', hasCategories: 'Categories', hasServiceAreas: 'Service Areas', hasServices: 'Services List' };
     const gbpFilledCount = gbpFields.filter(f => gbpCompleteness[f]).length;
     gbpCompleteness.filledCount = gbpFilledCount;
     gbpCompleteness.totalFields = gbpFields.length;
-    gbpCompleteness.missingFields = gbpFields.filter(f => !gbpCompleteness[f]).map(f => {
-      const labels = { hasName: 'Business Name', hasDescription: 'Business Description', hasPhone: 'Phone Number', hasWebsite: 'Website URL', hasHours: 'Business Hours', hasCategories: 'Categories', hasServiceAreas: 'Service Areas', hasServices: 'Services List' };
-      return labels[f] || f;
-    });
+    gbpCompleteness.missingFields = gbpFields.filter(f => !gbpCompleteness[f]).map(f => gbpFieldLabels[f] || f);
+    // All fields with status for detail view
+    gbpCompleteness.allFields = gbpFields.map(f => ({ key: f, label: gbpFieldLabels[f] || f, done: !!gbpCompleteness[f] }));
 
     // Competitor benchmarks (from grid scan data)
     const compReviews = topCompetitors.filter(c => c.reviews > 0).map(c => c.reviews);
@@ -18714,12 +18714,29 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       topCompetitorRating: topCompetitors[0]?.rating || null,
     };
 
-    // Citation/directory data from GBP audit findings
+    // Citation/directory data — check citations table for accurate status
+    let citationStatuses = {};
+    try {
+      const citR = await pool.query(`SELECT directory_name, status, listing_url FROM citations WHERE project_id=$1`, [projectId]);
+      for (const row of citR.rows) citationStatuses[row.directory_name.toLowerCase()] = { status: row.status, url: row.listing_url };
+    } catch (e) { /* citations table may not exist yet */ }
+    // Also check audit findings as fallback
     const citationFindings = await pool.query(
-      `SELECT title, current_value, recommended_value FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp','gbp_external') AND category='Directory & Citations' AND status != 'dismissed' LIMIT 30`,
+      `SELECT title, current_value, recommended_value, severity FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp','gbp_external') AND category='Directory & Citations' AND status != 'dismissed' LIMIT 50`,
       [projectId]
     );
-    const citationCount = citationFindings.rows.length;
+    const citationCount = Object.values(citationStatuses).filter(c => c.status === 'listed').length ||
+      (AUSTRALIAN_DIRECTORIES.length - citationFindings.rows.length);
+    // Send full directory list with listed/not-listed status
+    const citedGapNames = new Set(citationFindings.rows.map(r => (r.title || '').toLowerCase()));
+    const directoryList = AUSTRALIAN_DIRECTORIES.map(d => {
+      const citStatus = citationStatuses[d.name.toLowerCase()];
+      const listed = citStatus ? citStatus.status === 'listed' : !citedGapNames.has(d.name.toLowerCase());
+      return {
+        name: d.name, url: d.url, type: d.type, free: d.free, paid_option: d.paid_option || null,
+        difficulty: d.difficulty, priority: d.priority, description: d.description, listed,
+      };
+    });
 
     res.json({
       project: { id: project.id, name: project.name, business_name: project.business_name, domain: project.domain },
@@ -18757,6 +18774,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       gbpCompleteness,
       competitorBenchmarks,
       citationCount,
+      directoryList,
     });
   } catch (e) {
     console.error('[local-intel] Error:', e.message, e.stack);
