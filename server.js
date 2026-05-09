@@ -18268,14 +18268,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const allSuburbNames = new Set();
     const suburbSources = {}; // normalized -> { original, inGbp, inProject, pages, keywords, gridScans, gsc }
 
-    // Source 1: GBP service areas
+    // Source 1: GBP service areas ONLY (project service_areas excluded — too noisy)
     for (const s of gbpSuburbs) { allSuburbNames.add(normalize(s)); suburbSources[normalize(s)] = { original: s, inGbp: true }; }
-    // Also merge project service areas (user-configured)
-    for (const s of projSuburbs) {
-      const n = normalize(s);
-      if (!suburbSources[n]) { allSuburbNames.add(n); suburbSources[n] = { original: s, inGbp: false }; }
-      suburbSources[n].inProject = true;
-    }
 
     // Source 2: Detect suburb pages from website URLs (e.g. /service-areas/car-key-replacement-cockburn/)
     for (const page of websitePages) {
