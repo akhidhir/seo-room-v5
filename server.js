@@ -313,6 +313,16 @@ async function initDb() {
       )
     `);
 
+    // Reviews cache — stores review text for suburb mention analysis
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS reviews_cache (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        reviews JSONB DEFAULT '[]',
+        total_count INTEGER DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // WordPress change history — universal rollback for ALL WP writes
     await client.query(`
       CREATE TABLE IF NOT EXISTS wp_change_history (
@@ -3677,6 +3687,34 @@ app.get('/api/projects/:projectId/gbp-profile', async (req, res) => {
     const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
     res.json({ profile: config, updated_at: result.rows[0].updated_at });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sync reviews to cache — accepts array of reviews (called by scheduled task or manually)
+app.post('/api/projects/:projectId/reviews/sync', async (req, res) => {
+  const { projectId } = req.params;
+  const { reviews } = req.body;
+  if (!Array.isArray(reviews)) return res.status(400).json({ error: 'reviews must be an array' });
+  try {
+    // Store minimal review data: comment text, reviewer name, rating
+    const minimal = reviews.map(r => ({
+      comment: (r.comment || r.text || '').substring(0, 500),
+      reviewer: r.reviewer?.displayName || r.author || '',
+      rating: r.rating || r.starRating || 0,
+      date: r.create_time || r.date || null,
+    }));
+    await pool.query(
+      `INSERT INTO reviews_cache (project_id, reviews, total_count, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (project_id)
+       DO UPDATE SET reviews=$2, total_count=$3, updated_at=NOW()`,
+      [projectId, JSON.stringify(minimal), minimal.length]
+    );
+    console.log(`[reviews-sync] Cached ${minimal.length} reviews for project ${projectId}`);
+    res.json({ cached: minimal.length });
+  } catch (e) {
+    console.error('[reviews-sync] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -18276,27 +18314,19 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const reviewStats = rc?.reviews_stats || null;
 
     // ============ CROSS-REFERENCE: SUBURBS ============
-    // Suburbs come from TWO real sources only:
-    // 1. GBP service areas (what Google shows)
-    // 2. Website /service-areas/ pages (what the client built)
-    // No auto-discovery from keywords or SUBURB_GPS — that adds noise.
+    // PRIMARY SOURCE: Website /service-areas/ pages (what the client wants to target)
+    // CROSS-REFERENCE: GBP service areas (is it listed?), review mentions (social proof)
     const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
     const allSuburbNames = new Set();
-    const suburbSources = {}; // normalized -> { original, inGbp, inProject, pages, keywords, gridScans, gsc }
+    const suburbSources = {}; // normalized -> { original, inGbp, fromWebsite, pages, keywords, gridScans, gsc, reviewMentions }
 
-    // Source 1: GBP service areas ONLY (project service_areas excluded — too noisy)
-    for (const s of gbpSuburbs) { allSuburbNames.add(normalize(s)); suburbSources[normalize(s)] = { original: s, inGbp: true }; }
-
-    // Source 2: Detect suburb pages from website URLs (e.g. /service-areas/car-key-replacement-cockburn/)
+    // Source 1 (PRIMARY): Website /service-areas/ pages — this is what the client wants to rank for
     for (const page of websitePages) {
       const url = (page.url || page.slug || '').toLowerCase();
-      // Match /service-areas/xxx or /service-area/xxx patterns
       const saMatch = url.match(/\/service-?areas?\/([\w-]+)\/?$/);
       if (saMatch) {
-        // Extract suburb name: try matching the tail against known GBP suburbs first,
-        // otherwise use the full slug as-is (works for /service-areas/rockingham/)
         let suburbSlug = saMatch[1];
-        // Try to match the end of the slug against GBP suburbs (handles any service prefix generically)
+        // Try to match the tail against known GBP suburbs (handles any service prefix generically)
         const gbpMatch = gbpSuburbs.find(s => {
           const gn = normalize(s).replace(/\s+/g, '-');
           return suburbSlug.endsWith(gn) || suburbSlug === gn;
@@ -18304,12 +18334,10 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         if (gbpMatch) {
           suburbSlug = normalize(gbpMatch).replace(/\s+/g, '-');
         } else if (suburbSlug.includes('-')) {
-          // No GBP match — extract last 1-2 words as suburb (e.g. "car-key-replacement-fremantle" → "fremantle")
+          // No GBP match — extract last 1-2 words as suburb name
           const parts = suburbSlug.split('-');
-          // Try last 2 words first (e.g. "bibra-lake"), then last 1 word
           const last2 = parts.slice(-2).join('-');
           const last1 = parts[parts.length - 1];
-          // Use last2 if it looks like a multi-word suburb (both parts 3+ chars), otherwise last1
           if (parts.length >= 3 && parts[parts.length - 2].length >= 3 && last1.length >= 3) {
             suburbSlug = last2;
           } else {
@@ -18333,33 +18361,47 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Match existing suburb names against /service-areas/ pages and dedicated suburb pages only
-    // Skip blog posts that merely mention a suburb — they inflate counts (e.g. "Perth" = 200+ matches)
-    for (const page of websitePages) {
-      const url = (page.slug || page.url || '').toLowerCase();
-      // Only match: /service-areas/*, /suburbs/*, or pages where suburb IS the slug (e.g. /mandurah/)
-      const isServiceAreaPage = url.includes('/service-area');
-      const isSuburbPage = url.includes('/suburb');
+    // Cross-reference: Mark which suburbs are also in GBP service areas
+    for (const s of gbpSuburbs) {
+      const n = normalize(s);
+      if (suburbSources[n]) {
+        suburbSources[n].inGbp = true;
+      } else {
+        // GBP suburb with no website page — still include it so we can flag "missing page"
+        allSuburbNames.add(n);
+        suburbSources[n] = { original: s, inGbp: true, fromWebsite: false };
+      }
+    }
+
+    // Cross-reference: Review mentions — use cached reviews from DB, or fetch via SerpAPI
+    let allReviews = [];
+    // 1. Check for cached reviews in reviews_cache table
+    try {
+      const rvR = await pool.query('SELECT reviews, updated_at FROM reviews_cache WHERE project_id=$1', [projectId]);
+      if (rvR.rows[0]?.reviews) {
+        const cached = typeof rvR.rows[0].reviews === 'string' ? JSON.parse(rvR.rows[0].reviews) : rvR.rows[0].reviews;
+        if (Array.isArray(cached)) allReviews = cached;
+      }
+    } catch (e) { /* reviews_cache table may not exist yet */ }
+    // 2. Fallback: SerpAPI Place Details reviews (top ~10 most relevant)
+    if (allReviews.length === 0 && profile?.sampleReviews) {
+      allReviews = profile.sampleReviews.map(r => ({ comment: r.text || '', reviewer: r.author || '', rating: r.rating || 0 }));
+    }
+
+    // Scan review text for suburb mentions
+    for (const review of allReviews) {
+      const text = normalize(review.comment || review.text || '');
+      const replyText = normalize(review.review_reply?.comment || review.response || '');
+      const fullText = text + ' ' + replyText;
       for (const n of allSuburbNames) {
-        const dashN = n.replace(/\s+/g, '-');
-        // For service-area pages, match suburb in URL
-        if ((isServiceAreaPage || isSuburbPage) && (url.includes(dashN) || url.includes(n.replace(/\s+/g, '')))) {
-          if (!suburbSources[n].pages) suburbSources[n].pages = [];
-          const normUrl = (page.url || '').replace(/\/+$/, '');
-          if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
-            suburbSources[n].pages.push({ url: page.url, title: page.title });
-          }
-        }
-        // For non-service-area pages, only match if suburb IS the entire slug (e.g. /mandurah/ not /blog-about-mandurah/)
-        if (!isServiceAreaPage && !isSuburbPage) {
-          const lastSegment = url.replace(/\/+$/, '').split('/').pop() || '';
-          if (lastSegment === dashN || lastSegment === n.replace(/\s+/g, '')) {
-            if (!suburbSources[n].pages) suburbSources[n].pages = [];
-            const normUrl = (page.url || '').replace(/\/+$/, '');
-            if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
-              suburbSources[n].pages.push({ url: page.url, title: page.title });
-            }
-          }
+        // Only match suburb names 4+ chars to avoid false positives (e.g. "como" in "recommend")
+        if (n.length >= 4 && fullText.includes(n)) {
+          if (!suburbSources[n].reviewMentions) suburbSources[n].reviewMentions = [];
+          suburbSources[n].reviewMentions.push({
+            reviewer: review.reviewer?.displayName || '',
+            rating: review.rating || review.starRating || 0,
+            snippet: (review.comment || review.text || '').substring(0, 100),
+          });
         }
       }
     }
@@ -18419,6 +18461,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (!s.pages?.length) gaps.push('Create suburb landing page');
       if (!s.keywords?.length) gaps.push('Add keyword tracking');
       if (!s.gridScans?.length) gaps.push('Run grid scan');
+      if (!s.reviewMentions?.length) gaps.push('Get reviews mentioning this suburb');
       // Indexing status for this suburb's pages
       const indexedPages = s.indexing?.filter(i => i.verdict === 'PASS').length || 0;
       const notIndexedPages = s.indexing?.filter(i => i.verdict === 'FAIL' || i.verdict === 'NEUTRAL').length || 0;
@@ -18426,7 +18469,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       return {
         suburb: s.original,
         inGbp: !!s.inGbp,
-        inProject: !!s.inProject,
+        fromWebsite: !!s.fromWebsite,
         pageCount: s.pages?.length || 0,
         pages: (s.pages || []).slice(0, 3),
         keywordCount: s.keywords?.length || 0,
@@ -18435,11 +18478,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         bestSolv: s.gridScans?.length ? Math.max(...s.gridScans.map(g => g.solv || 0)) : null,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
+        reviewMentions: s.reviewMentions?.length || 0,
+        reviewSnippets: (s.reviewMentions || []).slice(0, 3),
         indexedPages,
         notIndexedPages,
         indexingStatus: notIndexedPages > 0 ? 'issues' : indexedPages > 0 ? 'indexed' : s.pages?.length ? 'unchecked' : null,
         gaps,
-        score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 20 : 0) + (s.keywords?.length ? 20 : 0) + (s.gridScans?.length ? 20 : 0) + (s.gsc?.length ? 20 : 0),
+        score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 20 : 0) + (s.keywords?.length ? 15 : 0) + (s.gridScans?.length ? 15 : 0) + (s.reviewMentions?.length ? 15 : 0) + (s.gsc?.length ? 15 : 0),
       };
     }).sort((a, b) => b.score - a.score);
 
@@ -18893,6 +18938,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         indexingTotal,
         indexingIndexed,
         indexingNotIndexed,
+        totalReviews: allReviews.length,
+        suburbsWithReviews: suburbMatrix.filter(s => s.reviewMentions > 0).length,
       },
       suburbs: suburbMatrix,
       services: serviceMatrix,
