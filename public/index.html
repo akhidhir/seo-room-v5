@@ -3858,8 +3858,8 @@
               {/* ── GBP PROFILE ── */}
               <KpiItem itemKey="gbp-profile" icon="id-card" iconColor="#8b5cf6"
                 title="GBP Profile Completeness"
-                subtitle="All 8 fields must be filled for maximum visibility"
-                badge={`${gbpC.filledCount || 0}/${gbpC.totalFields || 8}`}
+                subtitle={`All ${gbpC.totalFields || 9} fields must be filled for maximum visibility`}
+                badge={`${gbpC.filledCount || 0}/${gbpC.totalFields || 9}`}
                 badgeColor={gbpComplete ? '#22c55e' : '#ef4444'}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
                   {(gbpC.allFields || []).map((f, i) => {
@@ -3870,6 +3870,13 @@
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{f.label}</div>
                           {f.done && valueMap[f.key] && <div style={{ fontSize: 14, fontWeight: 600, color: '#22c55e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{valueMap[f.key]}</div>}
+                          {!f.done && f.key === 'hasAddress' && (
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginTop: 2 }}>No address found — CRITICAL</div>
+                              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>All businesses must have an address in GBP, even service-area businesses. You can hide it from customers but Google needs it for local ranking.</div>
+                            </div>
+                          )}
+                          {!f.done && f.key !== 'hasAddress' && <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', marginTop: 2 }}>Not set</div>}
                         </div>
                         {!f.done && (
                           <button onClick={(e) => { e.stopPropagation(); createAction(`Add ${f.label} to GBP`, `Go to business.google.com and add your ${f.label}. This field is currently missing from your Google Business Profile.`, 'gbp', 'high'); }}
