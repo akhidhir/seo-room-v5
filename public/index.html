@@ -3944,10 +3944,10 @@
             </div>
           )}
 
-          {/* Content only shows when a KPI card is expanded */}
+          {/* Content only shows when a KPI card is expanded — matrix/tabs moved inside each level */}
 
-          {/* COVERAGE MATRIX TAB */}
-          {activeTab === 'matrix' && (() => {
+          {/* OLD MATRIX TAB — hidden, kept for reference, will be placed inside Suburb Level */}
+          {false && (() => {
             // Rank color: top 3 green, 4-7 yellow, 8-15 orange, 16+ red, no data gray
             const rankCell = (cell) => {
               const r = cell.rank;
