@@ -18995,8 +18995,15 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // ============ KPI DATA ============
     // GBP profile completeness
+    const gbpAddress = [
+      ...(profile?.storefrontAddress?.addressLines || []),
+      profile?.storefrontAddress?.locality,
+      profile?.storefrontAddress?.administrativeArea,
+      profile?.storefrontAddress?.postalCode,
+    ].filter(Boolean).join(', ');
     const gbpCompleteness = {
       hasName: !!profile?.title,
+      hasAddress: !!gbpAddress,
       hasDescription: !!profile?.profile?.description,
       hasPhone: !!profile?.phoneNumbers?.primaryPhone,
       hasWebsite: !!profile?.websiteUri,
@@ -19013,10 +19020,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       phone: profile?.phoneNumbers?.primaryPhone || null,
       website: profile?.websiteUri || null,
       name: profile?.title || null,
+      address: gbpAddress || null,
       primaryCategory: profile?.categories?.primaryCategory?.displayName || null,
     };
-    const gbpFields = ['hasName', 'hasDescription', 'hasPhone', 'hasWebsite', 'hasHours', 'hasCategories', 'hasServiceAreas', 'hasServices'];
-    const gbpFieldLabels = { hasName: 'Business Name', hasDescription: 'Business Description', hasPhone: 'Phone Number', hasWebsite: 'Website URL', hasHours: 'Business Hours', hasCategories: 'Categories', hasServiceAreas: 'Service Areas', hasServices: 'Services List' };
+    const gbpFields = ['hasName', 'hasAddress', 'hasDescription', 'hasPhone', 'hasWebsite', 'hasHours', 'hasCategories', 'hasServiceAreas', 'hasServices'];
+    const gbpFieldLabels = { hasName: 'Business Name', hasAddress: 'Business Address', hasDescription: 'Business Description', hasPhone: 'Phone Number', hasWebsite: 'Website URL', hasHours: 'Business Hours', hasCategories: 'Categories', hasServiceAreas: 'Service Areas', hasServices: 'Services List' };
     const gbpFilledCount = gbpFields.filter(f => gbpCompleteness[f]).length;
     gbpCompleteness.filledCount = gbpFilledCount;
     gbpCompleteness.totalFields = gbpFields.length;

@@ -3863,7 +3863,7 @@
                 badgeColor={gbpComplete ? '#22c55e' : '#ef4444'}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
                   {(gbpC.allFields || []).map((f, i) => {
-                    const valueMap = { hasName: gbpC.name, hasPhone: gbpC.phone, hasWebsite: gbpC.website, hasDescription: gbpC.description ? gbpC.description.substring(0, 80) + '...' : null, hasCategories: gbpC.primaryCategory, hasServiceAreas: `${gbpC.serviceAreasCount} suburbs`, hasServices: `${gbpC.servicesCount} services`, hasHours: 'Set', hasPhotos: `${gbpC.photosCount} photos` };
+                    const valueMap = { hasName: gbpC.name, hasAddress: gbpC.address, hasPhone: gbpC.phone, hasWebsite: gbpC.website, hasDescription: gbpC.description ? gbpC.description.substring(0, 80) + '...' : null, hasCategories: gbpC.primaryCategory, hasServiceAreas: `${gbpC.serviceAreasCount} suburbs`, hasServices: `${gbpC.servicesCount} services`, hasHours: 'Set', hasPhotos: `${gbpC.photosCount} photos` };
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', borderRadius: 12, background: f.done ? '#22c55e08' : '#ef444408', border: `1px solid ${f.done ? '#22c55e' : '#ef4444'}25` }}>
                         <i className={`fas fa-${f.done ? 'check-circle' : 'times-circle'}`} style={{ color: f.done ? '#22c55e' : '#ef4444', fontSize: 20 }} />
