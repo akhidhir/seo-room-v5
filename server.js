@@ -18293,10 +18293,17 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       // Match /service-areas/xxx or /service-area/xxx patterns
       const saMatch = url.match(/\/service-?areas?\/([\w-]+)\/?$/);
       if (saMatch) {
-        // Extract suburb name: strip service-type prefixes like "car-key-replacement-"
+        // Extract suburb name: try matching the tail against known GBP suburbs first,
+        // otherwise use the full slug as-is (works for /service-areas/rockingham/)
         let suburbSlug = saMatch[1];
-        // Remove common service prefixes to get the suburb name
-        suburbSlug = suburbSlug.replace(/^(car-key-replacement-|plumber-|electrician-|locksmith-|gasfitter-|plumbing-)/, '');
+        // Try to match the end of the slug against GBP suburbs (handles any service prefix generically)
+        const gbpMatch = gbpSuburbs.find(s => {
+          const gn = normalize(s).replace(/\s+/g, '-');
+          return suburbSlug.endsWith(gn) || suburbSlug === gn;
+        });
+        if (gbpMatch) {
+          suburbSlug = normalize(gbpMatch).replace(/\s+/g, '-');
+        }
         const suburbName = suburbSlug.replace(/-/g, ' ').trim();
         const n = normalize(suburbName);
         if (n && n.length > 1) {
