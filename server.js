@@ -19250,7 +19250,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const gbpAuditChecks = [];
 
     // 1. Verified status
-    const isVerified = !!profile?.metadata?.hasVoiceOfMerchant;
+    // GBP Management API has 0 quota so metadata.hasVoiceOfMerchant is unavailable.
+    // Infer verification: if profile has reviews, rating, or categories from SerpAPI, it's verified.
+    const hasApiVerification = !!profile?.metadata?.hasVoiceOfMerchant;
+    const inferredVerified = !!(gbpCompleteness.hasName && (reviewStats?.total_reviews > 0 || gbpCategories.length > 0));
+    const isVerified = hasApiVerification || inferredVerified;
     gbpAuditChecks.push({
       id: 'verified',
       title: 'Business Verification',
