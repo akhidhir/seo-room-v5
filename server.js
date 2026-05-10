@@ -4008,24 +4008,6 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
-// Debug: test what a directory page returns from server
-app.get('/api/debug/fetch-page', async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).json({ error: 'url param required' });
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-      redirect: 'follow',
-    });
-    clearTimeout(timer);
-    const html = await resp.text();
-    res.json({ httpStatus: resp.status, finalUrl: resp.url, length: html.length, preview: html.substring(0, 2000), includes_car_key: html.toLowerCase().includes('car key rescue') });
-  } catch (e) { res.json({ error: e.message, type: e.name }); }
-});
-
 // Helper: fetch a URL with timeout, return {html, blocked} or null
 async function fetchPage(url, timeoutMs = 8000) {
   const controller = new AbortController();
@@ -4172,27 +4154,28 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     let detectedPhone = '';
     const specialPlatforms = {
       'Google Business Profile': async () => {
-        // Always search Maps to get phone number for citation checks
+        // Use Place ID lookup to get phone number for citation cross-checks
+        if (gbpPlaceId) {
+          try {
+            const placeData = await serpApiSearch({ engine: 'google_maps', place_id: gbpPlaceId, api_key: SERPAPI_KEY });
+            const pr = placeData.place_results || {};
+            if (pr.phone) {
+              detectedPhone = pr.phone.replace(/[\s\-()]/g, '');
+              console.log(`[citations] Phone from Place ID: ${pr.phone} → ${detectedPhone}`);
+            }
+            return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: `Verified: ${pr.title || businessName}, ${pr.rating || '?'}★, ${pr.reviews || 0} reviews` };
+          } catch (e) { console.log(`[citations] Place ID lookup error:`, e.message); }
+          return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'GBP Place ID connected' };
+        }
+        // Fallback: search by name
         try {
           const mapsData = await serpApiSearch({ engine: 'google_maps', q: `${businessName} ${location}`, api_key: SERPAPI_KEY });
           const match = (mapsData.local_results || []).find(r => r.title?.toLowerCase().includes(bizLower.split(' ')[0]) || (r.website && r.website.includes(domain)));
-          if (match?.phone) {
-            detectedPhone = match.phone.replace(/[\s\-()]/g, '');
-            console.log(`[citations] Detected phone from Maps: ${match.phone} → ${detectedPhone}`);
-          }
-          // Also try place_results for single result
-          if (!detectedPhone && mapsData.place_results?.phone) {
-            detectedPhone = mapsData.place_results.phone.replace(/[\s\-()]/g, '');
-            console.log(`[citations] Detected phone from place_results: ${detectedPhone}`);
-          }
-          if (gbpPlaceId) {
-            return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'Verified: GBP Place ID connected in Project Settings' };
-          }
           if (match) {
+            if (match.phone) { detectedPhone = match.phone.replace(/[\s\-()]/g, ''); console.log(`[citations] Phone from Maps search: ${detectedPhone}`); }
             return { status: 'listed', listing_url: match.place_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id}` : match.link, notes: `Found: ${match.title}, ${match.rating || '?'}★, ${match.reviews || 0} reviews` };
           }
-        } catch (e) { console.log(`[citations] GBP Maps search error:`, e.message); }
-        if (gbpPlaceId) return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'GBP Place ID connected' };
+        } catch (e) {}
         return null;
       },
       'Facebook Business': async () => {
