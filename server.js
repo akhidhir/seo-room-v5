@@ -4000,7 +4000,9 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
     }));
     const listed = directories.filter(d => d.status === 'listed').length;
     const pending = directories.filter(d => d.status === 'pending').length;
-    res.json({ directories, stats: { total: directories.length, listed, pending, not_listed: directories.length - listed - pending } });
+    const notChecked = directories.filter(d => d.status === 'not_checked').length;
+    const notListed = directories.filter(d => d.status === 'not_listed').length;
+    res.json({ directories, stats: { total: directories.length, listed, pending, not_listed: notListed, not_checked: notChecked } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -4087,39 +4089,36 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           continue;
         }
 
-        // Search Google for business name + directory domain (more reliable than site: operator)
-        // Google's site: operator misses many directory pages — broader search catches them
-        const locationShort = (location || '').split(',')[0].trim();
-        const searchData = await serpApiSearch({
-          engine: 'google',
-          q: `"${businessName}" ${dir.url} ${locationShort}`,
-          num: 5,
-          api_key: SERPAPI_KEY,
-        });
-
-        const organicResults = searchData.organic_results || [];
-        // Match: result URL must contain the directory domain
+        // Strategy: try 3 search approaches, stop on first match
         const dirDomain = dir.url.replace(/^www\./, '');
-        let match = organicResults.find(r => r.link && r.link.includes(dirDomain));
-        let found = !!match;
-        let listingUrl = found ? match.link : null;
-        let snippet = found ? (match.snippet || match.title || '') : '';
+        const locationShort = (location || '').split(',')[0].trim();
+        let found = false;
+        let listingUrl = null;
+        let snippet = '';
 
-        // Backup: search by website domain instead of business name
+        // 1) site: operator with business name (most precise)
+        try {
+          const s1 = await serpApiSearch({ engine: 'google', q: `site:${dirDomain} "${businessName}"`, num: 5, api_key: SERPAPI_KEY });
+          const m1 = (s1.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
+          if (m1) { found = true; listingUrl = m1.link; snippet = m1.snippet || m1.title || ''; }
+        } catch (e) { /* continue */ }
+
+        // 2) site: operator with domain (catches listings that use website URL instead of business name)
         if (!found && domain) {
-          const domainSearch = await serpApiSearch({
-            engine: 'google',
-            q: `"${domain}" ${dir.url}`,
-            num: 5,
-            api_key: SERPAPI_KEY,
-          });
-          const domainResults = domainSearch.organic_results || [];
-          match = domainResults.find(r => r.link && r.link.includes(dirDomain));
-          if (match) {
-            found = true;
-            listingUrl = match.link;
-            snippet = `Found via domain. ${match.snippet || match.title || ''}`.trim();
-          }
+          try {
+            const s2 = await serpApiSearch({ engine: 'google', q: `site:${dirDomain} "${domain}"`, num: 5, api_key: SERPAPI_KEY });
+            const m2 = (s2.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
+            if (m2) { found = true; listingUrl = m2.link; snippet = `Found via domain. ${m2.snippet || m2.title || ''}`.trim(); }
+          } catch (e) { /* continue */ }
+        }
+
+        // 3) Broad search: business name + directory domain + location (catches when site: misses)
+        if (!found) {
+          try {
+            const s3 = await serpApiSearch({ engine: 'google', q: `"${businessName}" ${dir.url} ${locationShort}`, num: 10, api_key: SERPAPI_KEY });
+            const m3 = (s3.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
+            if (m3) { found = true; listingUrl = m3.link; snippet = m3.snippet || m3.title || ''; }
+          } catch (e) { /* continue */ }
         }
 
         results.push({
