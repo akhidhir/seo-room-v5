@@ -4,6 +4,8 @@
 - Don't ask multiple questions; pick the best path and propose it
 - Skip preamble. No "I'll continue" or "Let me look at..."
 - Push the work forward — don't wait for permission on small steps
+- Do NOT assume or act on your own — take instruction from the user and do only what they say
+- No chatty or silly responses — direct and to the point only
 - File paths: edits to `/sessions/.../mnt/Desktop/...` may not sync to disk; copy files to Desktop and have user cp + git push
 - Lock files: `.git/HEAD.lock` and `.git/index.lock` often need user to remove via `rm -f` in their terminal
 - User prefers "always accurate data" — no fake/sample data ever
@@ -210,6 +212,55 @@ const PILLAR_CATEGORIES = {
 - **GBP audit accuracy** — SerpAPI Place Details call for exact review count, rating, photos, categories.
 - **Competitor analysis persistence** — saved to `competitor_analysis` JSONB column with accept/reject status per topic gap.
 - **Action Plan filters** — always shows all 4 types (Automated, Copywriter Current, Copywriter New, Manual) regardless of existing data.
+
+## Google Local Business Ranking — Official Documentation (Last checked: May 2026, check every 3 months)
+
+Sources: https://support.google.com/business/answer/7091 | https://support.google.com/business/answer/3038177 | https://support.google.com/business/answer/2853879
+
+### 3 Core Ranking Factors
+1. **Relevance** — how well the profile matches the search query. Complete + detailed info = better matching.
+2. **Distance** — how far the business is from the searcher. For service-area businesses, based on the address Google has on file (even if hidden).
+3. **Prominence** — how well-known the business is. Based on: links, articles, directories, review count, review score, and organic web ranking (SEO).
+
+### Required GBP Fields (all businesses)
+- **Business Address** — REQUIRED even for service-area/mobile businesses. Can hide from public but Google needs it for ranking.
+- **Business Name** — real-world name, no keyword stuffing, no taglines.
+- **Phone Number** — local number preferred, not call center.
+- **Categories** — fewest possible, most specific. Primary category is a ranking factor.
+- **Business Hours** — kept up to date, including special hours/holidays.
+- **Business Description** — relevant to services, no promos/links/prices.
+- **Website URL** — direct URL, no redirects.
+- **Photos & Videos** — show what you offer.
+- **Service Areas** — up to 20 areas (cities, postcodes, regions).
+- **Services List** — complete set of services offered.
+- **Reviews** — count + score factor into ranking. Respond to reviews.
+- **Products** — for retail businesses in eligible countries.
+- **Verified** — verification tells Google you're authorized.
+
+### Service-Area / Mobile Business Specifics
+- Must have address set (hide from customers).
+- One profile per central office/location.
+- If multiple locations with separate staff → each gets own profile.
+- Service area boundary: max ~2 hours driving from base.
+- No virtual offices (must be staffed during stated hours).
+- Businesses requiring age verification (alcohol, cannabis, weapons) can't be service-area without storefront.
+
+### What Improves Ranking (from Google docs)
+- Complete and accurate profile information.
+- Review count + positive ratings.
+- Responding to reviews.
+- Web SEO (organic position is a factor).
+- Links, articles, directories mentioning the business.
+- Photos and videos.
+- Keeping hours up to date.
+- Consistent name and categories across all locations (chains).
+
+### What Our Dashboard Checks (Local Intel)
+- Profile Completeness: 9 fields (name, address, description, phone, website, hours, categories, service areas, services).
+- 3 suburb signals: has landing page, in GBP service areas, mentioned in review.
+- Citations/directories (25 Australian directories).
+- Competitor analysis (grid scan, review gap, dominance).
+- Website location pages existence.
 
 ## Known Issues
 
