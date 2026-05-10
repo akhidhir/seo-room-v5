@@ -7283,7 +7283,9 @@
         setFetching(true);
         try {
           const data = await api(`/projects/${pid}/clarity-metrics/fetch`, { method: 'POST' });
-          if (data.ok) { loadMetrics(); }
+          if (data.error) { alert('Fetch error: ' + data.error); }
+          else if (data.ok) { loadMetrics(); }
+          else { alert('Unexpected response from server'); }
         } catch (e) { alert('Fetch error: ' + e.message); }
         setFetching(false);
       };

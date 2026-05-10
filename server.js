@@ -4462,9 +4462,9 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
     if (!clarityResp.ok) {
       const errText = await clarityResp.text();
       console.log(`[clarity] API error ${clarityResp.status}:`, errText);
-      if (clarityResp.status === 401) return res.status(401).json({ error: 'Clarity API token is invalid or expired. Generate a new one in Clarity Settings → Data Export.' });
-      if (clarityResp.status === 429) return res.status(429).json({ error: 'Clarity API daily limit reached (10 calls/day). Try again tomorrow.' });
-      return res.status(clarityResp.status).json({ error: `Clarity API error: ${clarityResp.status}` });
+      if (clarityResp.status === 401) return res.status(400).json({ error: 'Clarity API token is invalid or expired. Generate a new one in Clarity Settings → Data Export.' });
+      if (clarityResp.status === 429) return res.status(400).json({ error: 'Clarity API daily limit reached (10 calls/day). Try again tomorrow.' });
+      return res.status(400).json({ error: `Clarity API error: ${clarityResp.status} — ${errText.substring(0, 200)}` });
     }
 
     const clarityData = await clarityResp.json();
