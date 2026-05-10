@@ -7252,6 +7252,191 @@
       );
     }
 
+    // ============ USER BEHAVIOUR PAGE (Microsoft Clarity) ============
+    function UserBehaviourPage({ project }) {
+      const [metrics, setMetrics] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [fetching, setFetching] = useState(false);
+      const [analysing, setAnalysing] = useState(false);
+      const [configured, setConfigured] = useState(false);
+      const [fetchedAt, setFetchedAt] = useState(null);
+      const [findings, setFindings] = useState(null);
+      const [sortCol, setSortCol] = useState('sessions');
+      const [sortDir, setSortDir] = useState('desc');
+      const pid = project?.id;
+
+      const loadMetrics = async () => {
+        if (!pid) return;
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${pid}/clarity-metrics`);
+          setMetrics(data.metrics || []);
+          setConfigured(data.configured);
+          setFetchedAt(data.fetched_at);
+        } catch (e) { console.error('clarity load:', e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadMetrics(); }, [pid]);
+
+      const handleFetch = async () => {
+        setFetching(true);
+        try {
+          const data = await api(`/projects/${pid}/clarity-metrics/fetch`, { method: 'POST' });
+          if (data.ok) { loadMetrics(); }
+        } catch (e) { alert('Fetch error: ' + e.message); }
+        setFetching(false);
+      };
+
+      const handleAnalyse = async () => {
+        setAnalysing(true);
+        try {
+          const data = await api(`/projects/${pid}/clarity-metrics/analyse`, { method: 'POST' });
+          setFindings(data.findings || []);
+        } catch (e) { alert('Analysis error: ' + e.message); }
+        setAnalysing(false);
+      };
+
+      const sorted = [...metrics].sort((a, b) => {
+        const av = a[sortCol] || 0, bv = b[sortCol] || 0;
+        return sortDir === 'desc' ? bv - av : av - bv;
+      });
+
+      const toggleSort = (col) => {
+        if (sortCol === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+        else { setSortCol(col); setSortDir('desc'); }
+      };
+
+      const scoreColor = (s) => s >= 75 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
+      const metricBadge = (val, thresholds) => {
+        if (!val) return { bg: '#22c55e15', color: '#22c55e' };
+        if (val <= thresholds[0]) return { bg: '#22c55e15', color: '#22c55e' };
+        if (val <= thresholds[1]) return { bg: '#f59e0b15', color: '#f59e0b' };
+        return { bg: '#ef444415', color: '#ef4444' };
+      };
+
+      const totalSessions = metrics.reduce((s, m) => s + (m.sessions || 0), 0);
+      const totalDeadClicks = metrics.reduce((s, m) => s + (m.dead_clicks || 0), 0);
+      const totalRageClicks = metrics.reduce((s, m) => s + (m.rage_clicks || 0), 0);
+      const avgScore = metrics.length ? Math.round(metrics.reduce((s, m) => s + (m.score || 0), 0) / metrics.length) : 0;
+
+      const clarityUrl = project?.clarity_project_id ? `https://clarity.microsoft.com/projects/view/${project.clarity_project_id}/dashboard` : 'https://clarity.microsoft.com';
+
+      if (loading) return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: 300 } },
+        React.createElement('div', { className: 'spinner' }));
+
+      return React.createElement('div', null,
+        // Header
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+          React.createElement('div', null,
+            React.createElement('h2', { style: { fontSize: 22, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 10 } },
+              React.createElement('i', { className: 'fas fa-fire', style: { color: '#f59e0b' } }),
+              'User Behaviour'),
+            React.createElement('p', { style: { color: 'var(--text3)', fontSize: 14, margin: '4px 0 0' } },
+              'Track how users interact with your website — powered by Microsoft Clarity')),
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('a', { href: clarityUrl, target: '_blank', rel: 'noopener',
+              style: { padding: '8px 14px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 600, fontSize: 13, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 } },
+              React.createElement('i', { className: 'fas fa-external-link-alt', style: { fontSize: 11 } }), 'View Heatmaps'),
+            configured && React.createElement('button', { onClick: handleAnalyse, disabled: analysing || !metrics.length,
+              style: { padding: '8px 14px', borderRadius: 8, background: '#6366f115', border: '1px solid #6366f130', color: '#6366f1', fontWeight: 600, fontSize: 13, cursor: 'pointer' } },
+              analysing ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Analysing...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-brain', style: { marginRight: 6 } }), 'AI Analysis')),
+            configured && React.createElement('button', { onClick: handleFetch, disabled: fetching,
+              style: { padding: '8px 14px', borderRadius: 8, background: '#6366f1', border: 'none', color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } },
+              fetching ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Fetching...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-sync-alt', style: { marginRight: 6 } }), 'Fetch Metrics')))),
+
+        // Not configured state
+        !configured && React.createElement('div', { className: 'card', style: { textAlign: 'center', padding: 40 } },
+          React.createElement('i', { className: 'fas fa-fire', style: { fontSize: 48, color: '#f59e0b', marginBottom: 16, opacity: 0.5 } }),
+          React.createElement('h3', { style: { fontSize: 18, margin: '0 0 8px' } }, 'Microsoft Clarity Not Connected'),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 14, marginBottom: 16 } },
+            'Connect Microsoft Clarity to track dead clicks, rage clicks, scroll depth, and more.'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', maxWidth: 400, margin: '0 auto', textAlign: 'left' } },
+            React.createElement('div', { style: { marginBottom: 8 } }, '1. Sign up free at clarity.microsoft.com'),
+            React.createElement('div', { style: { marginBottom: 8 } }, '2. Add your website and install the tracking code'),
+            React.createElement('div', { style: { marginBottom: 8 } }, '3. Go to Settings → Data Export → Generate API Token'),
+            React.createElement('div', null, '4. Enter the Project ID and Token in Project Settings'))),
+
+        // Stats cards
+        configured && metrics.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 } },
+          React.createElement('div', { className: 'stat-card' },
+            React.createElement('div', { className: 'stat-label' }, 'SESSIONS (3 DAYS)'),
+            React.createElement('div', { className: 'stat-value', style: { color: '#6366f1' } }, totalSessions.toLocaleString())),
+          React.createElement('div', { className: 'stat-card' },
+            React.createElement('div', { className: 'stat-label' }, 'DEAD CLICKS'),
+            React.createElement('div', { className: 'stat-value', style: { color: '#ef4444' } }, totalDeadClicks.toLocaleString())),
+          React.createElement('div', { className: 'stat-card' },
+            React.createElement('div', { className: 'stat-label' }, 'RAGE CLICKS'),
+            React.createElement('div', { className: 'stat-value', style: { color: '#D85A30' } }, totalRageClicks.toLocaleString())),
+          React.createElement('div', { className: 'stat-card' },
+            React.createElement('div', { className: 'stat-label' }, 'AVG UX SCORE'),
+            React.createElement('div', { className: 'stat-value', style: { color: scoreColor(avgScore) } }, avgScore))),
+
+        // Fetched at + page count
+        configured && fetchedAt && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 12 } },
+          'Last fetched: ', new Date(fetchedAt).toLocaleString(), ' — ', metrics.length, ' pages tracked'),
+
+        // Metrics table
+        configured && metrics.length > 0 && React.createElement('div', { className: 'card', style: { padding: 0, overflow: 'hidden' } },
+          React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+            React.createElement('thead', null,
+              React.createElement('tr', { style: { borderBottom: '1px solid var(--border)' } },
+                ['page_url', 'sessions', 'dead_clicks', 'rage_clicks', 'scroll_depth', 'quick_backs', 'score'].map(col =>
+                  React.createElement('th', { key: col, onClick: () => toggleSort(col),
+                    style: { padding: '10px 12px', textAlign: col === 'page_url' ? 'left' : 'center', cursor: 'pointer', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', fontWeight: 600, whiteSpace: 'nowrap', userSelect: 'none' } },
+                    col === 'page_url' ? 'Page' : col === 'dead_clicks' ? 'Dead Clicks' : col === 'rage_clicks' ? 'Rage Clicks' : col === 'scroll_depth' ? 'Scroll %' : col === 'quick_backs' ? 'Quick Backs' : col === 'sessions' ? 'Sessions' : 'Score',
+                    sortCol === col && React.createElement('i', { className: `fas fa-sort-${sortDir === 'desc' ? 'down' : 'up'}`, style: { marginLeft: 4, fontSize: 10 } }))))),
+            React.createElement('tbody', null,
+              sorted.map((m, i) => {
+                const dc = metricBadge(m.dead_clicks, [5, 20]);
+                const rc = metricBadge(m.rage_clicks, [3, 10]);
+                const qb = metricBadge(m.quick_backs, [5, 15]);
+                const path = (m.page_url || '').replace(/^https?:\/\/[^/]+/, '') || '/';
+                return React.createElement('tr', { key: i, style: { borderBottom: '1px solid var(--border)' } },
+                  React.createElement('td', { style: { padding: '10px 12px', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    React.createElement('div', { style: { fontWeight: 600, color: 'var(--text1)' } }, path),
+                    m.page_title && React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.page_title)),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px', color: 'var(--text2)' } }, (m.sessions || 0).toLocaleString()),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
+                    React.createElement('span', { style: { background: dc.bg, color: dc.color, padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 } }, m.dead_clicks || 0)),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
+                    React.createElement('span', { style: { background: rc.bg, color: rc.color, padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 } }, m.rage_clicks || 0)),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 } },
+                      React.createElement('div', { style: { width: 50, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' } },
+                        React.createElement('div', { style: { width: `${m.scroll_depth || 0}%`, height: '100%', background: (m.scroll_depth || 0) >= 60 ? '#22c55e' : (m.scroll_depth || 0) >= 40 ? '#f59e0b' : '#ef4444', borderRadius: 3 } })),
+                      React.createElement('span', { style: { fontSize: 12, color: 'var(--text2)' } }, Math.round(m.scroll_depth || 0) + '%'))),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
+                    React.createElement('span', { style: { background: qb.bg, color: qb.color, padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 } }, m.quick_backs || 0)),
+                  React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
+                    React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: '50%', border: `3px solid ${scoreColor(m.score)}`, fontSize: 13, fontWeight: 700, color: scoreColor(m.score) } }, m.score || 0)));
+              })))),
+
+        // No data state
+        configured && metrics.length === 0 && React.createElement('div', { className: 'card', style: { textAlign: 'center', padding: 40 } },
+          React.createElement('i', { className: 'fas fa-chart-bar', style: { fontSize: 36, color: 'var(--text3)', marginBottom: 12, opacity: 0.4 } }),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 14 } }, 'No metrics yet. Click "Fetch Metrics" to pull data from Clarity.'),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 12 } }, 'Make sure the Clarity tracking code is installed on your website first.')),
+
+        // AI Findings
+        findings && findings.length > 0 && React.createElement('div', { style: { marginTop: 24 } },
+          React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: 'fas fa-brain', style: { color: '#6366f1' } }),
+            'AI Conversion Insights', React.createElement('span', { style: { fontSize: 12, fontWeight: 400, color: 'var(--text3)' } }, `(${findings.length} findings)`)),
+          findings.map((f, i) => React.createElement('div', { key: i, className: 'card', style: { marginBottom: 8, borderLeft: `3px solid ${f.severity === 'critical' ? '#ef4444' : f.severity === 'high' ? '#f59e0b' : '#6366f1'}`, borderRadius: 0 } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+              React.createElement('div', { style: { fontWeight: 700, fontSize: 14 } }, f.title),
+              React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase',
+                background: f.severity === 'critical' ? '#ef444415' : f.severity === 'high' ? '#f59e0b15' : '#6366f115',
+                color: f.severity === 'critical' ? '#ef4444' : f.severity === 'high' ? '#f59e0b' : '#6366f1' } }, f.severity)),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginBottom: 6 } }, f.description),
+            React.createElement('div', { style: { fontSize: 13, padding: '8px 12px', background: '#22c55e10', borderRadius: 6, border: '1px solid #22c55e20' } },
+              React.createElement('i', { className: 'fas fa-lightbulb', style: { color: '#22c55e', marginRight: 6 } }), f.recommendation),
+            f.page_url && React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 6 } },
+              React.createElement('i', { className: 'fas fa-link', style: { marginRight: 4 } }), f.page_url))))
+      );
+    }
+
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     const _onpageCache = {};
     function OnPageAuditPage({ project }) {
@@ -19397,6 +19582,9 @@
         toneOfVoice: '',
         writerVoice: '',
         customerPersona: '',
+        clarityProjectId: '',
+        clarityApiToken: '',
+        phone: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
@@ -19446,6 +19634,9 @@
               toneOfVoice: data.project.tone_of_voice || '',
               writerVoice: data.project.writer_voice || '',
               customerPersona: data.project.customer_persona || '',
+              clarityProjectId: data.project.clarity_project_id || '',
+              clarityApiToken: data.project.clarity_api_token || '',
+              phone: data.project.phone || '',
             });
           }
           // Load available GSC sites and GBP locations
@@ -19793,6 +19984,46 @@
                     placeholder="xxxx xxxx xxxx xxxx" style={{ fontSize: 12 }} />
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Phone Number */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fas fa-phone" style={{ marginRight: 8, color: '#22c55e' }} />Business Phone
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+              Used for citation scanning — searches Google for your phone number to find directory listings.
+            </div>
+            <input type="text" className="form-input" value={formData.phone}
+              onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+              placeholder="0433 933 223" style={{ fontSize: 12, maxWidth: 300 }} />
+          </div>
+
+          {/* Microsoft Clarity — User Behaviour Tracking */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fas fa-fire" style={{ marginRight: 8, color: '#f59e0b' }} />Microsoft Clarity
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+              User behaviour tracking — dead clicks, rage clicks, scroll depth, quick backs. Sign up free at <a href="https://clarity.microsoft.com" target="_blank" rel="noopener" style={{ color: '#6366f1' }}>clarity.microsoft.com</a>, add your site, then enter the Project ID and API Token below.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label className="form-label" style={{ fontSize: 11 }}>Clarity Project ID</label>
+                <input type="text" className="form-input" value={formData.clarityProjectId}
+                  onChange={(e) => setFormData(prev => ({ ...prev, clarityProjectId: e.target.value }))}
+                  placeholder="abc123xyz" style={{ fontSize: 12 }} />
+              </div>
+              <div>
+                <label className="form-label" style={{ fontSize: 11 }}>API Token</label>
+                <input type="password" className="form-input" value={formData.clarityApiToken}
+                  onChange={(e) => setFormData(prev => ({ ...prev, clarityApiToken: e.target.value }))}
+                  placeholder="Bearer token from Settings → Data Export" style={{ fontSize: 12 }} />
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+              To get the API token: Clarity → Settings → Data Export → Generate New API Token
             </div>
           </div>
 
@@ -20896,6 +21127,8 @@
             return <IndexingPage project={project} />;
           case 'citations':
             return <CitationsPage project={project} />;
+          case 'user-behaviour':
+            return <UserBehaviourPage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
           case 'nw-project':
@@ -20976,6 +21209,7 @@ case 'action-plan':
           { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
           { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
           { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
+          { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
         ]},
         { section: 'GBP', items: [
           { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },

@@ -262,6 +262,28 @@ async function initDb() {
       )
     `);
 
+    // Clarity metrics (Microsoft Clarity user behaviour data)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS clarity_metrics (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        page_url TEXT NOT NULL,
+        page_title TEXT,
+        sessions INTEGER DEFAULT 0,
+        dead_clicks INTEGER DEFAULT 0,
+        rage_clicks INTEGER DEFAULT 0,
+        excessive_scrolls INTEGER DEFAULT 0,
+        quick_backs INTEGER DEFAULT 0,
+        scroll_depth DOUBLE PRECISION DEFAULT 0,
+        engagement_time DOUBLE PRECISION DEFAULT 0,
+        error_clicks INTEGER DEFAULT 0,
+        script_errors INTEGER DEFAULT 0,
+        score INTEGER DEFAULT 0,
+        fetched_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, page_url)
+      )
+    `);
+
     // GSC keywords (position data from Google Search Console)
     await client.query(`
       CREATE TABLE IF NOT EXISTS gsc_keywords (
@@ -389,6 +411,9 @@ async function initDb() {
     await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_project_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_api_token TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS phone TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_custom_suburbs TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_name TEXT`).catch(() => {});
@@ -1243,6 +1268,9 @@ app.put('/api/projects/:id', async (req, res) => {
   const customer_persona = b.customer_persona ?? b.customerPersona;
   const writer_voice = b.writer_voice ?? b.writerVoice;
   const rc_location_id = b.rc_location_id ?? b.rcLocationId;
+  const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
+  const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
+  const phone = b.phone;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -1270,7 +1298,10 @@ app.put('/api/projects/:id', async (req, res) => {
            page_wireframe=$27,
            customer_persona=$28,
            writer_voice=$29,
-           rc_location_id=COALESCE($30, rc_location_id)
+           rc_location_id=COALESCE($30, rc_location_id),
+           clarity_project_id=COALESCE($31, clarity_project_id),
+           clarity_api_token=COALESCE($32, clarity_api_token),
+           phone=COALESCE($33, phone)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1286,7 +1317,8 @@ app.put('/api/projects/:id', async (req, res) => {
        page_wireframe !== undefined ? page_wireframe : null,
        customer_persona !== undefined ? customer_persona : null,
        writer_voice !== undefined ? writer_voice : null,
-       rc_location_id !== undefined ? rc_location_id : null]
+       rc_location_id !== undefined ? rc_location_id : null,
+       clarity_project_id || null, clarity_api_token || null, phone || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -4381,6 +4413,245 @@ app.put('/api/projects/:projectId/citations/:directoryName', async (req, res) =>
     );
     res.json({ ok: true });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== MICROSOFT CLARITY (User Behaviour Metrics) ====================
+
+// GET cached clarity metrics
+app.get('/api/projects/:projectId/clarity-metrics', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT clarity_project_id, clarity_api_token, domain FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const { clarity_project_id, clarity_api_token } = proj.rows[0];
+    const configured = !!(clarity_project_id && clarity_api_token);
+
+    const metrics = await pool.query(
+      'SELECT * FROM clarity_metrics WHERE project_id=$1 ORDER BY sessions DESC',
+      [projectId]
+    );
+    const fetchedAt = metrics.rows.length ? metrics.rows[0].fetched_at : null;
+    res.json({ configured, metrics: metrics.rows, fetched_at: fetchedAt });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST fetch fresh clarity metrics from API
+app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const { clarity_project_id, clarity_api_token, domain } = proj.rows[0];
+    if (!clarity_project_id || !clarity_api_token) {
+      return res.status(400).json({ error: 'Microsoft Clarity not configured. Go to Settings → Project Settings and enter your Clarity Project ID and API Token.' });
+    }
+
+    console.log(`[clarity] Fetching metrics for project ${projectId}, Clarity ID: ${clarity_project_id}`);
+
+    // Call Clarity Data Export API — get URL-level breakdown
+    const clarityUrl = `https://www.clarity.ms/export-data/api/v1/project-live-insights?numOfDays=3&dimension1=URL`;
+    const clarityResp = await fetch(clarityUrl, {
+      headers: {
+        'Authorization': `Bearer ${clarity_api_token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!clarityResp.ok) {
+      const errText = await clarityResp.text();
+      console.log(`[clarity] API error ${clarityResp.status}:`, errText);
+      if (clarityResp.status === 401) return res.status(401).json({ error: 'Clarity API token is invalid or expired. Generate a new one in Clarity Settings → Data Export.' });
+      if (clarityResp.status === 429) return res.status(429).json({ error: 'Clarity API daily limit reached (10 calls/day). Try again tomorrow.' });
+      return res.status(clarityResp.status).json({ error: `Clarity API error: ${clarityResp.status}` });
+    }
+
+    const clarityData = await clarityResp.json();
+    console.log(`[clarity] Got ${Array.isArray(clarityData) ? clarityData.length : 0} metric groups`);
+
+    // Parse the Clarity response — it returns an array of metric groups
+    // Each group has { metricName, information: [...] }
+    const metricMap = {};
+    for (const group of (Array.isArray(clarityData) ? clarityData : [])) {
+      const metricName = group.metricName;
+      for (const row of (group.information || [])) {
+        const url = row.URL || row.url;
+        if (!url) continue;
+        if (!metricMap[url]) metricMap[url] = { page_url: url };
+        switch (metricName) {
+          case 'Traffic':
+            metricMap[url].sessions = parseInt(row.totalSessionCount || 0);
+            metricMap[url].page_title = row.PageTitle || row.pageTitle || null;
+            break;
+          case 'Dead Click Count':
+            metricMap[url].dead_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+          case 'Rage Click Count':
+            metricMap[url].rage_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+          case 'Excessive Scroll':
+            metricMap[url].excessive_scrolls = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+          case 'Quickback Click':
+            metricMap[url].quick_backs = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+          case 'Scroll Depth':
+            metricMap[url].scroll_depth = parseFloat(row.Percentage || row.percentage || row.avgScrollDepth || 0);
+            break;
+          case 'Engagement Time':
+            metricMap[url].engagement_time = parseFloat(row.AvgTime || row.avgTime || row.avgEngagementTime || 0);
+            break;
+          case 'Error Click Count':
+            metricMap[url].error_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+          case 'Script Error Count':
+            metricMap[url].script_errors = parseInt(row.Count || row.count || row.totalCount || 0);
+            break;
+        }
+      }
+    }
+
+    // Calculate composite score per page (0-100)
+    const pages = Object.values(metricMap);
+    for (const p of pages) {
+      let score = 100;
+      // Penalise for dead clicks (max -30)
+      if (p.dead_clicks > 0) score -= Math.min(30, p.dead_clicks * 2);
+      // Penalise for rage clicks (max -25)
+      if (p.rage_clicks > 0) score -= Math.min(25, p.rage_clicks * 3);
+      // Penalise for quick backs (max -20)
+      if (p.quick_backs > 0) score -= Math.min(20, p.quick_backs * 2);
+      // Penalise for low scroll depth (max -15)
+      if (p.scroll_depth && p.scroll_depth < 50) score -= Math.round((50 - p.scroll_depth) * 0.3);
+      // Penalise for excessive scrolls (max -10)
+      if (p.excessive_scrolls > 0) score -= Math.min(10, p.excessive_scrolls * 2);
+      p.score = Math.max(0, Math.round(score));
+    }
+
+    // Upsert into DB
+    for (const p of pages) {
+      await pool.query(
+        `INSERT INTO clarity_metrics (project_id, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, score, fetched_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+         ON CONFLICT (project_id, page_url)
+         DO UPDATE SET page_title=COALESCE($3, clarity_metrics.page_title), sessions=$4, dead_clicks=$5, rage_clicks=$6, excessive_scrolls=$7, quick_backs=$8, scroll_depth=$9, engagement_time=$10, error_clicks=$11, script_errors=$12, score=$13, fetched_at=NOW()`,
+        [projectId, p.page_url, p.page_title, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0, p.score || 0]
+      );
+    }
+
+    console.log(`[clarity] Saved ${pages.length} page metrics for project ${projectId}`);
+    res.json({ ok: true, pages_count: pages.length, metrics: pages });
+  } catch (e) {
+    console.error('[clarity] Fetch error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST run AI analysis on clarity metrics
+app.post('/api/projects/:projectId/clarity-metrics/analyse', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    const metrics = await pool.query(
+      'SELECT * FROM clarity_metrics WHERE project_id=$1 ORDER BY sessions DESC LIMIT 30',
+      [projectId]
+    );
+    if (!metrics.rows.length) return res.status(400).json({ error: 'No Clarity data. Fetch metrics first.' });
+
+    const metricsData = metrics.rows.map(m => ({
+      url: m.page_url,
+      title: m.page_title,
+      sessions: m.sessions,
+      dead_clicks: m.dead_clicks,
+      rage_clicks: m.rage_clicks,
+      scroll_depth: m.scroll_depth,
+      quick_backs: m.quick_backs,
+      excessive_scrolls: m.excessive_scrolls,
+      engagement_time: m.engagement_time,
+      score: m.score,
+    }));
+
+    const prompt = `You are a conversion rate optimisation (CRO) expert analysing Microsoft Clarity user behaviour data for "${project.business_name || project.name}" (${project.domain}).
+
+Here is the user behaviour data per page (last 3 days):
+
+${JSON.stringify(metricsData, null, 2)}
+
+METRIC DEFINITIONS:
+- Dead clicks: users clicking non-clickable elements (missing CTAs, unlinked text, images that look like buttons)
+- Rage clicks: users repeatedly clicking something that isn't working (broken links, slow-loading elements, frustration)
+- Quick backs: users who land and immediately go back (wrong page, misleading title, bad UX)
+- Scroll depth: % of page content users actually see (low = content below the fold is never seen)
+- Excessive scrolls: users scrolling up and down searching for something (confusing layout, hard to find info)
+- Engagement time: seconds spent actively interacting with the page
+
+ANALYSE the data and return a JSON array of findings. For each finding:
+- Focus on actionable, specific issues — not generic advice
+- Reference the exact page URL and metrics
+- Prioritise by impact (high-traffic pages with bad metrics first)
+- Consider what the page's purpose is (homepage = conversions, service page = calls, contact = form fills)
+
+Return ONLY a valid JSON array, no markdown:
+[
+  {
+    "title": "Short descriptive title",
+    "description": "What the data shows and why it matters",
+    "recommendation": "Specific action to take",
+    "severity": "critical|high|medium|low",
+    "page_url": "the affected URL",
+    "category": "Dead Clicks|Rage Clicks|Scroll Depth|Quick Backs|Engagement|Excessive Scrolling"
+  }
+]
+
+Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics relative to their traffic.`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const aiText = aiResp.content[0]?.text || '[]';
+    let findings;
+    try {
+      findings = JSON.parse(aiText);
+    } catch (e) {
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      findings = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+    }
+
+    // Save findings to audit_findings
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, type, status, report) VALUES ($1, 'clarity', 'completed', $2) RETURNING id`,
+      [projectId, JSON.stringify({ metrics: metricsData, findings_count: findings.length })]
+    );
+    const auditId = auditRes.rows[0].id;
+
+    let savedCount = 0;
+    for (const f of findings) {
+      await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, status, current_value, target_value)
+         VALUES ($1, $2, 'clarity', $3, $4, $5, $6, $7, 'approved', $8, $9)`,
+        [projectId, auditId, f.category || 'User Behaviour', f.title, f.description, f.recommendation, f.severity || 'medium', f.page_url || '', 'Improve conversion']
+      );
+
+      // Auto-create action item
+      await pool.query(
+        `INSERT INTO action_items (project_id, title, description, type, priority, status, category, pages_affected)
+         VALUES ($1, $2, $3, 'manual', $4, 'todo', $5, $6)`,
+        [projectId, f.title, f.recommendation, f.severity === 'critical' ? 'high' : f.severity === 'high' ? 'high' : 'medium', f.category || 'User Behaviour', f.page_url || '']
+      );
+      savedCount++;
+    }
+
+    console.log(`[clarity] AI analysis: ${findings.length} findings, ${savedCount} action items for project ${projectId}`);
+    res.json({ ok: true, findings, audit_id: auditId });
+  } catch (e) {
+    console.error('[clarity] Analysis error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
