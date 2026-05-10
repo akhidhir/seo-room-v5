@@ -4008,6 +4008,17 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
+// Debug: test what a directory page returns from server
+app.get('/api/debug/fetch-page', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'url param required' });
+  try {
+    const html = await fetchPage(url, 10000);
+    if (!html) return res.json({ status: 'null', length: 0, preview: '' });
+    res.json({ status: 'ok', length: html.length, preview: html.substring(0, 1000), includes_car_key: html.toLowerCase().includes('car key rescue') });
+  } catch (e) { res.json({ error: e.message }); }
+});
+
 // Helper: fetch a URL with timeout, return HTML text or null
 async function fetchPage(url, timeoutMs = 8000) {
   const controller = new AbortController();
@@ -4048,19 +4059,29 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     const bizLower = businessName.toLowerCase();
     const bizPhone = project.phone || '';
 
-    console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain})`);
+    console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain}) phone=${bizPhone}`);
 
     // ── PHASE 1: Direct HTTP checks — fetch each directory's search page ──
     // Much more accurate than Google's site: operator
     const directChecks = {
       'Yellow Pages Australia': async () => {
-        const html = await fetchPage(`https://www.yellowpages.com.au/find/${encodeURIComponent(bizSlug)}/${locSlug}-wa`);
-        if (!html) return null;
-        if (html.toLowerCase().includes(bizLower)) {
-          // Extract listing URL from HTML
-          const linkMatch = html.match(/href="(\/[^"]*?)"\s[^>]*class="[^"]*listing-name/i) || html.match(/href="(\/[^"]*?)"[^>]*>\s*Car Key/i);
-          const listingPath = linkMatch ? linkMatch[1] : null;
-          return { status: 'listed', listing_url: listingPath ? `https://www.yellowpages.com.au${listingPath}` : `https://www.yellowpages.com.au/find/${encodeURIComponent(bizSlug)}/${locSlug}-wa`, notes: 'Found via direct Yellow Pages search' };
+        // Try multiple YP URL patterns
+        const ypUrls = [
+          `https://www.yellowpages.com.au/find/${bizSlug}/${locSlug}-wa`,
+          `https://www.yellowpages.com.au/${locSlug}-wa/${bizSlug}`,
+          `https://www.yellowpages.com.au/find/${encodeURIComponent(businessName)}/${locSlug}+wa`,
+        ];
+        for (const ypUrl of ypUrls) {
+          const html = await fetchPage(ypUrl);
+          if (!html) continue;
+          // Check for business name, phone, or domain in HTML
+          const htmlLower = html.toLowerCase();
+          const found = htmlLower.includes(bizLower) || (bizPhone && html.includes(bizPhone.replace(/\s/g, ''))) || (domain && htmlLower.includes(domain.toLowerCase()));
+          if (found && !htmlLower.includes('captcha') && !htmlLower.includes('robot')) {
+            const linkMatch = html.match(/href="(\/[^"]*?listing[^"]*?)"/i);
+            const listingPath = linkMatch ? linkMatch[1] : null;
+            return { status: 'listed', listing_url: listingPath ? `https://www.yellowpages.com.au${listingPath}` : ypUrl, notes: 'Found via direct Yellow Pages search' };
+          }
         }
         return null;
       },
