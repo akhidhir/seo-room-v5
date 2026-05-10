@@ -666,7 +666,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/fetch-page'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -4026,7 +4026,7 @@ app.get('/api/debug/fetch-page', async (req, res) => {
   } catch (e) { res.json({ error: e.message, type: e.name }); }
 });
 
-// Helper: fetch a URL with timeout, return HTML text or null
+// Helper: fetch a URL with timeout, return {html, blocked} or null
 async function fetchPage(url, timeoutMs = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -4037,9 +4037,13 @@ async function fetchPage(url, timeoutMs = 8000) {
       redirect: 'follow',
     });
     clearTimeout(timer);
-    if (!resp.ok) return null;
     const text = await resp.text();
-    return text;
+    // Detect Cloudflare/bot blocks
+    if (resp.status === 403 || text.includes('Cloudflare') || text.includes('you have been blocked') || text.includes('Checking you\'re a human') || text.includes('captcha')) {
+      return { html: null, blocked: true };
+    }
+    if (!resp.ok) return null;
+    return { html: text, blocked: false };
   } catch (e) {
     clearTimeout(timer);
     return null;
@@ -4072,85 +4076,91 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     // Much more accurate than Google's site: operator
     const directChecks = {
       'Yellow Pages Australia': async () => {
-        // Try multiple YP URL patterns
-        const ypUrls = [
-          `https://www.yellowpages.com.au/find/${bizSlug}/${locSlug}-wa`,
-          `https://www.yellowpages.com.au/${locSlug}-wa/${bizSlug}`,
-          `https://www.yellowpages.com.au/find/${encodeURIComponent(businessName)}/${locSlug}+wa`,
-        ];
-        for (const ypUrl of ypUrls) {
-          const html = await fetchPage(ypUrl);
-          if (!html) continue;
-          // Check for business name, phone, or domain in HTML
-          const htmlLower = html.toLowerCase();
-          const found = htmlLower.includes(bizLower) || (bizPhone && html.includes(bizPhone.replace(/\s/g, ''))) || (domain && htmlLower.includes(domain.toLowerCase()));
-          if (found && !htmlLower.includes('captcha') && !htmlLower.includes('robot')) {
-            const linkMatch = html.match(/href="(\/[^"]*?listing[^"]*?)"/i);
-            const listingPath = linkMatch ? linkMatch[1] : null;
-            return { status: 'listed', listing_url: listingPath ? `https://www.yellowpages.com.au${listingPath}` : ypUrl, notes: 'Found via direct Yellow Pages search' };
-          }
+        const r = await fetchPage(`https://www.yellowpages.com.au/find/${bizSlug}/${locSlug}-wa`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Cloudflare blocked — verify manually' };
+        if (r.html && (r.html.toLowerCase().includes(bizLower) || (bizPhone && r.html.includes(bizPhone.replace(/\s/g, ''))))) {
+          return { status: 'listed', listing_url: `https://www.yellowpages.com.au/find/${bizSlug}/${locSlug}-wa`, notes: 'Found via direct Yellow Pages search' };
         }
         return null;
       },
       'True Local': async () => {
-        const html = await fetchPage(`https://www.truelocal.com.au/search/${encodeURIComponent(bizSlug)}/${locSlug}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
-          return { status: 'listed', listing_url: `https://www.truelocal.com.au/search/${encodeURIComponent(bizSlug)}/${locSlug}`, notes: 'Found via direct True Local search' };
+        const r = await fetchPage(`https://www.truelocal.com.au/search/${bizSlug}/${locSlug}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Cloudflare blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.truelocal.com.au/search/${bizSlug}/${locSlug}`, notes: 'Found via direct True Local search' };
         }
         return null;
       },
       'Yelp Australia': async () => {
-        const html = await fetchPage(`https://www.yelp.com.au/search?find_desc=${encodeURIComponent(businessName)}&find_loc=${encodeURIComponent(locationShort + ', WA')}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.yelp.com.au/search?find_desc=${encodeURIComponent(businessName)}&find_loc=${encodeURIComponent(locationShort + ', WA')}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.yelp.com.au/search?find_desc=${encodeURIComponent(businessName)}&find_loc=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Yelp search' };
         }
         return null;
       },
       'Hotfrog': async () => {
-        const html = await fetchPage(`https://www.hotfrog.com.au/search/au/${encodeURIComponent(locSlug)}/${encodeURIComponent(bizSlug)}`);
-        if (html && html.toLowerCase().includes(bizLower) && !html.includes('Checking you\'re a human')) {
-          return { status: 'listed', listing_url: `https://www.hotfrog.com.au/search/au/${encodeURIComponent(locSlug)}/${encodeURIComponent(bizSlug)}`, notes: 'Found via direct Hotfrog search' };
+        const r = await fetchPage(`https://www.hotfrog.com.au/search/au/${locSlug}/${bizSlug}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.hotfrog.com.au/search/au/${locSlug}/${bizSlug}`, notes: 'Found via direct Hotfrog search' };
         }
         return null;
       },
       'Localsearch': async () => {
-        const html = await fetchPage(`https://www.localsearch.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.localsearch.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.localsearch.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Localsearch search' };
         }
         return null;
       },
       'Word of Mouth': async () => {
-        const html = await fetchPage(`https://www.wordofmouth.com.au/search?keyword=${encodeURIComponent(businessName)}&location=${encodeURIComponent(locationShort)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.wordofmouth.com.au/search?keyword=${encodeURIComponent(businessName)}&location=${encodeURIComponent(locationShort)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.wordofmouth.com.au/search?keyword=${encodeURIComponent(businessName)}&location=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Word of Mouth search' };
         }
         return null;
       },
       'Start Local': async () => {
-        const html = await fetchPage(`https://www.startlocal.com.au/search/?q=${encodeURIComponent(businessName)}&l=${encodeURIComponent(locationShort)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.startlocal.com.au/search/?q=${encodeURIComponent(businessName)}&l=${encodeURIComponent(locationShort)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.startlocal.com.au/search/?q=${encodeURIComponent(businessName)}&l=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Start Local search' };
         }
         return null;
       },
       'dLook': async () => {
-        const html = await fetchPage(`https://www.dlook.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.dlook.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.dlook.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`, notes: 'Found via direct dLook search' };
         }
         return null;
       },
       'Local Business Guide': async () => {
-        const html = await fetchPage(`https://www.localbusinessguide.com.au/search?q=${encodeURIComponent(businessName)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://www.localbusinessguide.com.au/search?q=${encodeURIComponent(businessName)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://www.localbusinessguide.com.au/search?q=${encodeURIComponent(businessName)}`, notes: 'Found via direct Local Business Guide search' };
         }
         return null;
       },
       'Foursquare': async () => {
-        const html = await fetchPage(`https://foursquare.com/explore?mode=url&near=${encodeURIComponent(locationShort)}&q=${encodeURIComponent(businessName)}`);
-        if (html && html.toLowerCase().includes(bizLower)) {
+        const r = await fetchPage(`https://foursquare.com/explore?mode=url&near=${encodeURIComponent(locationShort)}&q=${encodeURIComponent(businessName)}`);
+        if (!r) return null;
+        if (r.blocked) return { status: 'not_checked', listing_url: null, notes: 'Bot blocked — verify manually' };
+        if (r.html && r.html.toLowerCase().includes(bizLower)) {
           return { status: 'listed', listing_url: `https://foursquare.com/explore?near=${encodeURIComponent(locationShort)}&q=${encodeURIComponent(businessName)}`, notes: 'Found via direct Foursquare search' };
         }
         return null;
@@ -4256,9 +4266,16 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         }
 
         // Priority 2: Direct HTTP check
+        let directResult = null;
+        let wasBlocked = false;
         if (directChecks[dir.name]) {
-          const r = await directChecks[dir.name]();
-          if (r) { results.push({ name: dir.name, ...r }); console.log(`[citations] ${dir.name}: FOUND (direct)`); continue; }
+          directResult = await directChecks[dir.name]();
+          if (directResult && directResult.status === 'listed') {
+            results.push({ name: dir.name, ...directResult });
+            console.log(`[citations] ${dir.name}: FOUND (direct)`);
+            continue;
+          }
+          if (directResult && directResult.status === 'not_checked') wasBlocked = true;
         }
 
         // Priority 3: Broad Google results
@@ -4268,7 +4285,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           continue;
         }
 
-        // Priority 4: Targeted site: search (no quotes — more relaxed) for Essential + Major directories
+        // Priority 4: Targeted site: search for Essential + Major directories
         if (SERPAPI_KEY && (dir.type === 'Essential' || dir.type === 'Major')) {
           const dirDomain = dir.url.replace(/^www\./, '');
           try {
@@ -4280,6 +4297,13 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
               continue;
             }
           } catch (e) { /* continue */ }
+        }
+
+        // If blocked by Cloudflare and no Google results, mark as not_checked
+        if (wasBlocked) {
+          results.push({ name: dir.name, status: 'not_checked', listing_url: null, notes: 'Site blocked server access — verify manually' });
+          console.log(`[citations] ${dir.name}: BLOCKED — not_checked`);
+          continue;
         }
 
         // Not found anywhere
