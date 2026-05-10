@@ -4008,6 +4008,26 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
+// Helper: fetch a URL with timeout, return HTML text or null
+async function fetchPage(url, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      redirect: 'follow',
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const text = await resp.text();
+    return text;
+  } catch (e) {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
 // Scan all directories to check if business is listed
 app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
   const { projectId } = req.params;
@@ -4018,48 +4038,121 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     const businessName = project.business_name || project.name || '';
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    if (!SERPAPI_KEY) return res.status(400).json({ error: 'SerpAPI key not configured' });
     if (!businessName) return res.status(400).json({ error: 'Business name required in Project Settings' });
 
     const location = project.location || '';
+    const locationShort = (location || '').split(',')[0].trim();
     const gbpPlaceId = project.gbp_location_id || '';
+    const bizSlug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+    const locSlug = locationShort.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+    const bizLower = businessName.toLowerCase();
+    const bizPhone = project.phone || '';
 
     console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain})`);
 
-    // Platforms that can't be checked via site: search — detect differently
+    // ── PHASE 1: Direct HTTP checks — fetch each directory's search page ──
+    // Much more accurate than Google's site: operator
+    const directChecks = {
+      'Yellow Pages Australia': async () => {
+        const html = await fetchPage(`https://www.yellowpages.com.au/find/${encodeURIComponent(bizSlug)}/${locSlug}-wa`);
+        if (!html) return null;
+        if (html.toLowerCase().includes(bizLower)) {
+          // Extract listing URL from HTML
+          const linkMatch = html.match(/href="(\/[^"]*?)"\s[^>]*class="[^"]*listing-name/i) || html.match(/href="(\/[^"]*?)"[^>]*>\s*Car Key/i);
+          const listingPath = linkMatch ? linkMatch[1] : null;
+          return { status: 'listed', listing_url: listingPath ? `https://www.yellowpages.com.au${listingPath}` : `https://www.yellowpages.com.au/find/${encodeURIComponent(bizSlug)}/${locSlug}-wa`, notes: 'Found via direct Yellow Pages search' };
+        }
+        return null;
+      },
+      'True Local': async () => {
+        const html = await fetchPage(`https://www.truelocal.com.au/search/${encodeURIComponent(bizSlug)}/${locSlug}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.truelocal.com.au/search/${encodeURIComponent(bizSlug)}/${locSlug}`, notes: 'Found via direct True Local search' };
+        }
+        return null;
+      },
+      'Yelp Australia': async () => {
+        const html = await fetchPage(`https://www.yelp.com.au/search?find_desc=${encodeURIComponent(businessName)}&find_loc=${encodeURIComponent(locationShort + ', WA')}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.yelp.com.au/search?find_desc=${encodeURIComponent(businessName)}&find_loc=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Yelp search' };
+        }
+        return null;
+      },
+      'Hotfrog': async () => {
+        const html = await fetchPage(`https://www.hotfrog.com.au/search/au/${encodeURIComponent(locSlug)}/${encodeURIComponent(bizSlug)}`);
+        if (html && html.toLowerCase().includes(bizLower) && !html.includes('Checking you\'re a human')) {
+          return { status: 'listed', listing_url: `https://www.hotfrog.com.au/search/au/${encodeURIComponent(locSlug)}/${encodeURIComponent(bizSlug)}`, notes: 'Found via direct Hotfrog search' };
+        }
+        return null;
+      },
+      'Localsearch': async () => {
+        const html = await fetchPage(`https://www.localsearch.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.localsearch.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Localsearch search' };
+        }
+        return null;
+      },
+      'Word of Mouth': async () => {
+        const html = await fetchPage(`https://www.wordofmouth.com.au/search?keyword=${encodeURIComponent(businessName)}&location=${encodeURIComponent(locationShort)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.wordofmouth.com.au/search?keyword=${encodeURIComponent(businessName)}&location=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Word of Mouth search' };
+        }
+        return null;
+      },
+      'Start Local': async () => {
+        const html = await fetchPage(`https://www.startlocal.com.au/search/?q=${encodeURIComponent(businessName)}&l=${encodeURIComponent(locationShort)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.startlocal.com.au/search/?q=${encodeURIComponent(businessName)}&l=${encodeURIComponent(locationShort)}`, notes: 'Found via direct Start Local search' };
+        }
+        return null;
+      },
+      'dLook': async () => {
+        const html = await fetchPage(`https://www.dlook.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.dlook.com.au/search?q=${encodeURIComponent(businessName)}&where=${encodeURIComponent(locationShort)}`, notes: 'Found via direct dLook search' };
+        }
+        return null;
+      },
+      'Local Business Guide': async () => {
+        const html = await fetchPage(`https://www.localbusinessguide.com.au/search?q=${encodeURIComponent(businessName)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://www.localbusinessguide.com.au/search?q=${encodeURIComponent(businessName)}`, notes: 'Found via direct Local Business Guide search' };
+        }
+        return null;
+      },
+      'Foursquare': async () => {
+        const html = await fetchPage(`https://foursquare.com/explore?mode=url&near=${encodeURIComponent(locationShort)}&q=${encodeURIComponent(businessName)}`);
+        if (html && html.toLowerCase().includes(bizLower)) {
+          return { status: 'listed', listing_url: `https://foursquare.com/explore?near=${encodeURIComponent(locationShort)}&q=${encodeURIComponent(businessName)}`, notes: 'Found via direct Foursquare search' };
+        }
+        return null;
+      },
+    };
+
+    // ── PHASE 2: Special platform detection (GBP, Facebook, LinkedIn, Apple, Bing) ──
     const specialPlatforms = {
       'Google Business Profile': async () => {
-        // If GBP is connected or Place ID is set, it's listed
         if (gbpPlaceId) return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'Verified: GBP Place ID connected in Project Settings' };
-        // Otherwise search Google Maps
         try {
           const mapsData = await serpApiSearch({ engine: 'google_maps', q: `${businessName} ${location}`, api_key: SERPAPI_KEY });
-          const match = (mapsData.local_results || []).find(r => r.title?.toLowerCase().includes(businessName.toLowerCase().split(' ')[0]) || (r.website && r.website.includes(domain)));
-          if (match) return { status: 'listed', listing_url: match.place_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id}` : match.link, notes: `Found on Google Maps: ${match.title}, ${match.rating || '?'} stars, ${match.reviews || 0} reviews` };
-        } catch (e) {}
-        return null;
-      },
-      'Apple Maps (Apple Business Connect)': async () => {
-        // Can't check programmatically — search Google for apple maps listing
-        try {
-          const data = await serpApiSearch({ engine: 'google', q: `site:maps.apple.com "${businessName}"`, num: 3, api_key: SERPAPI_KEY });
-          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: `Found on Apple Maps` };
-        } catch (e) {}
-        return null;
-      },
-      'Bing Places': async () => {
-        try {
-          const data = await serpApiSearch({ engine: 'google', q: `site:bing.com/maps "${businessName}" ${location.split(',')[0] || ''}`, num: 3, api_key: SERPAPI_KEY });
-          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: `Found on Bing Maps` };
+          const match = (mapsData.local_results || []).find(r => r.title?.toLowerCase().includes(bizLower.split(' ')[0]) || (r.website && r.website.includes(domain)));
+          if (match) return { status: 'listed', listing_url: match.place_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id}` : match.link, notes: `Found: ${match.title}, ${match.rating || '?'}★, ${match.reviews || 0} reviews` };
         } catch (e) {}
         return null;
       },
       'Facebook Business': async () => {
-        try {
-          const data = await serpApiSearch({ engine: 'google', q: `site:facebook.com "${businessName}" ${location.split(',')[0] || ''}`, num: 5, api_key: SERPAPI_KEY });
-          const match = (data.organic_results || []).find(r => r.link?.includes('facebook.com/') && !r.link?.includes('/posts/') && !r.link?.includes('/photos/'));
-          if (match) return { status: 'listed', listing_url: match.link, notes: `Found: ${match.title || ''}`.trim() };
-        } catch (e) {}
+        // Try multiple search strategies
+        const queries = [
+          `site:facebook.com "${businessName}" ${locationShort}`,
+          `site:facebook.com "${domain.replace('.com.au', '').replace('.com', '')}"`,
+        ];
+        for (const q of queries) {
+          try {
+            const data = await serpApiSearch({ engine: 'google', q, num: 5, api_key: SERPAPI_KEY });
+            const match = (data.organic_results || []).find(r => r.link?.includes('facebook.com/') && !r.link?.includes('/posts/') && !r.link?.includes('/photos/') && !r.link?.includes('/events/'));
+            if (match) return { status: 'listed', listing_url: match.link, notes: `Found: ${match.title || ''}`.trim() };
+          } catch (e) {}
+        }
         return null;
       },
       'LinkedIn Company': async () => {
@@ -4070,65 +4163,86 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         } catch (e) {}
         return null;
       },
+      'Apple Maps (Apple Business Connect)': async () => {
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:maps.apple.com "${businessName}"`, num: 3, api_key: SERPAPI_KEY });
+          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: 'Found on Apple Maps' };
+        } catch (e) {}
+        return null;
+      },
+      'Bing Places': async () => {
+        try {
+          const data = await serpApiSearch({ engine: 'google', q: `site:bing.com/maps "${businessName}" ${locationShort}`, num: 3, api_key: SERPAPI_KEY });
+          if ((data.organic_results || []).length > 0) return { status: 'listed', listing_url: data.organic_results[0].link, notes: 'Found on Bing Maps' };
+        } catch (e) {}
+        return null;
+      },
     };
 
+    // ── PHASE 3: Broad Google search — catch any directory listings in Google results ──
+    const foundViaGoogle = {};
+    if (SERPAPI_KEY) {
+      try {
+        console.log(`[citations] Phase 3: Broad Google search for "${businessName}" ${locationShort}`);
+        const broadData = await serpApiSearch({ engine: 'google', q: `"${businessName}" ${locationShort}`, num: 50, api_key: SERPAPI_KEY });
+        for (const r of (broadData.organic_results || [])) {
+          if (!r.link) continue;
+          for (const dir of AUSTRALIAN_DIRECTORIES) {
+            const dd = dir.url.replace(/^www\./, '');
+            if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
+              foundViaGoogle[dir.name] = { url: r.link, snippet: r.snippet || r.title || '' };
+            }
+          }
+        }
+      } catch (e) { console.log('[citations] Broad search error:', e.message); }
+
+      // Also search by domain
+      if (domain) {
+        try {
+          const domData = await serpApiSearch({ engine: 'google', q: `"${domain}" ${locationShort}`, num: 50, api_key: SERPAPI_KEY });
+          for (const r of (domData.organic_results || [])) {
+            if (!r.link) continue;
+            for (const dir of AUSTRALIAN_DIRECTORIES) {
+              const dd = dir.url.replace(/^www\./, '');
+              if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
+                foundViaGoogle[dir.name] = { url: r.link, snippet: `Via domain. ${r.snippet || r.title || ''}`.trim() };
+              }
+            }
+          }
+        } catch (e) { console.log('[citations] Domain search error:', e.message); }
+      }
+      console.log(`[citations] Broad search found ${Object.keys(foundViaGoogle).length} directories`);
+    }
+
+    // ── Combine all results ──
     const results = [];
     for (const dir of AUSTRALIAN_DIRECTORIES) {
       try {
-        // Use special detection for platforms that don't work with site: search
+        // Priority 1: Special platforms
         if (specialPlatforms[dir.name]) {
-          const specialResult = await specialPlatforms[dir.name]();
-          if (specialResult) {
-            results.push({ name: dir.name, ...specialResult });
-            console.log(`[citations] ${dir.name}: FOUND (special)`);
-            continue;
-          }
-          // If special check found nothing, mark as not listed
+          const r = await specialPlatforms[dir.name]();
+          if (r) { results.push({ name: dir.name, ...r }); console.log(`[citations] ${dir.name}: FOUND (special)`); continue; }
           results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: 'Not found via automated scan' });
           console.log(`[citations] ${dir.name}: NOT FOUND (special)`);
           continue;
         }
 
-        // Strategy: try 3 search approaches, stop on first match
-        const dirDomain = dir.url.replace(/^www\./, '');
-        const locationShort = (location || '').split(',')[0].trim();
-        let found = false;
-        let listingUrl = null;
-        let snippet = '';
-
-        // 1) site: operator with business name (most precise)
-        try {
-          const s1 = await serpApiSearch({ engine: 'google', q: `site:${dirDomain} "${businessName}"`, num: 5, api_key: SERPAPI_KEY });
-          const m1 = (s1.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
-          if (m1) { found = true; listingUrl = m1.link; snippet = m1.snippet || m1.title || ''; }
-        } catch (e) { /* continue */ }
-
-        // 2) site: operator with domain (catches listings that use website URL instead of business name)
-        if (!found && domain) {
-          try {
-            const s2 = await serpApiSearch({ engine: 'google', q: `site:${dirDomain} "${domain}"`, num: 5, api_key: SERPAPI_KEY });
-            const m2 = (s2.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
-            if (m2) { found = true; listingUrl = m2.link; snippet = `Found via domain. ${m2.snippet || m2.title || ''}`.trim(); }
-          } catch (e) { /* continue */ }
+        // Priority 2: Direct HTTP check
+        if (directChecks[dir.name]) {
+          const r = await directChecks[dir.name]();
+          if (r) { results.push({ name: dir.name, ...r }); console.log(`[citations] ${dir.name}: FOUND (direct)`); continue; }
         }
 
-        // 3) Broad search: business name + directory domain + location (catches when site: misses)
-        if (!found) {
-          try {
-            const s3 = await serpApiSearch({ engine: 'google', q: `"${businessName}" ${dir.url} ${locationShort}`, num: 10, api_key: SERPAPI_KEY });
-            const m3 = (s3.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
-            if (m3) { found = true; listingUrl = m3.link; snippet = m3.snippet || m3.title || ''; }
-          } catch (e) { /* continue */ }
+        // Priority 3: Broad Google results
+        if (foundViaGoogle[dir.name]) {
+          results.push({ name: dir.name, status: 'listed', listing_url: foundViaGoogle[dir.name].url, notes: `Auto-detected: ${foundViaGoogle[dir.name].snippet}`.substring(0, 200) });
+          console.log(`[citations] ${dir.name}: FOUND (google)`);
+          continue;
         }
 
-        results.push({
-          name: dir.name,
-          status: found ? 'listed' : 'not_listed',
-          listing_url: listingUrl,
-          notes: found ? `Auto-detected: ${snippet}`.substring(0, 200) : '',
-        });
-
-        console.log(`[citations] ${dir.name}: ${found ? 'FOUND' : 'NOT FOUND'}`);
+        // Not found anywhere
+        results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: 'Not found via automated scan' });
+        console.log(`[citations] ${dir.name}: NOT FOUND`);
       } catch (e) {
         console.log(`[citations] Error checking ${dir.name}:`, e.message);
         results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: `Scan error: ${e.message}` });
