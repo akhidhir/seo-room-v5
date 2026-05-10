@@ -3870,6 +3870,9 @@
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{f.label}</div>
                           {f.done && valueMap[f.key] && <div style={{ fontSize: 14, fontWeight: 600, color: '#22c55e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{valueMap[f.key]}</div>}
+                          {f.done && f.key === 'hasAddress' && gbpC.addressHidden && (
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b', marginTop: 2 }}>Address hidden — normal for service-area businesses</div>
+                          )}
                           {!f.done && f.key === 'hasAddress' && (
                             <div>
                               <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginTop: 2 }}>No address found — CRITICAL</div>

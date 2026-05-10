@@ -19212,9 +19212,12 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       profile?.storefrontAddress?.administrativeArea,
       profile?.storefrontAddress?.postalCode,
     ].filter(Boolean).join(', ');
+    // Service-area businesses hide their address — that's normal, not a problem
+    const isServiceArea = project.is_local_business !== false && gbpSuburbs.length > 0 && !gbpAddress;
     const gbpCompleteness = {
       hasName: !!profile?.title,
-      hasAddress: !!gbpAddress,
+      hasAddress: !!gbpAddress || isServiceArea,
+      addressHidden: isServiceArea,
       hasDescription: !!profile?.profile?.description,
       hasPhone: !!profile?.phoneNumbers?.primaryPhone,
       hasWebsite: !!profile?.websiteUri,
