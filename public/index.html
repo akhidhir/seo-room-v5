@@ -19620,7 +19620,7 @@
               businessName: data.project.business_name || data.project.businessName || '',
               industry: data.project.industry || '',
               location: data.project.location || '',
-              serviceAreas: data.project.service_areas || data.project.serviceAreas || [],
+              serviceAreas: (data.project.service_areas || data.project.serviceAreas || []).map(a => typeof a === 'string' ? { name: a, distance: 20 } : a),
               competitors: data.project.competitors || [],
               isLocalBusiness: data.project.is_local_business !== false,
               isElementorSite: data.project.is_elementor_site !== false,
@@ -20095,7 +20095,10 @@
 
             {formData.serviceAreas.length > 0 && (
               <div style={{ marginBottom: '16px' }}>
-                {formData.serviceAreas.map((area, idx) => (
+                {formData.serviceAreas.map((area, idx) => {
+                  const areaName = typeof area === 'string' ? area : (area.name || '');
+                  const areaDist = typeof area === 'string' ? null : area.distance;
+                  return (
                   <div
                     key={idx}
                     style={{
@@ -20109,7 +20112,7 @@
                     }}
                   >
                     <div>
-                      <strong>{area.name}</strong> <span style={{ color: 'var(--text2)', fontSize: '12px' }}>({area.distance}km)</span>
+                      <strong>{areaName}</strong> {areaDist != null && <span style={{ color: 'var(--text2)', fontSize: '12px' }}>({areaDist}km)</span>}
                     </div>
                     <button
                       className="btn btn-danger btn-small"
@@ -20118,7 +20121,7 @@
                       <i className="fas fa-trash"></i>
                     </button>
                   </div>
-                ))}
+                )})}
               </div>
             )}
 
