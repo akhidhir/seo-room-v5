@@ -4172,23 +4172,27 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     let detectedPhone = '';
     const specialPlatforms = {
       'Google Business Profile': async () => {
-        if (gbpPlaceId) {
-          // Fetch place details to get phone number
-          try {
-            const placeData = await serpApiSearch({ engine: 'google_maps', q: `${businessName} ${location}`, api_key: SERPAPI_KEY });
-            const match = (placeData.local_results || []).find(r => r.title?.toLowerCase().includes(bizLower.split(' ')[0]) || (r.website && r.website.includes(domain)));
-            if (match?.phone) detectedPhone = match.phone.replace(/[\s\-()]/g, '');
-          } catch (e) {}
-          return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'Verified: GBP Place ID connected in Project Settings' };
-        }
+        // Always search Maps to get phone number for citation checks
         try {
           const mapsData = await serpApiSearch({ engine: 'google_maps', q: `${businessName} ${location}`, api_key: SERPAPI_KEY });
           const match = (mapsData.local_results || []).find(r => r.title?.toLowerCase().includes(bizLower.split(' ')[0]) || (r.website && r.website.includes(domain)));
+          if (match?.phone) {
+            detectedPhone = match.phone.replace(/[\s\-()]/g, '');
+            console.log(`[citations] Detected phone from Maps: ${match.phone} → ${detectedPhone}`);
+          }
+          // Also try place_results for single result
+          if (!detectedPhone && mapsData.place_results?.phone) {
+            detectedPhone = mapsData.place_results.phone.replace(/[\s\-()]/g, '');
+            console.log(`[citations] Detected phone from place_results: ${detectedPhone}`);
+          }
+          if (gbpPlaceId) {
+            return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'Verified: GBP Place ID connected in Project Settings' };
+          }
           if (match) {
-            if (match.phone) detectedPhone = match.phone.replace(/[\s\-()]/g, '');
             return { status: 'listed', listing_url: match.place_id ? `https://www.google.com/maps/place/?q=place_id:${match.place_id}` : match.link, notes: `Found: ${match.title}, ${match.rating || '?'}★, ${match.reviews || 0} reviews` };
           }
-        } catch (e) {}
+        } catch (e) { console.log(`[citations] GBP Maps search error:`, e.message); }
+        if (gbpPlaceId) return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'GBP Place ID connected' };
         return null;
       },
       'Facebook Business': async () => {
@@ -4264,6 +4268,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
       }
       // Search by phone number — catches directory listings that Google indexed with the phone
       const phoneToSearch = detectedPhone || bizPhone.replace(/[\s\-()]/g, '');
+      console.log(`[citations] Phone to search: "${phoneToSearch}" (detected=${detectedPhone}, project=${bizPhone})`);
       if (phoneToSearch && phoneToSearch.length >= 8) {
         try {
           console.log(`[citations] Phone search: "${phoneToSearch}"`);
