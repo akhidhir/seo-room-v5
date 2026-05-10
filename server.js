@@ -4240,6 +4240,20 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           continue;
         }
 
+        // Priority 4: Targeted site: search (no quotes — more relaxed) for Essential + Major directories
+        if (SERPAPI_KEY && (dir.type === 'Essential' || dir.type === 'Major')) {
+          const dirDomain = dir.url.replace(/^www\./, '');
+          try {
+            const s4 = await serpApiSearch({ engine: 'google', q: `site:${dirDomain} ${businessName} ${locationShort}`, num: 10, api_key: SERPAPI_KEY });
+            const m4 = (s4.organic_results || []).find(r => r.link && r.link.includes(dirDomain));
+            if (m4) {
+              results.push({ name: dir.name, status: 'listed', listing_url: m4.link, notes: `Auto-detected: ${m4.snippet || m4.title || ''}`.substring(0, 200) });
+              console.log(`[citations] ${dir.name}: FOUND (site: fallback)`);
+              continue;
+            }
+          } catch (e) { /* continue */ }
+        }
+
         // Not found anywhere
         results.push({ name: dir.name, status: 'not_listed', listing_url: null, notes: 'Not found via automated scan' });
         console.log(`[citations] ${dir.name}: NOT FOUND`);
