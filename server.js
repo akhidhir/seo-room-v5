@@ -672,8 +672,6 @@ function optionalAuth(req, res, next) {
   // Allow invite routes without auth (client signup flow)
   if (req.path.match(/^\/api\/invite\//)) return next();
   if (whitelistPaths.includes(req.path)) return next();
-  // Allow debug endpoints temporarily
-  if (req.path.startsWith('/api/debug/')) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
   authMiddleware(req, res, next);
@@ -4033,20 +4031,6 @@ async function fetchPage(url, timeoutMs = 8000) {
     return null;
   }
 }
-
-// DEBUG: Test SerpAPI Maps search — REMOVE AFTER TESTING
-app.get('/api/debug/serpapi-test', async (req, res) => {
-  const q = req.query.q || 'Car Key Rescue Perth';
-  const placeId = req.query.place_id;
-  try {
-    const params = { engine: 'google_maps', api_key: SERPAPI_KEY };
-    if (placeId) { params.place_id = placeId; } else { params.q = q; }
-    const data = await serpApiSearch(params);
-    const lr = (data.local_results || []).slice(0, 3).map(r => ({ title: r.title, place_id: r.place_id, data_id: r.data_id, phone: r.phone, rating: r.rating, reviews: r.reviews, website: r.website, type: r.type }));
-    const pr = data.place_results ? { title: data.place_results.title, phone: data.place_results.phone, address: data.place_results.address, rating: data.place_results.rating, reviews: data.place_results.reviews, type: data.place_results.type, data_id: data.place_results.data_id, place_id: data.place_results.place_id } : null;
-    res.json({ query: placeId ? `place_id:${placeId}` : q, local_results: lr, place_results: pr });
-  } catch (e) { res.json({ error: e.message }); }
-});
 
 // Scan all directories to check if business is listed
 app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
