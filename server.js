@@ -666,7 +666,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/fetch-page'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
