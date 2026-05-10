@@ -4013,10 +4013,17 @@ app.get('/api/debug/fetch-page', async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: 'url param required' });
   try {
-    const html = await fetchPage(url, 10000);
-    if (!html) return res.json({ status: 'null', length: 0, preview: '' });
-    res.json({ status: 'ok', length: html.length, preview: html.substring(0, 1000), includes_car_key: html.toLowerCase().includes('car key rescue') });
-  } catch (e) { res.json({ error: e.message }); }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      redirect: 'follow',
+    });
+    clearTimeout(timer);
+    const html = await resp.text();
+    res.json({ httpStatus: resp.status, finalUrl: resp.url, length: html.length, preview: html.substring(0, 2000), includes_car_key: html.toLowerCase().includes('car key rescue') });
+  } catch (e) { res.json({ error: e.message, type: e.name }); }
 });
 
 // Helper: fetch a URL with timeout, return HTML text or null
