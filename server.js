@@ -4469,6 +4469,12 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
 
     const clarityData = await clarityResp.json();
     console.log(`[clarity] Got ${Array.isArray(clarityData) ? clarityData.length : 0} metric groups`);
+    console.log(`[clarity] Raw response keys:`, Array.isArray(clarityData) ? clarityData.map(g => g.metricName) : Object.keys(clarityData || {}));
+    if (Array.isArray(clarityData) && clarityData.length > 0) {
+      console.log(`[clarity] First group sample:`, JSON.stringify(clarityData[0]).substring(0, 500));
+    } else {
+      console.log(`[clarity] Full response (truncated):`, JSON.stringify(clarityData).substring(0, 1000));
+    }
 
     // Parse the Clarity response — it returns an array of metric groups
     // Each group has { metricName, information: [...] }
