@@ -5934,6 +5934,16 @@
           const data = await api(`/projects/${project.id}/audit-findings?pillar=gsc`);
           const list = Array.isArray(data) ? data : (data?.findings || []);
           setFindings(list.filter(f => f.pillar === 'gsc'));
+          // Also load latest audit summary from most recent completed GSC audit
+          try {
+            const auditsList = await api(`/projects/${project.id}/audits`);
+            const all = auditsList?.audits || [];
+            const latest = all.find(a => a.pillar === 'gsc' && a.status === 'completed' && a.audit_data);
+            if (latest) {
+              const ad = typeof latest.audit_data === 'string' ? JSON.parse(latest.audit_data) : latest.audit_data;
+              setSummary(ad);
+            }
+          } catch (e2) { /* summary is optional */ }
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       };
@@ -5996,7 +6006,14 @@
         const c = cfg[status] || cfg.new;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
-      const catColors = { 'Quick Win': '#22c55e', 'Low CTR': '#f97316', 'Zero Clicks': '#ef4444', 'Cannibalization': '#8b5cf6', 'Underperforming Page': '#f59e0b', 'Brand Dependency': '#ec4899', 'Indexing Issues': '#ef4444', 'Mobile Usability': '#3b82f6' };
+      const catColors = { 'Quick Win': '#22c55e', 'Low CTR': '#f97316', 'Zero Clicks': '#ef4444', 'Cannibalization': '#8b5cf6', 'Underperforming Page': '#f59e0b', 'Brand Dependency': '#ec4899', 'Indexing Issues': '#ef4444', 'Mobile Usability': '#3b82f6', 'Mobile Gap': '#06b6d4', 'Declining Keyword': '#ef4444', 'Growing Keyword': '#10b981', 'Sitemap Coverage': '#a855f7', 'Search Appearance': '#6366f1' };
+
+      const trendArrow = (val) => {
+        if (val == null) return null;
+        const color = val >= 0 ? '#22c55e' : '#ef4444';
+        const icon = val >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+        return <span style={{ fontSize: 13, fontWeight: 600, color, marginLeft: 6 }}><i className={`fas ${icon}`} style={{ fontSize: 11, marginRight: 3 }} />{Math.abs(val)}%</span>;
+      };
 
       // Review panel
       if (reviewFinding) {
@@ -6052,13 +6069,85 @@
             </div>
           </div>
 
+          {/* Stats cards */}
+          {summary && (<div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
+            {[
+              { label: 'Total Clicks', value: (summary.clicks || 0).toLocaleString(), change: summary.clicksChange, color: '#3b82f6', icon: 'fa-mouse-pointer' },
+              { label: 'Impressions', value: (summary.impressions || 0).toLocaleString(), change: summary.impressionsChange, color: '#8b5cf6', icon: 'fa-eye' },
+              { label: 'Avg Position', value: summary.avgPosition || '—', color: '#f97316', icon: 'fa-sort-numeric-up' },
+              { label: 'Avg CTR', value: summary.avgCtr != null ? summary.avgCtr + '%' : '—', color: '#22c55e', icon: 'fa-percentage' },
+            ].map((s, i) => (
+              <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: 1, marginBottom: 8 }}>
+                  <i className={`fas ${s.icon}`} style={{ marginRight: 6, color: s.color }} />{s.label}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}{s.change != null && trendArrow(s.change)}</div>
+                {s.change != null && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>vs prev 28 days</div>}
+              </div>
+            ))}
+          </div>)}
+
+          {/* Device split + Sitemaps row */}
+          {summary && (summary.device?.length > 0 || summary.sitemaps?.length > 0) && (<div style={{ display: 'grid', gridTemplateColumns: summary.device?.length > 0 && summary.sitemaps?.length > 0 ? '1fr 1fr' : '1fr', gap: 14, marginBottom: 20 }}>
+            {summary.device?.length > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)' }}>
+                <i className="fas fa-mobile-alt" style={{ marginRight: 8, color: '#06b6d4' }} />Device Performance
+              </div>
+              <table style={{ width: '100%', fontSize: 14 }}>
+                <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Device</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Clicks</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Impressions</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>CTR</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Avg Pos</th>
+                </tr></thead>
+                <tbody>{summary.device.map((d, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '10px 0', fontWeight: 600 }}><i className={`fas ${d.device === 'MOBILE' ? 'fa-mobile-alt' : d.device === 'TABLET' ? 'fa-tablet-alt' : 'fa-desktop'}`} style={{ marginRight: 8, color: d.device === 'MOBILE' ? '#06b6d4' : '#8b5cf6' }} />{d.device}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0' }}>{d.clicks.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0' }}>{d.impressions.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0', color: d.ctr < 0.02 ? '#ef4444' : '#22c55e' }}>{(d.ctr * 100).toFixed(1)}%</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0' }}>{d.position.toFixed(1)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>)}
+            {summary.sitemaps?.length > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)' }}>
+                <i className="fas fa-sitemap" style={{ marginRight: 8, color: '#a855f7' }} />Sitemaps
+              </div>
+              <table style={{ width: '100%', fontSize: 14 }}>
+                <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Sitemap</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Submitted</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Indexed</th>
+                  <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Status</th>
+                </tr></thead>
+                <tbody>{summary.sitemaps.map((sm, i) => {
+                  const submitted = (sm.contents || []).reduce((s, c) => s + (c.submitted || 0), 0);
+                  const indexed = (sm.contents || []).reduce((s, c) => s + (c.indexed || 0), 0);
+                  const filename = (sm.path || '').split('/').pop();
+                  const hasErrors = sm.errors > 0;
+                  return (<tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '10px 0', fontWeight: 500, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={sm.path}>{filename}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0' }}>{submitted}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0', color: submitted > 0 && indexed / submitted < 0.8 ? '#f59e0b' : '#22c55e' }}>{indexed}</td>
+                    <td style={{ textAlign: 'right', padding: '10px 0' }}>{hasErrors
+                      ? <span style={{ color: '#ef4444', fontWeight: 600 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />{sm.errors} errors</span>
+                      : <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" style={{ marginRight: 4 }} />OK</span>}</td>
+                  </tr>);
+                })}</tbody>
+              </table>
+            </div>)}
+          </div>)}
+
           {loading && (<div className="audit-loading-overlay"><span className="spinner-large"></span>
             <div className="audit-loading-text">Running GSC Audit</div>
             <div className="audit-loading-sub">Fetching Search Console data and analyzing keywords...</div></div>)}
 
           {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
 
-          {!loading && findings.length === 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '40px 28px', textAlign: 'center', marginBottom: 20 }}>
+          {!loading && findings.length === 0 && !summary && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '40px 28px', textAlign: 'center', marginBottom: 20 }}>
             <i className="fas fa-chart-line" style={{ fontSize: 40, color: 'var(--text3)', marginBottom: 16 }} />
             <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>No GSC Audit Data Yet</div>
             <div style={{ fontSize: 15, color: 'var(--text3)', maxWidth: 500, margin: '0 auto', lineHeight: 1.6 }}>
@@ -7084,6 +7173,7 @@
       const [lastChecked, setLastChecked] = useState(null);
       const [progress, setProgress] = useState(null); // { current, total }
       const [budget, setBudget] = useState(null); // { used, remaining, limit }
+      const [sitemaps, setSitemaps] = useState(null);
       const pollRef = React.useRef(null);
 
       const handleCompleted = (data) => {
@@ -7135,6 +7225,16 @@
           try {
             // Fetch budget
             try { const b = await api('/indexing/budget'); if (b.limit) setBudget(b); } catch {}
+            // Load sitemaps from latest GSC audit
+            try {
+              const auditsList = await api(`/projects/${project.id}/audits`);
+              const all = auditsList?.audits || [];
+              const latest = all.find(a => a.pillar === 'gsc' && a.status === 'completed' && a.audit_data);
+              if (latest) {
+                const ad = typeof latest.audit_data === 'string' ? JSON.parse(latest.audit_data) : latest.audit_data;
+                if (ad.sitemaps?.length > 0) setSitemaps(ad.sitemaps);
+              }
+            } catch {}
             const data = await api(`/projects/${project.id}/audits/indexing/latest`);
             if (data.status === 'running') {
               setLoading(true);
@@ -7272,6 +7372,39 @@
               </button>
             </div>
           </div>
+
+          {/* Sitemaps section */}
+          {sitemaps && sitemaps.length > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', marginBottom: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)' }}>
+              <i className="fas fa-sitemap" style={{ marginRight: 8, color: '#a855f7' }} />Submitted Sitemaps
+            </div>
+            <table style={{ width: '100%', fontSize: 14, borderCollapse: 'collapse' }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <th style={{ textAlign: 'left', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Sitemap</th>
+                <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Submitted</th>
+                <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Indexed</th>
+                <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Coverage</th>
+                <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Status</th>
+              </tr></thead>
+              <tbody>{sitemaps.map((sm, i) => {
+                const submitted = (sm.contents || []).reduce((s, c) => s + (c.submitted || 0), 0);
+                const indexed = (sm.contents || []).reduce((s, c) => s + (c.indexed || 0), 0);
+                const coverage = submitted > 0 ? (indexed / submitted * 100).toFixed(0) : '—';
+                const filename = (sm.path || '').split('/').pop();
+                return (<tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 0', fontWeight: 500 }} title={sm.path}>{filename}</td>
+                  <td style={{ textAlign: 'right', padding: '10px 0' }}>{submitted}</td>
+                  <td style={{ textAlign: 'right', padding: '10px 0' }}>{indexed}</td>
+                  <td style={{ textAlign: 'right', padding: '10px 0' }}>
+                    <span style={{ color: coverage !== '—' && parseInt(coverage) < 80 ? '#f59e0b' : '#22c55e', fontWeight: 600 }}>{coverage}{coverage !== '—' ? '%' : ''}</span>
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '10px 0' }}>{sm.errors > 0
+                    ? <span style={{ color: '#ef4444', fontWeight: 600 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />{sm.errors} errors</span>
+                    : <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" style={{ marginRight: 4 }} />OK</span>}</td>
+                </tr>);
+              })}</tbody>
+            </table>
+          </div>)}
 
           {loading && (
             <div className="audit-loading-overlay">

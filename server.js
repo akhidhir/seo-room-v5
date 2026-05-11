@@ -1587,22 +1587,25 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
     const PILLAR_MAP = {
       gbp_external: 'gbp_external', gbp: 'gbp_external',
       gbp_internal: 'gbp_internal',
-      gsc_agent: 'gsc_agent', gsc: 'gsc_agent',
+      gsc_agent: 'gsc', gsc: 'gsc',
       website: 'website', technical: 'website',
     };
-    const PILLAR_DISPLAY = { gbp_external: 'GBP', gbp_internal: 'GBP_Internal', gsc_agent: 'GSC', website: 'Website' };
+    const PILLAR_DISPLAY = { gbp_external: 'GBP', gbp_internal: 'GBP_Internal', gsc: 'GSC', gsc_agent: 'GSC', website: 'Website' };
     const VALID_CATS = {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
       GBP_Internal: ['Relevance > Description', 'Relevance > Categories', 'Relevance > Hours', 'Relevance > Services', 'Relevance > NAP', 'Relevance > Content', 'Relevance > Website', 'Proximity > Service Areas', 'Prominence > Reviews', 'Prominence > Posts', 'Prominence > Photos'],
-      GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+      GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
       Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
     };
     const ALIASES = {
-      'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
-      'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages', 'low ctr pages': 'Low CTR Pages',
-      'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages', 'zero-click pages': 'Zero-Click Pages',
-      'underperforming page': 'Underperforming Pages', 'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+      'quick win': 'Quick Win', 'quick wins': 'Quick Win',
+      'low ctr': 'Low CTR', 'low ctr page': 'Low CTR', 'low ctr pages': 'Low CTR',
+      'zero click': 'Zero Clicks', 'zero clicks': 'Zero Clicks', 'zero-click page': 'Zero Clicks', 'zero-click pages': 'Zero Clicks',
+      'underperforming page': 'Underperforming Page', 'underperforming pages': 'Underperforming Page', 'underperforming': 'Underperforming Page',
       'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+      'mobile gap': 'Mobile Gap', 'declining keyword': 'Declining Keyword', 'growing keyword': 'Growing Keyword',
+      'sitemap coverage': 'Sitemap Coverage', 'search appearance': 'Search Appearance',
+      'brand dependency': 'Brand Dependency', 'indexing issues': 'Indexing Issues', 'mobile usability': 'Mobile Usability',
       'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
       'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
       'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation', 'reviews & reputation': 'Reviews & Reputation',
@@ -1616,8 +1619,8 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
       'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
       'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health', 'security': 'Site Health', 'mobile': 'Site Health', 'structure': 'Site Health', 'links': 'Crawlability',
-      'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
-      'brand dependency': 'Quick Wins', 'manual': null,
+      'indexing': 'Crawlability',
+      'manual': null,
       // GBP internal "Pillar > Sub" mappings
       'proximity > maps ranking': 'Suburb Coverage', 'proximity > geo-targeting': 'Suburb Coverage', 'proximity > service areas': 'Suburb Coverage',
       'prominence > social profiles': 'Profile Completeness', 'prominence > reviews': 'Reviews & Reputation',
@@ -2015,15 +2018,18 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
     // Category normalization for display
     const DISPLAY_PILLAR_CATS = {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
-      GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+      GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
       Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
     };
     const CAT_ALIASES = {
-      'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
-      'low ctr': 'Low CTR Pages', 'low ctr page': 'Low CTR Pages', 'low ctr pages': 'Low CTR Pages',
-      'zero click': 'Zero-Click Pages', 'zero clicks': 'Zero-Click Pages', 'zero-click page': 'Zero-Click Pages', 'zero-click pages': 'Zero-Click Pages',
-      'underperforming page': 'Underperforming Pages', 'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
+      'quick win': 'Quick Win', 'quick wins': 'Quick Win',
+      'low ctr': 'Low CTR', 'low ctr page': 'Low CTR', 'low ctr pages': 'Low CTR',
+      'zero click': 'Zero Clicks', 'zero clicks': 'Zero Clicks', 'zero-click page': 'Zero Clicks', 'zero-click pages': 'Zero Clicks',
+      'underperforming page': 'Underperforming Page', 'underperforming pages': 'Underperforming Page', 'underperforming': 'Underperforming Page',
       'cannibalization': 'Cannibalization', 'keyword cannibalization': 'Cannibalization',
+      'mobile gap': 'Mobile Gap', 'declining keyword': 'Declining Keyword', 'growing keyword': 'Growing Keyword',
+      'sitemap coverage': 'Sitemap Coverage', 'search appearance': 'Search Appearance',
+      'brand dependency': 'Brand Dependency', 'indexing issues': 'Indexing Issues', 'mobile usability': 'Mobile Usability',
       'nap': 'NAP Consistency', 'nap consistency': 'NAP Consistency',
       'profile': 'Profile Completeness', 'profile completeness': 'Profile Completeness',
       'reviews': 'Reviews & Reputation', 'reputation': 'Reviews & Reputation', 'reviews & reputation': 'Reviews & Reputation',
@@ -2037,8 +2043,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
       'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
       'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health',
-      'indexing': 'Crawlability', 'indexing issues': 'Crawlability',
-      'brand dependency': 'Quick Wins',
+      'indexing': 'Crawlability',
     };
     function normalizeCategory(rawCat, displayPillar) {
       const cat = (rawCat || '').toLowerCase().trim();
@@ -13875,6 +13880,73 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
           body: JSON.stringify({ startDate, endDate, dimensions: ['query', 'page'], rowLimit: 2000 })
         }).then(r => r.json());
         var pageQueryRows = (pqRes.rows || []).map(r => ({ keyword: r.keys[0], page: r.keys[1], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+
+        // Fetch device-split data (mobile vs desktop)
+        var deviceRows = [];
+        try {
+          const devRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate, endDate, dimensions: ['device'], rowLimit: 10 })
+          }).then(r => r.json());
+          deviceRows = (devRes.rows || []).map(r => ({ device: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+        } catch (e) { console.log('[gsc-audit] Device split fetch failed:', e.message); }
+
+        // Fetch query+device combos for per-keyword device gap
+        var queryDeviceRows = [];
+        try {
+          const qdRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate, endDate, dimensions: ['query', 'device'], rowLimit: 2000 })
+          }).then(r => r.json());
+          queryDeviceRows = (qdRes.rows || []).map(r => ({ keyword: r.keys[0], device: r.keys[1], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+        } catch (e) { console.log('[gsc-audit] Query+device fetch failed:', e.message); }
+
+        // Fetch previous period data for trend analysis (prev 28 days)
+        const prevEndDate = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0];
+        const prevStartDate = new Date(Date.now() - 56 * 86400000).toISOString().split('T')[0];
+        var prevGscRows = [];
+        var prevPageRows = [];
+        try {
+          const prevKwRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate: prevStartDate, endDate: prevEndDate, dimensions: ['query'], rowLimit: 1000 })
+          }).then(r => r.json());
+          prevGscRows = (prevKwRes.rows || []).map(r => ({ keyword: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+
+          const prevPgRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate: prevStartDate, endDate: prevEndDate, dimensions: ['page'], rowLimit: 500 })
+          }).then(r => r.json());
+          prevPageRows = (prevPgRes.rows || []).map(r => ({ page: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+        } catch (e) { console.log('[gsc-audit] Trend data fetch failed:', e.message); }
+
+        // Fetch sitemaps
+        var sitemapsData = [];
+        try {
+          const smRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          }).then(r => r.json());
+          sitemapsData = (smRes.sitemap || []).map(s => ({
+            path: s.path, type: s.type, submitted: s.lastSubmitted, lastDownloaded: s.lastDownloaded,
+            isPending: s.isPending, warnings: s.warnings, errors: s.errors,
+            contents: (s.contents || []).map(c => ({ type: c.type, submitted: c.submitted, indexed: c.indexed }))
+          }));
+        } catch (e) { console.log('[gsc-audit] Sitemaps fetch failed:', e.message); }
+
+        // Fetch search appearance data
+        var searchAppearanceRows = [];
+        try {
+          const saRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate, endDate, dimensions: ['searchAppearance'], rowLimit: 50 })
+          }).then(r => r.json());
+          searchAppearanceRows = (saRes.rows || []).map(r => ({ type: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+        } catch (e) { console.log('[gsc-audit] Search appearance fetch failed:', e.message); }
       }
     }
 
@@ -14030,7 +14102,160 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
       }
     }
 
-    // 7. INDEXING ISSUES: Check key pages via URL Inspection API
+    // 7. MOBILE vs DESKTOP GAP: Keywords where mobile ranks much worse than desktop
+    if (queryDeviceRows && queryDeviceRows.length > 0) {
+      const kwDeviceMap = {};
+      for (const row of queryDeviceRows) {
+        if (!kwDeviceMap[row.keyword]) kwDeviceMap[row.keyword] = {};
+        kwDeviceMap[row.keyword][row.device] = row;
+      }
+      const mobileGaps = Object.entries(kwDeviceMap)
+        .filter(([kw, devs]) => devs.MOBILE && devs.DESKTOP && devs.MOBILE.position - devs.DESKTOP.position >= 3 && devs.MOBILE.impressions >= 20)
+        .map(([kw, devs]) => ({ keyword: kw, mobilePos: devs.MOBILE.position, desktopPos: devs.DESKTOP.position, gap: devs.MOBILE.position - devs.DESKTOP.position, mobileImp: devs.MOBILE.impressions, mobileCtr: devs.MOBILE.ctr }))
+        .sort((a, b) => b.gap - a.gap)
+        .slice(0, 10);
+
+      for (const g of mobileGaps) {
+        findings.push({
+          pillar: 'gsc', category: 'Mobile Gap',
+          title: `"${g.keyword}" ranks #${Math.round(g.desktopPos)} desktop → #${Math.round(g.mobilePos)} mobile`,
+          description: `This keyword ranks ${g.gap.toFixed(1)} positions worse on mobile than desktop. With mobile-first indexing, mobile rank is what matters. ${g.mobileImp} mobile impressions/month.`,
+          recommendation: 'Check mobile page speed (aim for LCP <2.5s), ensure content is fully visible without JS, fix any mobile usability issues, and verify mobile-friendly design.',
+          severity: g.gap >= 5 ? 'Critical' : 'Medium',
+          current_value: `Desktop #${g.desktopPos.toFixed(1)} → Mobile #${g.mobilePos.toFixed(1)} (gap: ${g.gap.toFixed(1)})`,
+          recommended_value: 'Mobile = Desktop position'
+        });
+      }
+    }
+
+    // 8. DECLINING KEYWORDS: Keywords that lost significant impressions/clicks vs previous period
+    if (prevGscRows && prevGscRows.length > 0) {
+      const prevMap = {};
+      for (const r of prevGscRows) prevMap[r.keyword] = r;
+
+      const declining = gscRows
+        .filter(r => {
+          const prev = prevMap[r.keyword];
+          if (!prev || prev.impressions < 20) return false;
+          const impDrop = ((r.impressions - prev.impressions) / prev.impressions) * 100;
+          const posDrop = r.position - prev.position;
+          return (impDrop <= -30 && prev.impressions >= 30) || (posDrop >= 3 && prev.impressions >= 20);
+        })
+        .map(r => {
+          const prev = prevMap[r.keyword];
+          return { keyword: r.keyword, curImp: r.impressions, prevImp: prev.impressions, curPos: r.position, prevPos: prev.position, curClicks: r.clicks, prevClicks: prev.clicks,
+            impChange: ((r.impressions - prev.impressions) / prev.impressions * 100), posChange: r.position - prev.position };
+        })
+        .sort((a, b) => a.impChange - b.impChange)
+        .slice(0, 15);
+
+      for (const d of declining) {
+        const impDir = d.impChange < 0 ? `↓${Math.abs(d.impChange).toFixed(0)}%` : `↑${d.impChange.toFixed(0)}%`;
+        const posDir = d.posChange > 0 ? `dropped ${d.posChange.toFixed(1)} positions` : `improved ${Math.abs(d.posChange).toFixed(1)} positions`;
+        findings.push({
+          pillar: 'gsc', category: 'Declining Keyword',
+          title: `"${d.keyword}" impressions ${impDir} (${d.prevImp}→${d.curImp})`,
+          description: `This keyword ${posDir} and went from ${d.prevImp} to ${d.curImp} impressions vs the previous 28 days. Clicks: ${d.prevClicks}→${d.curClicks}.`,
+          recommendation: 'Check if competitors have published new content targeting this keyword. Review and refresh your page content, update the publish date, and add internal links.',
+          severity: d.impChange <= -50 ? 'Critical' : 'Medium',
+          current_value: `Pos ${d.curPos.toFixed(1)} | ${d.curImp} imp | ${d.curClicks} clicks`,
+          recommended_value: `Recover to ${d.prevImp} imp | Pos ${d.prevPos.toFixed(1)}`
+        });
+      }
+
+      // Also track growing keywords as positive signals
+      const growing = gscRows
+        .filter(r => {
+          const prev = prevMap[r.keyword];
+          if (!prev || prev.impressions < 10) return false;
+          const impGrow = ((r.impressions - prev.impressions) / prev.impressions) * 100;
+          return impGrow >= 50 && r.impressions >= 20;
+        })
+        .map(r => {
+          const prev = prevMap[r.keyword];
+          return { keyword: r.keyword, curImp: r.impressions, prevImp: prev.impressions, curPos: r.position, prevPos: prev.position, curClicks: r.clicks, prevClicks: prev.clicks,
+            impChange: ((r.impressions - prev.impressions) / prev.impressions * 100) };
+        })
+        .sort((a, b) => b.impChange - a.impChange)
+        .slice(0, 10);
+
+      for (const g of growing) {
+        findings.push({
+          pillar: 'gsc', category: 'Growing Keyword',
+          title: `"${g.keyword}" impressions ↑${g.impChange.toFixed(0)}% (${g.prevImp}→${g.curImp})`,
+          description: `This keyword is gaining traction — impressions grew ${g.impChange.toFixed(0)}% vs previous period. Position: ${g.prevPos.toFixed(1)}→${g.curPos.toFixed(1)}. Clicks: ${g.prevClicks}→${g.curClicks}.`,
+          recommendation: 'Double down on this keyword. Optimize the ranking page title/description, add more internal links, expand content depth, and build backlinks to accelerate growth.',
+          severity: 'Low',
+          current_value: `Pos ${g.curPos.toFixed(1)} | ${g.curImp} imp | ${g.curClicks} clicks`,
+          recommended_value: `Push to page 1 top 3`
+        });
+      }
+    }
+
+    // 9. SITEMAP ISSUES: Check for sitemap errors or warnings
+    if (sitemapsData && sitemapsData.length > 0) {
+      const totalSubmitted = sitemapsData.reduce((s, sm) => s + (sm.contents || []).reduce((ss, c) => ss + (c.submitted || 0), 0), 0);
+      const totalIndexed = sitemapsData.reduce((s, sm) => s + (sm.contents || []).reduce((ss, c) => ss + (c.indexed || 0), 0), 0);
+      const indexRatio = totalSubmitted > 0 ? (totalIndexed / totalSubmitted * 100) : 0;
+
+      if (indexRatio < 80 && totalSubmitted > 0) {
+        findings.push({
+          pillar: 'gsc', category: 'Sitemap Coverage',
+          title: `Only ${indexRatio.toFixed(0)}% of sitemap URLs are indexed (${totalIndexed}/${totalSubmitted})`,
+          description: `Your sitemaps contain ${totalSubmitted} URLs but only ${totalIndexed} are indexed. ${totalSubmitted - totalIndexed} pages are being ignored by Google.`,
+          recommendation: 'Review non-indexed URLs: remove low-quality or duplicate pages from sitemap, fix crawl errors, improve thin content, and ensure proper canonical tags.',
+          severity: indexRatio < 50 ? 'Critical' : 'Medium',
+          current_value: `${totalIndexed}/${totalSubmitted} indexed (${indexRatio.toFixed(0)}%)`,
+          recommended_value: '90%+ sitemap coverage'
+        });
+      }
+
+      for (const sm of sitemapsData) {
+        if (sm.errors > 0) {
+          findings.push({
+            pillar: 'gsc', category: 'Sitemap Coverage',
+            title: `Sitemap "${sm.path.split('/').pop()}" has ${sm.errors} error(s)`,
+            description: `Google found errors in this sitemap. Errors prevent Google from reading the sitemap correctly.`,
+            recommendation: 'Validate the sitemap XML format, check for invalid URLs, and resubmit the sitemap in GSC.',
+            severity: 'Critical',
+            current_value: `${sm.errors} errors, ${sm.warnings || 0} warnings`,
+            recommended_value: '0 errors'
+          });
+        }
+      }
+    }
+
+    // 10. SEARCH APPEARANCE: Missing rich results opportunities
+    if (searchAppearanceRows && searchAppearanceRows.length >= 0) {
+      const hasRichResults = searchAppearanceRows.some(r => r.type && r.type !== 'PAGE');
+      const hasFaq = searchAppearanceRows.some(r => r.type === 'FAQ_RICH_RESULT');
+      const hasReviews = searchAppearanceRows.some(r => r.type === 'REVIEW_SNIPPET');
+
+      if (!hasFaq) {
+        findings.push({
+          pillar: 'gsc', category: 'Search Appearance',
+          title: 'No FAQ rich results detected',
+          description: 'FAQ schema markup is not generating rich results in Google. FAQ snippets take more SERP real estate and improve CTR.',
+          recommendation: 'Add FAQ schema (FAQPage) to your service pages and high-traffic landing pages. Include 3-5 relevant Q&As per page.',
+          severity: 'Medium',
+          current_value: 'No FAQ rich results',
+          recommended_value: 'FAQ snippets on key pages'
+        });
+      }
+      if (!hasReviews) {
+        findings.push({
+          pillar: 'gsc', category: 'Search Appearance',
+          title: 'No review snippets in search results',
+          description: 'Review/rating stars are not appearing in your search listings. Review snippets significantly boost CTR.',
+          recommendation: 'Add LocalBusiness or AggregateRating schema markup to your homepage and service pages with your Google review data.',
+          severity: 'Medium',
+          current_value: 'No review stars in SERP',
+          recommended_value: 'Star ratings visible in search'
+        });
+      }
+    }
+
+    // 11. INDEXING ISSUES: Check key pages via URL Inspection API
     if (accessToken && matchedSite) {
       try {
         // Get important pages from sitemap or pageRows
@@ -14178,12 +14403,31 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
       f.status = 'new';
     }
 
+    // Build summary stats
+    const totalClicks = gscRows.reduce((s, r) => s + r.clicks, 0);
+    const totalImpressions = gscRows.reduce((s, r) => s + r.impressions, 0);
+    const avgPosition = gscRows.length > 0 ? gscRows.reduce((s, r) => s + r.position, 0) / gscRows.length : 0;
+    const avgCtr = totalImpressions > 0 ? totalClicks / totalImpressions : 0;
+    const prevTotalClicks = (prevGscRows || []).reduce((s, r) => s + r.clicks, 0);
+    const prevTotalImpressions = (prevGscRows || []).reduce((s, r) => s + r.impressions, 0);
+
+    const summary = {
+      keywords: gscRows.length, pages: (pageRows || []).length, findings: findings.length,
+      clicks: totalClicks, impressions: totalImpressions, avgPosition: +avgPosition.toFixed(1), avgCtr: +(avgCtr * 100).toFixed(1),
+      prevClicks: prevTotalClicks, prevImpressions: prevTotalImpressions,
+      clicksChange: prevTotalClicks > 0 ? +((totalClicks - prevTotalClicks) / prevTotalClicks * 100).toFixed(1) : null,
+      impressionsChange: prevTotalImpressions > 0 ? +((totalImpressions - prevTotalImpressions) / prevTotalImpressions * 100).toFixed(1) : null,
+      device: deviceRows || [],
+      sitemaps: sitemapsData || [],
+      searchAppearance: searchAppearanceRows || [],
+    };
+
     // Mark audit complete
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
-      ['completed', JSON.stringify({ totalKeywords: gscRows.length, totalPages: (pageRows || []).length, findingsCount: findings.length }), auditId]);
+      ['completed', JSON.stringify(summary), auditId]);
 
-    console.log(`[gsc-audit] Project ${projectId}: ${findings.length} findings from ${gscRows.length} keywords`);
-    res.json({ findings, summary: { keywords: gscRows.length, pages: (pageRows || []).length, findings: findings.length } });
+    console.log(`[gsc-audit] Project ${projectId}: ${findings.length} findings from ${gscRows.length} keywords, ${totalClicks} clicks, ${totalImpressions} imp`);
+    res.json({ findings, summary });
   } catch (e) {
     console.error('[gsc-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -15060,8 +15304,8 @@ Quality check before outputting: remove any finding where current_value or descr
 const PILLAR_CATEGORIES = {
   gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
   website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
-  gsc_agent: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
-  gsc: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
+  gsc_agent: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
+  gsc: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
 };
 
 // ===== DETERMINISTIC findings extraction — NO AI, NO token limits, NO truncation =====
