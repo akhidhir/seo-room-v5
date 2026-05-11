@@ -18784,9 +18784,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // Extract GBP posts topics
     const gbpPosts = [];
+    const now = new Date();
+    const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    let gbpPostsThisMonth = 0;
     if (rc?.posts?.published_posts) {
       for (const p of rc.posts.published_posts) {
-        gbpPosts.push({ summary: (p.summary || '').substring(0, 120), state: p.state, url: p.callToAction?.url || '' });
+        gbpPosts.push({ summary: (p.summary || '').substring(0, 120), state: p.state, url: p.callToAction?.url || '', createTime: p.createTime || '' });
+        if ((p.createTime || '').startsWith(thisMonthStr)) gbpPostsThisMonth++;
       }
     }
 
@@ -19734,6 +19738,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         reviewStats,
         gbpCategories,
         gbpPostCount: gbpPosts.length,
+        gbpPostsThisMonth,
         competitorCount: topCompetitors.length,
         totalCombos,
         coveredCombos,
