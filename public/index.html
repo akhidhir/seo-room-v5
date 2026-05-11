@@ -6246,7 +6246,292 @@
       );
     }
 
-    // ============ WEBSITE AUDIT PAGE (Agent-Powered) ============
+    // ============ CODE-BASED WEBSITE AUDIT PAGE ============
+    function CodeWebsiteAuditPage({ project }) {
+      const [findings, setFindings] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [selected, setSelected] = useState(new Set());
+      const [reviewFinding, setReviewFinding] = useState(null);
+      const [searchQ, setSearchQ] = useState('');
+      const [filterSev, setFilterSev] = useState('all');
+      const [filterStatus, setFilterStatus] = useState('active');
+      const [filterCat, setFilterCat] = useState('all');
+      const [sortCol, setSortCol] = useState('severity');
+      const [sortDir, setSortDir] = useState('asc');
+      const [summary, setSummary] = useState(null);
+
+      const loadFindings = async () => {
+        setLoading(true); setError('');
+        try {
+          const data = await api(`/projects/${project.id}/audit-findings?pillar=website`);
+          const list = Array.isArray(data) ? data : (data?.findings || []);
+          setFindings(list.filter(f => f.pillar === 'website'));
+          try {
+            const auditsList = await api(`/projects/${project.id}/audits`);
+            const all = auditsList?.audits || [];
+            const latest = all.find(a => a.pillar === 'website' && a.status === 'completed' && a.audit_data);
+            if (latest) {
+              const ad = typeof latest.audit_data === 'string' ? JSON.parse(latest.audit_data) : latest.audit_data;
+              if (ad.crawled) setSummary(ad);
+            }
+          } catch {}
+        } catch (e) { setError(e.message); }
+        finally { setLoading(false); }
+      };
+
+      useEffect(() => { if (project?.id) loadFindings(); }, [project?.id]);
+
+      const runAudit = async () => {
+        setLoading(true); setError('');
+        try {
+          const res = await api(`/projects/${project.id}/audits/website/run`, { method: 'POST' });
+          if (res.findings) { setFindings(res.findings); setSummary(res.summary); }
+          else { await loadFindings(); }
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+      };
+
+      const updateStatus = async (id, status) => {
+        try {
+          await api(`/audit-findings/${id}`, { method: 'PUT', body: { status } });
+          setFindings(prev => prev.map(f => f.id === id ? { ...f, status } : f));
+        } catch (err) { setError(err.message); }
+      };
+
+      const bulkAction = async (status) => {
+        for (const id of selected) { await updateStatus(id, status); }
+        setSelected(new Set());
+      };
+
+      const sevOrder = { Critical: 0, critical: 0, High: 1, high: 1, Medium: 2, medium: 2, Low: 3, low: 3 };
+      const categories = useMemo(() => [...new Set(findings.map(f => f.category))].sort(), [findings]);
+
+      const sorted = useMemo(() => {
+        let list = [...findings];
+        if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
+        if (filterCat !== 'all') list = list.filter(f => f.category === filterCat);
+        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
+        else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
+        if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
+        list.sort((a, b) => {
+          let av, bv;
+          if (sortCol === 'severity') { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
+          else if (sortCol === 'title') return (a.title || '').localeCompare(b.title || '') * (sortDir === 'asc' ? 1 : -1);
+          else { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
+          return sortDir === 'asc' ? av - bv : bv - av;
+        });
+        return list;
+      }, [findings, filterSev, filterCat, filterStatus, searchQ, sortCol, sortDir]);
+
+      const catColors = { 'Site Health': '#ef4444', 'Crawlability': '#f97316', 'On-Page Issues': '#f59e0b', 'Content Quality': '#8b5cf6', 'Core Web Vitals': '#3b82f6', 'Schema & Data': '#06b6d4' };
+
+      const sevBadge = (sev) => {
+        const colors = { Critical: '#ef4444', critical: '#ef4444', High: '#f97316', high: '#f97316', Medium: '#f59e0b', medium: '#f59e0b', Low: '#3b82f6', low: '#3b82f6' };
+        const c = colors[sev] || '#64748b';
+        return <span style={{ padding: '4px 14px', borderRadius: 4, fontSize: 14, fontWeight: 700, background: c + '20', color: c }}>{sev}</span>;
+      };
+      const statusBadge = (status) => {
+        const cfg = { new: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', label: 'new' }, approved: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'approved' }, rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'ignored' }, fixed: { bg: 'rgba(34,197,94,0.25)', color: '#22c55e', label: 'Fixed' } };
+        const c = cfg[status] || cfg.new;
+        return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
+      };
+
+      if (reviewFinding) {
+        const f = reviewFinding;
+        const cc = catColors[f.category] || '#6366f1';
+        return (
+          <div>
+            <button className="btn btn-secondary" onClick={() => setReviewFinding(null)} style={{ marginBottom: 16, fontSize: 15, padding: '8px 16px' }}>
+              <i className="fas fa-arrow-left" style={{ marginRight: 8 }} /> Back to Issues
+            </button>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 28 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+                <div><div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
+                  <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2></div>
+                <div style={{ display: 'flex', gap: 8 }}>{sevBadge(f.severity)}
+                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: cc + '15', color: cc }}>{f.category}</span></div>
+              </div>
+              {f.description && (<div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>What's the issue</div>
+                <div style={{ fontSize: 17, lineHeight: 1.7, color: 'var(--text1)' }}>{f.description}</div></div>)}
+              {f.recommendation && (<div style={{ marginBottom: 20, padding: 20, background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.15)' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 10 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Suggested Fix</div>
+                <div style={{ fontSize: 17, lineHeight: 1.7, color: 'var(--text1)' }}>{f.recommendation}</div></div>)}
+              {(f.current_value || f.recommended_value) && (<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+                <div style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.06)', borderRadius: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Current State</div>
+                  <div style={{ fontSize: 17, fontWeight: 600, color: '#ef4444' }}>{f.current_value || '—'}</div></div>
+                <div style={{ padding: '16px 20px', background: 'rgba(34,197,94,0.06)', borderRadius: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Target</div>
+                  <div style={{ fontSize: 17, fontWeight: 600, color: '#22c55e' }}>{f.recommended_value || '—'}</div></div></div>)}
+              <div style={{ display: 'flex', gap: 14, marginTop: 24 }}>
+                <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
+                  <i className="fas fa-check" style={{ marginRight: 8 }} /> Move to Action Plan</button>
+                <button className="btn btn-secondary" onClick={() => { updateStatus(f.id, 'rejected'); setReviewFinding(null); }} style={{ fontSize: 16, padding: '12px 28px' }}>
+                  <i className="fas fa-eye-slash" style={{ marginRight: 8 }} /> Ignore</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+            <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
+              <i className="fas fa-spider" style={{ marginRight: 10, color: '#8b5cf6' }} />Website Audit
+              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} issues</span>
+            </h2>
+            <div style={{ marginLeft: 'auto' }}>
+              <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
+                <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Crawling...' : 'Run Audit'}
+              </button>
+            </div>
+          </div>
+
+          {/* Stats cards */}
+          {summary && (<div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
+            {[
+              { label: 'Pages Crawled', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
+              { label: 'Avg Word Count', value: summary.avgWordCount || 0, color: '#8b5cf6', icon: 'fa-file-word' },
+              { label: 'Avg Response', value: summary.avgResponseTime ? (summary.avgResponseTime / 1000).toFixed(1) + 's' : '—', color: summary.avgResponseTime > 2000 ? '#ef4444' : '#22c55e', icon: 'fa-clock' },
+              { label: 'Issues Found', value: summary.totalFindings || findings.length, color: '#f97316', icon: 'fa-exclamation-triangle' },
+            ].map((s, i) => (
+              <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: 1, marginBottom: 8 }}>
+                  <i className={`fas ${s.icon}`} style={{ marginRight: 6, color: s.color }} />{s.label}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>)}
+
+          {/* Health indicators */}
+          {summary && (<div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+            {[
+              { label: 'HTTPS', ok: summary.httpsPages === summary.successful, icon: 'fa-lock' },
+              { label: 'Robots.txt', ok: summary.hasRobotsTxt, icon: 'fa-robot' },
+              { label: 'Sitemap', ok: summary.hasSitemap, icon: 'fa-sitemap' },
+              { label: 'Schema', ok: summary.schemaTypes?.length > 0, icon: 'fa-code' },
+            ].map((h, i) => (
+              <div key={i} style={{ background: 'var(--card)', border: `1px solid ${h.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className={`fas ${h.ok ? 'fa-check-circle' : 'fa-times-circle'}`} style={{ color: h.ok ? '#22c55e' : '#ef4444' }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: h.ok ? '#22c55e' : '#ef4444' }}>{h.label}</span>
+              </div>
+            ))}
+            {summary.thinPages > 0 && <div style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="fas fa-exclamation-triangle" style={{ color: '#f59e0b' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.thinPages} thin pages</span>
+            </div>}
+            {summary.dupTitles > 0 && <div style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="fas fa-copy" style={{ color: '#f59e0b' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.dupTitles} duplicate titles</span>
+            </div>}
+          </div>)}
+
+          {loading && (<div className="audit-loading-overlay"><span className="spinner-large"></span>
+            <div className="audit-loading-text">Running Website Audit</div>
+            <div className="audit-loading-sub">Crawling pages and analyzing SEO health...</div></div>)}
+
+          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
+
+          {!loading && findings.length === 0 && !summary && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '40px 28px', textAlign: 'center', marginBottom: 20 }}>
+            <i className="fas fa-spider" style={{ fontSize: 40, color: 'var(--text3)', marginBottom: 16 }} />
+            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>No Website Audit Data Yet</div>
+            <div style={{ fontSize: 15, color: 'var(--text3)', maxWidth: 500, margin: '0 auto', lineHeight: 1.6 }}>
+              Click <strong>Run Audit</strong> to crawl your website and find SEO issues.
+            </div></div>)}
+
+          {findings.length > 0 && (<div style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 0, marginBottom: 12, flexWrap: 'wrap' }}>
+              {[{ key: 'all', label: 'All Categories', color: '#8b5cf6' }, ...categories.map(c => ({ key: c, label: c, color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
+                const count = tab.key === 'all' ? findings.length : findings.filter(f => f.category === tab.key).length;
+                const active = filterCat === tab.key;
+                return (<button key={tab.key} onClick={() => setFilterCat(tab.key)}
+                  style={{ flex: 1, minWidth: 120, padding: '12px 8px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)',
+                    borderBottom: active ? `3px solid ${tab.color}` : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)',
+                    fontWeight: active ? 700 : 500, fontSize: 14, transition: 'all 0.15s',
+                    borderRadius: i === 0 ? '8px 0 0 0' : i === arr.length - 1 ? '0 8px 0 0' : 0 }}>
+                  {tab.label} <span style={{ fontSize: 12, opacity: 0.7 }}>({count})</span></button>);
+              })}
+            </div>
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 14, color: 'var(--text2)' }}>Select:</span>
+              {['critical', 'medium', 'low'].map(s => {
+                const colors = { critical: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
+                const c = sorted.filter(f => (f.severity||'').toLowerCase() === s).length;
+                return <button key={s} className="btn btn-small" style={{ background: colors[s] + '15', borderColor: colors[s] + '30', color: colors[s], fontSize: 14 }}
+                  onClick={() => { const ids = sorted.filter(f => f.status !== 'fixed' && (f.severity || '').toLowerCase() === s).map(f => f.id); setSelected(new Set(ids)); }}>
+                  {s.charAt(0).toUpperCase() + s.slice(1)} ({c})</button>;
+              })}
+              <button className="btn btn-small" onClick={() => setSelected(new Set(sorted.map(f => f.id)))} style={{ fontSize: 14 }}>All ({sorted.length})</button>
+            </div>
+          </div>)}
+
+          {selected.size > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
+            <span style={{ fontSize: 15, color: 'var(--text2)' }}>{selected.size} selected:</span>
+            <button className="btn btn-small" onClick={() => bulkAction('approved')} style={{ fontSize: 14 }}>Move to Action Plan</button>
+            <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14 }}>Ignore</button>
+            <button className="btn btn-small" onClick={() => setSelected(new Set())} style={{ fontSize: 14, color: 'var(--text3)' }}>Clear</button>
+          </div>)}
+
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input type="text" placeholder="Search findings..." value={searchQ} onChange={e => setSearchQ(e.target.value)}
+              style={{ flex: 1, minWidth: 200, background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }} />
+            <select value={filterSev} onChange={e => setFilterSev(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
+              <option value="all">All Severities</option><option value="critical">Critical</option><option value="medium">Medium</option><option value="low">Low</option>
+            </select>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
+              <option value="active">Active</option><option value="all">All</option><option value="approved">Approved</option><option value="rejected">Ignored</option>
+            </select>
+            <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.length}</span>
+          </div>
+
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                <th style={{ width: 36, padding: '14px 10px' }}><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(sorted.map(f => f.id)) : new Set())} checked={selected.size === sorted.length && sorted.length > 0} /></th>
+                <th style={{ width: 30, padding: '14px 6px', color: 'var(--text3)', fontSize: 13 }}>#</th>
+                <th style={{ padding: '14px', textAlign: 'left', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Finding</th>
+                <th style={{ padding: '14px 10px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Severity</th>
+                <th style={{ padding: '14px 10px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Category</th>
+                <th style={{ padding: '14px 10px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Status</th>
+                <th style={{ padding: '14px 10px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Action</th>
+              </tr></thead>
+              <tbody>
+                {sorted.length === 0 && <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No findings yet. Click Run Audit to start.</td></tr>}
+                {(() => { let lastCat = ''; let num = 0;
+                  return sorted.map(f => {
+                    const showHeader = f.category !== lastCat && filterCat === 'all';
+                    lastCat = f.category; num++;
+                    const cc = catColors[f.category] || '#6366f1';
+                    return React.createElement(React.Fragment, { key: f.id },
+                      showHeader && (<tr style={{ background: cc + '10' }}>
+                        <td colSpan={7} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
+                          {f.category} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
+                        </td></tr>),
+                      <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
+                        onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
+                        <td style={{ padding: '14px 10px' }}><input type="checkbox" checked={selected.has(f.id)} onChange={() => { const s = new Set(selected); s.has(f.id) ? s.delete(f.id) : s.add(f.id); setSelected(s); }} /></td>
+                        <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{num}</td>
+                        <td style={{ padding: '14px', fontWeight: 600, fontSize: 15 }}><span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}</td>
+                        <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{f.category}</span></td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}><i className="fas fa-search" style={{ marginRight: 4 }} /> Review</button></td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    // ============ WEBSITE AUDIT PAGE (Agent-Powered — Legacy) ============
     // WebsiteAuditPage is a thin wrapper around AgentAuditPage (defined above)
     // ============ TECHNICAL AUDIT PAGE (Legacy Internal — kept for now) ============
     function TechnicalAuditPage({ project }) {
@@ -7599,6 +7884,239 @@
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
               <span className="spinner" style={{ marginBottom: 12, display: 'inline-block' }}></span>
               <div style={{ fontSize: 13 }}>Loading previous results...</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============ GSC INDEXED / NOT INDEXED PAGES ============
+    function GSCIndexedPage({ project, filter: pageFilter }) {
+      const [results, setResults] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+      const [searchQ, setSearchQ] = useState('');
+      const [sortCol, setSortCol] = useState('url');
+      const [sortDir, setSortDir] = useState('asc');
+      const [expandedRow, setExpandedRow] = useState(null);
+      const [lastChecked, setLastChecked] = useState(null);
+      const isIndexed = pageFilter === 'indexed';
+
+      useEffect(() => {
+        if (!project?.id) return;
+        (async () => {
+          setLoading(true);
+          try {
+            const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+            if (data.results) {
+              setResults(data.results);
+              if (data.completed_at) setLastChecked(new Date(data.completed_at));
+            }
+          } catch (e) { setError(e.message); }
+          finally { setLoading(false); }
+        })();
+      }, [project?.id]);
+
+      const filtered = useMemo(() => {
+        let list = results.filter(r => isIndexed ? r.verdict === 'PASS' : (r.verdict === 'FAIL' || r.verdict === 'NEUTRAL'));
+        if (searchQ.trim()) {
+          const q = searchQ.toLowerCase();
+          list = list.filter(r => (r.url || r.path || '').toLowerCase().includes(q) || (r.coverageState || '').toLowerCase().includes(q));
+        }
+        list.sort((a, b) => {
+          let av, bv;
+          if (sortCol === 'url') { av = a.path || a.url || ''; bv = b.path || b.url || ''; }
+          else if (sortCol === 'status') { av = a.coverageState || ''; bv = b.coverageState || ''; }
+          else if (sortCol === 'crawl') { av = a.lastCrawlTime || ''; bv = b.lastCrawlTime || ''; }
+          else { av = a.path || ''; bv = b.path || ''; }
+          return sortDir === 'asc' ? (av || '').localeCompare(bv || '') : (bv || '').localeCompare(av || '');
+        });
+        return list;
+      }, [results, searchQ, sortCol, sortDir, isIndexed]);
+
+      // Group not-indexed by reason
+      const reasonGroups = useMemo(() => {
+        if (isIndexed) return {};
+        const groups = {};
+        filtered.forEach(r => {
+          const reason = r.coverageState || 'Unknown';
+          if (!groups[reason]) groups[reason] = [];
+          groups[reason].push(r);
+        });
+        return groups;
+      }, [filtered, isIndexed]);
+
+      const totalIndexed = results.filter(r => r.verdict === 'PASS').length;
+      const totalNotIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length;
+
+      const reasonColors = {
+        'Page with redirect': '#f59e0b',
+        'Crawled - currently not indexed': '#ef4444',
+        'Discovered - currently not indexed': '#f97316',
+        'Excluded by noindex tag': '#8b5cf6',
+        'Blocked by robots.txt': '#64748b',
+        'Alternate page with proper canonical tag': '#3b82f6',
+        'Duplicate without user-selected canonical': '#06b6d4',
+        'Not found (404)': '#ef4444',
+        'Soft 404': '#f59e0b',
+        'Server error (5xx)': '#ef4444',
+      };
+
+      const thStyle = { padding: '12px 14px', textAlign: 'left', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', cursor: 'pointer', userSelect: 'none' };
+      const SortHeader = ({ col, label }) => (
+        <th style={thStyle} onClick={() => { if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortCol(col); setSortDir('asc'); } }}>
+          {label} {sortCol === col && <i className={`fas fa-sort-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ fontSize: 10, marginLeft: 4 }} />}
+        </th>
+      );
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+                <i className={`fas ${isIndexed ? 'fa-check-circle' : 'fa-exclamation-triangle'}`} style={{ marginRight: 10, color: isIndexed ? '#22c55e' : '#ef4444' }} />
+                {isIndexed ? 'Indexed Pages' : 'Not Indexed Pages'}
+                <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{filtered.length} pages</span>
+              </h2>
+              {lastChecked && <p style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>Last checked: {lastChecked.toLocaleDateString()} {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>}
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ background: 'var(--card)', borderRadius: 8, padding: '6px 14px', border: '1px solid var(--border)', fontSize: 13 }}>
+                <span style={{ color: '#22c55e', fontWeight: 700 }}>{totalIndexed}</span> <span style={{ color: 'var(--text3)' }}>indexed</span>
+                <span style={{ margin: '0 8px', color: 'var(--border)' }}>|</span>
+                <span style={{ color: '#ef4444', fontWeight: 700 }}>{totalNotIndexed}</span> <span style={{ color: 'var(--text3)' }}>not indexed</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Search */}
+          <div style={{ marginBottom: 16 }}>
+            <input type="text" placeholder="Search URLs..." value={searchQ} onChange={e => setSearchQ(e.target.value)}
+              style={{ width: '100%', background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px', fontSize: 15 }} />
+          </div>
+
+          {loading && <div style={{ textAlign: 'center', padding: 60 }}><span className="spinner-large"></span><div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading indexing data...</div></div>}
+          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 15, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
+
+          {!loading && results.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)', background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)' }}>
+              <i className="fas fa-file-import" style={{ fontSize: 40, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No indexing data yet</div>
+              <div style={{ fontSize: 14 }}>Go to the <strong>Indexing</strong> page and run a check first.</div>
+            </div>
+          )}
+
+          {/* Not Indexed: group by reason */}
+          {!loading && !isIndexed && Object.keys(reasonGroups).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+                {Object.entries(reasonGroups).map(([reason, pages]) => {
+                  const color = reasonColors[reason] || '#64748b';
+                  return (
+                    <div key={reason} style={{ background: color + '12', border: `1px solid ${color}30`, borderRadius: 8, padding: '10px 16px', minWidth: 160 }}>
+                      <div style={{ fontSize: 24, fontWeight: 800, color }}>{pages.length}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{reason}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Table */}
+          {!loading && filtered.length > 0 && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <SortHeader col="url" label="Page URL" />
+                  <SortHeader col="status" label={isIndexed ? 'Status' : 'Reason'} />
+                  <SortHeader col="crawl" label="Last Crawl" />
+                  <th style={{ ...thStyle, cursor: 'default' }}>Mobile</th>
+                  <th style={{ ...thStyle, cursor: 'default' }}>Robots</th>
+                </tr></thead>
+                <tbody>
+                  {filtered.map((r, idx) => {
+                    const path = r.path || (() => { try { return new URL(r.url).pathname; } catch { return r.url; } })();
+                    const isExpanded = expandedRow === idx;
+                    const crawlDate = r.lastCrawlTime ? new Date(r.lastCrawlTime).toLocaleDateString() : '—';
+                    const reasonColor = reasonColors[r.coverageState] || '#64748b';
+                    const mobileOk = r.mobileUsability !== 'FAIL';
+                    const robotsOk = r.robotsTxtState !== 'BLOCKED';
+
+                    return (
+                      <React.Fragment key={idx}>
+                        <tr onClick={() => !isIndexed && setExpandedRow(isExpanded ? null : idx)}
+                          style={{ borderBottom: '1px solid var(--border)', cursor: isIndexed ? 'default' : 'pointer',
+                            background: isExpanded ? 'rgba(99,102,241,0.06)' : r.verdict === 'FAIL' ? 'rgba(239,68,68,0.03)' : 'transparent' }}>
+                          <td style={{ padding: '12px 14px', fontSize: 14 }}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }} title={r.url}>{path}</div>
+                            {r.googleCanonical && r.googleCanonical !== r.url && (
+                              <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 2 }}>→ canonical: {(() => { try { return new URL(r.googleCanonical).pathname; } catch { return r.googleCanonical; } })()}</div>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 14px' }}>
+                            {isIndexed
+                              ? <span style={{ color: '#22c55e', fontWeight: 600, fontSize: 13 }}><i className="fas fa-check-circle" style={{ marginRight: 6 }} />Indexed</span>
+                              : <span style={{ color: reasonColor, fontWeight: 600, fontSize: 13, padding: '3px 10px', borderRadius: 4, background: reasonColor + '15' }}>{r.coverageState || 'Unknown'}</span>
+                            }
+                          </td>
+                          <td style={{ padding: '12px 14px', fontSize: 13, color: 'var(--text2)' }}>{crawlDate}</td>
+                          <td style={{ padding: '12px 14px' }}>
+                            <i className={`fas ${mobileOk ? 'fa-check' : 'fa-times'}`} style={{ color: mobileOk ? '#22c55e' : '#ef4444' }} />
+                          </td>
+                          <td style={{ padding: '12px 14px' }}>
+                            <i className={`fas ${robotsOk ? 'fa-check' : 'fa-ban'}`} style={{ color: robotsOk ? '#22c55e' : '#ef4444' }} />
+                          </td>
+                        </tr>
+                        {isExpanded && !isIndexed && (
+                          <tr><td colSpan={5} style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.04)', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Why Not Indexed</div>
+                                <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text1)' }}>
+                                  {r.coverageState === 'Page with redirect' && 'This URL redirects to another page. Google follows the redirect and indexes the destination instead.'}
+                                  {r.coverageState === 'Crawled - currently not indexed' && 'Google crawled this page but chose not to index it. Usually means thin content, duplicate content, or low quality signals.'}
+                                  {r.coverageState === 'Discovered - currently not indexed' && 'Google knows about this URL but hasn\'t crawled it yet, or crawled it but deprioritized indexing. May need more internal links or content improvements.'}
+                                  {r.coverageState === 'Excluded by noindex tag' && 'This page has a noindex meta tag or X-Robots-Tag header telling Google not to index it.'}
+                                  {r.coverageState === 'Blocked by robots.txt' && 'Robots.txt is preventing Google from crawling this page.'}
+                                  {r.coverageState === 'Alternate page with proper canonical tag' && 'This page has a canonical tag pointing to a different URL. Google indexes the canonical version instead.'}
+                                  {r.coverageState === 'Duplicate without user-selected canonical' && 'Google considers this a duplicate of another page and chose a different canonical.'}
+                                  {!['Page with redirect', 'Crawled - currently not indexed', 'Discovered - currently not indexed', 'Excluded by noindex tag', 'Blocked by robots.txt', 'Alternate page with proper canonical tag', 'Duplicate without user-selected canonical'].includes(r.coverageState) && (r.coverageState || 'Unknown reason')}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 8 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />How to Fix</div>
+                                <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text1)' }}>
+                                  {r.coverageState === 'Page with redirect' && '1. Remove the redirect if the page should be indexed. 2. Or update internal links to point to the destination URL directly.'}
+                                  {r.coverageState === 'Crawled - currently not indexed' && '1. Add unique, valuable content (500+ words). 2. Add 3-5 internal links from high-authority pages. 3. Add FAQ or LocalBusiness schema. 4. Request indexing in GSC.'}
+                                  {r.coverageState === 'Discovered - currently not indexed' && '1. Add internal links from your main pages. 2. Ensure the page is in your sitemap. 3. Improve page content quality. 4. Request indexing in GSC.'}
+                                  {r.coverageState === 'Excluded by noindex tag' && '1. Remove the noindex tag if the page should be indexed. 2. Check Yoast/RankMath settings for this page. 3. Verify no plugin is adding noindex.'}
+                                  {r.coverageState === 'Blocked by robots.txt' && '1. Update robots.txt to allow crawling this URL. 2. Check for overly broad Disallow rules. 3. Wait for Google to re-crawl.'}
+                                  {r.coverageState === 'Alternate page with proper canonical tag' && '1. If this page should be indexed, update the canonical tag to point to itself. 2. Or consolidate content into the canonical page.'}
+                                  {r.coverageState === 'Duplicate without user-selected canonical' && '1. Add a canonical tag pointing to the preferred version. 2. Remove or differentiate duplicate content. 3. Use 301 redirects for true duplicates.'}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text3)' }}>
+                              <span style={{ marginRight: 16 }}>Fetch: {r.pageFetchState || '—'}</span>
+                              <span style={{ marginRight: 16 }}>Robots: {r.robotsTxtState || '—'}</span>
+                              <span style={{ marginRight: 16 }}>Indexing: {r.indexingState || '—'}</span>
+                              <span>Full URL: <a href={r.url} target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>{r.url}</a></span>
+                            </div>
+                          </td></tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!loading && filtered.length === 0 && results.length > 0 && (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)', background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)' }}>
+              <i className={`fas ${isIndexed ? 'fa-check-circle' : 'fa-exclamation-triangle'}`} style={{ fontSize: 36, marginBottom: 12, display: 'block', color: isIndexed ? '#22c55e' : '#ef4444', opacity: 0.4 }} />
+              {searchQ ? `No results matching "${searchQ}"` : isIndexed ? 'No indexed pages found' : 'All pages are indexed!'}
             </div>
           )}
         </div>
@@ -21822,13 +22340,17 @@
           case 'gsc-audit':
             return <GSCAuditPage project={project} />;
           case 'website-audit':
-            return <WebsiteAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
+            return <CodeWebsiteAuditPage project={project} />;
           case 'web-sec-pagespeed-scores':
             return <SpeedAuditPage project={project} />;
           case 'onpage-audit':
             return <OnPageAuditPage project={project} />;
           case 'indexing':
             return <IndexingPage project={project} />;
+          case 'gsc-indexed':
+            return <GSCIndexedPage project={project} filter="indexed" />;
+          case 'gsc-not-indexed':
+            return <GSCIndexedPage project={project} filter="not-indexed" />;
           case 'citations':
             return <CitationsPage project={project} />;
           case 'user-behaviour':
@@ -21888,8 +22410,7 @@ case 'action-plan':
               return <ExternalGBPAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
             }
             if (activeTab.startsWith('web-sec-')) {
-              const sectionName = activeTab.replace('web-sec-', '').replace(/-/g, ' ');
-              return <WebsiteAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
+              return <CodeWebsiteAuditPage project={project} />;
             }
             if (activeTab.startsWith('gsc-sec-')) {
               return <GSCAuditPage project={project} />;
@@ -21905,9 +22426,11 @@ case 'action-plan':
           { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true },
           { id: 'gbp-audit-internal', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true, children: [
-            { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
+            { id: 'gsc-indexed', label: 'Indexed Pages', icon: 'fas fa-check-circle' },
+            { id: 'gsc-not-indexed', label: 'Not Indexed', icon: 'fas fa-exclamation-triangle' },
           ] },
           { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true, children: [
+            { id: 'web-sec-pagespeed-scores', label: 'PageSpeed Scores', icon: 'fas fa-tachometer-alt' },
             { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
             { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
