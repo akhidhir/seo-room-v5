@@ -19658,20 +19658,33 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const avgCompPhotos = compPhotos.length ? Math.round(compPhotos.reduce((a, b) => a + b, 0) / compPhotos.length) : null;
     const photoIssues = [];
     if (photoCount === 0) {
-      photoIssues.push('No photos uploaded — Google says photos help customers and improve ranking');
+      photoIssues.push('No photos uploaded');
     } else if (photoCount < 5) {
-      photoIssues.push(`Only ${photoCount} photos — aim for at least 10-20 photos showing your business`);
+      photoIssues.push(`Only ${photoCount} photos — aim for at least 10-20`);
     }
     if (avgCompPhotos && photoCount < avgCompPhotos) {
       photoIssues.push(`Competitors average ${avgCompPhotos} photos, you have ${photoCount}`);
     }
+    const photoTypes = [
+      'Logo — your business logo (appears on Maps)',
+      'Cover photo — hero image that represents your business',
+      'Exterior — shopfront/van/vehicle branding so customers recognise you',
+      'Interior/workspace — your workshop, tools, or office setup',
+      'Team — photos of you and your team on the job',
+      'At work — action shots of services being performed (e.g. cutting keys, unlocking cars)',
+      'Completed jobs — before/after or finished results',
+      'Equipment — specialist tools and technology you use',
+      'Branded vehicle — if mobile service, show your branded van/car',
+      'Customer interactions — with permission, happy customers receiving service'
+    ];
     gbpAuditChecks.push({
       id: 'photo-benchmarks',
       title: 'Photos & Media',
       status: photoIssues.length === 0 ? 'pass' : photoCount === 0 ? 'critical' : 'warning',
       value: `${photoCount} photos${avgCompPhotos ? ` (competitors avg: ${avgCompPhotos})` : ''}`,
       issues: photoIssues,
-      recommendation: photoIssues.length ? `Google says photos and videos show what you offer. ${photoIssues.join('. ')}` : null,
+      photoTypes,
+      recommendation: photoIssues.length ? `Google says photos and videos show what you offer. Upload at least 10-20 high-quality photos across these categories:\n${photoTypes.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\nTips: Use real photos (not stock), geo-tag them to your location, and add new photos monthly to signal activity.` : null,
     });
 
     // Competitor benchmarks (from grid scan data)
