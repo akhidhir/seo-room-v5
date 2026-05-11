@@ -4002,25 +4002,125 @@ app.get('/api/projects/:projectId/rc-profile', async (req, res) => {
   }
 });
 
-// Re-run internal GBP audit from stored RC data (on-demand)
+// Re-run internal GBP audit from stored RC data (on-demand, auto-fetches from RC API if needed)
 app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    // Load stored RC data from project_integrations
-    const rcResult = await pool.query(
-      `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
-      [projectId]
-    );
-    if (rcResult.rows.length === 0) {
-      return res.status(400).json({ error: 'No Rating Captain data found. Run a sync first (scheduled task or Cowork).' });
-    }
-    const rcData = typeof rcResult.rows[0].config === 'string' ? JSON.parse(rcResult.rows[0].config) : rcResult.rows[0].config;
-    const { profile, healthcheck, reviews_stats, posts } = rcData;
-
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
     const businessName = project.business_name || project.name || '';
+
+    // Load stored RC data from project_integrations
+    let rcResult = await pool.query(
+      `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
+      [projectId]
+    );
+
+    // Auto-fetch from RC API if no stored data
+    if (rcResult.rows.length === 0) {
+      const RC_TOKEN = process.env.RC_API_TOKEN;
+      if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured. Set it in Railway environment variables.' });
+
+      const gbpLocationId = project.gbp_location_id;
+      if (!gbpLocationId) return res.status(400).json({ error: 'No GBP Location ID set in project settings. Go to Settings → select RC location.' });
+
+      const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+      const RC_BASE = 'https://local.ratingcaptain.com/api';
+      console.log(`[gbp-internal] No stored RC data — auto-fetching from RC API for ${gbpLocationId}...`);
+
+      // Fetch profile, healthcheck, reviews stats, posts in parallel
+      let profile = null, healthcheck = [], reviews_stats = null, posts = null;
+
+      const [profileResp, hcResp, reviewsResp, postsResp] = await Promise.allSettled([
+        fetch(`${RC_BASE}/locations/${gbpLocationId}`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/locations/${gbpLocationId}/healthcheck`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/locations/${gbpLocationId}/reviews/stats`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/locations/${gbpLocationId}/posts?status=published&per_page=25`, { headers: rcHeaders }),
+      ]);
+
+      if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
+        profile = await profileResp.value.json();
+        console.log(`[gbp-internal] Fetched profile: ${profile.title || 'unknown'}`);
+      } else {
+        console.log(`[gbp-internal] Profile fetch failed:`, profileResp.status === 'fulfilled' ? `HTTP ${profileResp.value.status}` : profileResp.reason?.message);
+      }
+      if (hcResp.status === 'fulfilled' && hcResp.value.ok) {
+        healthcheck = await hcResp.value.json();
+        console.log(`[gbp-internal] Fetched ${Array.isArray(healthcheck) ? healthcheck.length : 0} healthcheck items`);
+      }
+      if (reviewsResp.status === 'fulfilled' && reviewsResp.value.ok) {
+        reviews_stats = await reviewsResp.value.json();
+        console.log(`[gbp-internal] Fetched reviews stats: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} avg`);
+      }
+      if (postsResp.status === 'fulfilled' && postsResp.value.ok) {
+        posts = await postsResp.value.json();
+        console.log(`[gbp-internal] Fetched ${posts.published_posts?.length || 0} posts`);
+      }
+
+      if (!profile && !reviews_stats) {
+        return res.status(400).json({ error: 'Could not fetch data from Rating Captain API. Check that GBP Location ID is correct and RC_API_TOKEN is valid.' });
+      }
+
+      // Store fetched data as rc_profile for future use
+      const rcData = { profile, healthcheck, reviews_stats, posts, synced_at: new Date().toISOString() };
+      await pool.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+         VALUES ($1, 'rc_profile', $2, 'connected', NOW())
+         ON CONFLICT (project_id, kind)
+         DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+        [projectId, JSON.stringify(rcData)]
+      );
+
+      // Also store as gbp_profile for the profile summary card
+      if (profile) {
+        const hours = (profile.regularHours?.periods || []);
+        const serviceItems = (profile.serviceItems || []);
+        const serviceAreas = (profile.serviceArea?.places?.placeInfos || []);
+        const gbpProfile = {
+          business: { name: profile.title || businessName },
+          source: 'rating_captain',
+          address: [
+            ...(profile.storefrontAddress?.addressLines || []),
+            profile.storefrontAddress?.locality,
+            profile.storefrontAddress?.administrativeArea,
+            profile.storefrontAddress?.postalCode
+          ].filter(Boolean).join(', '),
+          phone: profile.phoneNumbers?.primaryPhone || null,
+          website: profile.websiteUri || null,
+          description: profile.profile?.description || null,
+          categories: [
+            profile.categories?.primaryCategory?.displayName,
+            ...(profile.categories?.additionalCategories || []).map(c => c.displayName)
+          ].filter(Boolean),
+          hours: hours.map(h => ({ day: h.openDay, hours: `${h.openTime?.hours || 0}:${String(h.openTime?.minutes || 0).padStart(2,'0')}-${h.closeTime?.hours || 0}:${String(h.closeTime?.minutes || 0).padStart(2,'0')}` })),
+          services: serviceItems.map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean),
+          service_areas: serviceAreas.map(s => s.placeName),
+          place_id: profile.metadata?.placeId || null,
+          maps_uri: profile.metadata?.mapsUri || null,
+          reviews: reviews_stats || {},
+          posts_count: posts?.published_posts?.length || 0,
+          last_post_date: posts?.published_posts?.[0]?.createTime || null,
+        };
+        await pool.query(
+          `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+           VALUES ($1, 'gbp_profile', $2, 'connected', NOW())
+           ON CONFLICT (project_id, kind)
+           DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+          [projectId, JSON.stringify(gbpProfile)]
+        );
+      }
+
+      console.log(`[gbp-internal] Stored RC profile data, proceeding with audit...`);
+      // Re-load from DB to use consistent code path
+      rcResult = await pool.query(
+        `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`,
+        [projectId]
+      );
+    }
+
+    const rcData = typeof rcResult.rows[0].config === 'string' ? JSON.parse(rcResult.rows[0].config) : rcResult.rows[0].config;
+    const { profile, healthcheck, reviews_stats, posts } = rcData;
 
     console.log(`[gbp-internal] Re-running internal audit from stored RC data for project ${projectId} (${businessName})`);
 
