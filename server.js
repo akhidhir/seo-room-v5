@@ -4024,8 +4024,8 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
       [projectId]
     );
 
-    // Auto-fetch from RC API if no stored data
-    if (rcResult.rows.length === 0) {
+    // Always fetch fresh data from RC API on re-run (ensures reviews, posts, etc. are current)
+    {
       const RC_TOKEN = process.env.RC_API_TOKEN;
       if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured. Set it in Railway environment variables.' });
 

@@ -5509,8 +5509,10 @@
       const prof = profileSummary?.profile || profileSummary || null;
       const rcReviews = rcProfile?.reviews_stats || {};
       const rcPosts = rcProfile?.posts?.published_posts || [];
+      const rcPostsCount = rcProfile?.posts?.count || rcPosts.length || rcProfile?.gbp_profile?.posts_count || 0;
       const rcHours = p?.regularHours?.periods || [];
-      const rcServices = (p?.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean);
+      const rcServicesRaw = (p?.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean);
+      const rcServices = rcServicesRaw.filter(s => !s.startsWith('job_type_id:'));
       const rcAreas = (p?.serviceArea?.places?.placeInfos || []).map(s => s.placeName);
       const rcCats = [p?.categories?.primaryCategory?.displayName, ...(p?.categories?.additionalCategories || []).map(c => c.displayName)].filter(Boolean);
       const rcDesc = p?.profile?.description || prof?.description || '';
@@ -5574,10 +5576,10 @@
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 16 }}>
                     {[
                       { label: 'Categories', value: rcCats.length || (prof?.categories || []).length, icon: 'fas fa-tags', color: '#6366f1' },
-                      { label: 'Services', value: rcServices.length || (prof?.services || []).length, icon: 'fas fa-cogs', color: '#22c55e' },
+                      { label: 'Services', value: rcServicesRaw.length || (prof?.services || []).length, icon: 'fas fa-cogs', color: '#22c55e' },
                       { label: 'Service Areas', value: rcAreas.length || (prof?.service_areas || []).length, icon: 'fas fa-map', color: '#f59e0b' },
-                      { label: 'Hours/Week', value: rcHours.length || (prof?.hours || []).length, icon: 'fas fa-clock', color: '#3b82f6' },
-                      { label: 'Posts', value: rcPosts.length || prof?.posts_count || 0, icon: 'fas fa-newspaper', color: '#ec4899' },
+                      { label: 'Days/Week', value: rcHours.length || (prof?.hours || []).length, icon: 'fas fa-clock', color: '#3b82f6' },
+                      { label: 'Posts', value: rcPostsCount, icon: 'fas fa-newspaper', color: '#ec4899' },
                     ].map((s, i) => (
                       <div key={i} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', textAlign: 'center' }}>
                         <i className={s.icon} style={{ color: s.color, fontSize: 16, marginBottom: 6, display: 'block' }} />
