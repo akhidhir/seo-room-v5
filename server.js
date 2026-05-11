@@ -4038,13 +4038,15 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
       const numericId = gbpLocationId.replace(/^locations\//, '');
       console.log(`[gbp-internal] No stored RC data — auto-fetching from RC API for ${numericId}...`);
 
-      // Fetch profile + reviews stats + posts list in parallel (using correct RC API endpoints)
+      // Fetch profile + reviews (all + unreplied for stats) + posts list in parallel
+      // RC REST API uses location_ids[] param format and current_page (not page)
       let profile = null, healthcheck = [], reviews_stats = null, posts = null;
 
-      const [profileResp, reviewsResp, postsListResp] = await Promise.allSettled([
+      const [profileResp, reviewsAllResp, reviewsUnrepliedResp, postsListResp] = await Promise.allSettled([
         fetch(`${RC_BASE}/locations/${numericId}`, { headers: rcHeaders }),
-        fetch(`${RC_BASE}/reviews/stats?location_id=${encodeURIComponent(gbpLocationId)}`, { headers: rcHeaders }),
-        fetch(`${RC_BASE}/posts?location_id=${encodeURIComponent(gbpLocationId)}&page=1&per_page=100&status=published`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/reviews?location_ids[]=${encodeURIComponent(gbpLocationId)}&current_page=1&per_page=1`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/reviews?location_ids[]=${encodeURIComponent(gbpLocationId)}&current_page=1&per_page=1&replied=false`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/posts?location_ids[]=${encodeURIComponent(gbpLocationId)}&current_page=1&per_page=100`, { headers: rcHeaders }),
       ]);
 
       if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
@@ -4054,25 +4056,55 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
         console.log(`[gbp-internal] Profile fetch failed:`, profileResp.status === 'fulfilled' ? `HTTP ${profileResp.value.status}` : profileResp.reason?.message);
       }
 
-      // Get review stats from dedicated reviews/stats endpoint (accurate, real-time)
-      if (reviewsResp.status === 'fulfilled' && reviewsResp.value.ok) {
+      // Build review stats from reviews list endpoint (uses pagination total for accurate count)
+      if (reviewsAllResp.status === 'fulfilled' && reviewsAllResp.value.ok) {
         try {
-          const revData = await reviewsResp.value.json();
+          const revData = await reviewsAllResp.value.json();
+          const totalReviews = revData.total || 0;
+          const unrepliedData = (reviewsUnrepliedResp.status === 'fulfilled' && reviewsUnrepliedResp.value.ok)
+            ? await reviewsUnrepliedResp.value.json() : null;
+          const unrepliedCount = unrepliedData?.total || 0;
+          const repliedCount = totalReviews - unrepliedCount;
+          const replyRate = totalReviews > 0 ? Math.round((repliedCount / totalReviews) * 1000) / 10 : 0;
+          // Get average rating from the first review's context or from profile
+          const firstReview = (revData.reviews || revData.data || [])[0];
+          // Calculate avg from extended endpoint as fallback
           reviews_stats = {
-            total_reviews: revData.total_reviews || 0,
-            average_rating: revData.average_rating || 0,
-            reply_rate: revData.reply_rate || 0,
-            replied_count: revData.replied_count || 0,
-            unreplied_count: revData.unreplied_count || 0,
-            rating_distribution: revData.rating_distribution || {},
+            total_reviews: totalReviews,
+            average_rating: 0, // will be filled from extended or profile
+            reply_rate: replyRate,
+            replied_count: repliedCount,
+            unreplied_count: unrepliedCount,
           };
-          console.log(`[gbp-internal] Got reviews stats: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} avg, ${reviews_stats.reply_rate}% reply rate`);
-        } catch (e) { console.log(`[gbp-internal] Reviews stats parse error:`, e.message); }
+          console.log(`[gbp-internal] Got reviews from list: ${totalReviews} total, ${unrepliedCount} unreplied, ${replyRate}% reply rate`);
+        } catch (e) { console.log(`[gbp-internal] Reviews parse error:`, e.message); }
       } else {
-        console.log(`[gbp-internal] Reviews stats fetch failed:`, reviewsResp.status === 'fulfilled' ? `HTTP ${reviewsResp.value.status}` : reviewsResp.reason?.message);
+        console.log(`[gbp-internal] Reviews fetch failed:`, reviewsAllResp.status === 'fulfilled' ? `HTTP ${reviewsAllResp.value.status}` : reviewsAllResp.reason?.message);
       }
 
-      // Get posts list from dedicated posts endpoint (returns actual post objects)
+      // Get avg rating from extended endpoint (this part works, just review count is stale)
+      try {
+        const extResp = await fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders });
+        if (extResp.ok) {
+          const extData = await extResp.json();
+          const loc = (extData.data || []).find(l => l.location_id === gbpLocationId);
+          if (loc) {
+            if (reviews_stats) {
+              reviews_stats.average_rating = loc.rating || 0;
+            } else {
+              // Fallback: use extended data if reviews list failed
+              reviews_stats = {
+                total_reviews: loc.reviews_amount || 0,
+                average_rating: loc.rating || 0,
+                reply_rate: 0, replied_count: 0, unreplied_count: 0,
+              };
+            }
+            console.log(`[gbp-internal] Got rating from extended: ${loc.rating}`);
+          }
+        }
+      } catch (e) { console.log(`[gbp-internal] Extended fetch error:`, e.message); }
+
+      // Get posts list
       if (postsListResp.status === 'fulfilled' && postsListResp.value.ok) {
         try {
           const postsData = await postsListResp.value.json();
