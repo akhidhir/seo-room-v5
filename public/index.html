@@ -16891,6 +16891,7 @@
       const [gridSize, setGridSize] = useState(5);
       const [gridRadius, setGridRadius] = useState(10);
       const [scanProgress, setScanProgress] = useState('');
+      const [rcSyncing, setRcSyncing] = useState(false);
 
       const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: [] });
 
@@ -16935,6 +16936,27 @@
           setAuditInsights({ serviceAreas: Array.isArray(serviceAreas) ? serviceAreas : [], sitePages, gbpFindings, citations });
         })();
       }, [project.id]);
+
+      const handleRcSync = async () => {
+        setRcSyncing(true);
+        try {
+          const result = await api(`/projects/${project.id}/rc-grid-sync/live`, { method: 'POST' });
+          if (result.error) { alert('RC Sync failed: ' + result.error); setRcSyncing(false); return; }
+          // Reload grid scans
+          const data = await api(`/projects/${project.id}/maps/grid-scans`);
+          if (Array.isArray(data)) {
+            const scanMap = {};
+            data.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
+            setGridScans(scanMap);
+            setMapsChecked(true);
+          }
+          loadData();
+          alert(`Synced ${result.synced} keywords from Rating Captain`);
+        } catch (e) {
+          alert('RC Sync error: ' + e.message);
+        }
+        setRcSyncing(false);
+      };
 
       const handleCheckRankings = async () => {
         const allMapKws = keywords.filter(k => k.location);
@@ -17233,6 +17255,9 @@
               </button>
               <button onClick={downloadMapsSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
                 Sample
+              </button>
+              <button className="btn" onClick={handleRcSync} disabled={rcSyncing} style={{ fontSize: 13, color: '#f97316', borderColor: '#f97316' }}>
+                {rcSyncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Syncing RC...</> : <><i className="fa-solid fa-satellite-dish" style={{ marginRight: 4 }} />Sync from RC</>}
               </button>
               <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || mapsKeywordsRaw.length === 0} style={{ fontSize: 13 }}>
                 {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />{scanProgress || 'Scanning...'}</> : <><i className="fa-solid fa-th" style={{ marginRight: 4 }} />Grid Scan</>}

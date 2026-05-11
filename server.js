@@ -3762,6 +3762,109 @@ app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
   }
 });
 
+// RC Grid Sync — DIRECT from RC Local API (on-demand, called from dashboard button)
+app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
+  const { projectId } = req.params;
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const rcLocationId = project.gbp_location_id; // e.g. "locations/17933670947974765351"
+    if (!rcLocationId) return res.status(400).json({ error: 'No GBP Location ID set in project settings' });
+
+    const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+    const RC_BASE = 'https://local.ratingcaptain.com/api';
+
+    // Step 1: Get locations with keywords
+    console.log(`[rc-live-sync] Fetching RC locations for project ${projectId}...`);
+    const locResp = await fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders });
+    if (!locResp.ok) return res.status(500).json({ error: `RC locations API returned ${locResp.status}` });
+    const locData = await locResp.json();
+
+    // Find matching location by gbp_location_id
+    const allLocations = locData.data || [];
+    const rcLocation = allLocations.find(l => l.location_id === rcLocationId);
+    if (!rcLocation) return res.status(404).json({ error: `Location ${rcLocationId} not found in RC account` });
+
+    const keywords = rcLocation.keywords || [];
+    if (keywords.length === 0) return res.json({ ok: true, synced: 0, message: 'No keywords monitored in RC for this location' });
+
+    // Step 2: Get center lat/lng
+    const llResp = await fetch(`${RC_BASE}/locations/${rcLocationId}/latlng`, { headers: rcHeaders });
+    let centerLat = null, centerLng = null;
+    if (llResp.ok) {
+      const llData = await llResp.json();
+      centerLat = llData.latitude || llData.lat;
+      centerLng = llData.longitude || llData.lng;
+    }
+
+    // Step 3: Fetch monitoring data for each keyword
+    let synced = 0;
+    const results = [];
+    for (const kw of keywords) {
+      if (!kw.monitoring_id) continue;
+      console.log(`[rc-live-sync] Fetching grid for "${kw.query}" (monitoring ${kw.monitoring_id})...`);
+
+      const monResp = await fetch(`${RC_BASE}/keywords/monitoring/${kw.monitoring_id}`, { headers: rcHeaders });
+      if (!monResp.ok) { results.push({ keyword: kw.query, error: `HTTP ${monResp.status}` }); continue; }
+      const monData = await monResp.json();
+      const monResults = monData.monitoring?.results || monData.results || [];
+      if (monResults.length === 0) { results.push({ keyword: kw.query, error: 'No grid data' }); continue; }
+
+      // Transform RC grid points to our format
+      const size = kw.number_of_points ? Math.round(Math.sqrt(kw.number_of_points)) : Math.round(Math.sqrt(monResults.length));
+      const gridPoints = monResults.map((pt, i) => {
+        const latestResult = pt.results && pt.results.length > 0 ? pt.results[pt.results.length - 1] : null;
+        const pos = latestResult ? latestResult.position : null;
+        return {
+          row: Math.floor(i / size),
+          col: i % size,
+          lat: pt.location?.latitude || pt.lat,
+          lng: pt.location?.longitude || pt.lng,
+          position: pos != null && pos <= 20 ? pos : null,
+          found: pos != null && pos <= 20,
+          top3: []
+        };
+      });
+
+      // Compute metrics
+      const foundPoints = gridPoints.filter(p => p.found);
+      const arp = foundPoints.length > 0 ? +(foundPoints.reduce((s, p) => s + p.position, 0) / foundPoints.length).toFixed(1) : null;
+      const atrp = +(gridPoints.reduce((s, p) => s + (p.found ? p.position : 21), 0) / gridPoints.length).toFixed(1);
+      const top3Count = gridPoints.filter(p => p.position && p.position <= 3).length;
+      const solv = +((top3Count / gridPoints.length) * 100).toFixed(1);
+      const cLat = centerLat || (monResults.reduce((s, p) => s + (p.location?.latitude || 0), 0) / monResults.length);
+      const cLng = centerLng || (monResults.reduce((s, p) => s + (p.location?.longitude || 0), 0) / monResults.length);
+
+      // Upsert into grid_scans
+      await pool.query('DELETE FROM grid_scans WHERE project_id=$1 AND keyword=$2', [projectId, kw.query]);
+      await pool.query(
+        `INSERT INTO grid_scans (project_id, keyword, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
+        [projectId, kw.query, size, cLat, cLng, 10, JSON.stringify(gridPoints), arp, atrp, solv, foundPoints.length, gridPoints.length]
+      );
+
+      // Upsert rank_keywords
+      const existingKw = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND keyword=$2', [projectId, kw.query]);
+      if (existingKw.rows.length === 0) {
+        await pool.query('INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3)', [projectId, kw.query, '']);
+      }
+
+      synced++;
+      results.push({ keyword: kw.query, points: gridPoints.length, arp, atrp, solv });
+    }
+
+    console.log(`[rc-live-sync] Synced ${synced}/${keywords.length} keywords for project ${projectId}`);
+    res.json({ ok: true, synced, total: keywords.length, results });
+  } catch (e) {
+    console.error('[rc-live-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== GBP PROFILE (from Chrome Extension) ====================
 
 // Store GBP profile data scraped by the extension
