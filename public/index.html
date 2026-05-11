@@ -9101,7 +9101,7 @@
       const getAuditPageLabel = (item) => {
         const pillar = (item._pillar || item.pillar || '').toLowerCase();
         const cat = (item._category || item.category || '').toLowerCase();
-        if (pillar.includes('gbp')) return 'External Audit';
+        if (pillar.includes('gbp')) return 'GBP Audit';
         if (pillar.includes('gsc')) return 'GSC Audit';
         if (cat === 'core web vitals') return 'Website Audit';
         if (cat === 'on-page issues' || cat === 'content quality') return 'Website Audit';
@@ -9223,7 +9223,7 @@
           {/* Stats cards — match audit pages */}
           {(() => {
             const auditStats = [
-              { label: 'EXTERNAL AUDIT', icon: 'fas fa-globe', color: '#ef4444', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'External Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'External Audit' && (i.status || 'pending') === 'pending').length },
+              { label: 'GBP AUDIT', icon: 'fas fa-map-marker-alt', color: '#ef4444', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GBP Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GBP Audit' && (i.status || 'pending') === 'pending').length },
               { label: 'GSC AUDIT', icon: 'fas fa-chart-line', color: '#3b82f6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit' && (i.status || 'pending') === 'pending').length },
               { label: 'WEBSITE AUDIT', icon: 'fas fa-spider', color: '#8b5cf6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit' && (i.status || 'pending') === 'pending').length },
               { label: 'PENDING', icon: 'fas fa-clock', color: '#f59e0b', count: stats.pending, pending: stats.pending },
@@ -21529,10 +21529,7 @@ case 'action-plan':
       const allNavItems = [
         { section: 'AUDIT', items: [
           { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true },
-          { id: 'gbp-audit', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true, expandable: true, children: [
-            { id: 'gbp-audit-internal', label: 'Internal Audit', icon: 'fas fa-database' },
-            { id: 'gbp-audit-external', label: 'External Audit', icon: 'fas fa-globe', expandable: true },
-          ] },
+          { id: 'gbp-audit-internal', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true },
           { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true, children: [
             { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
