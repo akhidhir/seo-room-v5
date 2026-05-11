@@ -4376,6 +4376,62 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
   }
 });
 
+// GBP Performance Stats (calls, website clicks, impressions — month by month)
+app.get('/api/projects/:projectId/gbp-performance', async (req, res) => {
+  const { projectId } = req.params;
+  const days = parseInt(req.query.days) || 365;
+  try {
+    const proj = await pool.query('SELECT gbp_location_id FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length || !proj.rows[0].gbp_location_id) return res.status(400).json({ error: 'No GBP Location ID set' });
+    const gbpLocationId = proj.rows[0].gbp_location_id;
+    const RC_TOKEN = process.env.RC_API_TOKEN;
+    if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+
+    const numericId = gbpLocationId.replace(/^locations\//, '');
+    const RC_BASE = 'https://local.ratingcaptain.com/api';
+    const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+
+    const resp = await fetch(`${RC_BASE}/locations/${numericId}/stats?days=${days}`, { headers: rcHeaders });
+    if (!resp.ok) {
+      // Fallback: try the GBP Management API style via RC proxy
+      const resp2 = await fetch(`${RC_BASE}/stats/performance?location_ids[]=${encodeURIComponent(gbpLocationId)}&days=${days}`, { headers: rcHeaders });
+      if (!resp2.ok) return res.status(resp2.status).json({ error: 'Could not fetch GBP performance stats' });
+      const data2 = await resp2.json();
+      return res.json(data2);
+    }
+    const data = await resp.json();
+
+    // Parse the multiDailyMetricTimeSeries format into monthly aggregates
+    const series = data.multiDailyMetricTimeSeries?.[0]?.dailyMetricTimeSeries || data.dailyMetricTimeSeries || [];
+    const monthlyMap = {}; // 'YYYY-MM' -> { calls, websiteClicks, impressions, directions }
+
+    for (const metric of series) {
+      const metricName = metric.dailyMetric;
+      const values = metric.timeSeries?.datedValues || [];
+      for (const dv of values) {
+        const val = parseInt(dv.value) || 0;
+        if (!val) continue;
+        const key = `${dv.date.year}-${String(dv.date.month).padStart(2, '0')}`;
+        if (!monthlyMap[key]) monthlyMap[key] = { month: key, calls: 0, websiteClicks: 0, impressions: 0, directions: 0, searchImpressions: 0, mapsImpressions: 0 };
+        if (metricName === 'CALL_CLICKS') monthlyMap[key].calls += val;
+        else if (metricName === 'WEBSITE_CLICKS') monthlyMap[key].websiteClicks += val;
+        else if (metricName === 'BUSINESS_DIRECTION_REQUESTS') monthlyMap[key].directions += val;
+        else if (metricName.includes('IMPRESSIONS')) {
+          monthlyMap[key].impressions += val;
+          if (metricName.includes('SEARCH')) monthlyMap[key].searchImpressions += val;
+          if (metricName.includes('MAPS')) monthlyMap[key].mapsImpressions += val;
+        }
+      }
+    }
+
+    const months = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
+    res.json({ months, raw_metrics: series.map(s => s.dailyMetric) });
+  } catch (e) {
+    console.error('[gbp-performance] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== CITATIONS & DIRECTORIES ====================
 
 // Get all directories with project-specific status
