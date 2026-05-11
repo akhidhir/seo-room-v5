@@ -22085,7 +22085,7 @@ case 'action-plan':
                           onClick={() => {
                             if (item.expandable) {
                               setExpandedNav(prev => ({ ...prev, [item.id]: !prev[item.id] }));
-                              if (!item.children) { setActiveTab(item.id); setMobileMenuOpen(false); }
+                              setActiveTab(item.id); setMobileMenuOpen(false);
                             } else {
                               setActiveTab(item.id); setMobileMenuOpen(false);
                             }
