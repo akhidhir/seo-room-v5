@@ -3467,8 +3467,11 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
         place_id: profile.metadata?.placeId || null,
         maps_uri: profile.metadata?.mapsUri || null,
         reviews: reviews_stats || {},
-        posts_count: posts?.published_posts?.length || 0,
-        last_post_date: posts?.published_posts?.[0]?.createTime || null,
+        posts_count: posts?.count || posts?.published_posts?.length || 0,
+        last_post_date: (() => {
+          const fp = posts?.published_posts?.[0];
+          return fp?.createTime || fp?.created_at || fp?.publishedAt || fp?.published_at || null;
+        })(),
         opening_date: profile.openInfo?.openingDate ? `${profile.openInfo.openingDate.year}-${String(profile.openInfo.openingDate.month).padStart(2,'0')}-${String(profile.openInfo.openingDate.day).padStart(2,'0')}` : null,
       };
       await pool.query(
@@ -3501,8 +3504,11 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     const replyRate = reviews_stats?.reply_rate || 0;
     const unreplied = reviews_stats?.unreplied_count || 0;
     const postsList = posts?.published_posts || [];
-    const lastPostDate = postsList[0]?.createTime ? new Date(postsList[0].createTime) : null;
-    const daysSincePost = lastPostDate ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : 999;
+    const postsCount = posts?.count || postsList.length || 0;
+    const firstPost = postsList[0];
+    const lastPostDateStr = firstPost?.createTime || firstPost?.created_at || firstPost?.publishedAt || firstPost?.published_at || firstPost?.updateTime || null;
+    const lastPostDate = lastPostDateStr ? new Date(lastPostDateStr) : null;
+    const daysSincePost = (lastPostDate && !isNaN(lastPostDate.getTime())) ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : null;
 
     // Helper to add finding
     const addFinding = (category, title, desc, recommendation, severity, current, target) => {
@@ -3592,18 +3598,18 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     }
 
     // -- Posts --
-    if (daysSincePost > 30) {
+    if (daysSincePost !== null && daysSincePost > 30) {
       addFinding('Prominence > Posts', 'No recent GBP posts',
         daysSincePost > 365 ? `Last post was over ${Math.round(daysSincePost/365)} year(s) ago.` : `Last post was ${daysSincePost} days ago.`,
         'Post weekly on GBP: service highlights, tips, offers, team photos. Each post signals activity to Google.',
         daysSincePost > 90 ? 'Critical' : 'High', `${daysSincePost} days since last post`, 'Weekly posts');
     }
 
-    if (postsList.length < 10) {
+    if (postsCount < 10) {
       addFinding('Prominence > Posts', 'Low total post count',
-        `Only ${postsList.length} posts total on GBP profile.`,
+        `Only ${postsCount} posts total on GBP profile.`,
         'Build a content calendar with 2-3 posts per week. Mix service updates, tips, before/after photos, and seasonal offers.',
-        'Medium', `${postsList.length} total posts`, '50+ posts');
+        'Medium', `${postsCount} total posts`, '50+ posts');
     }
 
     // -- Healthcheck items --
@@ -4076,14 +4082,32 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
         } catch (e) { console.log(`[gbp-internal] Stats parse error:`, e.message); }
       }
 
-      // Get posts data
+      // Get posts data — stats/posts returns stats (counts), not post objects
       if (postsResp.status === 'fulfilled' && postsResp.value.ok) {
         try {
           const postsData = await postsResp.value.json();
-          posts = { published_posts: postsData.data || postsData.posts || postsData || [] };
-          console.log(`[gbp-internal] Got posts stats`);
+          console.log(`[gbp-internal] Posts stats response:`, JSON.stringify(postsData).substring(0, 500));
+          // postsData is stats format — extract count from it
+          const postsCount = postsData.total || postsData.count || postsData.published ||
+            (Array.isArray(postsData.data) ? postsData.data.length : 0) ||
+            (Array.isArray(postsData) ? postsData.length : 0);
+          posts = { posts_stats: postsData, count: postsCount, published_posts: [] };
         } catch (e) { console.log(`[gbp-internal] Posts parse error:`, e.message); }
       }
+
+      // Try to get actual post list from RC API
+      try {
+        const postsListResp = await fetch(`${RC_BASE}/posts?location_ids[]=${encodeURIComponent(gbpLocationId)}&current_page=1&per_page=20`, { headers: rcHeaders });
+        if (postsListResp.ok) {
+          const postsListData = await postsListResp.json();
+          const postItems = postsListData.data || postsListData.posts || (Array.isArray(postsListData) ? postsListData : []);
+          if (postItems.length > 0) {
+            posts.published_posts = postItems;
+            if (!posts.count) posts.count = postsListData.total || postItems.length;
+            console.log(`[gbp-internal] Got ${postItems.length} actual posts from RC API`);
+          }
+        }
+      } catch (e) { console.log(`[gbp-internal] Posts list fetch error:`, e.message); }
 
       if (!profile) {
         return res.status(400).json({ error: 'Could not fetch profile from Rating Captain API. Check that GBP Location ID is correct and RC_API_TOKEN is valid.' });
@@ -4126,8 +4150,11 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
           place_id: profile.metadata?.placeId || null,
           maps_uri: profile.metadata?.mapsUri || null,
           reviews: reviews_stats || {},
-          posts_count: posts?.published_posts?.length || 0,
-          last_post_date: posts?.published_posts?.[0]?.createTime || null,
+          posts_count: posts?.count || posts?.published_posts?.length || 0,
+          last_post_date: (() => {
+            const fp = posts?.published_posts?.[0];
+            return fp?.createTime || fp?.created_at || fp?.publishedAt || fp?.published_at || null;
+          })(),
         };
         await pool.query(
           `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
@@ -4164,8 +4191,12 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
     const replyRate = reviews_stats?.reply_rate || 0;
     const unreplied = reviews_stats?.unreplied_count || 0;
     const postsList = posts?.published_posts || [];
-    const lastPostDate = postsList[0]?.createTime ? new Date(postsList[0].createTime) : null;
-    const daysSincePost = lastPostDate ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : 999;
+    const postsCount = posts?.count || postsList.length || 0;
+    // Try multiple date field names from RC API (createTime, created_at, publishedAt, etc.)
+    const firstPost = postsList[0];
+    const lastPostDateStr = firstPost?.createTime || firstPost?.created_at || firstPost?.publishedAt || firstPost?.published_at || firstPost?.updateTime || null;
+    const lastPostDate = lastPostDateStr ? new Date(lastPostDateStr) : null;
+    const daysSincePost = (lastPostDate && !isNaN(lastPostDate.getTime())) ? Math.round((Date.now() - lastPostDate.getTime()) / (1000*60*60*24)) : null;
 
     const addFinding = (category, title, desc, recommendation, severity, current, target) => {
       findings.push({ category, title, description: desc, recommendation, severity, current_value: current, recommended_value: target });
@@ -4252,18 +4283,18 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
     }
 
     // -- Posts --
-    if (daysSincePost > 30) {
+    if (daysSincePost !== null && daysSincePost > 30) {
       addFinding('Prominence > Posts', 'No recent GBP posts',
         daysSincePost > 365 ? `Last post was over ${Math.round(daysSincePost/365)} year(s) ago.` : `Last post was ${daysSincePost} days ago.`,
         'Post weekly on GBP: service highlights, tips, offers, team photos.',
         daysSincePost > 90 ? 'Critical' : 'High', `${daysSincePost} days since last post`, 'Weekly posts');
     }
 
-    if (postsList.length < 10) {
+    if (postsCount < 10) {
       addFinding('Prominence > Posts', 'Low total post count',
-        `Only ${postsList.length} posts total on GBP profile.`,
+        `Only ${postsCount} posts total on GBP profile.`,
         'Build a content calendar with 2-3 posts per week.',
-        'Medium', `${postsList.length} total posts`, '50+ posts');
+        'Medium', `${postsCount} total posts`, '50+ posts');
     }
 
     // -- Healthcheck items --
@@ -17029,7 +17060,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
     const urls = [...sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
     const skip = new Set(['','contact-us','about-us','blog','privacy-policy','terms-conditions','faq','reviews','sitemap','service-areas','services','photo-gallery','refund-exchange','thank-you','cart','checkout','my-account','shop','sample-page']);
 
-    // Extract suburb pages
+    // Extract suburb pages — standard patterns + custom patterns (e.g. /plumber-{suburb}/)
     const suburbs = urls
       .filter(u => u.includes('/service-areas/') || u.includes('/suburbs/') || u.includes('/locations/'))
       .map(u => {
@@ -17038,6 +17069,28 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
         return slug;
       })
       .filter(s => s && s.length > 1);
+
+    // Also detect suburb pages from project's GBP service areas matching any URL
+    try {
+      const projR2 = await pool.query('SELECT service_areas FROM projects WHERE id=$1', [projectId]);
+      const sa2 = projR2.rows[0]?.service_areas;
+      if (sa2) {
+        const saList = typeof sa2 === 'string' ? JSON.parse(sa2) : sa2;
+        if (Array.isArray(saList)) {
+          const seen2 = new Set(suburbs.map(s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()));
+          for (const sub of saList) {
+            const subName = (typeof sub === 'string' ? sub : sub.name || '').trim();
+            const n = subName.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+            if (n.length < 3 || seen2.has(n)) continue;
+            const slug = n.replace(/\s+/g, '-');
+            if (urls.some(u => u.toLowerCase().includes(slug))) {
+              seen2.add(n);
+              suburbs.push(subName);
+            }
+          }
+        }
+      }
+    } catch {}
 
     // Extract service pages — anything that's not a suburb, not a brand index, not generic
     const brandIndexes = new Set(['a-f','g-j','k-o','p-z']);
@@ -19117,6 +19170,27 @@ app.post('/api/projects/:id/discover-suburbs', async (req, res) => {
       }
     }
 
+    // 2b. Also detect suburbs from custom URL patterns (e.g. /plumber-warner/) by matching GBP suburb names
+    if (suburbs.length === 0 && gbpSuburbs.length > 0) {
+      for (const page of allPages) {
+        const url = (page.url || '').toLowerCase();
+        try {
+          const urlPath = new URL(url.startsWith('http') ? url : 'https://x.com' + url).pathname.toLowerCase();
+          for (const gs of gbpSuburbs) {
+            const gSlug = normalize(gs).replace(/\s+/g, '-');
+            if (gSlug.length > 2 && urlPath.includes(gSlug)) {
+              const n = normalize(gs);
+              if (!seenSuburbs.has(n)) {
+                seenSuburbs.add(n);
+                suburbs.push(gs);
+              }
+            }
+          }
+        } catch {}
+      }
+      if (suburbs.length > 0) source = 'website'; // detected from custom URL patterns
+    }
+
     // 3. Fallback: if no location pages, use GBP service areas
     let source = 'website';
     if (suburbs.length === 0 && gbpSuburbs.length > 0) {
@@ -19331,11 +19405,26 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     // Check if website has any location pages (regardless of source of truth)
+    // Also detect custom patterns like /plumber-{suburb}/ by matching suburb names in URLs
     for (const page of websitePages) {
       const url = (page.url || page.slug || '').toLowerCase();
       if (/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/.test(url)) {
         hasLocationPages = true;
         break;
+      }
+    }
+    // If no standard location pages, check for suburb names in any URL slug
+    if (!hasLocationPages && masterSuburbs.length > 0) {
+      for (const page of websitePages) {
+        const url = (page.url || page.slug || '').toLowerCase();
+        for (const s of masterSuburbs) {
+          const subSlug = normalize(s).replace(/\s+/g, '-');
+          if (subSlug.length > 2 && url.includes(subSlug)) {
+            hasLocationPages = true;
+            break;
+          }
+        }
+        if (hasLocationPages) break;
       }
     }
 
@@ -19381,6 +19470,27 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           }
         }
       }
+      // If no standard location pages, try custom URL patterns by matching GBP suburb names in page URLs
+      if (allSuburbNames.size === 0 && gbpSuburbs.length > 0) {
+        for (const page of websitePages) {
+          const url = (page.url || page.slug || '').toLowerCase();
+          try {
+            const urlPath = new URL(url.startsWith('http') ? url : 'https://x.com' + url).pathname.toLowerCase();
+            for (const gs of gbpSuburbs) {
+              const gSlug = normalize(gs).replace(/\s+/g, '-');
+              if (gSlug.length > 2 && urlPath.includes(gSlug)) {
+                const n = normalize(gs);
+                if (!suburbSources[n]) {
+                  allSuburbNames.add(n);
+                  suburbSources[n] = { original: gs, inGbp: false, fromWebsite: true, hasPage: true };
+                  hasLocationPages = true;
+                }
+              }
+            }
+          } catch {}
+        }
+        if (allSuburbNames.size > 0) suburbSource = 'website';
+      }
       // If still no suburbs found, fall back to GBP service areas
       if (allSuburbNames.size === 0) {
         suburbSource = gbpSuburbs.length > 0 ? 'gbp' : 'none';
@@ -19395,8 +19505,12 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     // SIGNAL 1: Check if each suburb has a dedicated landing page
+    // Matches standard patterns (/service-areas/{suburb}) AND custom patterns (/plumber-{suburb}/, /{service}-{suburb}/)
     for (const page of websitePages) {
       const url = (page.url || page.slug || '').toLowerCase();
+      const normUrl = (page.url || '').replace(/\/+$/, '');
+
+      // Standard service-areas/locations pattern
       const saMatch = url.match(/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/);
       if (saMatch) {
         const slug = saMatch[2];
@@ -19405,12 +19519,29 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           if (slug === nSlug || slug.endsWith(nSlug) || slug.endsWith('-' + nSlug)) {
             suburbSources[n].hasPage = true;
             if (!suburbSources[n].pages) suburbSources[n].pages = [];
-            const normUrl = (page.url || '').replace(/\/+$/, '');
             if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
               suburbSources[n].pages.push({ url: page.url, title: page.title });
             }
           }
         }
+      }
+
+      // Custom pattern: any URL slug containing a suburb name (e.g. /plumber-warner/, /electrician-albany-creek/)
+      for (const n of allSuburbNames) {
+        if (suburbSources[n]?.hasPage) continue; // already found
+        const nSlug = n.replace(/\s+/g, '-');
+        if (nSlug.length < 3) continue; // skip very short suburb names to avoid false positives
+        // Check if the URL path (not domain) contains the suburb slug
+        try {
+          const urlPath = new URL(url.startsWith('http') ? url : 'https://x.com' + url).pathname.toLowerCase();
+          if (urlPath.includes(nSlug)) {
+            suburbSources[n].hasPage = true;
+            if (!suburbSources[n].pages) suburbSources[n].pages = [];
+            if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
+              suburbSources[n].pages.push({ url: page.url, title: page.title });
+            }
+          }
+        } catch {}
       }
     }
 
