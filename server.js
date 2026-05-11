@@ -3430,7 +3430,7 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
 
     console.log(`[rc-sync] Syncing Rating Captain data for project ${projectId} (${businessName})`);
 
-    // 1. Store RC profile data in project_integrations
+    // 1. Store RC profile data in project_integrations (both rc_profile and rc_sync)
     const rcData = { location_id, profile, healthcheck, reviews_stats, posts, synced_at: new Date().toISOString() };
     await pool.query(
       `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
@@ -3438,6 +3438,15 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
        ON CONFLICT (project_id, kind)
        DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
       [projectId, JSON.stringify(rcData)]
+    );
+    // Also store as rc_sync so internal audit picks up reviews/posts
+    const syncData = { reviews_stats, posts, synced_at: new Date().toISOString() };
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+       VALUES ($1, 'rc_sync', $2, 'connected', NOW())
+       ON CONFLICT (project_id, kind)
+       DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [projectId, JSON.stringify(syncData)]
     );
 
     // 2. Also update gbp_profile with RC data (richer than extension)
@@ -4068,20 +4077,21 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
       }
 
       // Reviews + posts come from RC MCP sync (stored in DB via /rc-sync endpoint)
-      // Check if we have synced review/post data already
+      // Check rc_sync first, fall back to rc_profile
       const syncedResult = await pool.query(
-        `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_sync'`,
+        `SELECT config, kind FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_sync', 'rc_profile') ORDER BY CASE kind WHEN 'rc_sync' THEN 1 ELSE 2 END LIMIT 1`,
         [projectId]
       );
       if (syncedResult.rows.length > 0) {
         const syncData = typeof syncedResult.rows[0].config === 'string' ? JSON.parse(syncedResult.rows[0].config) : syncedResult.rows[0].config;
+        const source = syncedResult.rows[0].kind;
         if (syncData.reviews_stats) {
           reviews_stats = { ...reviews_stats, ...syncData.reviews_stats };
-          console.log(`[gbp-internal] Using synced reviews: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} rating`);
+          console.log(`[gbp-internal] Using ${source} reviews: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} rating`);
         }
         if (syncData.posts) {
           posts = syncData.posts;
-          console.log(`[gbp-internal] Using synced posts: ${posts.count} total`);
+          console.log(`[gbp-internal] Using ${source} posts: ${posts.count} total`);
         }
       } else {
         console.log(`[gbp-internal] No RC sync data found — click "Sync RC Data" on dashboard to fetch from Rating Captain`);
@@ -4413,43 +4423,16 @@ app.get('/api/projects/:projectId/gbp-performance', async (req, res) => {
   }
 });
 
-// ==================== RC MCP SYNC ====================
-// Receives accurate review + post data from Rating Captain MCP tools (via scheduled task)
-app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
-  const { projectId } = req.params;
-  const { reviews_stats, posts, performance } = req.body;
-  try {
-    const syncData = {
-      reviews_stats: reviews_stats || null,
-      posts: posts || null,
-      performance: performance || null,
-      synced_at: new Date().toISOString(),
-    };
-    await pool.query(
-      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
-       VALUES ($1, 'rc_sync', $2, 'connected', NOW())
-       ON CONFLICT (project_id, kind)
-       DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
-      [projectId, JSON.stringify(syncData)]
-    );
-    console.log(`[rc-sync] Stored RC data for project ${projectId}: ${reviews_stats?.total_reviews || 0} reviews, ${posts?.count || 0} posts`);
-    res.json({ ok: true, synced_at: syncData.synced_at });
-  } catch (e) {
-    console.error('[rc-sync] Error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Get RC sync status
+// GET RC sync status (checks rc_sync first, falls back to rc_profile)
 app.get('/api/projects/:projectId/rc-sync', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='rc_sync'`,
+      `SELECT config, updated_at, kind FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_sync', 'rc_profile') ORDER BY CASE kind WHEN 'rc_sync' THEN 1 ELSE 2 END LIMIT 1`,
       [req.params.projectId]
     );
     if (result.rows.length === 0) return res.json({ synced: false });
     const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
-    res.json({ synced: true, ...config, updated_at: result.rows[0].updated_at });
+    res.json({ synced: true, reviews_stats: config.reviews_stats, posts: config.posts, synced_at: config.synced_at, updated_at: result.rows[0].updated_at });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
