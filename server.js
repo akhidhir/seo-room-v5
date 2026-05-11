@@ -3685,6 +3685,83 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
   }
 });
 
+// ==================== RC GRID SYNC (Rating Captain keyword monitoring → grid_scans) ====================
+
+// Accept RC keyword monitoring data and store as grid_scans
+app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
+  const { projectId } = req.params;
+  const { keywords } = req.body; // Array of { keyword, rc_keyword_id, grid_points: [{lat, lng, position}], grid_size, center_lat, center_lng, radius_km }
+  try {
+    if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const businessName = (proj.rows[0].business_name || proj.rows[0].name || '').toLowerCase();
+
+    let synced = 0;
+    for (const kw of keywords) {
+      const { keyword, rc_keyword_id, grid_points: rawPoints, grid_size, center_lat, center_lng, radius_km } = kw;
+      if (!keyword || !rawPoints || rawPoints.length === 0) continue;
+
+      // Derive grid dimensions from total points
+      const size = grid_size || Math.round(Math.sqrt(rawPoints.length));
+      const rad = radius_km || 10;
+
+      // Transform RC points to our grid_points format
+      const gridPoints = rawPoints.map((pt, i) => ({
+        row: Math.floor(i / size),
+        col: i % size,
+        lat: pt.lat,
+        lng: pt.lng,
+        position: pt.position != null && pt.position <= 20 ? pt.position : null,
+        found: pt.position != null && pt.position <= 20,
+        top3: pt.top3 || []
+      }));
+
+      // Compute metrics
+      const foundPoints = gridPoints.filter(p => p.found);
+      const arp = foundPoints.length > 0 ? +(foundPoints.reduce((s, p) => s + p.position, 0) / foundPoints.length).toFixed(1) : null;
+      const atrp = +(gridPoints.reduce((s, p) => s + (p.found ? p.position : 21), 0) / gridPoints.length).toFixed(1);
+      const top3 = gridPoints.filter(p => p.position && p.position <= 3).length;
+      const solv = +((top3 / gridPoints.length) * 100).toFixed(1);
+
+      // Compute center from points if not provided
+      const cLat = center_lat || (rawPoints.reduce((s, p) => s + p.lat, 0) / rawPoints.length);
+      const cLng = center_lng || (rawPoints.reduce((s, p) => s + p.lng, 0) / rawPoints.length);
+
+      // Upsert into grid_scans (replace existing for same keyword)
+      await pool.query(
+        `INSERT INTO grid_scans (project_id, keyword, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'rating_captain')
+         ON CONFLICT ON CONSTRAINT grid_scans_project_keyword_unique
+         DO UPDATE SET grid_size=$3, center_lat=$4, center_lng=$5, radius_km=$6, grid_points=$7, arp=$8, atrp=$9, solv=$10, found_in=$11, data_points=$12, scanned_at=NOW(), source='rating_captain'`,
+        [projectId, keyword, size, cLat, cLng, rad, JSON.stringify(gridPoints), arp, atrp, solv, foundPoints.length, gridPoints.length]
+      ).catch(async () => {
+        // If unique constraint doesn't exist, do delete + insert
+        await pool.query('DELETE FROM grid_scans WHERE project_id=$1 AND keyword=$2', [projectId, keyword]);
+        await pool.query(
+          `INSERT INTO grid_scans (project_id, keyword, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
+          [projectId, keyword, size, cLat, cLng, rad, JSON.stringify(gridPoints), arp, atrp, solv, foundPoints.length, gridPoints.length]
+        );
+      });
+
+      // Also upsert rank_keywords so it shows in the table
+      const existingKw = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND keyword=$2', [projectId, keyword]);
+      if (existingKw.rows.length === 0) {
+        await pool.query('INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3)', [projectId, keyword, '']);
+      }
+
+      synced++;
+    }
+
+    console.log(`[rc-grid-sync] Synced ${synced} keywords for project ${projectId}`);
+    res.json({ ok: true, synced, total: keywords.length });
+  } catch (e) {
+    console.error('[rc-grid-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== GBP PROFILE (from Chrome Extension) ====================
 
 // Store GBP profile data scraped by the extension
