@@ -3820,8 +3820,9 @@ app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
     const keywords = rcLocation.keywords || [];
     if (keywords.length === 0) return res.json({ ok: true, synced: 0, message: 'No keywords monitored in RC for this location' });
 
-    // Step 2: Get center lat/lng
-    const llResp = await fetch(`${RC_BASE}/locations/${rcLocationId}/latlng`, { headers: rcHeaders });
+    // Step 2: Get center lat/lng (strip locations/ prefix for RC API path)
+    const numericLocId = rcLocationId.replace(/^locations\//, '');
+    const llResp = await fetch(`${RC_BASE}/locations/${numericLocId}/latlng`, { headers: rcHeaders });
     let centerLat = null, centerLng = null;
     if (llResp.ok) {
       const llData = await llResp.json();
@@ -4027,16 +4028,20 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
 
       const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
       const RC_BASE = 'https://local.ratingcaptain.com/api';
-      console.log(`[gbp-internal] No stored RC data — auto-fetching from RC API for ${gbpLocationId}...`);
+      // RC API uses numeric ID only — strip "locations/" prefix
+      const numericId = gbpLocationId.replace(/^locations\//, '');
+      console.log(`[gbp-internal] No stored RC data — auto-fetching from RC API for ${numericId}...`);
 
-      // Fetch profile, healthcheck, reviews stats, posts in parallel
+      // Fetch profile + extended data (for reviews) + posts stats in parallel
       let profile = null, healthcheck = [], reviews_stats = null, posts = null;
 
-      const [profileResp, hcResp, reviewsResp, postsResp] = await Promise.allSettled([
-        fetch(`${RC_BASE}/locations/${gbpLocationId}`, { headers: rcHeaders }),
-        fetch(`${RC_BASE}/locations/${gbpLocationId}/healthcheck`, { headers: rcHeaders }),
-        fetch(`${RC_BASE}/locations/${gbpLocationId}/reviews/stats`, { headers: rcHeaders }),
-        fetch(`${RC_BASE}/locations/${gbpLocationId}/posts?status=published&per_page=25`, { headers: rcHeaders }),
+      const now = Math.floor(Date.now() / 1000);
+      const yearAgo = now - 365 * 24 * 3600;
+      const [profileResp, extResp, postsResp, statsResp] = await Promise.allSettled([
+        fetch(`${RC_BASE}/locations/${numericId}`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/stats/posts?location_ids[]=${encodeURIComponent(gbpLocationId)}&start_date=${yearAgo}&end_date=${now}&days=365`, { headers: rcHeaders }),
+        fetch(`${RC_BASE}/stats`, { method: 'POST', headers: { ...rcHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ location_ids: [gbpLocationId] }) }),
       ]);
 
       if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
@@ -4045,21 +4050,43 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
       } else {
         console.log(`[gbp-internal] Profile fetch failed:`, profileResp.status === 'fulfilled' ? `HTTP ${profileResp.value.status}` : profileResp.reason?.message);
       }
-      if (hcResp.status === 'fulfilled' && hcResp.value.ok) {
-        healthcheck = await hcResp.value.json();
-        console.log(`[gbp-internal] Fetched ${Array.isArray(healthcheck) ? healthcheck.length : 0} healthcheck items`);
-      }
-      if (reviewsResp.status === 'fulfilled' && reviewsResp.value.ok) {
-        reviews_stats = await reviewsResp.value.json();
-        console.log(`[gbp-internal] Fetched reviews stats: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} avg`);
-      }
-      if (postsResp.status === 'fulfilled' && postsResp.value.ok) {
-        posts = await postsResp.value.json();
-        console.log(`[gbp-internal] Fetched ${posts.published_posts?.length || 0} posts`);
+
+      // Get review data from extended endpoint (has rating + reviews_amount per location)
+      if (extResp.status === 'fulfilled' && extResp.value.ok) {
+        const extData = await extResp.value.json();
+        const loc = (extData.data || []).find(l => l.location_id === gbpLocationId);
+        if (loc) {
+          reviews_stats = {
+            total_reviews: loc.reviews_amount || 0,
+            average_rating: loc.rating || 0,
+            reply_rate: 0, unreplied_count: 0 // not available from extended
+          };
+          console.log(`[gbp-internal] Got reviews from extended: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} avg`);
+        }
       }
 
-      if (!profile && !reviews_stats) {
-        return res.status(400).json({ error: 'Could not fetch data from Rating Captain API. Check that GBP Location ID is correct and RC_API_TOKEN is valid.' });
+      // Try stats endpoint for richer review data
+      if (statsResp.status === 'fulfilled' && statsResp.value.ok) {
+        try {
+          const statsData = await statsResp.value.json();
+          if (statsData.total_reviews || statsData.average_rating) {
+            reviews_stats = { ...reviews_stats, ...statsData };
+            console.log(`[gbp-internal] Got richer stats:`, JSON.stringify(statsData).substring(0, 200));
+          }
+        } catch (e) { console.log(`[gbp-internal] Stats parse error:`, e.message); }
+      }
+
+      // Get posts data
+      if (postsResp.status === 'fulfilled' && postsResp.value.ok) {
+        try {
+          const postsData = await postsResp.value.json();
+          posts = { published_posts: postsData.data || postsData.posts || postsData || [] };
+          console.log(`[gbp-internal] Got posts stats`);
+        } catch (e) { console.log(`[gbp-internal] Posts parse error:`, e.message); }
+      }
+
+      if (!profile) {
+        return res.status(400).json({ error: 'Could not fetch profile from Rating Captain API. Check that GBP Location ID is correct and RC_API_TOKEN is valid.' });
       }
 
       // Store fetched data as rc_profile for future use
