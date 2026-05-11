@@ -21132,7 +21132,7 @@
       const [user, setUser] = useState(null);
       const [project, setProject] = useState(null);
       const [activeTab, setActiveTab] = useState('gbp-audit');
-      const [expandedNav, setExpandedNav] = useState({ 'gbp-audit': true });
+      const [expandedNav, setExpandedNav] = useState({ 'gbp-audit': true, 'website-audit': true });
       const [extAuditReport, setExtAuditReport] = useState('');
       const [websiteAuditReport, setWebsiteAuditReport] = useState('');
       const [gscAuditReport, setGscAuditReport] = useState('');
@@ -21413,11 +21413,12 @@ case 'action-plan':
             { id: 'gbp-audit-external', label: 'External Audit', icon: 'fas fa-globe', expandable: true },
           ] },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true },
-          { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true },
-          { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
-          { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
-          { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
-          { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
+          { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true, children: [
+            { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
+            { id: 'indexing', label: 'Indexing', icon: 'fas fa-file-import' },
+            { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
+            { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
+          ] },
         ]},
         { section: 'GBP', items: [
           { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },
@@ -21603,22 +21604,30 @@ case 'action-plan':
                             <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.5 }}></i>
                           )}
                         </div>
-                        {/* Sections for expandable items WITHOUT children (GSC, Website) */}
-                        {item.expandable && isExpanded && !item.children && itemSections.map(sec => {
-                          const secId = secPrefix + sec.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
-                          return (
-                            <div key={secId}
-                              className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
-                              style={Object.assign({ paddingLeft: 40, fontSize: 13 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
-                              onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
-                            >
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
-                              <span>{sec.length > 24 ? sec.substring(0, 24) + '...' : sec}</span>
-                            </div>
-                          );
-                        })}
+                        {/* Sections for expandable items WITHOUT children (GSC) or WITH children that also have sections (Website) */}
+                        {item.expandable && isExpanded && ((!item.children && itemSections.length > 0) || item.id === 'website-audit') && (() => {
+                          const secs = item.id === 'website-audit' ? (() => {
+                            if (!websiteAuditReport) return [];
+                            const s = [...WEBSITE_ALLOWED_SECTIONS];
+                            if (!s.includes('PageSpeed Scores')) { const si = s.indexOf('Summary'); if (si >= 0) s.splice(si, 0, 'PageSpeed Scores'); else s.push('PageSpeed Scores'); }
+                            return s;
+                          })() : itemSections;
+                          return secs.map(sec => {
+                            const secId = secPrefix + sec.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+                            return (
+                              <div key={secId}
+                                className={`sidebar-item ${activeTab === secId ? 'active' : ''}`}
+                                style={Object.assign({ paddingLeft: 40, fontSize: 13 }, activeTab === secId ? { color: sColor, borderLeftColor: sColor, background: sColor + '18' } : {})}
+                                onClick={() => { setActiveTab(secId); setMobileMenuOpen(false); }}
+                              >
+                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeTab === secId ? sColor : 'var(--text3)', opacity: activeTab === secId ? 1 : 0.4, flexShrink: 0 }}></span>
+                                <span>{sec.length > 24 ? sec.substring(0, 24) + '...' : sec}</span>
+                              </div>
+                            );
+                          });
+                        })()}
                         {/* Children for expandable items WITH children (GBP) */}
-                        {item.expandable && isExpanded && item.children && item.children.map(child => {
+                        {item.expandable && isExpanded && item.children && item.children.filter(c => !c.localOnly || isLocal).map(child => {
                           const childActive = activeTab === child.id || (activeTab.startsWith('ext-sec-') && child.id === 'gbp-audit-external');
                           const childExpanded = expandedNav[child.id];
                           const extSections = child.id === 'gbp-audit-external' ? getExternalAuditSections(extAuditReport) : [];
