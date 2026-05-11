@@ -3531,10 +3531,10 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
 
     if (hours.length < 5) {
       const dayNames = hours.map(h => h.openDay);
-      const missingDays = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
+      const closedDays = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
       addFinding('Relevance > Hours', 'Limited opening hours',
-        `Only open ${hours.length} days/week (${dayNames.join(', ')}). Missing: ${missingDays.join(', ')}.`,
-        'Consider extending hours or at minimum adding Friday hours. Businesses open 5+ days rank better in local search.',
+        `Open ${hours.length} days/week (${dayNames.join(', ')}). Closed: ${closedDays.join(', ')}.`,
+        'Consider extending hours. Businesses open 5+ days rank better in local search, especially in "open now" filters.',
         'High', `${hours.length} days/week`, '5-7 days/week');
     }
 
@@ -3858,10 +3858,10 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
 
     if (hours.length < 5) {
       const dayNames = hours.map(h => h.openDay);
-      const missingDays = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
+      const closedDays2 = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].filter(d => !dayNames.includes(d));
       addFinding('Relevance > Hours', 'Limited opening hours',
-        `Only open ${hours.length} days/week. Missing: ${missingDays.join(', ')}.`,
-        'Businesses open 5+ days rank better in local search.',
+        `Open ${hours.length} days/week. Closed: ${closedDays2.join(', ')}.`,
+        'Businesses open 5+ days rank better in local search, especially in "open now" filters.',
         'High', `${hours.length} days/week`, '5-7 days/week');
     }
 
@@ -19627,27 +19627,27 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       recommendation: saIssues.length ? `Google says service area shouldn't extend farther than ~2 hours driving. ${saIssues.join('. ')}` : null,
     });
 
-    // 6. Hours freshness — check if hours cover all 7 days, check for gaps
+    // 6. Hours freshness — check if hours are configured. Days not in regularHours.periods are "Closed" (valid, not missing).
     const hoursPeriods = profile?.regularHours?.periods || [];
     const daysWithHours = new Set(hoursPeriods.map(p => p.openDay));
     const allDays = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
-    const missingDays = allDays.filter(d => !daysWithHours.has(d));
+    const closedDays = allDays.filter(d => !daysWithHours.has(d));
     const hoursIssues = [];
     if (hoursPeriods.length === 0) {
       hoursIssues.push('No business hours set');
-    } else if (missingDays.length > 0) {
-      hoursIssues.push(`Missing hours for: ${missingDays.map(d => d.charAt(0) + d.slice(1).toLowerCase()).join(', ')} — if closed, mark as closed`);
     }
+    // Days not in periods are explicitly closed — that's valid, not "missing"
     const hasSpecialHours = !!profile?.specialHours?.specialHourPeriods?.length;
     if (!hasSpecialHours && hoursPeriods.length > 0) {
       hoursIssues.push('No special hours set — add holiday hours to keep profile accurate');
     }
+    const closedDaysLabel = closedDays.length > 0 ? `, closed ${closedDays.map(d => d.charAt(0) + d.slice(1).toLowerCase()).join(', ')}` : '';
     gbpAuditChecks.push({
       id: 'hours-completeness',
       title: 'Hours Completeness',
       status: hoursIssues.length === 0 ? 'pass' : hoursPeriods.length === 0 ? 'critical' : 'warning',
-      value: hoursPeriods.length > 0 ? `${daysWithHours.size}/7 days set${hasSpecialHours ? ', has special hours' : ', no special hours'}` : 'Not set',
-      missingDays: missingDays.map(d => d.charAt(0) + d.slice(1).toLowerCase()),
+      value: hoursPeriods.length > 0 ? `7/7 days set (open ${daysWithHours.size}${closedDaysLabel})${hasSpecialHours ? ', has special hours' : ', no special hours'}` : 'Not set',
+      missingDays: [],
       issues: hoursIssues,
       recommendation: hoursIssues.length ? `Google says keep hours up to date including special hours. ${hoursIssues.join('. ')}` : null,
     });
