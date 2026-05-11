@@ -16908,6 +16908,20 @@
           const serviceAreas = project.service_areas || project.serviceAreas || [];
           let sitePages = [];
           try { sitePages = await api(`/projects/${project.id}/site-pages`); if (!Array.isArray(sitePages)) sitePages = []; } catch(e) {}
+          // Also load local-intel suburbs to check real website pages (site_pages table may be empty)
+          try {
+            const liResp = await api(`/projects/${project.id}/local-intel`);
+            const liSuburbs = liResp.suburbs || [];
+            for (const s of liSuburbs) {
+              if (s.hasPage && s.pages?.length > 0) {
+                const slug = (s.pages[0].url || '').replace(/^\//, '').replace(/\/$/, '');
+                const alreadyExists = sitePages.some(p => (p.slug || '').toLowerCase() === slug.toLowerCase() || (p.page_name || '').toLowerCase() === s.suburb.toLowerCase());
+                if (!alreadyExists) {
+                  sitePages.push({ page_name: s.suburb, slug, page_url: s.pages[0].url, page_type: 'suburb', stage: 'published' });
+                }
+              }
+            }
+          } catch(e) {}
           let gbpFindings = [];
           try {
             const resp = await api(`/projects/${project.id}/audit-findings`);
