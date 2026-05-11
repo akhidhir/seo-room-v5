@@ -3762,6 +3762,34 @@ app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
   }
 });
 
+// RC Locations — list all active RC profiles for dropdown in Project Settings
+app.get('/api/rc/locations', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.json({ locations: [], error: 'RC_API_TOKEN not configured' });
+  try {
+    const rcResp = await fetch('https://local.ratingcaptain.com/api/locations/extended?current_page=1&type=active_profiles', {
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' }
+    });
+    if (!rcResp.ok) return res.json({ locations: [], error: `RC API returned ${rcResp.status}` });
+    const data = await rcResp.json();
+    const locations = (data.data || []).map(l => ({
+      rc_id: l.id,
+      name: l.name,
+      location_id: l.location_id,
+      place_id: l.place_id,
+      address: l.address,
+      city: l.city,
+      category: l.category,
+      rating: l.rating,
+      reviews: l.reviews_amount,
+      keywords_count: (l.keywords || []).length
+    }));
+    res.json({ locations });
+  } catch (e) {
+    res.json({ locations: [], error: e.message });
+  }
+});
+
 // RC Grid Sync — DIRECT from RC Local API (on-demand, called from dashboard button)
 app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
   const { projectId } = req.params;
