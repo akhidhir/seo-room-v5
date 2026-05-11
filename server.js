@@ -4067,73 +4067,51 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
         }
       }
 
-      // Reviews endpoint needs POST (GET returns 405)
-      // Try multiple body formats to find the right one
-      const reviewBodies = [
-        { location_id: gbpLocationId, page: 1, per_page: 1 },
-        { location_ids: [gbpLocationId], page: 1, per_page: 1 },
-        { location_id: gbpLocationId, current_page: 1, per_page: 1 },
-        { location_ids: [gbpLocationId], current_page: 1, per_page: 1 },
-        { location_id: numericId, page: 1, per_page: 1 },
-      ];
-      const postHeaders = { ...rcHeaders, 'Content-Type': 'application/json' };
-      for (const body of reviewBodies) {
+      // RC REST API doesn't expose /reviews or /posts endpoints externally.
+      // Use SerpAPI Place Details for accurate review count + rating (direct from Google)
+      const placeId = profile?.metadata?.placeId;
+      if (placeId && process.env.SERPAPI_KEY) {
         try {
-          const r = await fetch(`${RC_BASE}/reviews`, { method: 'POST', headers: postHeaders, body: JSON.stringify(body) });
-          console.log(`[gbp-internal] Reviews POST ${JSON.stringify(body)} → ${r.status}`);
-          if (r.ok) {
-            const data = await r.json();
-            console.log(`[gbp-internal] Reviews response keys: ${Object.keys(data).join(',')}, sample: ${JSON.stringify(data).substring(0, 400)}`);
-            const total = data.total || data.total_reviews || data.totalCount || data.count || 0;
-            const avg = data.average_rating || data.averageRating || reviews_stats?.average_rating || 0;
-            const revItems = data.reviews || data.data || [];
-            if (total > 0 || revItems.length > 0) {
+          const serpData = await serpApiSearch({
+            engine: 'google_maps',
+            place_id: placeId,
+            type: 'place',
+          });
+          const placeResults = serpData?.place_results || serpData;
+          if (placeResults) {
+            const serpReviews = placeResults.reviews || placeResults.user_reviews?.total || placeResults.reviews_count || 0;
+            const serpRating = placeResults.rating || 0;
+            const serpPhotos = placeResults.photos?.length || placeResults.photos_count || 0;
+            console.log(`[gbp-internal] SerpAPI place: ${serpReviews} reviews, ${serpRating} rating, ${serpPhotos} photos`);
+            if (serpReviews > 0) {
               reviews_stats = {
-                total_reviews: total || revItems.length,
-                average_rating: avg || reviews_stats?.average_rating || 0,
-                reply_rate: data.reply_rate || 0,
-                replied_count: data.replied_count || 0,
-                unreplied_count: data.unreplied_count || 0,
+                ...reviews_stats,
+                total_reviews: serpReviews,
+                average_rating: serpRating || reviews_stats?.average_rating || 0,
+                photos_count: serpPhotos,
               };
-              console.log(`[gbp-internal] ✓ Reviews: ${reviews_stats.total_reviews} total, ${reviews_stats.average_rating} rating`);
-              break;
             }
           }
-        } catch (e) { /* try next */ }
+        } catch (e) { console.log(`[gbp-internal] SerpAPI place details error:`, e.message); }
       }
 
-      // Posts: /posts?location_ids[]=... returns 500, try POST and /stats/posts
-      const postAttempts = [
-        { method: 'POST', url: `${RC_BASE}/posts`, body: { location_id: gbpLocationId, page: 1, per_page: 100, status: 'published' } },
-        { method: 'POST', url: `${RC_BASE}/posts`, body: { location_ids: [gbpLocationId], page: 1, per_page: 100, status: 'published' } },
-        { method: 'POST', url: `${RC_BASE}/posts`, body: { location_id: gbpLocationId, current_page: 1, per_page: 100 } },
-        { method: 'POST', url: `${RC_BASE}/posts`, body: { location_ids: [gbpLocationId], current_page: 1, per_page: 100 } },
-        { method: 'GET', url: `${RC_BASE}/stats/posts?location_ids[]=${gbpLocationId}&days=365` },
-      ];
-      for (const attempt of postAttempts) {
-        try {
-          const opts = attempt.method === 'POST'
-            ? { method: 'POST', headers: postHeaders, body: JSON.stringify(attempt.body) }
-            : { headers: rcHeaders };
-          const r = await fetch(attempt.url, opts);
-          const label = attempt.method === 'POST' ? `POST /posts ${JSON.stringify(attempt.body)}` : `GET ${attempt.url.replace(RC_BASE, '')}`;
-          console.log(`[gbp-internal] Posts attempt ${label} → ${r.status}`);
-          if (r.ok) {
-            const data = await r.json();
-            console.log(`[gbp-internal] Posts response keys: ${Object.keys(data).join(',')}, sample: ${JSON.stringify(data).substring(0, 400)}`);
-            const postItems = data.published_posts || data.data || data.posts || (Array.isArray(data) ? data : []);
-            const postsCount = data.total || data.count || data.published || postItems.length || 0;
-            if (postsCount > 0 || postItems.length > 0) {
-              posts = { count: postsCount, published_posts: postItems };
-              console.log(`[gbp-internal] ✓ Posts: ${postItems.length} items, total: ${postsCount}`);
-              break;
-            }
-          }
-        } catch (e) { /* try next */ }
-      }
+      // Posts: try /stats/posts with original working format (encoded + start/end dates)
+      const now = Math.floor(Date.now() / 1000);
+      const yearAgo = now - 365 * 24 * 3600;
+      try {
+        const postsResp = await fetch(`${RC_BASE}/stats/posts?location_ids[]=${encodeURIComponent(gbpLocationId)}&start_date=${yearAgo}&end_date=${now}&days=365`, { headers: rcHeaders });
+        console.log(`[gbp-internal] Stats/posts → ${postsResp.status}`);
+        if (postsResp.ok) {
+          const postsData = await postsResp.json();
+          console.log(`[gbp-internal] Stats/posts keys: ${Object.keys(postsData).join(',')}, sample: ${JSON.stringify(postsData).substring(0, 400)}`);
+          const postsCount = postsData.total || postsData.count || postsData.published ||
+            (Array.isArray(postsData.data) ? postsData.data.length : 0) ||
+            (Array.isArray(postsData) ? postsData.length : 0);
+          posts = { count: postsCount, published_posts: [], posts_stats: postsData };
+        }
+      } catch (e) { console.log(`[gbp-internal] Stats/posts error:`, e.message); }
       if (!posts) {
         posts = { count: 0, published_posts: [] };
-        console.log(`[gbp-internal] No posts endpoint worked, defaulting to 0`);
       }
 
       if (!profile) {
