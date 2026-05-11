@@ -20218,6 +20218,22 @@
                   </button>
                 </div>
                 <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+                  <button onClick={async () => {
+                    try {
+                      const data = await api(`/projects/${project.id}/rank-tracking/website-keywords`);
+                      const subs = data.suburbs || [];
+                      if (subs.length === 0) { alert('No suburb pages found on the website'); return; }
+                      const existing = (serviceAreas || []).map(s => s.toLowerCase());
+                      const newSubs = subs.filter(s => !existing.includes(s.toLowerCase()));
+                      if (newSubs.length === 0) { alert('All website suburbs already added'); return; }
+                      const updated = [...(serviceAreas || []), ...newSubs];
+                      await api(`/projects/${project.id}`, { method: 'PUT', body: { service_areas: updated } });
+                      setServiceAreas(updated);
+                      alert(`Added ${newSubs.length} suburbs from website`);
+                    } catch(e) { alert('Error: ' + e.message); }
+                  }} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                    <i className="fas fa-globe" style={{ marginRight: 4 }}></i>Pull from Website
+                  </button>
                   <button onClick={() => setBulkMode(true)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
                     <i className="fas fa-list" style={{ marginRight: 4 }}></i>Bulk add suburbs
                   </button>
