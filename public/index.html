@@ -22620,14 +22620,9 @@ case 'action-plan':
                             <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.5 }}></i>
                           )}
                         </div>
-                        {/* Sections for expandable items WITHOUT children (GSC) or WITH children that also have sections (Website) */}
-                        {item.expandable && isExpanded && ((!item.children && itemSections.length > 0) || item.id === 'website-audit') && (() => {
-                          const secs = item.id === 'website-audit' ? (() => {
-                            if (!websiteAuditReport) return [];
-                            const s = [...WEBSITE_ALLOWED_SECTIONS];
-                            if (!s.includes('PageSpeed Scores')) { const si = s.indexOf('Summary'); if (si >= 0) s.splice(si, 0, 'PageSpeed Scores'); else s.push('PageSpeed Scores'); }
-                            return s;
-                          })() : itemSections;
+                        {/* Sections for expandable items WITHOUT children (GSC) */}
+                        {item.expandable && isExpanded && !item.children && itemSections.length > 0 && (() => {
+                          const secs = itemSections;
                           return secs.map(sec => {
                             const secId = secPrefix + sec.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
                             return (
