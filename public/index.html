@@ -17785,7 +17785,20 @@
                           placeholder={'One per line, e.g.:\nauto locksmith\ncar key replacement\nemergency lockout\ntransponder key programming'}
                           rows={8} style={{ fontSize: 12, resize: 'vertical', minHeight: 160, fontFamily: 'inherit' }} />
                         <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                          <button onClick={suggestServices} disabled={suggestingServices} className="btn btn-primary" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
+                          <button onClick={async () => {
+                            try {
+                              const resp = await api(`/projects/${project.id}/rank-tracking/website-keywords`);
+                              const names = [...(resp.services || []).map(s => s.name), ...(resp.brands || []).map(b => b.name)];
+                              if (names.length === 0) { alert('No service pages found on website'); return; }
+                              setGenServicesText(prev => {
+                                const existing = prev.split('\n').filter(s => s.trim());
+                                return [...new Set([...existing, ...names])].join('\n');
+                              });
+                            } catch (e) { alert('Error: ' + e.message); }
+                          }} className="btn btn-primary" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
+                            <i className="fa-solid fa-globe" style={{ marginRight: 4 }} />Pull from Website
+                          </button>
+                          <button onClick={suggestServices} disabled={suggestingServices} className="btn" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
                             {suggestingServices ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Generating...</> : <><i className="fa-solid fa-robot" style={{ marginRight: 4 }} />AI Suggest</>}
                           </button>
                           <button onClick={() => {
@@ -17817,8 +17830,21 @@
                         <textarea className="form-input" value={genSuburbsText} onChange={(e) => setGenSuburbsText(e.target.value)}
                           placeholder={'One per line, e.g.:\nVincent\nSubiaco\nVictoria Park\nNedlands\nBayswater'}
                           rows={8} style={{ fontSize: 12, resize: 'vertical', minHeight: 160, fontFamily: 'inherit' }} />
-                        {/* Quick-fill from service areas */}
+                        {/* Quick-fill suburbs */}
                         <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          <button onClick={async () => {
+                            try {
+                              const resp = await api(`/projects/${project.id}/rank-tracking/website-keywords`);
+                              const suburbs = (resp.suburbs || []).map(s => s.charAt(0).toUpperCase() + s.slice(1));
+                              if (suburbs.length === 0) { alert('No suburb pages found on website'); return; }
+                              setGenSuburbsText(prev => {
+                                const existing = prev.split('\n').filter(s => s.trim());
+                                return [...new Set([...existing, ...suburbs])].join('\n');
+                              });
+                            } catch (e) { alert('Error: ' + e.message); }
+                          }} className="btn btn-primary" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
+                            <i className="fa-solid fa-globe" style={{ marginRight: 4 }} />Pull from Website
+                          </button>
                           <button onClick={async () => {
                             const resp = await api(`/projects/${project.id}/service-areas`);
                             const areas = (resp.service_areas || resp || []).filter(a => !cityNames.has((a.name || '').toLowerCase()));

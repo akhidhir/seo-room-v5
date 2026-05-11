@@ -16671,6 +16671,72 @@ Return ONLY a JSON array of strings, no duplicates, no explanation. Example: ["s
   }
 });
 
+// Pull services + suburbs from website sitemap
+app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const p = projRes.rows[0];
+    const domain = (p.domain || '').replace(/\/+$/, '');
+    if (!domain) return res.status(400).json({ error: 'No domain set in project settings' });
+
+    // Try Yoast sitemap first, then standard
+    let sitemapXml = '';
+    for (const path of ['/page-sitemap.xml', '/wp-sitemap-posts-page-1.xml', '/sitemap.xml']) {
+      try {
+        const r = await fetch(`https://${domain}${path}`, { signal: AbortSignal.timeout(10000) });
+        if (r.ok) { sitemapXml = await r.text(); if (sitemapXml.includes('<loc>')) break; }
+      } catch {}
+    }
+    if (!sitemapXml) return res.status(400).json({ error: 'Could not fetch sitemap from ' + domain });
+
+    const urls = [...sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
+    const skip = new Set(['','contact-us','about-us','blog','privacy-policy','terms-conditions','faq','reviews','sitemap','service-areas','services','photo-gallery','refund-exchange','thank-you','cart','checkout','my-account','shop','sample-page']);
+
+    // Extract suburb pages
+    const suburbs = urls
+      .filter(u => u.includes('/service-areas/') || u.includes('/suburbs/') || u.includes('/locations/'))
+      .map(u => {
+        const slug = u.replace(/https?:\/\/[^/]+\/(service-areas|suburbs|locations)\//, '').replace(/\/$/, '')
+          .replace(/^car-key-replacement-/, '').replace(/-/g, ' ');
+        return slug;
+      })
+      .filter(s => s && s.length > 1);
+
+    // Extract service pages — anything that's not a suburb, not a brand index, not generic
+    const brandIndexes = new Set(['a-f','g-j','k-o','p-z']);
+    const servicePages = [];
+    const brandPages = [];
+    for (const u of urls) {
+      const path = u.replace(/https?:\/\/[^/]+\//, '').replace(/\/$/, '');
+      if (!path || skip.has(path) || u.includes('/service-areas/') || u.includes('/suburbs/') || u.includes('/locations/')) continue;
+      if (path.startsWith('category/') || path.startsWith('tag/') || path.startsWith('blog/')) continue;
+      if (path.match(/^elementor-|^dsfs$|^vbn|^sample/)) continue;
+
+      const parts = path.split('/');
+      if (parts.length === 2 && brandIndexes.has(parts[0])) {
+        // Brand page like a-f/toyota-car-key-replacement
+        const brand = parts[1].replace(/-car-key-replacement$/, '').replace(/-/g, ' ');
+        brandPages.push({ slug: path, name: brand + ' car key replacement', brand: brand });
+      } else if (parts.length === 1 && brandIndexes.has(parts[0])) {
+        continue; // brand index page
+      } else {
+        // Service page
+        const name = path.replace(/services?\//g, '').replace(/-/g, ' ')
+          .replace(/\s*(in|services?|perth)\s*/gi, ' ').trim();
+        if (name.length > 2) servicePages.push({ slug: path, name });
+      }
+    }
+
+    console.log(`[website-keywords] ${domain}: ${servicePages.length} services, ${brandPages.length} brands, ${suburbs.length} suburbs`);
+    res.json({ services: servicePages, brands: brandPages, suburbs });
+  } catch (e) {
+    console.error('[website-keywords] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // AI generate smart keyword combos
 app.post('/api/projects/:projectId/rank-tracking/generate-combos', async (req, res) => {
   const { projectId } = req.params;
