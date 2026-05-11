@@ -3767,6 +3767,14 @@
               </div>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>What does each suburb need to rank? Business, Service, and Suburb signals in one place.</div>
             </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={() => onNavigate && onNavigate('gbp-internal')} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-clipboard-check" style={{ marginRight: 4 }} />Run GBP Audit
+              </button>
+              <button className="btn btn-primary" onClick={() => { setLoading(true); reload(); }} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-arrows-rotate" style={{ marginRight: 4 }} />Refresh
+              </button>
+            </div>
           </div>
 
           {/* 3-Level KPI Cards */}
