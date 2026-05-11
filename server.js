@@ -4067,49 +4067,25 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
         }
       }
 
-      // RC REST API doesn't expose /reviews or /posts endpoints externally.
-      // Use SerpAPI Place Details for accurate review count + rating (direct from Google)
-      const placeId = profile?.metadata?.placeId;
-      if (placeId && process.env.SERPAPI_KEY) {
-        try {
-          const serpData = await serpApiSearch({
-            engine: 'google_maps',
-            place_id: placeId,
-            type: 'place',
-          });
-          const placeResults = serpData?.place_results || serpData;
-          if (placeResults) {
-            const serpReviews = placeResults.reviews || placeResults.user_reviews?.total || placeResults.reviews_count || 0;
-            const serpRating = placeResults.rating || 0;
-            const serpPhotos = placeResults.photos?.length || placeResults.photos_count || 0;
-            console.log(`[gbp-internal] SerpAPI place: ${serpReviews} reviews, ${serpRating} rating, ${serpPhotos} photos`);
-            if (serpReviews > 0) {
-              reviews_stats = {
-                ...reviews_stats,
-                total_reviews: serpReviews,
-                average_rating: serpRating || reviews_stats?.average_rating || 0,
-                photos_count: serpPhotos,
-              };
-            }
-          }
-        } catch (e) { console.log(`[gbp-internal] SerpAPI place details error:`, e.message); }
-      }
-
-      // Posts: try /stats/posts with original working format (encoded + start/end dates)
-      const now = Math.floor(Date.now() / 1000);
-      const yearAgo = now - 365 * 24 * 3600;
-      try {
-        const postsResp = await fetch(`${RC_BASE}/stats/posts?location_ids[]=${encodeURIComponent(gbpLocationId)}&start_date=${yearAgo}&end_date=${now}&days=365`, { headers: rcHeaders });
-        console.log(`[gbp-internal] Stats/posts → ${postsResp.status}`);
-        if (postsResp.ok) {
-          const postsData = await postsResp.json();
-          console.log(`[gbp-internal] Stats/posts keys: ${Object.keys(postsData).join(',')}, sample: ${JSON.stringify(postsData).substring(0, 400)}`);
-          const postsCount = postsData.total || postsData.count || postsData.published ||
-            (Array.isArray(postsData.data) ? postsData.data.length : 0) ||
-            (Array.isArray(postsData) ? postsData.length : 0);
-          posts = { count: postsCount, published_posts: [], posts_stats: postsData };
+      // Reviews + posts come from RC MCP sync (stored in DB via /rc-sync endpoint)
+      // Check if we have synced review/post data already
+      const syncedResult = await pool.query(
+        `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_sync'`,
+        [projectId]
+      );
+      if (syncedResult.rows.length > 0) {
+        const syncData = typeof syncedResult.rows[0].config === 'string' ? JSON.parse(syncedResult.rows[0].config) : syncedResult.rows[0].config;
+        if (syncData.reviews_stats) {
+          reviews_stats = { ...reviews_stats, ...syncData.reviews_stats };
+          console.log(`[gbp-internal] Using synced reviews: ${reviews_stats.total_reviews} reviews, ${reviews_stats.average_rating} rating`);
         }
-      } catch (e) { console.log(`[gbp-internal] Stats/posts error:`, e.message); }
+        if (syncData.posts) {
+          posts = syncData.posts;
+          console.log(`[gbp-internal] Using synced posts: ${posts.count} total`);
+        }
+      } else {
+        console.log(`[gbp-internal] No RC sync data found — click "Sync RC Data" on dashboard to fetch from Rating Captain`);
+      }
       if (!posts) {
         posts = { count: 0, published_posts: [] };
       }
@@ -4433,6 +4409,48 @@ app.get('/api/projects/:projectId/gbp-performance', async (req, res) => {
     res.json({ months, raw_metrics: series.map(s => s.dailyMetric) });
   } catch (e) {
     console.error('[gbp-performance] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== RC MCP SYNC ====================
+// Receives accurate review + post data from Rating Captain MCP tools (via scheduled task)
+app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
+  const { projectId } = req.params;
+  const { reviews_stats, posts, performance } = req.body;
+  try {
+    const syncData = {
+      reviews_stats: reviews_stats || null,
+      posts: posts || null,
+      performance: performance || null,
+      synced_at: new Date().toISOString(),
+    };
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+       VALUES ($1, 'rc_sync', $2, 'connected', NOW())
+       ON CONFLICT (project_id, kind)
+       DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [projectId, JSON.stringify(syncData)]
+    );
+    console.log(`[rc-sync] Stored RC data for project ${projectId}: ${reviews_stats?.total_reviews || 0} reviews, ${posts?.count || 0} posts`);
+    res.json({ ok: true, synced_at: syncData.synced_at });
+  } catch (e) {
+    console.error('[rc-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get RC sync status
+app.get('/api/projects/:projectId/rc-sync', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='rc_sync'`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ synced: false });
+    const config = typeof result.rows[0].config === 'string' ? JSON.parse(result.rows[0].config) : result.rows[0].config;
+    res.json({ synced: true, ...config, updated_at: result.rows[0].updated_at });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

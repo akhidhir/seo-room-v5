@@ -5315,6 +5315,7 @@
       const [profileSummary, setProfileSummary] = useState(null);
       const [rcProfile, setRcProfile] = useState(null);
       const [rcSyncedAt, setRcSyncedAt] = useState(null);
+      const [rcSyncData, setRcSyncData] = useState(null);
       const [showProfile, setShowProfile] = useState(true);
       const [perfData, setPerfData] = useState(null);
       const [perfLoading, setPerfLoading] = useState(false);
@@ -5365,6 +5366,7 @@
         loadFindings();
         loadRcProfile();
         loadPerformance();
+        api(`/projects/${project.id}/rc-sync`).then(d => { if (d?.synced) setRcSyncData(d); }).catch(() => {});
         api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
       }, [project?.id]);
 
@@ -5517,11 +5519,13 @@
       };
 
       // Build profile display data from RC or gbp_profile
+      // Prefer rc_sync data (from MCP tools) over rc_profile data (from REST API - stale)
       const p = rcProfile?.profile || null;
       const prof = profileSummary?.profile || profileSummary || null;
-      const rcReviews = rcProfile?.reviews_stats || {};
-      const rcPosts = rcProfile?.posts?.published_posts || [];
-      const rcPostsCount = rcProfile?.posts?.count || rcPosts.length || rcProfile?.gbp_profile?.posts_count || 0;
+      const rcReviews = rcSyncData?.reviews_stats || rcProfile?.reviews_stats || {};
+      const rcPosts = rcSyncData?.posts?.published_posts || rcProfile?.posts?.published_posts || [];
+      const rcPostsCount = rcSyncData?.posts?.count || rcProfile?.posts?.count || rcPosts.length || rcProfile?.gbp_profile?.posts_count || 0;
+      const rcSyncTime = rcSyncData?.synced_at || null;
       const rcHours = p?.regularHours?.periods || [];
       const rcServicesRaw = (p?.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean);
       const rcServices = rcServicesRaw.filter(s => !s.startsWith('job_type_id:'));
@@ -5537,8 +5541,14 @@
               <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} issues</span>
             </h2>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              {rcSyncedAt && <span style={{ fontSize: 13, color: 'var(--text3)' }}>
+              {rcSyncTime && <span style={{ fontSize: 13, color: '#22c55e' }}>
+                <i className="fas fa-check-circle" style={{ marginRight: 4 }} />RC synced {timeAgo(rcSyncTime)}
+              </span>}
+              {!rcSyncTime && rcSyncedAt && <span style={{ fontSize: 13, color: 'var(--text3)' }}>
                 <i className="fas fa-clock" style={{ marginRight: 4 }} />Synced {timeAgo(rcSyncedAt)}
+              </span>}
+              {!rcSyncTime && <span style={{ fontSize: 12, color: '#f59e0b', cursor: 'help' }} title="Click Sync RC Data in Cowork to get accurate reviews &amp; posts data">
+                <i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />RC data not synced
               </span>}
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
                 <i className="fas fa-play" style={{ marginRight: 8 }} /> {loading ? 'Analyzing...' : 'Re-run Audit'}
