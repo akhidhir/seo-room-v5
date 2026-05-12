@@ -427,6 +427,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS customer_persona TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS writer_voice TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_slugs JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -1293,6 +1294,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
   const phone = b.phone;
+  const product_slugs = b.product_slugs;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -1323,7 +1325,8 @@ app.put('/api/projects/:id', async (req, res) => {
            rc_location_id=COALESCE($30, rc_location_id),
            clarity_project_id=COALESCE($31, clarity_project_id),
            clarity_api_token=COALESCE($32, clarity_api_token),
-           phone=COALESCE($33, phone)
+           phone=COALESCE($33, phone),
+           product_slugs=COALESCE($34::jsonb, product_slugs)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1340,7 +1343,8 @@ app.put('/api/projects/:id', async (req, res) => {
        customer_persona !== undefined ? customer_persona : null,
        writer_voice !== undefined ? writer_voice : null,
        rc_location_id !== undefined ? rc_location_id : null,
-       clarity_project_id || null, clarity_api_token || null, phone || null]
+       clarity_project_id || null, clarity_api_token || null, phone || null,
+       product_slugs ? JSON.stringify(product_slugs) : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -20562,16 +20566,30 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
+    // Classify services vs products using project.product_slugs
+    const productSlugsArr = Array.isArray(project.product_slugs) ? project.product_slugs.map(s => s.toLowerCase().trim()) : [];
+    const isProductSlug = (name) => {
+      if (!productSlugsArr.length) return false;
+      const slug = name.toLowerCase().replace(/\s+/g, '-');
+      const norm = name.toLowerCase();
+      return productSlugsArr.some(ps => slug === ps || slug.includes(ps) || norm.includes(ps.replace(/-/g, ' ')));
+    };
+
     const serviceMatrix = Array.from(allServiceNames).map(n => {
       const s = serviceSources[n];
+      const isProduct = isProductSlug(s.original);
       const gaps = [];
-      if (!s.mainPage) gaps.push('Create service page');
+      if (!s.mainPage) gaps.push(isProduct ? 'Create product page' : 'Create service page');
       if (!s.inGbp) gaps.push('Add to GBP services');
-      if (s.suburbPages.length === 0 && allSuburbNames.size > 0) gaps.push('Create suburb landing pages');
+      if (!isProduct && s.suburbPages.length === 0 && allSuburbNames.size > 0) gaps.push('Create suburb landing pages');
       if (!s.keywords?.length) gaps.push('Add keyword tracking');
       if (!s.posts?.length) gaps.push('Write GBP post');
+      const score = isProduct
+        ? (s.mainPage ? 40 : 0) + (s.inGbp ? 30 : 0) + (s.keywords?.length ? 15 : 0) + (s.gsc?.length ? 15 : 0)
+        : (s.mainPage ? 25 : 0) + (s.inGbp ? 20 : 0) + (s.suburbPages.length > 0 ? 15 : 0) + (s.keywords?.length ? 15 : 0) + (s.posts?.length ? 10 : 0) + (s.gsc?.length ? 15 : 0);
       return {
         service: s.original,
+        type: isProduct ? 'product' : 'service',
         source: s.source || 'website',
         inGbp: !!s.inGbp,
         hasPage: !!s.mainPage,
@@ -20584,7 +20602,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         postCount: s.posts?.length || 0,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gaps,
-        score: (s.mainPage ? 25 : 0) + (s.inGbp ? 20 : 0) + (s.suburbPages.length > 0 ? 15 : 0) + (s.keywords?.length ? 15 : 0) + (s.posts?.length ? 10 : 0) + (s.gsc?.length ? 15 : 0),
+        score,
       };
     }).sort((a, b) => b.score - a.score);
 
@@ -21077,12 +21095,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       project: { id: project.id, name: project.name, business_name: project.business_name, domain: project.domain },
       summary: {
         suburbCount: suburbMatrix.length,
-        serviceCount: serviceMatrix.length,
+        serviceCount: serviceMatrix.filter(s => s.type === 'service').length,
+        productCount: serviceMatrix.filter(s => s.type === 'product').length,
         gbpOnlyServiceCount: gbpOnlyServices.length,
         gbpSuburbCount: suburbMatrix.filter(s => s.inGbp).length,
         gbpServiceCount: serviceMatrix.filter(s => s.inGbp).length,
         servicesWithPage: serviceMatrix.filter(s => s.hasPage).length,
-        servicesWithSuburbPages: serviceMatrix.filter(s => s.suburbPageCount > 0).length,
+        servicesWithSuburbPages: serviceMatrix.filter(s => s.type === 'service' && s.suburbPageCount > 0).length,
         pagesWithSuburb: suburbMatrix.filter(s => s.pageCount > 0).length,
         pagesWithService: serviceMatrix.filter(s => s.pageCount > 0).length,
         trackedKeywords: rankKeywords.length,
@@ -21109,7 +21128,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       suburbSource,
       hasLocationPages,
       suburbs: suburbMatrix,
-      services: serviceMatrix,
+      services: serviceMatrix.filter(s => s.type === 'service'),
+      products: serviceMatrix.filter(s => s.type === 'product'),
+      productSlugs: productSlugsArr,
       gbpOnlyServices,
       competitors: topCompetitors,
       matrix: matrixRows,
@@ -21335,6 +21356,26 @@ app.put('/api/projects/:id/local-intel/suburbs/:name', async (req, res) => {
     });
     await pool.query('UPDATE projects SET service_areas=$1 WHERE id=$2', [JSON.stringify(sa), projectId]);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Toggle service ↔ product classification
+app.post('/api/projects/:id/local-intel/toggle-product', async (req, res) => {
+  const projectId = req.params.id;
+  const { slug, isProduct } = req.body;
+  if (!slug) return res.status(400).json({ error: 'slug required' });
+  try {
+    const projR = await pool.query('SELECT product_slugs FROM projects WHERE id=$1', [projectId]);
+    if (!projR.rows.length) return res.status(404).json({ error: 'Project not found' });
+    let slugs = Array.isArray(projR.rows[0].product_slugs) ? projR.rows[0].product_slugs : [];
+    const normSlug = slug.toLowerCase().replace(/\s+/g, '-').trim();
+    if (isProduct && !slugs.includes(normSlug)) {
+      slugs.push(normSlug);
+    } else if (!isProduct) {
+      slugs = slugs.filter(s => s !== normSlug);
+    }
+    await pool.query('UPDATE projects SET product_slugs=$1 WHERE id=$2', [JSON.stringify(slugs), projectId]);
+    res.json({ ok: true, product_slugs: slugs });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
