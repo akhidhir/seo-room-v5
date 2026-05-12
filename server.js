@@ -18208,18 +18208,19 @@ app.post('/api/projects/:projectId/rank-tracking/keywords/bulk-delete', async (r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Delete ALL tracked keywords for a project
+// Delete ALL tracked keywords for a project (SERP only — preserves Maps keywords)
 app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
+  const pid = req.params.projectId;
   try {
-    // Only delete SERP keywords (those without a location) — Maps keywords have locations
-    const serpKws = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = \'\')', [req.params.projectId]);
-    const serpIds = serpKws.rows.map(r => r.id);
-    if (serpIds.length > 0) {
-      await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1::int[]) AND project_id=$2', [serpIds, req.params.projectId]);
-      await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1::int[])', [serpIds]);
-    }
-    res.json({ ok: true, deleted: serpIds.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    // Delete SERP tracking records (location is null or empty)
+    await pool.query(`DELETE FROM rank_tracking WHERE project_id=$1 AND (location IS NULL OR location = '')`, [pid]);
+    // Delete SERP keywords (no location)
+    const del = await pool.query(`DELETE FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = '') RETURNING id`, [pid]);
+    res.json({ ok: true, deleted: del.rowCount });
+  } catch (e) {
+    console.error('[delete-serp-keywords]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Clean ALL maps data (keywords with location + their tracking records)
