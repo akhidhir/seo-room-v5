@@ -4786,6 +4786,103 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
       results.push(...batchResults);
     }
 
+    // ── FALLBACK: SerpAPI broad search for unresolved directories ──
+    // Only fires if there are not_checked or not_listed results AND SerpAPI key exists
+    // Costs ~$0.01-0.02 total (2-3 searches max)
+    const unresolved = results.filter(r => r.status === 'not_checked' || r.status === 'not_listed');
+    if (unresolved.length > 0 && SERPAPI_KEY) {
+      console.log(`[citations] Fallback: SerpAPI broad search for ${unresolved.length} unresolved directories`);
+      const foundViaGoogle = {};
+
+      // Search 1: Business name + location (catches most directory listings)
+      try {
+        const broadData = await serpApiSearch({ engine: 'google', q: `"${businessName}" ${locationShort}`, num: 100, api_key: SERPAPI_KEY });
+        for (const r of (broadData.organic_results || [])) {
+          if (!r.link) continue;
+          for (const dir of AUSTRALIAN_DIRECTORIES) {
+            const dd = dir.url.replace(/^www\./, '');
+            if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
+              foundViaGoogle[dir.name] = { url: r.link, snippet: r.snippet || r.title || '' };
+            }
+          }
+        }
+      } catch (e) { console.log('[citations] Broad search error:', e.message); }
+
+      // Search 2: Domain name (catches listings that use the URL)
+      if (domain) {
+        try {
+          const domData = await serpApiSearch({ engine: 'google', q: `"${domain}" ${locationShort}`, num: 100, api_key: SERPAPI_KEY });
+          for (const r of (domData.organic_results || [])) {
+            if (!r.link) continue;
+            for (const dir of AUSTRALIAN_DIRECTORIES) {
+              const dd = dir.url.replace(/^www\./, '');
+              if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
+                foundViaGoogle[dir.name] = { url: r.link, snippet: `Via domain. ${r.snippet || r.title || ''}`.trim() };
+              }
+            }
+          }
+        } catch (e) { console.log('[citations] Domain search error:', e.message); }
+      }
+
+      // Search 3: Phone number (catches listings indexed with phone)
+      const phoneToSearch = normalizePhone(bizPhone);
+      if (phoneToSearch && phoneToSearch.length >= 8) {
+        try {
+          const phoneFormatted = phoneToSearch.replace(/^(\d{4})(\d{3})(\d{3})$/, '$1 $2 $3');
+          const phoneQ = phoneFormatted !== phoneToSearch ? `"${phoneToSearch}" OR "${phoneFormatted}"` : `"${phoneToSearch}"`;
+          const phoneData = await serpApiSearch({ engine: 'google', q: phoneQ, num: 100, api_key: SERPAPI_KEY });
+          for (const r of (phoneData.organic_results || [])) {
+            if (!r.link) continue;
+            for (const dir of AUSTRALIAN_DIRECTORIES) {
+              const dd = dir.url.replace(/^www\./, '');
+              if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
+                foundViaGoogle[dir.name] = { url: r.link, snippet: `Via phone. ${r.snippet || r.title || ''}`.trim() };
+              }
+            }
+          }
+        } catch (e) { console.log('[citations] Phone search error:', e.message); }
+      }
+
+      console.log(`[citations] SerpAPI fallback found ${Object.keys(foundViaGoogle).length} additional directories`);
+
+      // Update unresolved results with SerpAPI findings
+      for (let i = 0; i < results.length; i++) {
+        if ((results[i].status === 'not_checked' || results[i].status === 'not_listed') && foundViaGoogle[results[i].name]) {
+          const gResult = foundViaGoogle[results[i].name];
+          // Try to fetch the actual listing page for NAP extraction
+          let found_name = null, found_phone = null, found_address = null, nap_match = null;
+          try {
+            const listingPage = await fetchPage(gResult.url, 10000);
+            if (listingPage && !listingPage.blocked && listingPage.html) {
+              found_name = extractFoundName(listingPage.html);
+              found_phone = extractPhone(listingPage.html);
+              found_address = extractAddress(listingPage.html, location);
+              if (found_name || found_phone || found_address) {
+                nap_match = compareNAP(canonicalNAP, { name: found_name, phone: found_phone, address: found_address });
+              }
+            }
+          } catch (e) { /* NAP extraction failed, still mark as listed */ }
+
+          results[i] = {
+            ...results[i],
+            status: 'listed',
+            listing_url: gResult.url,
+            notes: `Found via Google: ${gResult.snippet}`.substring(0, 200),
+            found_name, found_phone, found_address, nap_match,
+          };
+          console.log(`[citations] ${results[i].name}: FOUND (SerpAPI fallback)`);
+        }
+      }
+
+      // For remaining not_checked that SerpAPI also didn't find → mark as not_listed (confirmed absent)
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'not_checked') {
+          results[i].status = 'not_listed';
+          results[i].notes = 'Not found via HTTP crawl or Google search';
+        }
+      }
+    }
+
     // Save all results to DB
     for (const r of results) {
       await pool.query(
@@ -4799,7 +4896,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
 
     const listed = results.filter(r => r.status === 'listed').length;
     const notChecked = results.filter(r => r.status === 'not_checked').length;
-    console.log(`[citations] Scan complete: ${listed}/${results.length} listed, ${notChecked} not checked (blocked/timeout)`);
+    console.log(`[citations] Scan complete: ${listed}/${results.length} listed, ${notChecked} not checked`);
     res.json({ results, stats: { total: results.length, listed, not_listed: results.filter(r => r.status === 'not_listed').length, not_checked: notChecked }, canonical_nap: canonicalNAP });
   } catch (e) {
     console.error('[citations] Scan error:', e.message);
