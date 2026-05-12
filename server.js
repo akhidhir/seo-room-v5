@@ -18215,8 +18215,8 @@ app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) =
     const serpKws = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = \'\')', [req.params.projectId]);
     const serpIds = serpKws.rows.map(r => r.id);
     if (serpIds.length > 0) {
-      await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1)', [serpIds]);
-      await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1)', [serpIds]);
+      await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1::int[]) AND project_id=$2', [serpIds, req.params.projectId]);
+      await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1::int[])', [serpIds]);
     }
     res.json({ ok: true, deleted: serpIds.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
