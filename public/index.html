@@ -3588,8 +3588,7 @@
       const [editingService, setEditingService] = useState(null);
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
-      const [visibleSvcSections, setVisibleSvcSections] = useState({ services: true, products: true }); // toggle sections inside Service KPI
-      const toggleSvcSection = (key) => setVisibleSvcSections(prev => ({ ...prev, [key]: !prev[key] }));
+      const [activeSvcTab, setActiveSvcTab] = useState('services'); // 'services' | 'products'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
@@ -4516,24 +4515,21 @@
                   { key: 'services', label: 'Suburb Pages', value: `${servicesWithSuburbPages}/${services.length}`, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' },
                   { key: 'products', label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' },
                 ].map((box, idx) => {
-                  const isActive = visibleSvcSections[box.key];
+                  const isActive = activeSvcTab === box.key;
                   return (
-                  <div key={idx} onClick={() => toggleSvcSection(box.key)}
+                  <div key={idx} onClick={() => setActiveSvcTab(box.key)}
                     style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${box.color}50`; e.currentTarget.style.opacity = '1'; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; e.currentTarget.style.opacity = isActive ? '1' : '0.5'; }}>
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = `${box.color}40`; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = isActive ? '1' : '0.5'; e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; }}>
                     <div style={{ fontSize: 40, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                      {box.label}
-                      <i className={`fas fa-eye${isActive ? '' : '-slash'}`} style={{ fontSize: 11, color: isActive ? box.color : 'var(--text3)' }} />
-                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
                   </div>
                   );
                 })}
               </div>
 
               {/* ── SERVICES TABLE ── */}
-              {visibleSvcSections.services && (<React.Fragment>
+              {activeSvcTab === 'services' && (<React.Fragment>
               <div id="svc-section" style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-wrench" />Services ({services.length})
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
@@ -4558,7 +4554,7 @@
                 </div>
               </React.Fragment>)}
               {/* ── PRODUCTS TABLE ── */}
-              {visibleSvcSections.products && (<React.Fragment>
+              {activeSvcTab === 'products' && (<React.Fragment>
               <div id="prod-section" style={{ fontSize: 15, fontWeight: 800, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-box" />Products ({products.length})
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
