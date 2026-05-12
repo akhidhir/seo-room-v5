@@ -8134,6 +8134,8 @@
       const [saving, setSaving] = useState(null);
       const [scanning, setScanning] = useState(false);
       const [filter, setFilter] = useState('all');
+      const [canonicalNAP, setCanonicalNAP] = useState({});
+      const [expandedNAP, setExpandedNAP] = useState({});
 
       useEffect(() => {
         if (project?.id) loadCitations();
@@ -8145,6 +8147,7 @@
           const data = await api(`/projects/${project.id}/citations`);
           setDirectories(data.directories || []);
           setStats(data.stats || { total: 0, listed: 0, pending: 0, not_listed: 0 });
+          if (data.canonical_nap) setCanonicalNAP(data.canonical_nap);
         } catch (e) { console.error('Load citations:', e); }
         finally { setLoading(false); }
       };
@@ -8216,9 +8219,9 @@
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
-                <i className="fas fa-building" style={{ marginRight: 10, color: 'var(--accent)' }} />Citations & Directories
+                <i className="fas fa-building" style={{ marginRight: 10, color: 'var(--accent)' }} />Citations & NAP Audit
               </h2>
-              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Track your business listings across Australian directories — NAP consistency is a key local ranking factor</p>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Track your business listings across directories — checks if listed and verifies Name, Address, Phone consistency</p>
             </div>
             <button className="btn btn-primary" onClick={scanCitations} disabled={scanning} style={{ fontSize: 13 }}>
               {scanning ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Scan All Directories</>}
@@ -8229,7 +8232,7 @@
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
               <div className="audit-loading-text">Scanning Citations</div>
-              <div className="audit-loading-sub">Checking each directory for your business listing via Google... this takes 1-2 minutes</div>
+              <div className="audit-loading-sub">Crawling each directory for your business listing + checking NAP consistency... this takes 1-2 minutes</div>
             </div>
           )}
 
@@ -8239,7 +8242,7 @@
               { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
               { id: 'listed', label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
               { id: 'not_listed', label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
-              { id: 'not_checked', label: 'Not Checked', value: stats.not_checked || 0, color: '#64748b', icon: 'fas fa-question-circle' },
+              { id: 'nap_issues', label: 'NAP Issues', value: stats.nap_issues || 0, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
             ].map(s => (
               <div key={s.id} onClick={() => setFilter(s.id)} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: filter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', opacity: filter === 'all' || filter === s.id ? 1 : 0.5, transition: 'all 0.2s' }}>
                 <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
@@ -8252,7 +8255,7 @@
           {/* Progress bar */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
-              <span>Citation Coverage {(stats.not_checked || 0) > 0 ? `(${stats.total - (stats.not_checked || 0)} scanned)` : ''}</span>
+              <span>Citation Coverage {(stats.not_checked || 0) > 0 ? `(${stats.total - (stats.not_checked || 0)} scanned)` : ''}{(stats.nap_issues || 0) > 0 ? ` · ${stats.nap_issues} NAP issue${stats.nap_issues > 1 ? 's' : ''}` : ''}</span>
               <span>{(() => { const scanned = stats.total - (stats.not_checked || 0); return scanned > 0 ? Math.round((stats.listed / scanned) * 100) : 0; })()}%</span>
             </div>
             <div style={{ height: 8, background: 'var(--bg)', borderRadius: 4, overflow: 'hidden' }}>
@@ -8263,14 +8266,14 @@
           {/* Directory tiers */}
           {filter !== 'all' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
-              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : filter === 'not_checked' ? 'Not Checked' : 'Not Listed'}</strong></span>
+              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : filter === 'not_checked' ? 'Not Checked' : filter === 'nap_issues' ? 'NAP Issues' : 'Not Listed'}</strong></span>
               <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>Clear filter</button>
             </div>
           )}
 
           {tiers.map(tier => {
             const allTierDirs = directories.filter(d => d.type === tier.key).length;
-            const tierDirs = directories.filter(d => d.type === tier.key && (filter === 'all' || d.status === filter));
+            const tierDirs = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? (d.nap_match && (d.nap_match.name === 'mismatch' || d.nap_match.phone === 'mismatch' || d.nap_match.address === 'mismatch')) : d.status === filter)));
             if (tierDirs.length === 0) return null;
             const tierListed = directories.filter(d => d.type === tier.key && d.status === 'listed').length;
             return (
@@ -8288,7 +8291,9 @@
                     const isEditing = editingDir === dir.name;
                     return (
                       <div key={dir.name} style={{ borderBottom: idx < tierDirs.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr', padding: '12px 16px', alignItems: 'center', gap: 12 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.5fr', padding: '12px 16px', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+                          onClick={() => dir.status === 'listed' && setExpandedNAP(prev => ({ ...prev, [dir.name]: !prev[dir.name] }))}
+                        >
                           {/* Directory info */}
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -8298,25 +8303,18 @@
                               ) : (
                                 <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 600 }}>PAID</span>
                               )}
-                              {dir.paid_option && <span style={{ fontSize: 10, color: 'var(--text3)' }}>{dir.paid_option}</span>}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{dir.description}</div>
-                            {dir.listing_url && <a href={dir.listing_url} target="_blank" rel="noopener" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />{dir.listing_url}</a>}
+                            {dir.listing_url && <a href={dir.listing_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />View listing</a>}
                           </div>
 
-                          {/* URL */}
-                          <div>
-                            <a href={`https://${dir.url}`} target="_blank" rel="noopener" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>
-                              <i className="fas fa-external-link-alt" style={{ marginRight: 4, fontSize: 10 }} />{dir.url}
-                            </a>
-                          </div>
-
-                          {/* Status dropdown */}
+                          {/* Status */}
                           <div>
                             <select
                               value={dir.status}
-                              onChange={(e) => updateStatus(dir, e.target.value)}
+                              onChange={(e) => { e.stopPropagation(); updateStatus(dir, e.target.value); }}
                               disabled={saving === dir.name}
+                              onClick={e => e.stopPropagation()}
                               style={{
                                 background: `${statusColor[dir.status]}18`,
                                 color: statusColor[dir.status],
@@ -8331,17 +8329,65 @@
                             </select>
                           </div>
 
+                          {/* NAP Status */}
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {dir.status === 'listed' && dir.nap_match ? (
+                              ['name', 'phone', 'address'].map(field => {
+                                const val = dir.nap_match[field];
+                                const color = val === 'match' ? '#22c55e' : val === 'mismatch' ? '#ef4444' : val === 'partial' ? '#f59e0b' : '#64748b';
+                                const icon = val === 'match' ? 'fa-check' : val === 'mismatch' ? 'fa-times' : val === 'partial' ? 'fa-minus' : 'fa-question';
+                                return <span key={field} title={`${field}: ${val || 'unknown'}`} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: color + '18', color, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                  <i className={`fas ${icon}`} style={{ fontSize: 8 }} />{field.charAt(0).toUpperCase()}
+                                </span>;
+                              })
+                            ) : dir.status === 'listed' ? (
+                              <span style={{ fontSize: 10, color: 'var(--text3)' }}>No NAP data</span>
+                            ) : null}
+                          </div>
+
+                          {/* Directory URL */}
+                          <div>
+                            <a href={`https://${dir.url}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>
+                              <i className="fas fa-external-link-alt" style={{ marginRight: 4, fontSize: 9 }} />{dir.url}
+                            </a>
+                          </div>
+
                           {/* Actions */}
                           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                             <button
                               className="btn btn-secondary btn-small"
-                              onClick={() => { setEditingDir(isEditing ? null : dir.name); setEditUrl(dir.listing_url || ''); setEditNotes(dir.notes || ''); }}
+                              onClick={(e) => { e.stopPropagation(); setEditingDir(isEditing ? null : dir.name); setEditUrl(dir.listing_url || ''); setEditNotes(dir.notes || ''); }}
                               style={{ fontSize: 11, padding: '4px 8px' }}
                             >
                               <i className={`fas fa-${isEditing ? 'times' : 'edit'}`} />
                             </button>
                           </div>
                         </div>
+
+                        {/* Expanded NAP details */}
+                        {expandedNAP[dir.name] && dir.status === 'listed' && (
+                          <div style={{ padding: '8px 16px 12px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>NAP Comparison</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr 1fr', gap: 6, fontSize: 12 }}>
+                              <div style={{ fontWeight: 600, color: 'var(--text3)' }}></div>
+                              <div style={{ fontWeight: 600, color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase' }}>Your Business</div>
+                              <div style={{ fontWeight: 600, color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase' }}>Found on Directory</div>
+                              {[
+                                { label: 'Name', canonical: canonicalNAP.name, found: dir.found_name, match: dir.nap_match?.name },
+                                { label: 'Phone', canonical: canonicalNAP.phone, found: dir.found_phone, match: dir.nap_match?.phone },
+                                { label: 'Address', canonical: canonicalNAP.address, found: dir.found_address, match: dir.nap_match?.address },
+                              ].map(row => {
+                                const color = row.match === 'match' ? '#22c55e' : row.match === 'mismatch' ? '#ef4444' : row.match === 'partial' ? '#f59e0b' : 'var(--text3)';
+                                return <React.Fragment key={row.label}>
+                                  <div style={{ fontWeight: 600, color }}>{row.label}</div>
+                                  <div style={{ color: 'var(--text2)', fontSize: 12 }}>{row.canonical || '—'}</div>
+                                  <div style={{ color, fontSize: 12, fontWeight: row.match === 'mismatch' ? 600 : 400 }}>{row.found || <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>Not detected</span>}</div>
+                                </React.Fragment>;
+                              })}
+                            </div>
+                            {dir.notes && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{dir.notes}</div>}
+                          </div>
+                        )}
 
                         {/* Expanded edit row */}
                         {isEditing && (
@@ -22423,7 +22469,9 @@ case 'action-plan':
 
       const allNavItems = [
         { section: 'AUDIT', items: [
-          { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true },
+          { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true, expandable: true, children: [
+            { id: 'citations', label: 'Citations & NAP', icon: 'fas fa-building' },
+          ] },
           { id: 'gbp-audit-internal', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true },
           { id: 'gsc-audit', label: 'GSC Audit', icon: 'fas fa-chart-line', expandable: true, children: [
             { id: 'gsc-indexed', label: 'Indexed Pages', icon: 'fas fa-check-circle' },
@@ -22432,7 +22480,6 @@ case 'action-plan':
           { id: 'website-audit', label: 'Website Audit', icon: 'fas fa-spider', expandable: true, children: [
             { id: 'web-sec-pagespeed-scores', label: 'PageSpeed Scores', icon: 'fas fa-tachometer-alt' },
             { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
-            { id: 'citations', label: 'Citations', icon: 'fas fa-building', localOnly: true },
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
           ] },
         ]},
