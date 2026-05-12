@@ -14529,9 +14529,69 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // ===== PHASE 1: Gather all data =====
     const gbpData = { profile: null, source: 'none', competitors: [], mapsRankings: [], directories: AUSTRALIAN_DIRECTORIES };
 
-    // 1. Get business profile — prefer extension-scraped data (100% accurate)
+    // 1. Get business profile — prefer RC cache (Rating Captain), then extension data
 
-    // 1a. Check for extension-scraped GBP data (most accurate source)
+    // 1a. Check RC cache (synced from Rating Captain MCP tools — most complete source)
+    try {
+      const rcData = await pool.query(
+        `SELECT profile, reviews, healthcheck, attributes, review_stats, synced_at FROM rc_profile_cache WHERE project_id=$1`,
+        [projectId]
+      );
+      if (rcData.rows.length > 0) {
+        const rc = rcData.rows[0];
+        const rcProfile = rc.profile || {};
+        const rcReviews = rc.reviews || {};
+        const rcHealthcheck = rc.healthcheck || [];
+        const rcAttrs = rc.attributes || [];
+        const rcStats = rc.review_stats || {};
+        const ageHours = (Date.now() - new Date(rc.synced_at).getTime()) / (1000 * 60 * 60);
+        console.log(`[gbp-audit] RC cache found (${Math.round(ageHours)}h old)`);
+
+        gbpData.source = 'rc_cache';
+        gbpData.profile = {
+          name: rcProfile.title || businessName,
+          address: '', // RC doesn't expose address for service-area businesses
+          phone: rcProfile.phone || null,
+          website: rcProfile.website || null,
+          rating: rcStats.average_rating || null,
+          reviewCount: rcStats.total_reviews || rcReviews.total || 0,
+          primaryType: rcProfile.primaryCategory || null,
+          categories: [rcProfile.primaryCategory, ...(rcProfile.additionalCategories || [])].filter(Boolean),
+          description: rcProfile.description || null,
+          hoursSet: !!(rcProfile.hours && Object.keys(rcProfile.hours).length > 0),
+          hoursText: rcProfile.hours ? Object.entries(rcProfile.hours).map(([d, h]) => `${d}: ${h}`).join('; ') : null,
+          hoursDays: rcProfile.hours ? Object.keys(rcProfile.hours).filter(k => rcProfile.hours[k] !== 'closed').length : 0,
+          placeId: rcProfile.placeId || null,
+          mapsUri: rcProfile.mapsUri || null,
+          verified: rcProfile.verified || false,
+          openingSince: rcProfile.openingSince || null,
+          services: rcProfile.services || [],
+          serviceCount: rcProfile.serviceCount || (rcProfile.services || []).length,
+          serviceAreas: rcProfile.serviceAreas || [],
+          replyRate: rcStats.reply_rate || rcReviews.reply_rate || null,
+          sampleReviews: (rcReviews.recent || []).slice(0, 10).map(r => ({
+            author: r.reviewer, rating: r.rating, text: (r.comment || '').slice(0, 300),
+            date: r.date, response: r.replied ? 'replied' : null,
+          })),
+          // Attributes from RC
+          socialProfiles: rcAttrs.filter(a => a.name.startsWith('url_')).map(a => ({ platform: a.name.replace('url_', ''), url: a.value })),
+          paymentMethods: rcAttrs.filter(a => a.name.startsWith('pay_')).map(a => ({ method: a.name, accepted: a.value })),
+          attributes: rcAttrs,
+          // Healthcheck items from RC
+          healthcheck: rcHealthcheck,
+          dataAge: `${Math.round(ageHours)}h`,
+        };
+
+        console.log(`[gbp-audit] PROFILE (RC cache):`, JSON.stringify({
+          name: gbpData.profile.name, rating: gbpData.profile.rating, reviews: gbpData.profile.reviewCount,
+          categories: gbpData.profile.categories.length, description: gbpData.profile.description ? 'YES' : 'NO',
+          hours: gbpData.profile.hoursSet, services: gbpData.profile.serviceCount,
+          replyRate: gbpData.profile.replyRate, serviceAreas: gbpData.profile.serviceAreas.length,
+        }));
+      }
+    } catch (e) { console.log(`[gbp-audit] RC cache check error: ${e.message}`); }
+
+    // 1b. Check for extension-scraped GBP data (supplements RC with photos, posts, monthly views)
     try {
       const extData = await pool.query(
         `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`,
@@ -14542,234 +14602,50 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         const ageHours = (Date.now() - new Date(extData.rows[0].updated_at).getTime()) / (1000 * 60 * 60);
         console.log(`[gbp-audit] Extension data found (${Math.round(ageHours)}h old)`);
 
-        gbpData.source = 'extension';
-        gbpData.profile = {
-          name: ext.business?.name || businessName,
-          address: ext.address || '',
-          phone: ext.phone || null,
-          website: ext.website || null,
-          rating: ext.reviews?.averageRating || null,
-          reviewCount: ext.reviews?.totalCount || 0,
-          primaryType: (ext.categories || []).find(c => c.primary)?.name || null,
-          categories: (ext.categories || []).map(c => c.name),
-          description: ext.description || null,
-          hoursSet: (ext.hours || []).length > 0,
-          hoursText: (ext.hours || []).map(h => `${h.day}: ${h.hours}`).join('; '),
-          hoursDays: (ext.hours || []).length,
-          photoCount: ext.photos?.totalCount || 0,
-          photosByOwner: ext.photos?.byOwner || 0,
-          photosByCustomer: ext.photos?.byCustomer || 0,
-          services: ext.services || [],
-          serviceAreas: ext.service_areas || [],
-          posts: ext.posts || { count: 0 },
-          attributes: ext.attributes || [],
-          products: ext.products || [],
-          reviews: [],
-          thirdPartyReviews: ext.thirdPartyReviews || [],
-          socialProfiles: ext.socialProfiles || [],
-          monthlyViews: ext.monthlyViews || null,
-          collectedAt: ext.collected_at,
-          dataAge: `${Math.round(ageHours)}h`,
-        };
-        console.log(`[gbp-audit] PROFILE (extension):`, JSON.stringify({
-          name: gbpData.profile.name, rating: gbpData.profile.rating, reviews: gbpData.profile.reviewCount,
-          photos: gbpData.profile.photoCount, categories: gbpData.profile.categories,
-          description: gbpData.profile.description ? 'YES' : 'NO', hours: gbpData.profile.hoursSet,
-          services: gbpData.profile.services.length, posts: gbpData.profile.posts.count,
-        }));
+        if (!gbpData.profile) {
+          // No RC cache — use extension as primary
+          gbpData.source = 'extension';
+          gbpData.profile = {
+            name: ext.business?.name || businessName,
+            address: ext.address || '',
+            phone: ext.phone || null,
+            website: ext.website || null,
+            rating: ext.reviews?.averageRating || null,
+            reviewCount: ext.reviews?.totalCount || 0,
+            primaryType: (ext.categories || []).find(c => c.primary)?.name || null,
+            categories: (ext.categories || []).map(c => c.name),
+            description: ext.description || null,
+            hoursSet: (ext.hours || []).length > 0,
+            hoursText: (ext.hours || []).map(h => `${h.day}: ${h.hours}`).join('; '),
+            hoursDays: (ext.hours || []).length,
+            photoCount: ext.photos?.totalCount || 0,
+            photosByOwner: ext.photos?.byOwner || 0,
+            photosByCustomer: ext.photos?.byCustomer || 0,
+            services: ext.services || [],
+            serviceAreas: ext.service_areas || [],
+            posts: ext.posts || { count: 0 },
+            attributes: ext.attributes || [],
+            products: ext.products || [],
+            reviews: [],
+            thirdPartyReviews: ext.thirdPartyReviews || [],
+            socialProfiles: ext.socialProfiles || [],
+            monthlyViews: ext.monthlyViews || null,
+            collectedAt: ext.collected_at,
+            dataAge: `${Math.round(ageHours)}h`,
+          };
+        } else {
+          // RC cache exists — merge extension-only fields (photos, posts, monthly views)
+          if (ext.photos?.totalCount) { gbpData.profile.photoCount = ext.photos.totalCount; gbpData.profile.photosByOwner = ext.photos.byOwner || 0; gbpData.profile.photosByCustomer = ext.photos.byCustomer || 0; }
+          if (ext.posts) gbpData.profile.posts = ext.posts;
+          if (ext.monthlyViews) gbpData.profile.monthlyViews = ext.monthlyViews;
+          if (ext.thirdPartyReviews) gbpData.profile.thirdPartyReviews = ext.thirdPartyReviews;
+          if (ext.products && ext.products.length > 0) gbpData.profile.products = ext.products;
+          if (ext.address) gbpData.profile.address = ext.address;
+          gbpData.profile.extensionData = true;
+          console.log(`[gbp-audit] Merged extension data: photos=${gbpData.profile.photoCount}, posts=${(gbpData.profile.posts || {}).count || 0}`);
+        }
       }
     } catch (e) { console.log(`[gbp-audit] Extension data check error: ${e.message}`); }
-
-    // 1b. SerpAPI Maps — run to get rating/reviews/categories
-    // Extension data will be merged on top afterwards for hours/description
-    const extensionProfile = gbpData.profile; // Save extension data to merge later
-    if (SERPAPI_KEY && businessName) {
-      try {
-        const searchQ = businessName.replace(/&/g, 'and');
-        console.log(`[gbp-audit] SerpAPI search: "${searchQ}" (original: "${businessName}"`);
-
-        const data = await serpApiSearch({
-          engine: 'google_maps',
-          q: searchQ,
-          type: 'search',
-          api_key: SERPAPI_KEY,
-        });
-
-        const results = data.local_results || [];
-        console.log(`[gbp-audit] SerpAPI found ${results.length} results`);
-
-        // Match by website domain (most accurate), then by business name
-        const bnLower = businessName.toLowerCase().split(' ')[0];
-        const match = results.find(r => r.website && r.website.includes(domain)) ||
-          results.find(r => r.title && r.title.toLowerCase().includes(bnLower)) ||
-          null;
-
-        if (match) {
-          console.log(`[gbp-audit] Matched: "${match.title}" (${match.website || 'no website'})`);
-          gbpData.source = 'serpapi';
-          // match.reviews can be a number or a URL string — extract the number
-          const reviewCount = typeof match.reviews === 'number' ? match.reviews : (typeof match.reviews_original === 'number' ? match.reviews_original : parseInt(match.reviews) || 0);
-          gbpData.profile = {
-            name: match.title || '',
-            address: match.address || '',
-            phone: match.phone || null,
-            website: match.website || null,
-            rating: match.rating || null,
-            reviewCount: reviewCount,
-            primaryType: match.type || null,
-            categories: match.types || (match.type ? [match.type] : []),
-            placeId: match.place_id || null,
-            photoCount: match.thumbnail ? 1 : 0,
-            serviceOptions: match.service_options || null,
-          };
-
-          // Get more data via Google Knowledge Graph (regular Google search)
-          {
-            try {
-              const kpData = await serpApiSearch({
-                engine: 'google',
-                q: businessName,
-                api_key: SERPAPI_KEY,
-              });
-              const kp = kpData.knowledge_graph || {};
-              console.log(`[gbp-audit] Knowledge graph: title="${kp.title || 'none'}", desc=${kp.description ? 'YES' : 'NO'}, hours=${kp.hours ? 'YES' : 'NO'}, type="${kp.type || 'none'}"`);
-
-              // Also check local_results from Google search for richer data
-              const localResult = (kpData.local_results?.places || [])[0];
-              if (localResult) {
-                console.log(`[gbp-audit] Local result: photos=${localResult.photos_count || '?'}, hours=${localResult.operating_hours ? 'YES' : 'NO'}`);
-                if (localResult.description) gbpData.profile.description = localResult.description;
-                if (localResult.operating_hours) {
-                  gbpData.profile.hoursSet = true;
-                  gbpData.profile.hoursText = JSON.stringify(localResult.operating_hours);
-                }
-              }
-              if (kp.description) gbpData.profile.description = kp.description;
-              if (kp.hours) {
-                gbpData.profile.hoursSet = true;
-                gbpData.profile.hoursText = typeof kp.hours === 'string' ? kp.hours : JSON.stringify(kp.hours);
-              }
-
-              // Merge knowledge graph — only safe fields, never overwrite reviewCount with non-numbers
-              const p = kp;
-              if (p) {
-                if (p.address) gbpData.profile.address = p.address;
-                if (p.phone) gbpData.profile.phone = p.phone;
-                // Don't overwrite reviewCount — KG often has wrong/missing data
-                // Don't overwrite rating — SerpAPI Maps is more accurate
-                // Only overwrite if KG has better data — never null out existing values
-                if (p.description && !gbpData.profile.description) gbpData.profile.description = p.description;
-                console.log(`[gbp-audit] KG merge: description=${gbpData.profile.description ? 'YES' : 'NO'}, hours=${gbpData.profile.hoursSet}`);
-              }
-            } catch (e) { console.log(`[gbp-audit] Detail lookup error: ${e.message}`); }
-          }
-
-          // 1b-extra. SerpAPI Place Details — get EXACT review count, photos, full data
-          if (match.place_id || match.data_id) {
-            try {
-              const placeParams = { engine: 'google_maps', type: 'place', api_key: SERPAPI_KEY };
-              if (match.data_id) placeParams.data_id = match.data_id;
-              else placeParams.place_id = match.place_id;
-              console.log(`[gbp-audit] SerpAPI Place Details: ${match.data_id || match.place_id}`);
-              const placeData = await serpApiSearch(placeParams);
-              const pr = placeData.place_results || placeData;
-              if (pr) {
-                if (pr.reviews !== undefined) { gbpData.profile.reviewCount = pr.reviews; console.log(`[gbp-audit] Exact review count: ${pr.reviews}`); }
-                if (pr.rating !== undefined) gbpData.profile.rating = pr.rating;
-                if (pr.user_reviews?.most_relevant) gbpData.profile.sampleReviews = pr.user_reviews.most_relevant.slice(0, 10).map(r => ({ author: r.username, rating: r.rating, text: (r.description || r.snippet || '').slice(0, 300), date: r.date, response: r.response?.description || null }));
-                if (pr.photos_count || pr.images?.length) gbpData.profile.photoCount = pr.photos_count || pr.images?.length || gbpData.profile.photoCount;
-                if (pr.description) gbpData.profile.description = pr.description;
-                if (pr.hours) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = JSON.stringify(pr.hours); }
-                if (pr.address) gbpData.profile.address = pr.address;
-                if (pr.phone) gbpData.profile.phone = pr.phone;
-                if (pr.type) gbpData.profile.primaryType = pr.type;
-                if (pr.types || pr.subtypes) gbpData.profile.categories = pr.subtypes || pr.types || gbpData.profile.categories;
-                if (pr.extensions) gbpData.profile.serviceOptions = pr.extensions;
-                console.log(`[gbp-audit] Place Details enriched: reviews=${gbpData.profile.reviewCount}, rating=${gbpData.profile.rating}, photos=${gbpData.profile.photoCount}, categories=${(gbpData.profile.categories || []).length}`);
-              }
-            } catch (e) { console.log(`[gbp-audit] Place Details error: ${e.message}`); }
-          }
-
-          console.log(`[gbp-audit] PROFILE:`, JSON.stringify({
-            name: gbpData.profile.name, rating: gbpData.profile.rating, reviews: gbpData.profile.reviewCount,
-            photos: gbpData.profile.photoCount, phone: gbpData.profile.phone ? 'YES' : 'NO',
-            categories: gbpData.profile.categories, description: gbpData.profile.description ? 'YES' : 'NO',
-            hours: gbpData.profile.hoursSet, website: gbpData.profile.website ? 'YES' : 'NO',
-          }));
-        } else {
-          console.log(`[gbp-audit] No match found for domain "${domain}" in ${results.length} results`);
-          if (results.length > 0) console.log(`[gbp-audit] First result: "${results[0].title}" (${results[0].website || 'no site'})`);
-        }
-      } catch (e) { console.error('[gbp-audit] SerpAPI error:', e.message); }
-    }
-
-    // 1b. Enrich profile with DataForSEO (full GBP data: description, hours, services, posts, Q&A)
-    if (DATAFORSEO_AUTH && gbpData.profile?.placeId) {
-      try {
-        console.log(`[gbp-audit] DataForSEO lookup for place_id: ${gbpData.profile.placeId}`);
-        const dfsResp = await fetch('https://api.dataforseo.com/v3/business_data/google/my_business_info/task_post', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
-          body: JSON.stringify([{ keyword: businessName, location_name: location || 'Australia', language_name: 'English' }]),
-          signal: AbortSignal.timeout(15000),
-        });
-        if (dfsResp.ok) {
-          const dfsData = await dfsResp.json();
-          const task = dfsData.tasks?.[0];
-          if (task?.status_code === 20000 && task.result?.[0]?.items?.[0]) {
-            const item = task.result[0].items[0];
-            console.log(`[gbp-audit] DataForSEO found: "${item.title}", desc=${item.description ? 'YES' : 'NO'}, hours=${item.work_hours ? 'YES' : 'NO'}, services=${(item.people_also_search || []).length}`);
-            // Merge richer data
-            if (item.description) gbpData.profile.description = item.description;
-            if (item.work_hours) {
-              gbpData.profile.hoursSet = true;
-              gbpData.profile.hoursText = JSON.stringify(item.work_hours);
-            }
-            if (item.total_photos) gbpData.profile.photoCount = item.total_photos;
-            if (item.phone) gbpData.profile.phone = item.phone;
-            if (item.category) gbpData.profile.primaryType = item.category;
-            if (item.additional_categories) gbpData.profile.categories = [item.category, ...item.additional_categories].filter(Boolean);
-            if (item.attributes) gbpData.profile.attributes = item.attributes;
-            if (item.place_topics) gbpData.profile.topics = item.place_topics;
-            gbpData.profile.dfsEnriched = true;
-          } else {
-            console.log(`[gbp-audit] DataForSEO: no results or error`, task?.status_code, task?.status_message);
-          }
-        }
-      } catch (e) { console.log(`[gbp-audit] DataForSEO error: ${e.message}`); }
-    }
-
-    // 1b-alt. Try DataForSEO by keyword if no place_id
-    if (DATAFORSEO_AUTH && gbpData.profile && !gbpData.profile.dfsEnriched) {
-      try {
-        console.log(`[gbp-audit] DataForSEO keyword search: "${businessName}"`);
-        const dfsResp = await fetch('https://api.dataforseo.com/v3/business_data/google/my_business_info/task_post', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
-          body: JSON.stringify([{ keyword: businessName, location_name: location || 'Australia', language_name: 'English' }]),
-          signal: AbortSignal.timeout(15000),
-        });
-        if (dfsResp.ok) {
-          const dfsData = await dfsResp.json();
-          const task = dfsData.tasks?.[0];
-          if (task?.status_code === 20000 && task.result?.[0]?.items) {
-            // Find matching business by domain
-            const items = task.result[0].items;
-            const match = items.find(i => i.domain && i.domain.includes(domain)) || items.find(i => i.title && i.title.toLowerCase().includes(businessName.split(' ')[0].toLowerCase())) || items[0];
-            if (match) {
-              console.log(`[gbp-audit] DataForSEO matched: "${match.title}", desc=${match.description ? 'YES' : 'NO'}, hours=${match.work_hours ? 'YES' : 'NO'}, photos=${match.total_photos || '?'}`);
-              if (match.description) gbpData.profile.description = match.description;
-              if (match.work_hours) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = JSON.stringify(match.work_hours); }
-              if (match.total_photos) gbpData.profile.photoCount = match.total_photos;
-              if (match.category) gbpData.profile.primaryType = match.category;
-              if (match.additional_categories) gbpData.profile.categories = [match.category, ...match.additional_categories].filter(Boolean);
-              if (match.attributes) gbpData.profile.attributes = match.attributes;
-              gbpData.profile.dfsEnriched = true;
-            }
-          }
-        }
-      } catch (e) { console.log(`[gbp-audit] DataForSEO keyword error: ${e.message}`); }
-    }
 
     // 1c. Scrape website for NAP consistency + schema
     if (domain) {
@@ -14828,45 +14704,26 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         keywords: c.keywords.slice(0, 5),
       }));
 
-    // Fallback: if no competitors from maps data, use Project Settings competitors + SerpAPI lookup
-    if (gbpData.competitors.length === 0 && (project.competitors || []).length > 0 && SERPAPI_KEY) {
-      console.log(`[gbp-audit] No maps competitors found, looking up ${project.competitors.length} from Project Settings`);
-      for (const compDomain of (project.competitors || []).slice(0, 5)) {
-        try {
-          const cleanDomain = compDomain.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
-          // Extract a business name from domain: "littlepommieplumber.com.au" -> "little pommie plumber"
-          const domainName = cleanDomain.split('.')[0].replace(/[-_]/g, ' ');
-          const searchQuery = `${domainName} ${(location || '').split(',')[0] || ''}`.trim();
-          console.log(`[gbp-audit] Competitor search: "${searchQuery}" (from ${compDomain})`);
-          const compSearch = await serpApiSearch({
-            engine: 'google_maps',
-            q: searchQuery,
-            type: 'search',
-            api_key: SERPAPI_KEY,
-          });
-          const place = (compSearch.local_results || [])[0];
-          if (place) {
-            gbpData.competitors.push({
-              name: place.title || compDomain,
-              rating: place.rating || null,
-              reviews: place.reviews || null,
-              appearances: 0,
-              avgPosition: place.position || '—',
-              keywords: [],
-              source: 'project_settings',
-              profile: {
-                rating: place.rating,
-                reviews: place.reviews,
-                photoCount: (place.thumbnail ? 1 : 0),
-                categories: place.type ? 1 : 0,
-                primaryType: place.type || null,
-                website: place.website || null,
-              },
-            });
+    // Fallback: if no competitors from maps data, check grid_scans for competitor data
+    if (gbpData.competitors.length === 0) {
+      try {
+        const gridComps = await pool.query(
+          `SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 5`,
+          [projectId]
+        );
+        const compMap = {};
+        for (const row of gridComps.rows) {
+          const comps = row.competitors?.top || [];
+          for (const c of comps) {
+            if (c.name && c.name.toLowerCase() !== businessName.toLowerCase()) {
+              if (!compMap[c.name]) compMap[c.name] = { name: c.name, rating: c.rating, reviews: c.reviews, appearances: c.appearances || 1, avgPosition: c.avg_position || '—', keywords: [], source: 'grid_scan' };
+              else compMap[c.name].appearances += (c.appearances || 1);
+            }
           }
-        } catch (e) { console.log(`[gbp-audit] Competitor lookup failed for ${compDomain}:`, e.message); }
-      }
-      console.log(`[gbp-audit] Found ${gbpData.competitors.length} competitors from Project Settings`);
+        }
+        gbpData.competitors = Object.values(compMap).sort((a, b) => b.appearances - a.appearances).slice(0, 5);
+        if (gbpData.competitors.length > 0) console.log(`[gbp-audit] Found ${gbpData.competitors.length} competitors from grid scans`);
+      } catch (e) { console.log(`[gbp-audit] Grid scan competitor lookup error: ${e.message}`); }
     }
 
     // 3. Look up top competitor profiles via Places API for comparison
@@ -14902,21 +14759,6 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     }
 
     const serviceAreas = project.service_areas || [];
-    // Merge extension data on top of SerpAPI data (extension wins for hours, address)
-    if (extensionProfile && gbpData.profile) {
-      if (extensionProfile.hoursSet) { gbpData.profile.hoursSet = true; gbpData.profile.hoursText = extensionProfile.hoursText; gbpData.profile.hoursDays = extensionProfile.hoursDays; }
-      if (extensionProfile.address) gbpData.profile.address = extensionProfile.address;
-      if (extensionProfile.description) gbpData.profile.description = extensionProfile.description;
-      if (extensionProfile.services && extensionProfile.services.length > 0) gbpData.profile.services = extensionProfile.services;
-      if (extensionProfile.posts) gbpData.profile.posts = extensionProfile.posts;
-      if (extensionProfile.attributes && extensionProfile.attributes.length > 0) gbpData.profile.attributes = extensionProfile.attributes;
-      if (extensionProfile.photoCount > 1) gbpData.profile.photoCount = extensionProfile.photoCount;
-      if (extensionProfile.thirdPartyReviews) gbpData.profile.thirdPartyReviews = extensionProfile.thirdPartyReviews;
-      if (extensionProfile.socialProfiles) gbpData.profile.socialProfiles = extensionProfile.socialProfiles;
-      if (extensionProfile.monthlyViews) gbpData.profile.monthlyViews = extensionProfile.monthlyViews;
-      gbpData.profile.extensionData = true;
-      console.log(`[gbp-audit] Merged extension data: hours=${gbpData.profile.hoursSet}, desc=${gbpData.profile.description ? 'YES' : 'NO'}, photos=${gbpData.profile.photoCount}`);
-    }
 
     console.log(`[gbp-audit] Final: source=${gbpData.source}, competitors=${gbpData.competitors.length}, rankings=${gbpData.mapsRankings.length}`);
 
@@ -15985,77 +15827,63 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       rankData = r.rows;
     } catch (e) {}
 
-    // 5. SerpAPI profile snapshot (quick lookup)
+    // 5. RC cache profile (replaces SerpAPI)
     let serpProfile = null;
     try {
-      if (SERPAPI_KEY) {
-        // Try multiple search queries to find the business
-        const locationShort = (location || '').split(',')[0].trim(); // "Bayswater" from "Bayswater, Perth WA"
-        const searchQueries = [
-          `${businessName} ${locationShort}`,
-          `${businessName} ${location}`,
-          domain ? `${domain.replace(/^www\./, '')} ${locationShort}` : null,
-        ].filter(Boolean);
-
-        let results = [];
-        let matchedQuery = '';
-        for (const searchQ of searchQueries) {
-          console.log(`[gbp-external] SerpAPI Maps search: "${searchQ}"`);
-          const data = await serpApiSearch({ engine: 'google_maps', q: searchQ, api_key: SERPAPI_KEY, num: 10 });
-          results = data.local_results || [];
-          if (results.length > 0) { matchedQuery = searchQ; break; }
-        }
-
-        const domainClean = domain.replace(/^www\./, '').toLowerCase();
-        const bnWords = businessName.toLowerCase().split(/\s+/);
-        const match = results.find(r => {
-          const rDomain = (r.website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
-          return rDomain === domainClean || rDomain.includes(domainClean) || domainClean.includes(rDomain);
-        }) || results.find(r => {
-          const titleLower = (r.title || '').toLowerCase();
-          return bnWords.filter(w => w.length > 2).every(w => titleLower.includes(w));
-        }) || results.find(r => (r.title || '').toLowerCase().includes(bnWords[0]));
-        console.log(`[gbp-external] SerpAPI: ${results.length} results, match: ${match ? match.title : 'NONE'} (query: "${matchedQuery}")`);
-        if (match) {
-          serpProfile = {
-            title: match.title, rating: match.rating, reviews: match.reviews,
-            type: match.type, address: match.address, phone: match.phone,
-            position: match.position, categories: match.categories || [],
-            website: match.website, thumbnail: match.thumbnail
-          };
-          // Get place details for richer data
-          if (match.data_id || match.place_id) {
-            try {
-              const placeParams = { engine: 'google_maps', type: 'place', api_key: SERPAPI_KEY };
-              if (match.data_id) placeParams.data_id = match.data_id;
-              else placeParams.place_id = match.place_id;
-              const pd = await serpApiSearch(placeParams);
-              const pr = pd.place_results || pd;
-              if (pr) {
-                serpProfile.reviews = pr.reviews || serpProfile.reviews;
-                serpProfile.rating = pr.rating || serpProfile.rating;
-                serpProfile.description = pr.description || null;
-                serpProfile.hours = pr.operating_hours || null;
-                serpProfile.photos_count = pr.photos_count || pr.images?.length || null;
-                serpProfile.categories = pr.categories || serpProfile.categories;
-                serpProfile.services = pr.services || null;
-                serpProfile.attributes = pr.attributes || null;
-                serpProfile.sampleReviews = (pr.user_reviews?.most_relevant || []).slice(0, 5).map(r => ({
-                  rating: r.rating, text: (r.description || r.snippet || '').slice(0, 200),
-                  date: r.date, hasResponse: !!r.response
-                }));
-              }
-            } catch (e) { console.log(`[gbp-external] Place details error: ${e.message}`); }
+      const rcData = await pool.query(
+        `SELECT profile, reviews, healthcheck, attributes, review_stats FROM rc_profile_cache WHERE project_id=$1`,
+        [projectId]
+      );
+      if (rcData.rows.length > 0) {
+        const rc = rcData.rows[0];
+        const rcProfile = rc.profile || {};
+        const rcReviews = rc.reviews || {};
+        const rcStats = rc.review_stats || {};
+        const rcAttrs = rc.attributes || [];
+        serpProfile = {
+          title: rcProfile.title || businessName,
+          rating: rcStats.average_rating || null,
+          reviews: rcStats.total_reviews || rcReviews.total || 0,
+          type: rcProfile.primaryCategory || null,
+          address: '', // service-area business
+          phone: rcProfile.phone || null,
+          categories: [rcProfile.primaryCategory, ...(rcProfile.additionalCategories || [])].filter(Boolean),
+          website: rcProfile.website || null,
+          description: rcProfile.description || null,
+          hours: rcProfile.hours || null,
+          services: rcProfile.services || [],
+          serviceCount: rcProfile.serviceCount || 0,
+          serviceAreas: rcProfile.serviceAreas || [],
+          attributes: rcAttrs,
+          replyRate: rcStats.reply_rate || null,
+          sampleReviews: (rcReviews.recent || []).slice(0, 5).map(r => ({
+            rating: r.rating, text: (r.comment || '').slice(0, 200),
+            date: r.date, hasResponse: r.replied || false,
+          })),
+          healthcheck: rc.healthcheck || [],
+          source: 'rc_cache',
+        };
+        // Add competitors from grid scans
+        const gridComps = await pool.query(
+          `SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 5`,
+          [projectId]
+        );
+        const compMap = {};
+        for (const row of gridComps.rows) {
+          for (const c of (row.competitors?.top || [])) {
+            if (c.name && c.name.toLowerCase() !== businessName.toLowerCase()) {
+              if (!compMap[c.name]) compMap[c.name] = { name: c.name, rating: c.rating, reviews: c.reviews, appearances: c.appearances || 1, website: c.website || null };
+              else compMap[c.name].appearances += (c.appearances || 1);
+            }
           }
         }
-        // Also grab top competitors from maps
-        const topCompetitors = results.filter(r => r.title !== match?.title).slice(0, 5).map(r => ({
-          name: r.title, rating: r.rating, reviews: r.reviews,
-          type: r.type, position: r.position, website: r.website
-        }));
-        if (topCompetitors.length) serpProfile = { ...serpProfile, mapsCompetitors: topCompetitors };
+        const topCompetitors = Object.values(compMap).sort((a, b) => b.appearances - a.appearances).slice(0, 5);
+        if (topCompetitors.length) serpProfile.mapsCompetitors = topCompetitors;
+        console.log(`[gbp-external] RC cache profile: ${serpProfile.title}, ${serpProfile.reviews} reviews, ${serpProfile.categories.length} categories, ${topCompetitors.length} competitors`);
+      } else {
+        console.log(`[gbp-external] No RC cache found — run "Sync from RC" first`);
       }
-    } catch (e) { console.log(`[gbp-external] SerpAPI quick lookup error: ${e.message}`); }
+    } catch (e) { console.log(`[gbp-external] RC cache lookup error: ${e.message}`); }
 
     const gbpAgentId = process.env.GBP_AGENT_ID;
     const gbpEnvId = process.env.GBP_ENVIRONMENT_ID;
