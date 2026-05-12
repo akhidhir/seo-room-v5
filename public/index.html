@@ -17702,7 +17702,7 @@
 
     // ============ RANK TRACKING HELPERS ============
     const posColor = (pos, checked) => !pos ? (checked ? '#ef4444' : 'var(--text3)') : pos <= 3 ? '#22c55e' : pos <= 10 ? '#3b82f6' : pos <= 20 ? '#f59e0b' : '#ef4444';
-    const posLabel = (pos, checked) => pos ? `#${pos}` : (checked ? 'Not Ranking' : '—');
+    const posLabel = (pos, checked) => pos ? `#${pos}` : (checked ? '>100' : '—');
 
     function useRankData(project) {
       const [keywords, setKeywords] = useState([]);
@@ -17893,32 +17893,32 @@
 
       return (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h2 style={{ margin: 0 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 8, color: 'var(--accent)' }} />SERP Rankings</h2>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
-                <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete All
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 10, color: 'var(--accent)' }} />SERP Rankings</h2>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 14, padding: '8px 16px', color: '#ef4444', borderColor: '#ef4444' }}>
+                <i className="fa-solid fa-trash" style={{ marginRight: 6 }} />Delete All
               </button>}
               <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
                 <select value={discoverLimit} onChange={e => setDiscoverLimit(Number(e.target.value))} disabled={discovering}
-                  style={{ fontSize: 13, padding: '6px 8px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)', borderRight: 'none', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer' }}>
+                  style={{ fontSize: 14, padding: '8px 10px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)', borderRight: 'none', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer' }}>
                   {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
-                <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 13, borderRadius: '0 6px 6px 0' }}>
-                  {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />Discover Keywords</>}
+                <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 14, padding: '8px 16px', borderRadius: '0 6px 6px 0' }}>
+                  {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 6 }} />Discover Keywords</>}
                 </button>
               </div>
-              <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 13 }}>
-                <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
+              <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
+                <i className="fa-solid fa-file-csv" style={{ marginRight: 6 }} />Import CSV
               </button>
-              <button onClick={downloadSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
+              <button onClick={downloadSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
                 Sample CSV
               </button>
-              <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 13 }}>
-                {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Importing...</> : <><i className="fa-solid fa-download" style={{ marginRight: 4 }} />Import from GSC</>}
+              <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
+                {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Importing...</> : <><i className="fa-solid fa-download" style={{ marginRight: 6 }} />Import from GSC</>}
               </button>
-              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 13 }}>
-                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 4 }} />Check Rankings</>}
+              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
+                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
               </button>
             </div>
           </div>
@@ -17961,54 +17961,54 @@
             </div>
           ) : (
             <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                 <thead>
-                  <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <tr style={{ background: 'var(--bg)', borderBottom: '2px solid var(--border)' }}>
                     {[
                       { key: 'keyword', label: 'Keyword', align: 'left', w: null },
-                      { key: 'volume', label: 'Volume', align: 'center', w: 90 },
-                      { key: 'gsc', label: 'GSC Pos', align: 'center', w: 80 },
-                      { key: 'position', label: 'SERP Pos', align: 'center', w: 80 },
-                      { key: null, label: 'Ranking URL', align: 'left', w: 200 },
-                      { key: 'competitors', label: 'Competitors', align: 'center', w: 100 },
-                      { key: 'checked', label: 'Checked', align: 'center', w: 90 },
+                      { key: 'volume', label: 'Volume', align: 'center', w: 100 },
+                      { key: 'gsc', label: 'GSC Pos', align: 'center', w: 100 },
+                      { key: 'position', label: 'SERP Pos', align: 'center', w: 100 },
+                      { key: null, label: 'Ranking URL', align: 'left', w: 260 },
+                      { key: 'competitors', label: 'Competitors', align: 'center', w: 120 },
+                      { key: 'checked', label: 'Checked', align: 'center', w: 110 },
                     ].map(h => (
-                      <th key={h.label} onClick={h.key ? () => toggleSort(h.key) : undefined} style={{ padding: '10px 14px', textAlign: h.align, fontWeight: 600, color: sortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                      <th key={h.label} onClick={h.key ? () => toggleSort(h.key) : undefined} style={{ padding: '14px 16px', textAlign: h.align, fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.5, color: sortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
                         {h.label}{h.key && sortIcon(h.key)}
                       </th>
                     ))}
-                    <th style={{ width: 40 }}></th>
+                    <th style={{ width: 44 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.map(kw => (
                     <React.Fragment key={kw.id}>
-                      <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => loadHistory(kw.keyword)}>
-                        <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}{kw.location && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 9, marginRight: 2 }} />{kw.location}</span>}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)' }}>
+                      <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.15s' }} onClick={() => loadHistory(kw.keyword)} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'} onMouseLeave={e => e.currentTarget.style.background = ''}>
+                        <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: 15 }}>{kw.keyword}{kw.location && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 10, marginRight: 3 }} />{kw.location}</span>}</td>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: 15, color: 'var(--text2)' }}>
                           {kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}
                         </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                          {kw.gsc_position != null ? <span style={{ color: posColor(Math.round(kw.gsc_position)), fontWeight: 700, fontSize: 15 }}>{Math.round(kw.gsc_position * 10) / 10}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                          {kw.gsc_position != null ? <span style={{ color: posColor(Math.round(kw.gsc_position)), fontWeight: 800, fontSize: 18 }}>{Math.round(kw.gsc_position * 10) / 10}</span> : <span style={{ color: 'var(--text3)', fontSize: 14 }}>—</span>}
                         </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                          <span style={{ color: posColor(kw.serp_position, kw.checked_at), fontWeight: 700, fontSize: kw.serp_position ? 16 : 13 }}>{posLabel(kw.serp_position, kw.checked_at)}</span>
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                          <span style={{ color: posColor(kw.serp_position, kw.checked_at), fontWeight: 800, fontSize: kw.serp_position ? 18 : 15 }}>{posLabel(kw.serp_position, kw.checked_at)}</span>
                         </td>
-                        <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--accent)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : '—'}
                         </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                           {(kw.competitors || []).filter(c => c.source === 'serp').length > 0 ? (
-                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '3px 10px' }}>
-                              {(kw.competitors || []).filter(c => c.source === 'serp').length} <i className="fa-solid fa-chevron-down" style={{ fontSize: 9, marginLeft: 4 }} />
+                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 13, padding: '5px 14px' }}>
+                              {(kw.competitors || []).filter(c => c.source === 'serp').length} <i className="fa-solid fa-chevron-down" style={{ fontSize: 10, marginLeft: 4 }} />
                             </button>
-                          ) : <span style={{ color: 'var(--text3)' }}>—</span>}
+                          ) : <span style={{ color: 'var(--text3)', fontSize: 14 }}>—</span>}
                         </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
+                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
                           {kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : '—'}
                         </td>
-                        <td style={{ padding: '6px' }}>
-                          <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
+                        <td style={{ padding: '8px' }}>
+                          <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 6 }}>
                             <i className="fa-solid fa-trash" />
                           </button>
                         </td>
