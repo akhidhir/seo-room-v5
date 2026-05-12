@@ -3587,6 +3587,7 @@
       const [editingSuburb, setEditingSuburb] = useState(null); // { old: 'X', val: 'Y' }
       const [editingService, setEditingService] = useState(null);
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
+      const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
@@ -4490,21 +4491,57 @@
                 </div>
 
               {/* ── GBP-ONLY SERVICES ── */}
-              {gbpOnlyServices.length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <i className="fas fa-info-circle" />GBP-Only ({gbpOnlyServices.length})
-                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— in GBP but no matching website page</span>
+              {gbpOnlyServices.length > 0 && (() => {
+                const MAX_CHIP_LEN = 60;
+                const shortItems = gbpOnlyServices.filter(gs => gs.length <= MAX_CHIP_LEN);
+                const longItems = gbpOnlyServices.filter(gs => gs.length > MAX_CHIP_LEN);
+                const gbpCats = (s.gbpCategories || []).filter(c => gbpOnlyServices.includes(c));
+                const pureServices = shortItems.filter(gs => !gbpCats.includes(gs));
+                const SHOW_LIMIT = 20;
+                const displayServices = showAllGbpOnly ? pureServices : pureServices.slice(0, SHOW_LIMIT);
+                return (
+                <div style={{ marginTop: 16, padding: '16px 20px', borderRadius: 12, background: '#f59e0b06', border: '1px solid #f59e0b15' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="fas fa-exclamation-triangle" />Unmatched GBP Items ({gbpOnlyServices.length})
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— in GBP but not matched to a defined service or product</span>
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {gbpOnlyServices.map((gs, i) => (
-                      <span key={i} style={{ padding: '5px 12px', borderRadius: 7, background: '#f59e0b08', border: '1px solid #f59e0b20', fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>
-                        {gs}
-                      </span>
-                    ))}
+                  <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.5 }}>
+                    These items appear in your Google Business Profile but don't match any service or product you've defined above. Consider adding relevant ones as services/products, or ignore if they're GBP auto-generated entries.
                   </div>
+                  {gbpCats.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Categories ({gbpCats.length})</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {gbpCats.map((cat, i) => (
+                          <span key={i} style={{ padding: '4px 10px', borderRadius: 6, background: '#6366f110', border: '1px solid #6366f125', fontSize: 12, color: '#818cf8', fontWeight: 600 }}>{cat}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {pureServices.length > 0 && (
+                    <div style={{ marginBottom: longItems.length > 0 ? 12 : 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Services ({pureServices.length})</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {displayServices.map((gs, i) => (
+                          <span key={i} style={{ padding: '4px 10px', borderRadius: 6, background: '#f59e0b08', border: '1px solid #f59e0b18', fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>{gs}</span>
+                        ))}
+                      </div>
+                      {pureServices.length > SHOW_LIMIT && (
+                        <button onClick={() => setShowAllGbpOnly(!showAllGbpOnly)} style={{ marginTop: 8, background: 'none', border: '1px solid #f59e0b25', borderRadius: 6, padding: '4px 12px', fontSize: 12, color: '#f59e0b', cursor: 'pointer', fontWeight: 600 }}>
+                          {showAllGbpOnly ? 'Show less' : `Show all ${pureServices.length} services`}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {longItems.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Post/Description Content ({longItems.length}) <span style={{ fontWeight: 500, textTransform: 'none' }}>— likely auto-generated, safe to ignore</span></div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>{longItems.length} long entries hidden (GBP post summaries mixed into services data)</div>
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
             );
           })()}
