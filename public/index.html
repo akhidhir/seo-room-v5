@@ -18430,10 +18430,23 @@
                                 <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                                   <i className="fa-solid fa-robot" style={{ marginRight: 4 }} />
                                   {ar.model?.includes('opus') ? 'Claude Opus' : ar.model?.includes('sonnet') ? 'Claude Sonnet' : 'Claude Haiku'} · {ar.cost?.inputTokens?.toLocaleString() || '?'} input + {ar.cost?.outputTokens?.toLocaleString() || '?'} output tokens · ${ar.cost?.total?.toFixed(4) || '?'}
+                                  {ar.analyzed_at && <span> · {new Date(ar.analyzed_at).toLocaleDateString()}</span>}
                                 </div>
-                                <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(null); }} style={{ fontSize: 12 }}>
-                                  <i className="fa-solid fa-chevron-up" style={{ marginRight: 4 }} />Collapse
-                                </button>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <button className="btn" onClick={async e => {
+                                    e.stopPropagation();
+                                    if (!confirm('Re-analyze this keyword? This will use AI credits.')) return;
+                                    await api(`/projects/${project.id}/rank-tracking/analyses/${encodeURIComponent(kw.keyword)}`, { method: 'DELETE' });
+                                    setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; });
+                                    setExpandedAnalysis(null);
+                                    setAnalysisChecked(prev => ({...prev, [kw.id]: true}));
+                                  }} style={{ fontSize: 12, color: '#f59e0b', borderColor: '#f59e0b' }}>
+                                    <i className="fa-solid fa-rotate" style={{ marginRight: 4 }} />Re-analyze
+                                  </button>
+                                  <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(null); }} style={{ fontSize: 12 }}>
+                                    <i className="fa-solid fa-chevron-up" style={{ marginRight: 4 }} />Collapse
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </td></tr>

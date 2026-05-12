@@ -19275,10 +19275,24 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
     const text = aiResp.content[0].text;
     let analysis;
     try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      // Strip markdown code fences (```json ... ```) before parsing
+      let cleaned = text.replace(/```(?:json)?\s*/gi, '').trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found');
       analysis = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      analysis = { verdict: text, score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
+      // Second attempt: try extracting JSON more aggressively
+      try {
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+          analysis = JSON.parse(text.substring(start, end + 1));
+        } else {
+          throw new Error('No braces');
+        }
+      } catch (e2) {
+        analysis = { verdict: text.substring(0, 500), score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
+      }
     }
 
     // Calculate actual token usage for cost display
@@ -19336,6 +19350,14 @@ app.get('/api/projects/:projectId/rank-tracking/analyses', async (req, res) => {
       };
     }
     res.json(results);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a saved SERP analysis (to allow re-run)
+app.delete('/api/projects/:projectId/rank-tracking/analyses/:keyword', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM serp_analysis WHERE project_id=$1 AND keyword=$2', [req.params.projectId, req.params.keyword]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
