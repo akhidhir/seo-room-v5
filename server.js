@@ -20352,10 +20352,14 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       // Separate: main service page (no suburb or the primary city page) vs suburb-specific pages
       // Main page = shortest matching URL (most likely the core service page)
       allMatches.sort((a, b) => a.rawSlug.length - b.rawSlug.length);
-      let mainPage = allMatches[0] || null;
+      // Ensure all URLs are absolute (some discovered pages store only the path)
+      const projectBase = project.domain?.startsWith('http') ? project.domain.replace(/\/+$/, '') : `https://${project.domain}`.replace(/\/+$/, '');
+      const absUrl = (u) => u && u.startsWith('/') ? projectBase + u : u;
+      let mainPage = allMatches[0] ? { ...allMatches[0], url: absUrl(allMatches[0].url) } : null;
+      const nonSuburbPages = allMatches.filter(m => !m.suburb).map(m => ({ url: absUrl(m.url), title: m.title }));
       const suburbPages = allMatches.filter(m => m.suburb).map(m => ({
         suburb: m.suburb.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
-        url: m.url, title: m.title
+        url: absUrl(m.url), title: m.title
       }));
       const hasPage = allMatches.length > 0;
 
@@ -20433,6 +20437,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         inGbp,
         hasPage,
         mainPage: mainPage ? { url: mainPage.url, title: mainPage.title } : null,
+        allPages: nonSuburbPages.slice(0, 10),
         suburbPageCount: suburbPages.length,
         suburbPages: suburbPages.slice(0, 50),
         missingSuburbs: missingSuburbs.slice(0, 50),
