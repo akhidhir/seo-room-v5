@@ -3706,7 +3706,7 @@
       );
       if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
 
-      const { summary: s, suburbs, services, products: _products = [], recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, gbpAuditChecks = [], competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [], suburbSource = 'settings', hasLocationPages = true } = data;
+      const { summary: s, suburbs, services, products: _products = [], recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, gbpAuditChecks = [], competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [], suburbSource = 'website', hasLocationPages = true, gbpOnlyLocations = [] } = data;
       const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 18 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
@@ -3793,7 +3793,7 @@
               <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <i className="fas fa-brain" style={{ color: '#8b5cf6' }} /> Local Intel
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>What does each suburb need to rank? Business, Service, and Suburb signals in one place.</div>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>What does each location need to rank? Business, Service, and Location signals in one place.</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn" onClick={runGbpAudit} disabled={auditRunning} style={{ fontSize: 13 }}>
@@ -3851,11 +3851,11 @@
                   <div style={{ width: 44, height: 44, borderRadius: 12, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Suburb Level KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Location Level KPIs</span>
                 </div>
                 <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-suburb signals — has landing page, listed in GBP service areas, mentioned in a Google review</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-location signals — has landing page, listed in GBP service areas, mentioned in a Google review</div>
             </div>
           </div>
 
@@ -4454,7 +4454,7 @@
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Service</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Page</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Suburbs</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Locations</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>In GBP</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Type</div>
                   </div>
@@ -4530,8 +4530,8 @@
                     <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Suburb Level KPIs</div>
-                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>3 signals per suburb: has landing page, listed in GBP service areas, mentioned in a review</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Location Level KPIs</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>3 signals per location: has landing page, listed in GBP service areas, mentioned in a review</div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -4539,7 +4539,7 @@
                     disabled={discoveringSuburbs}
                     style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: discoveringSuburbs ? 'wait' : 'pointer', opacity: discoveringSuburbs ? 0.6 : 1 }}>
                     <i className={discoveringSuburbs ? 'fas fa-spinner fa-spin' : 'fas fa-search'} style={{ marginRight: 6 }} />
-                    {discoveringSuburbs ? 'Scanning...' : 'Discover Suburbs'}
+                    {discoveringSuburbs ? 'Scanning...' : 'Discover Locations'}
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
                 </div>
@@ -4576,7 +4576,7 @@
                   <div>
                     <div style={{ fontWeight: 800, color: '#ef4444', fontSize: 15, marginBottom: 6 }}>No Location Pages Found</div>
                     <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
-                      This website has no dedicated suburb/service area pages (e.g. /service-areas/suburb-name/). Google uses location-specific pages as a strong ranking signal for local search. Without them, competitors with suburb pages will rank higher in Maps and local results.
+                      This website has no dedicated location pages (e.g. /plumber-suburb/ or /service-areas/suburb-name/). Google uses location-specific pages as a strong ranking signal for local search. Without them, competitors with location pages will rank higher in Maps and local results.
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginTop: 10 }}>
                       Recommendation: Create a /service-areas/ section with a dedicated page for each target suburb, including unique content about your services in that area.
@@ -4590,8 +4590,8 @@
 
               {/* ── LANDING PAGES ── */}
               <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
-                title="Suburb Landing Pages"
-                subtitle={subNoPage.length === 0 ? 'All suburbs have a landing page' : `${subNoPage.length} suburbs missing a page`}
+                title="Location Landing Pages"
+                subtitle={subNoPage.length === 0 ? 'All locations have a landing page' : `${subNoPage.length} locations missing a page`}
                 badge={`${suburbsWithPages}/${suburbs.length}`}
                 badgeColor={subNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
@@ -4714,8 +4714,8 @@
 
               {/* ── GBP SERVICE AREAS ── */}
               <KpiItem itemKey="sub-gbp" icon="map-marker-alt" iconColor="#22c55e"
-                title="Suburbs in GBP Service Areas"
-                subtitle={subNoGbp.length === 0 ? 'All suburbs listed as service areas' : `${subNoGbp.length} suburbs not in GBP`}
+                title="Locations in GBP Service Areas"
+                subtitle={subNoGbp.length === 0 ? 'All locations listed as service areas' : `${subNoGbp.length} locations not in GBP`}
                 badge={`${suburbsInGbp}/${suburbs.length}`}
                 badgeColor={subNoGbp.length === 0 ? '#22c55e' : '#f59e0b'}>
                 <div style={{ marginTop: 14 }}>
@@ -4754,7 +4754,7 @@
               {/* ── KEYWORD TRACKING ── */}
               <KpiItem itemKey="sub-track" icon="chart-line" iconColor="#f59e0b"
                 title="Keyword Tracking"
-                subtitle={subNoTrack.length === 0 ? 'All suburbs have keyword tracking' : `${subNoTrack.length} suburbs not being tracked`}
+                subtitle={subNoTrack.length === 0 ? 'All locations have keyword tracking' : `${subNoTrack.length} locations not being tracked`}
                 badge={`${suburbsTracked}/${suburbs.length}`}
                 badgeColor={subNoTrack.length === 0 ? '#22c55e' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
@@ -4795,7 +4795,7 @@
               {/* ── REVIEW MENTIONS ── */}
               <KpiItem itemKey="sub-reviews" icon="star" iconColor="#f97316"
                 title="Review Mentions"
-                subtitle={subNoReviews.length === 0 ? 'All suburbs mentioned in Google reviews' : `${subNoReviews.length} suburbs with no review mentions`}
+                subtitle={subNoReviews.length === 0 ? 'All locations mentioned in Google reviews' : `${subNoReviews.length} locations with no review mentions`}
                 badge={`${subWithReviews.length}/${suburbs.length}`}
                 badgeColor={subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444'}>
                 <div style={{ marginTop: 14 }}>
@@ -4830,11 +4830,36 @@
                   {s.totalReviews > 0 && (
                     <div style={{ marginTop: 16, padding: '12px 16px', borderRadius: 10, background: '#3b82f608', border: '1px solid #3b82f620', fontSize: 13, color: 'var(--text2)' }}>
                       <i className="fas fa-info-circle" style={{ marginRight: 6, color: '#3b82f6' }} />
-                      Scanned {s.totalReviews} Google reviews for suburb mentions. Encourage customers to include their suburb in reviews — it helps Maps rankings.
+                      Scanned {s.totalReviews} Google reviews for location mentions. Encourage customers to include their suburb in reviews — it helps Maps rankings.
                     </div>
                   )}
                 </div>
               </KpiItem>
+
+              {/* ── GBP-ONLY LOCATIONS (in GBP but no website page) ── */}
+              {(data.gbpOnlyLocations || []).length > 0 && (
+                <KpiItem itemKey="sub-gbp-only" icon="exclamation-circle" iconColor="#f97316"
+                  title="GBP-Only Locations"
+                  subtitle={`${data.gbpOnlyLocations.length} in GBP but no website page`}
+                  badge={data.gbpOnlyLocations.length}
+                  badgeColor="#f97316">
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12, lineHeight: 1.6 }}>
+                      These locations are listed in your GBP service areas but have no matching page on your website. Create landing pages to strengthen local rankings, or remove from GBP if you don't serve these areas.
+                    </div>
+                    {data.gbpOnlyLocations.map((loc, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#f9731606', border: '1px solid #f9731618' }}>
+                        <i className="fas fa-map-marker-alt" style={{ color: '#f97316', fontSize: 18 }} />
+                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{loc}</span>
+                        <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${loc}`, `Create a location landing page for "${loc}".\n\nThis suburb is in your GBP service areas but has no website page. Create a dedicated page targeting "[service] ${loc}" keywords.`, 'website', 'high'); }}
+                          style={{ padding: '6px 12px', borderRadius: 8, background: '#f9731615', border: '1px solid #f9731630', color: '#f97316', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          <i className="fas fa-plus" style={{ marginRight: 4 }} />Create Page
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </KpiItem>
+              )}
             </div>
             );
           })()}
@@ -5074,7 +5099,7 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Suburb</th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Location</th>
                     <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>GBP</th>
                     <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Pages</th>
                     <th style={{ textAlign: 'center', padding: '12px 8px', color: 'var(--text3)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase' }}>Keywords</th>
@@ -5117,12 +5142,12 @@
                   <tr style={{ borderTop: '2px solid var(--border)' }}>
                     <td colSpan={10} style={{ padding: '8px 12px' }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <input value={newSuburb} onChange={e => setNewSuburb(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddSuburb()} placeholder="Add suburb..." style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 260 }} />
+                        <input value={newSuburb} onChange={e => setNewSuburb(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddSuburb()} placeholder="Add location..." style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 260 }} />
                         <button onClick={handleAddSuburb} disabled={addingSuburb || !newSuburb.trim()} style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: addingSuburb || !newSuburb.trim() ? 0.5 : 1 }}>{addingSuburb ? 'Adding...' : '+ Add'}</button>
                       </div>
                     </td>
                   </tr>
-                  {suburbs.length === 0 && <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No suburbs found. Add service areas to your project or sync GBP data.</td></tr>}
+                  {suburbs.length === 0 && <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No locations found. Location pages are discovered from your website sitemap.</td></tr>}
                 </tbody>
               </table>
             </div>

@@ -20084,172 +20084,79 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     // 6. Reviews stats
     const reviewStats = rc?.reviews_stats || null;
 
-    // ============ CROSS-REFERENCE: SUBURBS ============
-    // SOURCE OF TRUTH: project.service_areas (populated via /discover-suburbs or manually in Settings)
-    // If not populated, fall back to live website scan + GBP
-    // CROSS-REFERENCE each suburb against 3 signals:
-    //   1. Has a dedicated landing page on the website? ✅/❌
-    //   2. Listed in GBP service areas? ✅/❌
-    //   3. Mentioned in a Google review? ✅/❌
+    // ============ CROSS-REFERENCE: LOCATIONS ============
+    // SOURCE OF TRUTH: Website pages (location pages discovered from sitemap)
+    // Patterns: /plumber-{suburb}/, /service-areas/{suburb}/, /locations/{suburb}/
+    // Then cross-reference with GBP service areas to find gaps
     const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
     const allSuburbNames = new Set();
-    const suburbSources = {}; // normalized -> { original, inGbp, fromWebsite, hasPage, pages, keywords, gridScans, gsc, reviewMentions }
+    const suburbSources = {};
+    let suburbSource = 'website';
+    let hasLocationPages = false;
 
-    // Load master suburb list from project.service_areas
-    let masterSuburbs = [];
-    let suburbSource = 'settings'; // 'settings', 'website', 'gbp', 'none'
-    let hasLocationPages = false; // whether the website has /service-areas/ pages at all
-    if (project.service_areas) {
-      const sa = typeof project.service_areas === 'string' ? JSON.parse(project.service_areas) : project.service_areas;
-      if (Array.isArray(sa)) masterSuburbs = sa.map(s => (typeof s === 'string' ? s : s.name || '').trim()).filter(Boolean);
-    }
-
-    // Check if website has any location pages (regardless of source of truth)
-    // Also detect custom patterns like /plumber-{suburb}/ by matching suburb names in URLs
+    // Step 1: Discover location pages from website (source of truth)
     for (const page of websitePages) {
-      const url = (page.url || page.slug || '').toLowerCase();
-      if (/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/.test(url)) {
-        hasLocationPages = true;
-        break;
+      let urlPath = '';
+      try { urlPath = new URL((page.url || '').startsWith('http') ? page.url : 'https://x.com' + (page.url || '')).pathname.replace(/^\/|\/$/g, '').toLowerCase(); } catch { urlPath = (page.slug || '').toLowerCase(); }
+      if (!urlPath) continue;
+
+      let suburbName = null;
+
+      // Pattern 1: /plumber-{suburb}/ (most common for plumbing/trade sites)
+      const plumberMatch = urlPath.match(/^plumber-([\w-]+)$/);
+      if (plumberMatch) {
+        suburbName = plumberMatch[1].replace(/-/g, ' ');
       }
-    }
-    // If no standard location pages, check for suburb names in any URL slug
-    if (!hasLocationPages && masterSuburbs.length > 0) {
-      for (const page of websitePages) {
-        const url = (page.url || page.slug || '').toLowerCase();
-        for (const s of masterSuburbs) {
-          const subSlug = normalize(s).replace(/\s+/g, '-');
-          if (subSlug.length > 2 && url.includes(subSlug)) {
-            hasLocationPages = true;
-            break;
-          }
+      // Pattern 2: /service-areas/{suburb}/, /locations/{suburb}/
+      if (!suburbName) {
+        const saMatch = urlPath.match(/^(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)$/);
+        if (saMatch) suburbName = saMatch[2].replace(/-/g, ' ');
+      }
+      // Pattern 3: /{trade}-{suburb}/ where trade is a known profession word
+      if (!suburbName) {
+        const tradeMatch = urlPath.match(/^(electrician|carpenter|painter|roofer|landscaper|handyman)-([\w-]+)$/);
+        if (tradeMatch) suburbName = tradeMatch[2].replace(/-/g, ' ');
+      }
+
+      if (suburbName) {
+        // Clean: remove city qualifiers
+        suburbName = suburbName.replace(/\s*(brisbane|north brisbane|south brisbane|perth|sydney|melbourne)$/i, '').trim();
+        if (suburbName.length < 2) continue;
+        const n = normalize(suburbName);
+        const cap = n.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        hasLocationPages = true;
+        if (!suburbSources[n]) {
+          allSuburbNames.add(n);
+          suburbSources[n] = { original: cap, inGbp: false, fromWebsite: true, hasPage: true, pages: [] };
         }
-        if (hasLocationPages) break;
+        const normUrl = (page.url || '').replace(/\/+$/, '');
+        if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
+          suburbSources[n].pages.push({ url: page.url, title: page.title || cap });
+        }
       }
     }
 
-    if (masterSuburbs.length > 0) {
-      // Use Project Settings as source of truth
-      for (const s of masterSuburbs) {
+    // If no location pages found on website, fall back to GBP service areas
+    if (allSuburbNames.size === 0) {
+      suburbSource = gbpSuburbs.length > 0 ? 'gbp' : 'none';
+      for (const s of gbpSuburbs) {
         const n = normalize(s);
         if (n && n.length > 1) {
           allSuburbNames.add(n);
-          suburbSources[n] = { original: s, inGbp: false, fromWebsite: false, hasPage: false };
-        }
-      }
-    } else {
-      // Fallback: extract suburbs from website /service-areas/ pages
-      suburbSource = 'website';
-      for (const page of websitePages) {
-        const url = (page.url || page.slug || '').toLowerCase();
-        const saMatch = url.match(/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/);
-        if (saMatch) {
-          let suburbSlug = saMatch[2];
-          const gbpMatch = gbpSuburbs.find(s => {
-            const gn = normalize(s).replace(/\s+/g, '-');
-            return suburbSlug.endsWith(gn) || suburbSlug === gn;
-          });
-          if (gbpMatch) {
-            suburbSlug = normalize(gbpMatch).replace(/\s+/g, '-');
-          } else if (suburbSlug.includes('-')) {
-            const parts = suburbSlug.split('-');
-            const last2 = parts.slice(-2).join('-');
-            const last1 = parts[parts.length - 1];
-            if (parts.length >= 3 && parts[parts.length - 2].length >= 3 && last1.length >= 3) {
-              suburbSlug = last2;
-            } else {
-              suburbSlug = last1;
-            }
-          }
-          const suburbName = suburbSlug.replace(/-/g, ' ').trim();
-          const n = normalize(suburbName);
-          if (n && n.length > 1 && !suburbSources[n]) {
-            const cap = n.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            allSuburbNames.add(n);
-            suburbSources[n] = { original: cap, inGbp: false, fromWebsite: true, hasPage: true };
-          }
-        }
-      }
-      // If no standard location pages, try custom URL patterns by matching GBP suburb names in page URLs
-      if (allSuburbNames.size === 0 && gbpSuburbs.length > 0) {
-        for (const page of websitePages) {
-          const url = (page.url || page.slug || '').toLowerCase();
-          try {
-            const urlPath = new URL(url.startsWith('http') ? url : 'https://x.com' + url).pathname.toLowerCase();
-            for (const gs of gbpSuburbs) {
-              const gSlug = normalize(gs).replace(/\s+/g, '-');
-              if (gSlug.length > 2 && urlPath.includes(gSlug)) {
-                const n = normalize(gs);
-                if (!suburbSources[n]) {
-                  allSuburbNames.add(n);
-                  suburbSources[n] = { original: gs, inGbp: false, fromWebsite: true, hasPage: true };
-                  hasLocationPages = true;
-                }
-              }
-            }
-          } catch {}
-        }
-        if (allSuburbNames.size > 0) suburbSource = 'website';
-      }
-      // If still no suburbs found, fall back to GBP service areas
-      if (allSuburbNames.size === 0) {
-        suburbSource = gbpSuburbs.length > 0 ? 'gbp' : 'none';
-        for (const s of gbpSuburbs) {
-          const n = normalize(s);
-          if (n && n.length > 1) {
-            allSuburbNames.add(n);
-            suburbSources[n] = { original: s, inGbp: true, fromWebsite: false, hasPage: false };
-          }
+          suburbSources[n] = { original: s, inGbp: true, fromWebsite: false, hasPage: false, pages: [] };
         }
       }
     }
 
-    // SIGNAL 1: Check if each suburb has a dedicated landing page
-    // Matches standard patterns (/service-areas/{suburb}) AND custom patterns (/plumber-{suburb}/, /{service}-{suburb}/)
-    for (const page of websitePages) {
-      const url = (page.url || page.slug || '').toLowerCase();
-      const normUrl = (page.url || '').replace(/\/+$/, '');
-
-      // Standard service-areas/locations pattern
-      const saMatch = url.match(/\/(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)\/?$/);
-      if (saMatch) {
-        const slug = saMatch[2];
-        for (const n of allSuburbNames) {
-          const nSlug = n.replace(/\s+/g, '-');
-          if (slug === nSlug || slug.endsWith(nSlug) || slug.endsWith('-' + nSlug)) {
-            suburbSources[n].hasPage = true;
-            if (!suburbSources[n].pages) suburbSources[n].pages = [];
-            if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
-              suburbSources[n].pages.push({ url: page.url, title: page.title });
-            }
-          }
-        }
-      }
-
-      // Custom pattern: any URL slug containing a suburb name (e.g. /plumber-warner/, /electrician-albany-creek/)
-      for (const n of allSuburbNames) {
-        if (suburbSources[n]?.hasPage) continue; // already found
-        const nSlug = n.replace(/\s+/g, '-');
-        if (nSlug.length < 3) continue; // skip very short suburb names to avoid false positives
-        // Check if the URL path (not domain) contains the suburb slug
-        try {
-          const urlPath = new URL(url.startsWith('http') ? url : 'https://x.com' + url).pathname.toLowerCase();
-          if (urlPath.includes(nSlug)) {
-            suburbSources[n].hasPage = true;
-            if (!suburbSources[n].pages) suburbSources[n].pages = [];
-            if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
-              suburbSources[n].pages.push({ url: page.url, title: page.title });
-            }
-          }
-        } catch {}
-      }
-    }
-
-    // SIGNAL 2: Check if each suburb is in GBP service areas
+    // SIGNAL 2: Check if each suburb is in GBP service areas + track GBP-only locations
+    const gbpOnlyLocations = [];
     for (const s of gbpSuburbs) {
       const n = normalize(s);
       if (suburbSources[n]) {
         suburbSources[n].inGbp = true;
+      } else if (n && n.length > 1 && hasLocationPages) {
+        // This suburb is in GBP but has no website page — it's a gap
+        gbpOnlyLocations.push(s);
       }
     }
 
@@ -21058,6 +20965,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       definedServices,
       definedProducts,
       gbpOnlyServices,
+      gbpOnlyLocations,
       competitors: topCompetitors,
       matrix: matrixRows,
       serviceNames: Array.from(allServiceNames).map(n => serviceSources[n].original),
