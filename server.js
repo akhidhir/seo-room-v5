@@ -702,6 +702,9 @@ async function initDb() {
     // Clean up stale "running" audits from previous server instance
     await client.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Server restarted during audit"}'::jsonb WHERE status='running'`).catch(() => {});
 
+    // Clean up broken SERP analyses (where JSON parsing failed — score=0 and verdict contains raw JSON)
+    await client.query(`DELETE FROM serp_analysis WHERE (analysis->>'score')::int = 0 AND length(analysis->>'verdict') > 200`).catch(() => {});
+
     console.log('[boot] Database schema initialized');
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
