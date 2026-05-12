@@ -17829,7 +17829,7 @@
 
       const modelCosts = {
         'haiku-4.5': 0.002, 'sonnet-4.5': 0.015, 'sonnet-4.6': 0.015,
-        'opus-4.6': 0.075, 'opus-4.7': 0.075
+        'opus-4.6': 0.075
       };
       const costPerKw = modelCosts[analysisModel] || 0.015;
       const analysisCheckedCount = Object.values(analysisChecked).filter(Boolean).length;
@@ -18002,7 +18002,6 @@
                   <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
                   <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
                   <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
-                  <option value="opus-4.7">Opus 4.7 (~$0.075/kw)</option>
                 </select>
               </div>
               <div style={{ fontSize: 14, color: 'var(--text2)', marginLeft: 8 }}>
@@ -18042,8 +18041,7 @@
                       <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
                       <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
                       <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
-                      <option value="opus-4.7">Opus 4.7 (~$0.075/kw)</option>
-                    </select>
+                        </select>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
                     <span>Cost per keyword</span><strong>${costPerKw.toFixed(3)}</strong>
@@ -18143,15 +18141,18 @@
                           {kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : '—'}
                         </td>
                         <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                          {analysisResults[kw.keyword] && !analysisResults[kw.keyword].error ? (
-                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(expandedAnalysis === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '4px 10px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
-                              <i className="fa-solid fa-eye" style={{ marginRight: 4 }} />View
-                            </button>
-                          ) : (
+                          <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center' }}>
+                            {analysisResults[kw.keyword] && (
+                              <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(expandedAnalysis === kw.keyword ? null : kw.keyword); }}
+                                style={{ fontSize: 12, padding: '4px 10px', color: analysisResults[kw.keyword].error ? '#ef4444' : 'var(--accent)', borderColor: analysisResults[kw.keyword].error ? '#ef4444' : 'var(--accent)' }}>
+                                <i className={`fa-solid ${analysisResults[kw.keyword].error ? 'fa-exclamation-triangle' : 'fa-eye'}`} style={{ marginRight: 4 }} />
+                                {analysisResults[kw.keyword].error ? 'Error' : 'View'}
+                              </button>
+                            )}
                             <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 6 }}>
                               <i className="fa-solid fa-trash" />
                             </button>
-                          )}
+                          </div>
                         </td>
                       </tr>
                       {expandedKw === kw.keyword && (kw.competitors || []).filter(c => c.source === 'serp').length > 0 && (
@@ -18163,6 +18164,20 @@
                               <span style={{ color: 'var(--text3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
                             </div>
                           ))}
+                        </td></tr>
+                      )}
+                      {/* SERP Analysis error panel */}
+                      {expandedAnalysis === kw.keyword && analysisResults[kw.keyword] && analysisResults[kw.keyword].error && (
+                        <tr><td colSpan={9} style={{ padding: '16px 24px', background: 'rgba(239,68,68,0.05)', borderTop: '2px solid #ef4444' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <i className="fa-solid fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 18 }} />
+                            <div>
+                              <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>Analysis Failed</div>
+                              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{analysisResults[kw.keyword].error}</div>
+                            </div>
+                            <button className="btn" onClick={e => { e.stopPropagation(); setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; }); setExpandedAnalysis(null); }}
+                              style={{ marginLeft: 'auto', fontSize: 12 }}>Dismiss</button>
+                          </div>
                         </td></tr>
                       )}
                       {/* SERP Analysis results panel */}

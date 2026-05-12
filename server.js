@@ -19125,11 +19125,10 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
   const modelMap = {
     'haiku-4.5': 'claude-haiku-4-5-20251001',
     'sonnet-4.5': 'claude-sonnet-4-5-20241022',
-    'sonnet-4.6': 'claude-sonnet-4-6-20250514',
-    'opus-4.6': 'claude-opus-4-6',
-    'opus-4.7': 'claude-opus-4-7-20250715'
+    'sonnet-4.6': 'claude-sonnet-4-6',
+    'opus-4.6': 'claude-opus-4-6'
   };
-  const aiModel = modelMap[model] || 'claude-sonnet-4-6-20250514';
+  const aiModel = modelMap[model] || 'claude-sonnet-4-6';
 
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -19271,7 +19270,7 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
     const outputTokens = aiResp.usage?.output_tokens || 0;
     const costRates = {
       'haiku-4.5': [0.80, 4], 'sonnet-4.5': [3, 15], 'sonnet-4.6': [3, 15],
-      'opus-4.6': [15, 75], 'opus-4.7': [15, 75]
+      'opus-4.6': [15, 75]
     };
     const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
     const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
