@@ -18269,18 +18269,22 @@
       const handleRcSync = async () => {
         setRcSyncing(true);
         try {
-          const result = await api(`/projects/${project.id}/rc-grid-sync/live`, { method: 'POST' });
-          if (result.error) { alert('RC Sync failed: ' + result.error); setRcSyncing(false); return; }
-          // Reload grid scans
+          // RC sync goes through Cowork/Claude MCP — check if data was already pushed
           const data = await api(`/projects/${project.id}/maps/grid-scans`);
-          if (Array.isArray(data)) {
+          const rcScans = Array.isArray(data) ? data.filter(s => s.source === 'rating_captain') : [];
+          if (rcScans.length > 0) {
+            // RC data exists — just reload it
             const scanMap = {};
             data.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
             setGridScans(scanMap);
             setMapsChecked(true);
+            loadData();
+            const latest = rcScans.reduce((a, b) => new Date(a.scanned_at) > new Date(b.scanned_at) ? a : b);
+            const age = Math.round((Date.now() - new Date(latest.scanned_at)) / 3600000);
+            alert(`Loaded ${rcScans.length} RC keywords (last synced ${age}h ago). To refresh, ask Cowork: "Sync RC grid data for this project"`);
+          } else {
+            alert('No RC grid data found. Ask Cowork: "Sync RC grid data for Projection Plumbing"');
           }
-          loadData();
-          alert(`Synced ${result.synced} keywords from Rating Captain`);
         } catch (e) {
           alert('RC Sync error: ' + e.message);
         }

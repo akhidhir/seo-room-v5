@@ -3892,11 +3892,26 @@ app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
 
     // Find matching location by gbp_location_id
     const allLocations = locData.data || [];
-    const rcLocation = allLocations.find(l => l.location_id === rcLocationId);
-    if (!rcLocation) return res.status(404).json({ error: `Location ${rcLocationId} not found in RC account` });
+    console.log(`[rc-live-sync] Found ${allLocations.length} RC locations. Looking for "${rcLocationId}"`);
+    console.log(`[rc-live-sync] RC location IDs:`, allLocations.map(l => ({ name: l.name, location_id: l.location_id, place_id: l.place_id, id: l.id, keywords: (l.keywords || []).length })));
+
+    // Try matching by location_id, place_id, or numeric id
+    let rcLocation = allLocations.find(l => l.location_id === rcLocationId);
+    if (!rcLocation) rcLocation = allLocations.find(l => l.location_id === rcLocationId.replace(/^locations\//, ''));
+    if (!rcLocation) rcLocation = allLocations.find(l => String(l.place_id) === rcLocationId);
+    if (!rcLocation) rcLocation = allLocations.find(l => String(l.id) === rcLocationId);
+    if (!rcLocation) rcLocation = allLocations.find(l => `locations/${l.location_id}` === rcLocationId);
+    if (!rcLocation) {
+      return res.status(404).json({
+        error: `Location "${rcLocationId}" not found in RC account`,
+        available: allLocations.map(l => ({ name: l.name, location_id: l.location_id, place_id: l.place_id }))
+      });
+    }
+    console.log(`[rc-live-sync] Matched RC location: ${rcLocation.name} (id=${rcLocation.id}, location_id=${rcLocation.location_id})`);
 
     const keywords = rcLocation.keywords || [];
-    if (keywords.length === 0) return res.json({ ok: true, synced: 0, message: 'No keywords monitored in RC for this location' });
+    console.log(`[rc-live-sync] Keywords in RC location: ${keywords.length}`, keywords.map(k => k.query || k.keyword || k.name));
+    if (keywords.length === 0) return res.json({ ok: true, synced: 0, message: `No keywords monitored in RC for "${rcLocation.name}". Add keywords in Rating Captain first.` });
 
     // Step 2: Get center lat/lng (strip locations/ prefix for RC API path)
     const numericLocId = rcLocationId.replace(/^locations\//, '');
