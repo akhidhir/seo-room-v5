@@ -18876,7 +18876,12 @@ app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
 // Get tracked keywords
 app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [req.params.projectId]);
+    const { rows } = await pool.query(`
+      SELECT rk.*, g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
+      FROM rank_keywords rk
+      LEFT JOIN gsc_keywords g ON g.project_id = rk.project_id AND LOWER(g.keyword) = LOWER(rk.keyword)
+      WHERE rk.project_id=$1 ORDER BY rk.keyword
+    `, [req.params.projectId]);
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -19139,7 +19144,8 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
       gscRes.rows.forEach(r => keywords.add(r.keyword.toLowerCase()));
     } catch (e) { console.log('gsc_keywords table error, skipping:', e.message); }
 
-    // If table empty, pull live from GSC API
+    // If table empty, pull live from GSC API and store into gsc_keywords
+    let gscLiveData = [];
     if (keywords.size === 0) {
       const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
       if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -19164,7 +19170,24 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: maxKw || 50 })
       }).then(r => r.json());
-      (kwRes.rows || []).forEach(r => keywords.add(r.keys[0].toLowerCase()));
+      gscLiveData = (kwRes.rows || []).map(r => ({
+        keyword: r.keys[0].toLowerCase(),
+        clicks: r.clicks || 0,
+        impressions: r.impressions || 0,
+        ctr: r.ctr || 0,
+        position: r.position || 0
+      }));
+      gscLiveData.forEach(r => keywords.add(r.keyword));
+
+      // Store into gsc_keywords table so the data persists for the latest endpoint JOIN
+      for (const g of gscLiveData) {
+        await pool.query(
+          `INSERT INTO gsc_keywords (project_id, keyword, clicks, impressions, ctr, position, fetched_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT (project_id, keyword) DO UPDATE SET clicks=EXCLUDED.clicks, impressions=EXCLUDED.impressions, ctr=EXCLUDED.ctr, position=EXCLUDED.position, fetched_at=NOW()`,
+          [projectId, g.keyword, g.clicks, g.impressions, g.ctr, g.position]
+        );
+      }
     }
 
     if (keywords.size === 0) {
