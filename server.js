@@ -17768,7 +17768,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const p = projRes.rows[0];
-    const domain = (p.domain || '').replace(/\/+$/, '');
+    const domain = (p.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
     if (!domain) return res.status(400).json({ error: 'No domain set in project settings' });
 
     // Try Yoast sitemap first, then standard
