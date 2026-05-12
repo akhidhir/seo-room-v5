@@ -3763,16 +3763,18 @@
       const suburbsInGbp = suburbs.filter(sub => sub.inGbp).length;
       const suburbsTracked = suburbs.filter(sub => sub.keywordCount > 0).length;
       const suburbsWithReviews = suburbs.filter(sub => sub.reviewMentions > 0).length;
-      const servicesWithPages = services.filter(svc => svc.pageCount > 0).length;
+      const servicesWithPages = services.filter(svc => svc.hasPage).length;
       const servicesInGbp = services.filter(svc => svc.inGbp).length;
+      const servicesWithSuburbPages = services.filter(svc => svc.suburbPageCount > 0).length;
       const servicesWithPosts = services.filter(svc => svc.postCount > 0).length;
+      const gbpOnlyServices = data.gbpOnlyServices || [];
 
       // Business KPI score
       const bizChecks = [gbpComplete, myReviews >= (compB.avgReviews || 999), myRating >= (compB.avgRating || 5), (s.gbpPostCount || 0) > 0];
       const bizScore = Math.round(bizChecks.filter(Boolean).length / bizChecks.length * 100);
       // Service KPI score
       const svcTotal = services.length || 1;
-      const svcScore = Math.round(((servicesWithPages + servicesInGbp + servicesWithPosts) / (svcTotal * 3)) * 100);
+      const svcScore = Math.round(((servicesWithPages + servicesInGbp + servicesWithSuburbPages + servicesWithPosts) / (svcTotal * 4)) * 100);
       // Suburb KPI score — 3 core signals: has landing page, in GBP, mentioned in reviews
       const subTotal = suburbs.length || 1;
       const subScore = Math.round(((suburbsWithPages + suburbsInGbp + suburbsWithReviews) / (subTotal * 3)) * 100);
@@ -3832,7 +3834,7 @@
                 </div>
                 <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(svcScore) }}>{svcScore}%</span>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-service signals — does each service have a page, GBP listing, and post?</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Website services vs GBP — {servicesWithPages} pages, {servicesInGbp} in GBP, {servicesWithSuburbPages} with suburb pages</div>
             </div>
 
             {/* SUBURB CARD */}
@@ -4300,9 +4302,8 @@
 
           {/* EXPANDED KPI DETAIL — SERVICE */}
           {expandedKpi === 'service' && (() => {
-            const svcNoPage = services.filter(svc => svc.pageCount === 0);
             const svcNoGbp = services.filter(svc => !svc.inGbp);
-            const svcNoPost = services.filter(svc => svc.postCount === 0);
+            const svcNoSuburbPages = services.filter(svc => svc.suburbPageCount === 0);
             const createAction = (title, desc, pillar, priority) => {
               api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
                 title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
@@ -4317,7 +4318,7 @@
                   </div>
                   <div>
                     <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Service Level KPIs</div>
-                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Each service needs a dedicated page, GBP listing, and GBP post</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Website services compared to GBP — suburb page coverage per service</div>
                   </div>
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
@@ -4326,185 +4327,126 @@
               {/* Summary stat boxes */}
               <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
                 <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithPages === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPages}/{services.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Have a Page</div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#3b82f6' }}>{services.length}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Website Services</div>
                 </div>
                 <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
                   <div style={{ fontSize: 32, fontWeight: 800, color: servicesInGbp === services.length ? '#22c55e' : '#f59e0b' }}>{servicesInGbp}/{services.length}</div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>In GBP</div>
                 </div>
                 <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithPosts === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithPosts}/{services.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Have a Post</div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithSuburbPages}/{services.length}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Have Suburb Pages</div>
                 </div>
+                {gbpOnlyServices.length > 0 && (
+                  <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#f59e0b08', border: '1px solid #f59e0b20', textAlign: 'center' }}>
+                    <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{gbpOnlyServices.length}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>GBP Only</div>
+                  </div>
+                )}
               </div>
 
-              {/* ── SERVICE PAGES ── */}
-              <KpiItem itemKey="svc-pages" icon="file-alt" iconColor="#8b5cf6"
-                title="Service Pages"
-                subtitle={svcNoPage.length === 0 ? 'All services have a dedicated page' : `${svcNoPage.length} services missing a page`}
-                badge={`${servicesWithPages}/${services.length}`}
-                badgeColor={svcNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  {services.some(svc => svc.pageCount === 0 && skippedKpiItems.has(`svcpg-${svc.service}`)) && (
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                      <button onClick={() => services.forEach(svc => resetItem(`svcpg-${svc.service}`))}
-                        style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                        <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All Ignored
-                      </button>
-                    </div>
-                  )}
-                  {services.map((svc, i) => {
-                    const isSkipped = svc.pageCount === 0 && skippedKpiItems.has(`svcpg-${svc.service}`);
-                    if (isSkipped) return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
-                        <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                        <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
-                        <button onClick={(e) => { e.stopPropagation(); resetItem(`svcpg-${svc.service}`); }}
-                          style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                          <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
-                        </button>
-                      </div>
-                    );
-                    return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: svc.pageCount > 0 ? '#22c55e06' : '#ef444406', border: `1px solid ${svc.pageCount > 0 ? '#22c55e' : '#ef4444'}18` }}>
-                        <i className={`fas fa-${svc.pageCount > 0 ? 'check-circle' : 'times-circle'}`} style={{ color: svc.pageCount > 0 ? '#22c55e' : '#ef4444', fontSize: 18 }} />
-                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                        {svc.pageCount > 0 ? (
-                          <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{svc.pageCount} page{svc.pageCount > 1 ? 's' : ''}</span>
-                        ) : (
-                          <>
-                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcpg-${svc.service}`); }}
-                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
-                              <i className="fas fa-forward" />
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); createAction(`Create Service Page: ${svc.service}`, `Create a dedicated landing page for "${svc.service}". Each service needs its own page optimized for that service keyword + location.\n\nPage should include:\n• Service description (500+ words)\n• Pricing/process info\n• Service area suburbs\n• Customer testimonials\n• Call to action`, 'website', 'high'); }}
-                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
+              {/* ── SERVICE TABLE ── */}
+              <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
+                {/* Header */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.6fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Service (from website)</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Page</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Suburbs</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>In GBP</div>
                 </div>
-              </KpiItem>
+                {/* Rows */}
+                {services.map((svc, i) => {
+                  const isExpanded = expandedKpiItem === `svc-${i}`;
+                  return (
+                    <React.Fragment key={i}>
+                      <div onClick={() => setExpandedKpiItem(isExpanded ? null : `svc-${i}`)}
+                        style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.6fr', gap: 0, padding: '14px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? '#3b82f608' : i % 2 === 0 ? 'transparent' : 'var(--bg)', transition: 'background 0.1s' }}
+                        onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = '#3b82f608'; }}
+                        onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'var(--bg)'; }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ color: 'var(--text3)', fontSize: 10, width: 12 }} />
+                          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          <i className={`fas fa-${svc.hasPage ? 'check-circle' : 'times-circle'}`} style={{ color: svc.hasPage ? '#22c55e' : '#ef4444', fontSize: 16 }} />
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          {svc.suburbPageCount > 0 ? (
+                            <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{svc.suburbPageCount}</span>
+                          ) : (
+                            <span style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>0</span>
+                          )}
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          <i className={`fas fa-${svc.inGbp ? 'check-circle' : 'minus-circle'}`} style={{ color: svc.inGbp ? '#22c55e' : '#f59e0b', fontSize: 16 }} />
+                        </div>
+                      </div>
+                      {/* Expanded detail */}
+                      {isExpanded && (
+                        <div style={{ padding: '16px 20px 16px 38px', background: '#3b82f606', borderBottom: '1px solid var(--border)' }}>
+                          {svc.mainPage && (
+                            <div style={{ marginBottom: 10 }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Main Page: </span>
+                              <a href={svc.mainPage.url} target="_blank" rel="noopener" style={{ fontSize: 13, color: '#3b82f6' }}>{svc.mainPage.title || svc.mainPage.url}</a>
+                            </div>
+                          )}
+                          {svc.suburbPages && svc.suburbPages.length > 0 && (
+                            <div style={{ marginBottom: 10 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Suburb Pages ({svc.suburbPageCount}):</div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {svc.suburbPages.map((sp, j) => (
+                                  <a key={j} href={sp.url} target="_blank" rel="noopener" style={{ padding: '4px 10px', borderRadius: 6, background: '#22c55e12', border: '1px solid #22c55e25', fontSize: 12, color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
+                                    {sp.suburb}
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {/* Action buttons */}
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            {!svc.inGbp && (
+                              <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.`, 'gbp', 'medium'); }}
+                                style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                                <i className="fas fa-plus" style={{ marginRight: 4 }} />Add to GBP
+                              </button>
+                            )}
+                            {svc.suburbPageCount === 0 && suburbs.length > 0 && (
+                              <button onClick={(e) => { e.stopPropagation(); createAction(`Create suburb pages for ${svc.service}`, `Create dedicated landing pages combining "${svc.service}" with each target suburb.\n\nExample: /${svc.service.toLowerCase().replace(/\s+/g, '-')}-{suburb}/\n\nEach page should target "{svc.service} {suburb}" keywords.`, 'website', 'high'); }}
+                                style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                                <i className="fas fa-plus" style={{ marginRight: 4 }} />Create Suburb Pages
+                              </button>
+                            )}
+                            {svc.postCount === 0 && (
+                              <button onClick={(e) => { e.stopPropagation(); createAction(`Write GBP Post: ${svc.service}`, `Create a Google Business post about your "${svc.service}" service.`, 'gbp', 'medium'); }}
+                                style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                                <i className="fas fa-pen" style={{ marginRight: 4 }} />Write Post
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
 
-              {/* ── GBP LISTINGS ── */}
-              <KpiItem itemKey="svc-gbp" icon="map-marker-alt" iconColor="#3b82f6"
-                title="Services in GBP"
-                subtitle={svcNoGbp.length === 0 ? 'All services listed in Google Business Profile' : `${svcNoGbp.length} services not in GBP`}
-                badge={`${servicesInGbp}/${services.length}`}
-                badgeColor={svcNoGbp.length === 0 ? '#22c55e' : '#f59e0b'}>
-                <div style={{ marginTop: 14 }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: servicesInGbp > 0 ? 14 : 0 }}>
-                    {services.filter(svc => svc.inGbp).map((svc, i) => (
-                      <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
-                        <i className="fas fa-check" style={{ marginRight: 6, fontSize: 11 }} />{svc.service}
+              {/* ── GBP-ONLY SERVICES ── */}
+              {gbpOnlyServices.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="fas fa-info-circle" />GBP-Only Services ({gbpOnlyServices.length})
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— in GBP but no matching website page</span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {gbpOnlyServices.map((gs, i) => (
+                      <span key={i} style={{ padding: '5px 12px', borderRadius: 7, background: '#f59e0b08', border: '1px solid #f59e0b20', fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>
+                        {gs}
                       </span>
                     ))}
                   </div>
-                  {svcNoGbp.length > 0 && (
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
-                          <i className="fas fa-times-circle" style={{ marginRight: 8 }} />Not in GBP ({svcNoGbp.filter(s => !skippedKpiItems.has(`svcgbp-${s.service}`)).length})
-                        </div>
-                        {svcNoGbp.some(s => skippedKpiItems.has(`svcgbp-${s.service}`)) && (
-                          <button onClick={() => svcNoGbp.forEach(s => resetItem(`svcgbp-${s.service}`))}
-                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
-                          </button>
-                        )}
-                      </div>
-                      {svcNoGbp.map((svc, i) => {
-                        if (skippedKpiItems.has(`svcgbp-${svc.service}`)) return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
-                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
-                            <button onClick={(e) => { e.stopPropagation(); resetItem(`svcgbp-${svc.service}`); }}
-                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
-                            </button>
-                          </div>
-                        );
-                        return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcgbp-${svc.service}`); }}
-                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
-                              <i className="fas fa-forward" />
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.\n\nThis helps Google understand what you offer and show you for relevant searches.`, 'gbp', 'medium'); }}
-                              style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
-              </KpiItem>
-
-              {/* ── GBP POSTS ── */}
-              <KpiItem itemKey="svc-posts" icon="pen-square" iconColor="#f59e0b"
-                title="GBP Posts per Service"
-                subtitle={svcNoPost.length === 0 ? 'All services have a GBP post' : `${svcNoPost.length} services without a post`}
-                badge={`${servicesWithPosts}/${services.length}`}
-                badgeColor={svcNoPost.length === 0 ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: servicesWithPosts > 0 ? 14 : 0 }}>
-                    {services.filter(svc => svc.postCount > 0).map((svc, i) => (
-                      <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
-                        <i className="fas fa-check" style={{ marginRight: 6, fontSize: 11 }} />{svc.service} ({svc.postCount})
-                      </span>
-                    ))}
-                  </div>
-                  {svcNoPost.length > 0 && (
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
-                          <i className="fas fa-times-circle" style={{ marginRight: 8 }} />No Post ({svcNoPost.filter(s => !skippedKpiItems.has(`svcpost-${s.service}`)).length})
-                        </div>
-                        {svcNoPost.some(s => skippedKpiItems.has(`svcpost-${s.service}`)) && (
-                          <button onClick={() => svcNoPost.forEach(s => resetItem(`svcpost-${s.service}`))}
-                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
-                          </button>
-                        )}
-                      </div>
-                      {svcNoPost.map((svc, i) => {
-                        if (skippedKpiItems.has(`svcpost-${svc.service}`)) return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
-                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{svc.service}</span>
-                            <button onClick={(e) => { e.stopPropagation(); resetItem(`svcpost-${svc.service}`); }}
-                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
-                            </button>
-                          </div>
-                        );
-                        return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
-                            <button onClick={(e) => { e.stopPropagation(); skipItem(`svcpost-${svc.service}`); }}
-                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
-                              <i className="fas fa-forward" />
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); createAction(`Write GBP Post: ${svc.service}`, `Create a Google Business post about your "${svc.service}" service.\n\nPost should include:\n• What the service involves\n• Why customers choose you\n• Call to action (call/book now)\n• Relevant photo if available\n\nPublish via business.google.com → Posts.`, 'gbp', 'medium'); }}
-                              style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </KpiItem>
+              )}
             </div>
             );
           })()}

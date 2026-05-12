@@ -20358,64 +20358,180 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }).sort((a, b) => b.score - a.score);
 
     // ============ CROSS-REFERENCE: SERVICES ============
+    // SOURCE OF TRUTH: Website pages (from sitemap/WP REST)
+    // Cross-reference each website service against GBP services
+    // GBP extras shown separately (ok to have more in GBP, just highlight)
+
+    // Step 1: Classify website pages into service pages vs suburb pages vs other
+    const excludedSlugs = new Set(['home', '', 'about', 'about-us', 'contact', 'contact-us', 'blog', 'privacy-policy', 'terms', 'terms-and-conditions', 'sitemap', 'search', 'services', 'service-areas', 'locations', 'careers', 'faq', 'testimonials', 'reviews', 'gallery', 'portfolio', 'thank-you', '404']);
+    const excludedPrefixes = ['blog/', 'category/', 'tag/', 'author/', 'wp-', 'feed/', 'comments/', '.'];
+    const suburbSlugsSet = new Set();
+    for (const n of allSuburbNames) suburbSlugsSet.add(n.replace(/\s+/g, '-'));
+
+    const websiteServices = {}; // slug -> { name, mainPage, suburbPages: [], isSubService }
+    const suburbServicePages = []; // pages that combine service + suburb
+
+    for (const page of websitePages) {
+      let rawSlug = (page.slug || '').toLowerCase().replace(/^\/|\/$/g, '');
+      if (!rawSlug && page.url) {
+        try { rawSlug = new URL(page.url.startsWith('http') ? page.url : 'https://x.com' + page.url).pathname.replace(/^\/|\/$/g, '').toLowerCase(); } catch {}
+      }
+      if (!rawSlug) continue;
+
+      // Skip excluded pages
+      if (excludedSlugs.has(rawSlug)) continue;
+      if (excludedPrefixes.some(p => rawSlug.startsWith(p))) continue;
+      // Skip /service-areas/X suburb pages (handled in suburb section)
+      if (/^(service-?areas?|locations?|suburbs?|areas?)\//.test(rawSlug)) continue;
+
+      // Check if this page contains a suburb name → it's a service+suburb combo page
+      let matchedSuburb = null;
+      let serviceSlug = rawSlug;
+      for (const subSlug of suburbSlugsSet) {
+        if (subSlug.length < 3) continue;
+        // Match suburb at end: /blocked-drains-kedron/ or /plumber-north-lakes/
+        if (rawSlug.endsWith('-' + subSlug) || rawSlug.endsWith('/' + subSlug)) {
+          matchedSuburb = subSlug;
+          serviceSlug = rawSlug.replace(new RegExp('[-/]' + subSlug.replace(/[-]/g, '[-]') + '$'), '');
+          break;
+        }
+        // Match suburb at start: /kedron-plumber/
+        if (rawSlug.startsWith(subSlug + '-')) {
+          matchedSuburb = subSlug;
+          serviceSlug = rawSlug.replace(new RegExp('^' + subSlug.replace(/[-]/g, '[-]') + '[-]'), '');
+          break;
+        }
+      }
+
+      // Clean service slug — remove location qualifiers
+      serviceSlug = serviceSlug.replace(/-(brisbane|north-brisbane|south-brisbane|perth|sydney|melbourne)$/, '');
+
+      if (matchedSuburb) {
+        // This is a service+suburb page
+        suburbServicePages.push({ serviceSlug, suburb: matchedSuburb.replace(/-/g, ' '), url: page.url, title: page.title });
+        // Ensure service exists
+        if (!websiteServices[serviceSlug]) {
+          const name = serviceSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          websiteServices[serviceSlug] = { name, mainPage: null, suburbPages: [] };
+        }
+        websiteServices[serviceSlug].suburbPages.push({ suburb: matchedSuburb.replace(/-/g, ' '), url: page.url, title: page.title });
+      } else {
+        // This is a main service page (or other page)
+        // Only include if it looks like a service (not too deep, not a blog post)
+        const depth = rawSlug.split('/').length;
+        if (depth <= 2) {
+          if (!websiteServices[serviceSlug]) {
+            const name = serviceSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            websiteServices[serviceSlug] = { name, mainPage: null, suburbPages: [] };
+          }
+          websiteServices[serviceSlug].mainPage = { url: page.url, title: page.title || websiteServices[serviceSlug].name };
+          // Update name from page title if available (more accurate)
+          if (page.title && page.title.length > 3) {
+            // Clean title: remove " - Business Name", " | Brand" suffixes
+            let cleanTitle = page.title.replace(/\s*[-|–—]\s*(projection|plumbing|north brisbane).*$/i, '').trim();
+            if (cleanTitle.length > 3 && cleanTitle.length < 80) websiteServices[serviceSlug].name = cleanTitle;
+          }
+        }
+      }
+    }
+
+    // Step 2: Get GBP services from RC cache
+    const gbpServiceNames = new Set();
+    const gbpServiceList = [];
+    // From RC cache profile.services (flat array of service names)
+    let rcCacheServices = [];
+    try {
+      const rcCacheR = await pool.query('SELECT profile FROM rc_profile_cache WHERE project_id=$1', [projectId]);
+      if (rcCacheR.rows[0]?.profile?.services) rcCacheServices = rcCacheR.rows[0].profile.services;
+    } catch (e) {}
+    for (const s of rcCacheServices) {
+      gbpServiceNames.add(normalize(s));
+      gbpServiceList.push(s);
+    }
+    // Also from raw RC profile serviceItems (for description data)
+    for (const s of gbpServices) {
+      const n = normalize(s);
+      if (!gbpServiceNames.has(n)) { gbpServiceNames.add(n); gbpServiceList.push(s); }
+    }
+    // GBP categories count as services too
+    for (const cat of gbpCategories) {
+      const n = normalize(cat);
+      if (!gbpServiceNames.has(n)) { gbpServiceNames.add(n); gbpServiceList.push(cat); }
+    }
+
+    // Step 3: Cross-reference website services with GBP
     const allServiceNames = new Set();
     const serviceSources = {};
 
-    // Include GBP categories as services (e.g. "Plumber" primary category)
-    for (const cat of gbpCategories) {
-      const n = normalize(cat);
-      if (!allServiceNames.has(n)) {
-        allServiceNames.add(n);
-        serviceSources[n] = { original: cat, inGbp: true, isCategory: true };
+    // Website services first (source of truth)
+    for (const [slug, svc] of Object.entries(websiteServices)) {
+      const n = normalize(svc.name);
+      allServiceNames.add(n);
+      // Check if this service is in GBP (fuzzy match)
+      let inGbp = false;
+      let gbpMatch = null;
+      const svcWords = n.split(/\s+/).filter(w => w.length >= 3);
+      for (const gn of gbpServiceNames) {
+        // Exact match
+        if (gn === n) { inGbp = true; gbpMatch = gn; break; }
+        // All significant words of website service found in GBP service name
+        if (svcWords.length > 0 && svcWords.every(w => gn.includes(w))) { inGbp = true; gbpMatch = gn; break; }
+        // All significant words of GBP service found in website service
+        const gnWords = gn.split(/\s+/).filter(w => w.length >= 3);
+        if (gnWords.length > 0 && gnWords.every(w => n.includes(w))) { inGbp = true; gbpMatch = gn; break; }
       }
+      serviceSources[n] = {
+        original: svc.name,
+        source: 'website',
+        inGbp,
+        gbpMatch,
+        mainPage: svc.mainPage,
+        suburbPages: svc.suburbPages || [],
+        pages: svc.mainPage ? [svc.mainPage] : [],
+      };
     }
-    for (const s of gbpServices) {
-      const n = normalize(s);
-      if (!allServiceNames.has(n)) {
-        allServiceNames.add(n);
-        serviceSources[n] = { original: s, inGbp: true };
+
+    // GBP-only services (not on website)
+    const gbpOnlyServices = [];
+    for (const gs of gbpServiceList) {
+      const gn = normalize(gs);
+      // Check if already matched by a website service
+      let matched = false;
+      for (const [, src] of Object.entries(serviceSources)) {
+        if (src.gbpMatch === gn || normalize(src.original) === gn) { matched = true; break; }
       }
+      if (!matched) {
+        // Check fuzzy: any website service contains this GBP service's key words
+        const gnWords = gn.split(/\s+/).filter(w => w.length >= 3);
+        for (const [, src] of Object.entries(serviceSources)) {
+          const srcN = normalize(src.original);
+          if (gnWords.length > 0 && gnWords.every(w => srcN.includes(w))) { matched = true; break; }
+          if (gnWords.length > 0) {
+            const srcWords = srcN.split(/\s+/).filter(w => w.length >= 3);
+            if (srcWords.length > 0 && srcWords.every(w => gn.includes(w))) { matched = true; break; }
+          }
+        }
+      }
+      if (!matched) gbpOnlyServices.push(gs);
     }
+
     // Include custom services added via Local Intel
     if (rc?.custom_services) {
       for (const s of rc.custom_services) {
         const n = normalize(s);
         if (!allServiceNames.has(n)) {
           allServiceNames.add(n);
-          serviceSources[n] = { original: s, inGbp: false };
+          serviceSources[n] = { original: s, source: 'custom', inGbp: false, mainPage: null, suburbPages: [], pages: [] };
         }
       }
     }
 
-    // Match website pages to services — match full slug OR all significant words present
-    for (const page of websitePages) {
-      const slug = normalize(page.slug || page.url || '');
-      const title = normalize(page.title || '');
-      for (const n of allServiceNames) {
-        const fullSlug = n.replace(/\s+/g, '-');
-        // Method 1: full slug match
-        let matched = slug.includes(fullSlug) || title.includes(n);
-        // Method 2: all significant words (3+ chars) present in slug or title
-        if (!matched) {
-          const words = n.split(/\s+/).filter(w => w.length >= 3);
-          if (words.length > 0) {
-            matched = words.every(w => slug.includes(w) || slug.includes(w.replace(/\s+/g, '-')) || title.includes(w));
-          }
-        }
-        if (matched) {
-          if (!serviceSources[n].pages) serviceSources[n].pages = [];
-          if (!serviceSources[n].pages.find(p => p.url === page.url)) {
-            serviceSources[n].pages.push({ url: page.url, title: page.title });
-          }
-        }
-      }
-    }
-
-    // Match keywords to services — use full service name
+    // Match keywords to services
     for (const kw of rankKeywords) {
       const kwN = normalize(kw.keyword);
       for (const n of allServiceNames) {
-        if (kwN.includes(n) || n.includes(kwN)) {
+        const words = n.split(/\s+/).filter(w => w.length >= 3);
+        if (words.length > 0 && words.some(w => kwN.includes(w))) {
           if (!serviceSources[n].keywords) serviceSources[n].keywords = [];
           const rt = rankMap[kw.keyword.toLowerCase()];
           serviceSources[n].keywords.push({ keyword: kw.keyword, volume: kw.search_volume, serp: rt?.serp_position, maps: rt?.maps_position });
@@ -20427,9 +20543,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     for (const post of gbpPosts) {
       const postText = normalize(post.summary);
       for (const n of allServiceNames) {
-        const words = n.split(/\s+/);
-        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
-        if (postText.includes(keyPart)) {
+        const words = n.split(/\s+/).filter(w => w.length >= 3);
+        if (words.length > 0 && words.some(w => postText.includes(w))) {
           if (!serviceSources[n].posts) serviceSources[n].posts = [];
           serviceSources[n].posts.push(post);
         }
@@ -20439,9 +20554,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     // Match GSC to services
     for (const [kwLower, gsc] of Object.entries(gscMap)) {
       for (const n of allServiceNames) {
-        const words = n.split(/\s+/);
-        const keyPart = words.length > 1 ? words.slice(0, 2).join(' ') : words[0];
-        if (kwLower.includes(keyPart)) {
+        const words = n.split(/\s+/).filter(w => w.length >= 3);
+        if (words.length > 0 && words.some(w => kwLower.includes(w))) {
           if (!serviceSources[n].gsc) serviceSources[n].gsc = [];
           serviceSources[n].gsc.push({ keyword: kwLower, clicks: gsc.clicks, impressions: gsc.impressions });
         }
@@ -20451,19 +20565,26 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const serviceMatrix = Array.from(allServiceNames).map(n => {
       const s = serviceSources[n];
       const gaps = [];
-      if (!s.pages?.length) gaps.push('Create service page');
+      if (!s.mainPage) gaps.push('Create service page');
+      if (!s.inGbp) gaps.push('Add to GBP services');
+      if (s.suburbPages.length === 0 && allSuburbNames.size > 0) gaps.push('Create suburb landing pages');
       if (!s.keywords?.length) gaps.push('Add keyword tracking');
       if (!s.posts?.length) gaps.push('Write GBP post');
       return {
         service: s.original,
+        source: s.source || 'website',
         inGbp: !!s.inGbp,
-        pageCount: s.pages?.length || 0,
-        pages: (s.pages || []).slice(0, 3),
+        hasPage: !!s.mainPage,
+        mainPage: s.mainPage,
+        suburbPageCount: s.suburbPages.length,
+        suburbPages: s.suburbPages.slice(0, 10),
+        totalSuburbs: allSuburbNames.size,
+        pageCount: (s.mainPage ? 1 : 0) + s.suburbPages.length,
         keywordCount: s.keywords?.length || 0,
         postCount: s.posts?.length || 0,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gaps,
-        score: (s.inGbp ? 20 : 0) + (s.pages?.length ? 25 : 0) + (s.keywords?.length ? 20 : 0) + (s.posts?.length ? 15 : 0) + (s.gsc?.length ? 20 : 0),
+        score: (s.mainPage ? 25 : 0) + (s.inGbp ? 20 : 0) + (s.suburbPages.length > 0 ? 15 : 0) + (s.keywords?.length ? 15 : 0) + (s.posts?.length ? 10 : 0) + (s.gsc?.length ? 15 : 0),
       };
     }).sort((a, b) => b.score - a.score);
 
@@ -20957,8 +21078,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       summary: {
         suburbCount: suburbMatrix.length,
         serviceCount: serviceMatrix.length,
+        gbpOnlyServiceCount: gbpOnlyServices.length,
         gbpSuburbCount: suburbMatrix.filter(s => s.inGbp).length,
         gbpServiceCount: serviceMatrix.filter(s => s.inGbp).length,
+        servicesWithPage: serviceMatrix.filter(s => s.hasPage).length,
+        servicesWithSuburbPages: serviceMatrix.filter(s => s.suburbPageCount > 0).length,
         pagesWithSuburb: suburbMatrix.filter(s => s.pageCount > 0).length,
         pagesWithService: serviceMatrix.filter(s => s.pageCount > 0).length,
         trackedKeywords: rankKeywords.length,
@@ -20986,6 +21110,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       hasLocationPages,
       suburbs: suburbMatrix,
       services: serviceMatrix,
+      gbpOnlyServices,
       competitors: topCompetitors,
       matrix: matrixRows,
       serviceNames: Array.from(allServiceNames).map(n => serviceSources[n].original),
