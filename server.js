@@ -17820,6 +17820,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
 
     // Extract service pages — anything that's not a suburb, not a brand index, not generic
     const brandIndexes = new Set(['a-f','g-j','k-o','p-z']);
+    const suburbSlugs = new Set(suburbs.map(s => s.toLowerCase().replace(/\s+/g, '-')));
     const servicePages = [];
     const brandPages = [];
     for (const u of urls) {
@@ -17827,6 +17828,9 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       if (!path || skip.has(path) || u.includes('/service-areas/') || u.includes('/suburbs/') || u.includes('/locations/')) continue;
       if (path.startsWith('category/') || path.startsWith('tag/') || path.startsWith('blog/')) continue;
       if (path.match(/^elementor-|^dsfs$|^vbn|^sample/)) continue;
+      // Skip suburb pages (e.g. plumber-kedron, plumber-albany-creek)
+      const pathLower = path.toLowerCase();
+      if (suburbSlugs.has(pathLower) || [...suburbSlugs].some(ss => pathLower.endsWith('-' + ss) || pathLower.includes('/' + ss))) continue;
 
       const parts = path.split('/');
       if (parts.length === 2 && brandIndexes.has(parts[0])) {
@@ -17838,7 +17842,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       } else {
         // Service page
         const name = path.replace(/services?\//g, '').replace(/-/g, ' ')
-          .replace(/\s*(in|services?|perth)\s*/gi, ' ').trim();
+          .replace(/\b(in|services?|perth)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim();
         if (name.length > 2) servicePages.push({ slug: path, name });
       }
     }
