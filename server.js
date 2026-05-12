@@ -19115,6 +19115,172 @@ app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// SERP Analysis — analyze why keyword isn't ranking by comparing against top 3 competitors
+app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
+  const { projectId } = req.params;
+  const { keyword, competitors, serp_position, gsc_position, gsc_clicks, gsc_impressions, model } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'Keyword required' });
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const aiModel = model === 'opus' ? 'claude-opus-4-6' : 'claude-haiku-4-5-20251001';
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const siteUrl = project.wordpress_url || (domain ? `https://${domain}` : '');
+
+    // Get top 3 competitors from stored data
+    const top3 = (competitors || []).filter(c => c.source === 'serp').slice(0, 3);
+
+    // Crawl competitor pages
+    const crawlPage = async (url) => {
+      try {
+        const resp = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!resp.ok) return { url, error: `HTTP ${resp.status}` };
+        const html = await resp.text();
+        const getTag = (tag) => { const m = html.match(new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 'is')); return m ? m[1].replace(/<[^>]*>/g, '').trim() : ''; };
+        const getMeta = (name) => { const m = html.match(new RegExp(`<meta[^>]*(?:name|property)=["']${name}["'][^>]*content=["']([^"']*)["']`, 'i')) || html.match(new RegExp(`content=["']([^"']*)["'][^>]*(?:name|property)=["']${name}["']`, 'i')); return m ? m[1] : ''; };
+        const title = getTag('title');
+        const metaDesc = getMeta('description');
+        const h1s = (html.match(/<h1[^>]*>(.*?)<\/h1>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim());
+        const h2s = (html.match(/<h2[^>]*>(.*?)<\/h2>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim()).slice(0, 10);
+        const bodyText = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        const wordCount = bodyText.split(/\s+/).length;
+        const hasSchema = /application\/ld\+json/i.test(html);
+        const schemaTypes = (html.match(/"@type"\s*:\s*"([^"]+)"/g) || []).map(m => m.match(/"([^"]+)"$/)[1]);
+        const internalLinks = (html.match(/href=["']([^"']*)/gi) || []).filter(h => h.includes(domain)).length;
+        const images = (html.match(/<img[^>]*>/gi) || []).length;
+        const hasAltTags = (html.match(/<img[^>]*alt=["'][^"']+["']/gi) || []).length;
+        return { url, title, metaDesc, h1s, h2s, wordCount, hasSchema, schemaTypes, internalLinks, images, hasAltTags };
+      } catch (e) { return { url, error: e.message }; }
+    };
+
+    // Crawl user's page (find best matching page for keyword)
+    let userPageUrl = siteUrl;
+    // Check if we have a ranking URL already
+    const rankRow = await pool.query(
+      `SELECT serp_url FROM rank_tracking WHERE project_id=$1 AND LOWER(keyword)=LOWER($2) AND serp_url IS NOT NULL ORDER BY checked_at DESC LIMIT 1`,
+      [projectId, keyword]
+    );
+    if (rankRow.rows.length > 0 && rankRow.rows[0].serp_url) {
+      userPageUrl = rankRow.rows[0].serp_url;
+    } else {
+      // Try keyword slug on the domain
+      const slug = keyword.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      try {
+        const testUrl = `${siteUrl}/${slug}/`;
+        const testResp = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+        if (testResp.ok) userPageUrl = testUrl;
+      } catch (e) {}
+    }
+
+    // Crawl all pages in parallel
+    const compUrls = top3.map(c => c.url || c.link).filter(Boolean);
+    const [userPage, ...compPages] = await Promise.all([
+      crawlPage(userPageUrl),
+      ...compUrls.map(u => crawlPage(u))
+    ]);
+
+    // Build analysis prompt
+    const prompt = `You are an expert SEO analyst. Analyze why this website is not ranking (or ranking poorly) for the target keyword, by comparing it against the top 3 competitors that ARE ranking.
+
+TARGET KEYWORD: "${keyword}"
+WEBSITE DOMAIN: ${domain}
+
+CURRENT PERFORMANCE:
+- SERP Position: ${serp_position ? `#${serp_position}` : 'Not in top 100'}
+- GSC Average Position: ${gsc_position ? Math.round(gsc_position * 10) / 10 : 'N/A'}
+- GSC Clicks (28d): ${gsc_clicks || 0}
+- GSC Impressions (28d): ${gsc_impressions || 0}
+
+USER'S PAGE (${userPage.url}):
+${userPage.error ? `Error crawling: ${userPage.error}` : `- Title: "${userPage.title}"
+- Meta Description: "${userPage.metaDesc}"
+- H1: ${userPage.h1s.length > 0 ? userPage.h1s.map(h => `"${h}"`).join(', ') : 'MISSING'}
+- H2s: ${userPage.h2s.length > 0 ? userPage.h2s.slice(0, 5).map(h => `"${h}"`).join(', ') : 'None'}
+- Word Count: ${userPage.wordCount}
+- Schema: ${userPage.hasSchema ? userPage.schemaTypes.join(', ') : 'None'}
+- Internal Links: ${userPage.internalLinks}
+- Images: ${userPage.images} (${userPage.hasAltTags} with alt tags)`}
+
+TOP 3 RANKING COMPETITORS:
+${compPages.map((cp, i) => `
+#${top3[i]?.position || i + 1} — ${cp.url}
+${cp.error ? `Error crawling: ${cp.error}` : `- Title: "${cp.title}"
+- Meta Description: "${cp.metaDesc}"
+- H1: ${cp.h1s.length > 0 ? cp.h1s.map(h => `"${h}"`).join(', ') : 'None'}
+- H2s: ${cp.h2s.length > 0 ? cp.h2s.slice(0, 5).map(h => `"${h}"`).join(', ') : 'None'}
+- Word Count: ${cp.wordCount}
+- Schema: ${cp.hasSchema ? cp.schemaTypes.join(', ') : 'None'}
+- Internal Links: ${cp.internalLinks}
+- Images: ${cp.images} (${cp.hasAltTags} with alt tags)`}`).join('\n')}
+
+Respond in this exact JSON format:
+{
+  "verdict": "One sentence summary of the main reason not ranking",
+  "score": 0-100 (how close to ranking on page 1),
+  "gaps": [
+    {
+      "category": "Content|Technical|On-Page|Authority|UX",
+      "issue": "Specific issue found",
+      "impact": "high|medium|low",
+      "fix": "Exact action to take",
+      "competitor_benchmark": "What competitors do differently"
+    }
+  ],
+  "quick_wins": ["Immediate action 1", "Immediate action 2", "Immediate action 3"],
+  "content_recommendations": {
+    "target_word_count": number,
+    "missing_topics": ["topic1", "topic2"],
+    "title_suggestion": "Optimized title tag",
+    "meta_suggestion": "Optimized meta description"
+  }
+}
+
+Be specific and actionable. Reference actual data from the crawled pages. No generic advice.`;
+
+    const aiResp = await anthropic.messages.create({
+      model: aiModel,
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const text = aiResp.content[0].text;
+    let analysis;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      analysis = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      analysis = { verdict: text, score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
+    }
+
+    // Calculate actual token usage for cost display
+    const inputTokens = aiResp.usage?.input_tokens || 0;
+    const outputTokens = aiResp.usage?.output_tokens || 0;
+    const costPerInputM = model === 'opus' ? 15 : 0.80;
+    const costPerOutputM = model === 'opus' ? 75 : 4;
+    const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
+
+    res.json({
+      ok: true,
+      keyword,
+      model: aiModel,
+      analysis,
+      userPage: { url: userPage.url, title: userPage.title, wordCount: userPage.wordCount, error: userPage.error },
+      competitors: compPages.map((cp, i) => ({ position: top3[i]?.position, url: cp.url, title: cp.title, wordCount: cp.wordCount, error: cp.error })),
+      cost: { inputTokens, outputTokens, total: Math.round(actualCost * 10000) / 10000 }
+    });
+  } catch (e) {
+    console.error('[serp-analysis]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get rank history for a keyword (for charts)
 app.get('/api/projects/:projectId/rank-tracking/history', async (req, res) => {
   const { keyword, days } = req.query;

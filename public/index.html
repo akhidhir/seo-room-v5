@@ -17819,6 +17819,50 @@
       const [discovered, setDiscovered] = useState(null);
       const [discoverLimit, setDiscoverLimit] = useState(20);
       const [selectedDiscovered, setSelectedDiscovered] = useState(new Set());
+      // SERP Analysis state
+      const [analysisModel, setAnalysisModel] = useState('opus');
+      const [analysisChecked, setAnalysisChecked] = useState({});
+      const [analyzing, setAnalyzing] = useState(false);
+      const [analysisResults, setAnalysisResults] = useState({});
+      const [showCostConfirm, setShowCostConfirm] = useState(false);
+      const [expandedAnalysis, setExpandedAnalysis] = useState(null);
+
+      const costPerKw = analysisModel === 'opus' ? 0.08 : 0.002;
+      const analysisCheckedCount = Object.values(analysisChecked).filter(Boolean).length;
+      const allChecked = sorted.length > 0 && analysisCheckedCount === sorted.length;
+
+      const toggleAnalysisCheck = (id) => setAnalysisChecked(prev => ({ ...prev, [id]: !prev[id] }));
+      const toggleAllAnalysis = () => {
+        if (allChecked) setAnalysisChecked({});
+        else setAnalysisChecked(Object.fromEntries(sorted.map(kw => [kw.id, true])));
+      };
+
+      const runAnalysis = async () => {
+        setShowCostConfirm(false);
+        setAnalyzing(true);
+        const toAnalyze = sorted.filter(kw => analysisChecked[kw.id]);
+        for (const kw of toAnalyze) {
+          try {
+            const r = await api(`/projects/${project.id}/rank-tracking/analyze`, {
+              method: 'POST',
+              body: {
+                keyword: kw.keyword,
+                competitors: kw.competitors || [],
+                serp_position: kw.serp_position,
+                gsc_position: kw.gsc_position,
+                gsc_clicks: kw.gsc_clicks,
+                gsc_impressions: kw.gsc_impressions,
+                model: analysisModel
+              }
+            });
+            if (r.ok) setAnalysisResults(prev => ({ ...prev, [kw.keyword]: r }));
+            else setAnalysisResults(prev => ({ ...prev, [kw.keyword]: { error: r.error } }));
+          } catch (e) {
+            setAnalysisResults(prev => ({ ...prev, [kw.keyword]: { error: e.message } }));
+          }
+        }
+        setAnalyzing(false);
+      };
 
       const toggleSort = (col) => {
         if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -17941,6 +17985,68 @@
             </div>
           )}
 
+          {/* SERP Analysis toolbar */}
+          {keywords.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '14px 18px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
+              <i className="fa-solid fa-brain" style={{ color: 'var(--accent)', fontSize: 18 }} />
+              <span style={{ fontWeight: 700, fontSize: 15 }}>SERP Analysis</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Model:</span>
+                <select value={analysisModel} onChange={e => setAnalysisModel(e.target.value)}
+                  style={{ fontSize: 14, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
+                  <option value="haiku">Haiku (~$0.002/kw)</option>
+                  <option value="opus">Opus (~$0.08/kw)</option>
+                </select>
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', marginLeft: 8 }}>
+                {analysisCheckedCount > 0 ? (
+                  <span><strong>{analysisCheckedCount}</strong> keyword{analysisCheckedCount !== 1 ? 's' : ''} selected — Est. <strong style={{ color: '#f59e0b' }}>${(analysisCheckedCount * costPerKw).toFixed(3)}</strong></span>
+                ) : (
+                  <span style={{ color: 'var(--text3)' }}>Select keywords to analyze (use checkboxes)</span>
+                )}
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <button className="btn" onClick={toggleAllAnalysis} style={{ fontSize: 13, padding: '6px 14px' }}>
+                  {allChecked ? 'Deselect All' : 'Select All'}
+                </button>
+                <button className="btn btn-primary" disabled={analysisCheckedCount === 0 || analyzing}
+                  onClick={() => setShowCostConfirm(true)}
+                  style={{ fontSize: 14, padding: '8px 18px' }}>
+                  {analyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Analyze</>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Cost confirmation modal */}
+          {showCostConfirm && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setShowCostConfirm(false)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, padding: 28, maxWidth: 420, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+                <h3 style={{ margin: '0 0 16px', fontSize: 18 }}><i className="fa-solid fa-brain" style={{ marginRight: 8, color: 'var(--accent)' }} />Confirm SERP Analysis</h3>
+                <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text2)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <span>Keywords</span><strong>{analysisCheckedCount}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <span>Model</span><strong>{analysisModel === 'opus' ? 'Claude Opus' : 'Claude Haiku'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <span>Cost per keyword</span><strong>${costPerKw.toFixed(3)}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', fontSize: 17 }}>
+                    <span style={{ fontWeight: 700 }}>Estimated Total</span><strong style={{ color: '#f59e0b', fontSize: 20 }}>${(analysisCheckedCount * costPerKw).toFixed(3)}</strong>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                  <button className="btn" onClick={() => setShowCostConfirm(false)} style={{ flex: 1, fontSize: 14, padding: '10px' }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={runAnalysis} style={{ flex: 1, fontSize: 14, padding: '10px' }}>
+                    <i className="fa-solid fa-play" style={{ marginRight: 6 }} />Run Analysis
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Add keyword */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
             <input value={newKw} onChange={e => setNewKw(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKw.trim()) { addKeyword(newKw); setNewKw(''); } }}
@@ -17964,6 +18070,9 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg)', borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ width: 40, padding: '14px 8px 14px 14px', textAlign: 'center' }}>
+                      <input type="checkbox" checked={allChecked} onChange={toggleAllAnalysis} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                    </th>
                     {[
                       { key: 'keyword', label: 'Keyword', align: 'left', w: null },
                       { key: 'volume', label: 'Volume', align: 'center', w: 100 },
@@ -17977,14 +18086,25 @@
                         {h.label}{h.key && sortIcon(h.key)}
                       </th>
                     ))}
-                    <th style={{ width: 44 }}></th>
+                    <th style={{ width: 80 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.map(kw => (
                     <React.Fragment key={kw.id}>
                       <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.15s' }} onClick={() => loadHistory(kw.keyword)} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'} onMouseLeave={e => e.currentTarget.style.background = ''}>
-                        <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: 15 }}>{kw.keyword}{kw.location && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 10, marginRight: 3 }} />{kw.location}</span>}</td>
+                        <td style={{ padding: '14px 8px 14px 14px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: 15 }}>
+                          {kw.keyword}
+                          {kw.location && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 10, marginRight: 3 }} />{kw.location}</span>}
+                          {analysisResults[kw.keyword] && !analysisResults[kw.keyword].error && (
+                            <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', borderRadius: 10, background: analysisResults[kw.keyword].analysis?.score >= 70 ? 'rgba(34,197,94,0.15)' : analysisResults[kw.keyword].analysis?.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)', color: analysisResults[kw.keyword].analysis?.score >= 70 ? '#22c55e' : analysisResults[kw.keyword].analysis?.score >= 40 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
+                              {analysisResults[kw.keyword].analysis?.score}/100
+                            </span>
+                          )}
+                        </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: 15, color: 'var(--text2)' }}>
                           {kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}
                         </td>
@@ -18007,14 +18127,20 @@
                         <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
                           {kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : '—'}
                         </td>
-                        <td style={{ padding: '8px' }}>
-                          <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 6 }}>
-                            <i className="fa-solid fa-trash" />
-                          </button>
+                        <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {analysisResults[kw.keyword] && !analysisResults[kw.keyword].error ? (
+                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(expandedAnalysis === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '4px 10px', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+                              <i className="fa-solid fa-eye" style={{ marginRight: 4 }} />View
+                            </button>
+                          ) : (
+                            <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 6 }}>
+                              <i className="fa-solid fa-trash" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                       {expandedKw === kw.keyword && (kw.competitors || []).filter(c => c.source === 'serp').length > 0 && (
-                        <tr><td colSpan={8} style={{ padding: '0 14px 10px 30px', background: 'var(--bg)' }}>
+                        <tr><td colSpan={9} style={{ padding: '0 14px 10px 30px', background: 'var(--bg)' }}>
                           {(kw.competitors || []).filter(c => c.source === 'serp').map((c, j) => (
                             <div key={j} style={{ display: 'flex', gap: 12, padding: '4px 0', fontSize: 12, color: 'var(--text2)' }}>
                               <span style={{ fontWeight: 600, color: posColor(c.position) }}>#{c.position}</span>
@@ -18024,6 +18150,102 @@
                           ))}
                         </td></tr>
                       )}
+                      {/* SERP Analysis results panel */}
+                      {expandedAnalysis === kw.keyword && analysisResults[kw.keyword] && !analysisResults[kw.keyword].error && (() => {
+                        const ar = analysisResults[kw.keyword];
+                        const a = ar.analysis || {};
+                        const impactColor = { high: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
+                        return (
+                          <tr><td colSpan={9} style={{ padding: 0 }}>
+                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, rgba(99,102,241,0.05), rgba(99,102,241,0.02))', borderTop: '2px solid var(--accent)' }}>
+                              {/* Header with score */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>SERP Analysis</div>
+                                  <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', lineHeight: 1.5 }}>{a.verdict}</div>
+                                </div>
+                                <div style={{ textAlign: 'center', minWidth: 80, padding: '12px 16px', borderRadius: 12, background: a.score >= 70 ? 'rgba(34,197,94,0.1)' : a.score >= 40 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)', border: `2px solid ${a.score >= 70 ? '#22c55e' : a.score >= 40 ? '#f59e0b' : '#ef4444'}` }}>
+                                  <div style={{ fontSize: 28, fontWeight: 800, color: a.score >= 70 ? '#22c55e' : a.score >= 40 ? '#f59e0b' : '#ef4444' }}>{a.score}</div>
+                                  <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>RANKING SCORE</div>
+                                </div>
+                              </div>
+
+                              {/* Quick Wins */}
+                              {a.quick_wins && a.quick_wins.length > 0 && (
+                                <div style={{ marginBottom: 20, padding: 16, background: 'rgba(34,197,94,0.08)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.2)' }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', marginBottom: 10 }}><i className="fa-solid fa-bolt" style={{ marginRight: 6 }} />Quick Wins</div>
+                                  {a.quick_wins.map((qw, i) => (
+                                    <div key={i} style={{ fontSize: 14, color: 'var(--text)', padding: '6px 0', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                      <span style={{ color: '#22c55e', fontWeight: 700, minWidth: 20 }}>{i + 1}.</span>
+                                      <span>{qw}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Gap Analysis */}
+                              {a.gaps && a.gaps.length > 0 && (
+                                <div style={{ marginBottom: 20 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 6, color: 'var(--accent)' }} />Gap Analysis vs Top 3</div>
+                                  {a.gaps.map((g, i) => (
+                                    <div key={i} style={{ padding: '12px 16px', marginBottom: 8, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', borderLeft: `4px solid ${impactColor[g.impact] || '#64748b'}` }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(99,102,241,0.1)', color: 'var(--accent)', fontWeight: 600 }}>{g.category}</span>
+                                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: `${impactColor[g.impact] || '#64748b'}22`, color: impactColor[g.impact] || '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>{g.impact}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{g.issue}</div>
+                                      <div style={{ fontSize: 13, color: '#22c55e', marginBottom: 4 }}><i className="fa-solid fa-wrench" style={{ marginRight: 4, fontSize: 11 }} />{g.fix}</div>
+                                      {g.competitor_benchmark && <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}><i className="fa-solid fa-users" style={{ marginRight: 4, fontSize: 10 }} />{g.competitor_benchmark}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Content Recommendations */}
+                              {a.content_recommendations && (
+                                <div style={{ marginBottom: 16, padding: 16, background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}><i className="fa-solid fa-pen-nib" style={{ marginRight: 6, color: '#f59e0b' }} />Content Recommendations</div>
+                                  {a.content_recommendations.target_word_count && (
+                                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 6 }}><strong>Target Word Count:</strong> {a.content_recommendations.target_word_count.toLocaleString()} words (Your page: {ar.userPage?.wordCount?.toLocaleString() || 'N/A'})</div>
+                                  )}
+                                  {a.content_recommendations.missing_topics && a.content_recommendations.missing_topics.length > 0 && (
+                                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 6 }}><strong>Missing Topics:</strong> {a.content_recommendations.missing_topics.join(', ')}</div>
+                                  )}
+                                  {a.content_recommendations.title_suggestion && (
+                                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 6 }}><strong>Suggested Title:</strong> <span style={{ color: '#22c55e' }}>{a.content_recommendations.title_suggestion}</span></div>
+                                  )}
+                                  {a.content_recommendations.meta_suggestion && (
+                                    <div style={{ fontSize: 13, color: 'var(--text2)' }}><strong>Suggested Meta:</strong> <span style={{ color: '#22c55e' }}>{a.content_recommendations.meta_suggestion}</span></div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Page comparison */}
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
+                                <div style={{ padding: 12, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>YOUR PAGE</div>
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{ar.userPage?.wordCount?.toLocaleString() || '?'}</div>
+                                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>words</div>
+                                </div>
+                                {(ar.competitors || []).slice(0, 3).map((cp, i) => (
+                                  <div key={i} style={{ padding: 12, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>#{cp.position || i + 1} COMPETITOR</div>
+                                    <div style={{ fontSize: 18, fontWeight: 800, color: posColor(cp.position || i + 1) }}>{cp.wordCount?.toLocaleString() || '?'}</div>
+                                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>words</div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Cost */}
+                              <div style={{ fontSize: 12, color: 'var(--text3)', textAlign: 'right' }}>
+                                Analysis cost: ${ar.cost?.total?.toFixed(4) || '?'} ({ar.cost?.inputTokens?.toLocaleString()} in / {ar.cost?.outputTokens?.toLocaleString()} out tokens) — {ar.model?.includes('opus') ? 'Opus' : 'Haiku'}
+                              </div>
+                            </div>
+                          </td></tr>
+                        );
+                      })()}
                     </React.Fragment>
                   ))}
                 </tbody>
