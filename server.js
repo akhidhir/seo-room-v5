@@ -658,6 +658,22 @@ async function initDb() {
     await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS found_phone TEXT`).catch(() => {});
     await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS nap_match JSONB`).catch(() => {});
 
+    // RC Local profile cache — stores synced GBP data from RC
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rc_profile_cache (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        rc_location_id TEXT NOT NULL,
+        profile JSONB,
+        reviews JSONB,
+        healthcheck JSONB,
+        attributes JSONB,
+        review_stats JSONB,
+        synced_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id)
+      )
+    `);
+
     // GBP tasks are manual — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
@@ -4756,7 +4772,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
             return { name: dir.name, status: 'not_listed', listing_url: null, notes: r?.blocked ? 'Site blocked automated check' : 'Not found via automated scan', found_name: null, found_phone: null, found_address: null, nap_match: null };
           }
 
-          const r = await fetchPage(searchUrl);
+          const r = await fetchPage(searchUrl, 15000);
           if (!r) {
             console.log(`[citations] ${dir.name}: TIMEOUT/ERROR`);
             return { name: dir.name, status: 'not_checked', listing_url: null, notes: 'Could not reach directory — timeout or network error', found_name: null, found_phone: null, found_address: null, nap_match: null };
@@ -4784,103 +4800,6 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         }
       }));
       results.push(...batchResults);
-    }
-
-    // ── FALLBACK: SerpAPI broad search for unresolved directories ──
-    // Only fires if there are not_checked or not_listed results AND SerpAPI key exists
-    // Costs ~$0.01-0.02 total (2-3 searches max)
-    const unresolved = results.filter(r => r.status === 'not_checked' || r.status === 'not_listed');
-    if (unresolved.length > 0 && SERPAPI_KEY) {
-      console.log(`[citations] Fallback: SerpAPI broad search for ${unresolved.length} unresolved directories`);
-      const foundViaGoogle = {};
-
-      // Search 1: Business name + location (catches most directory listings)
-      try {
-        const broadData = await serpApiSearch({ engine: 'google', q: `"${businessName}" ${locationShort}`, num: 100, api_key: SERPAPI_KEY });
-        for (const r of (broadData.organic_results || [])) {
-          if (!r.link) continue;
-          for (const dir of AUSTRALIAN_DIRECTORIES) {
-            const dd = dir.url.replace(/^www\./, '');
-            if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
-              foundViaGoogle[dir.name] = { url: r.link, snippet: r.snippet || r.title || '' };
-            }
-          }
-        }
-      } catch (e) { console.log('[citations] Broad search error:', e.message); }
-
-      // Search 2: Domain name (catches listings that use the URL)
-      if (domain) {
-        try {
-          const domData = await serpApiSearch({ engine: 'google', q: `"${domain}" ${locationShort}`, num: 100, api_key: SERPAPI_KEY });
-          for (const r of (domData.organic_results || [])) {
-            if (!r.link) continue;
-            for (const dir of AUSTRALIAN_DIRECTORIES) {
-              const dd = dir.url.replace(/^www\./, '');
-              if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
-                foundViaGoogle[dir.name] = { url: r.link, snippet: `Via domain. ${r.snippet || r.title || ''}`.trim() };
-              }
-            }
-          }
-        } catch (e) { console.log('[citations] Domain search error:', e.message); }
-      }
-
-      // Search 3: Phone number (catches listings indexed with phone)
-      const phoneToSearch = normalizePhone(bizPhone);
-      if (phoneToSearch && phoneToSearch.length >= 8) {
-        try {
-          const phoneFormatted = phoneToSearch.replace(/^(\d{4})(\d{3})(\d{3})$/, '$1 $2 $3');
-          const phoneQ = phoneFormatted !== phoneToSearch ? `"${phoneToSearch}" OR "${phoneFormatted}"` : `"${phoneToSearch}"`;
-          const phoneData = await serpApiSearch({ engine: 'google', q: phoneQ, num: 100, api_key: SERPAPI_KEY });
-          for (const r of (phoneData.organic_results || [])) {
-            if (!r.link) continue;
-            for (const dir of AUSTRALIAN_DIRECTORIES) {
-              const dd = dir.url.replace(/^www\./, '');
-              if (r.link.includes(dd) && !foundViaGoogle[dir.name]) {
-                foundViaGoogle[dir.name] = { url: r.link, snippet: `Via phone. ${r.snippet || r.title || ''}`.trim() };
-              }
-            }
-          }
-        } catch (e) { console.log('[citations] Phone search error:', e.message); }
-      }
-
-      console.log(`[citations] SerpAPI fallback found ${Object.keys(foundViaGoogle).length} additional directories`);
-
-      // Update unresolved results with SerpAPI findings
-      for (let i = 0; i < results.length; i++) {
-        if ((results[i].status === 'not_checked' || results[i].status === 'not_listed') && foundViaGoogle[results[i].name]) {
-          const gResult = foundViaGoogle[results[i].name];
-          // Try to fetch the actual listing page for NAP extraction
-          let found_name = null, found_phone = null, found_address = null, nap_match = null;
-          try {
-            const listingPage = await fetchPage(gResult.url, 10000);
-            if (listingPage && !listingPage.blocked && listingPage.html) {
-              found_name = extractFoundName(listingPage.html);
-              found_phone = extractPhone(listingPage.html);
-              found_address = extractAddress(listingPage.html, location);
-              if (found_name || found_phone || found_address) {
-                nap_match = compareNAP(canonicalNAP, { name: found_name, phone: found_phone, address: found_address });
-              }
-            }
-          } catch (e) { /* NAP extraction failed, still mark as listed */ }
-
-          results[i] = {
-            ...results[i],
-            status: 'listed',
-            listing_url: gResult.url,
-            notes: `Found via Google: ${gResult.snippet}`.substring(0, 200),
-            found_name, found_phone, found_address, nap_match,
-          };
-          console.log(`[citations] ${results[i].name}: FOUND (SerpAPI fallback)`);
-        }
-      }
-
-      // For remaining not_checked that SerpAPI also didn't find → mark as not_listed (confirmed absent)
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === 'not_checked') {
-          results[i].status = 'not_listed';
-          results[i].notes = 'Not found via HTTP crawl or Google search';
-        }
-      }
     }
 
     // Save all results to DB
@@ -4917,6 +4836,55 @@ app.put('/api/projects/:projectId/citations/:directoryName', async (req, res) =>
       [projectId, decodeURIComponent(directoryName), status || 'not_listed', listing_url || null, notes || null]
     );
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== RC LOCAL SYNC (GBP Profile Data) ====================
+
+// Receive synced RC data from Claude and save to cache
+app.post('/api/projects/:projectId/rc/sync', async (req, res) => {
+  const { projectId } = req.params;
+  const { rc_location_id, profile, reviews, healthcheck, attributes, review_stats } = req.body;
+  try {
+    if (!rc_location_id) return res.status(400).json({ error: 'rc_location_id required' });
+    await pool.query(
+      `INSERT INTO rc_profile_cache (project_id, rc_location_id, profile, reviews, healthcheck, attributes, review_stats, synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       ON CONFLICT (project_id)
+       DO UPDATE SET rc_location_id=$2, profile=$3, reviews=$4, healthcheck=$5, attributes=$6, review_stats=$7, synced_at=NOW()`,
+      [projectId, rc_location_id, JSON.stringify(profile || {}), JSON.stringify(reviews || {}), JSON.stringify(healthcheck || {}), JSON.stringify(attributes || []), JSON.stringify(review_stats || {})]
+    );
+    // Also update project's gbp_location_id if not set
+    const proj = await pool.query('SELECT gbp_location_id FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows[0] && !proj.rows[0].gbp_location_id && profile?.metadata?.placeId) {
+      await pool.query('UPDATE projects SET gbp_location_id=$1 WHERE id=$2', [profile.metadata.placeId, projectId]);
+    }
+    res.json({ ok: true, synced_at: new Date().toISOString() });
+  } catch (e) {
+    console.error('[rc-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get cached RC data
+app.get('/api/projects/:projectId/rc/profile', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const data = await pool.query('SELECT * FROM rc_profile_cache WHERE project_id=$1', [projectId]);
+    if (data.rows.length === 0) return res.json({ synced: false });
+    const row = data.rows[0];
+    res.json({
+      synced: true,
+      rc_location_id: row.rc_location_id,
+      profile: row.profile,
+      reviews: row.reviews,
+      healthcheck: row.healthcheck,
+      attributes: row.attributes,
+      review_stats: row.review_stats,
+      synced_at: row.synced_at,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
