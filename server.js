@@ -2607,9 +2607,30 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   return pages;
 }
 
+// Helper: check if an audit was already completed this month for a project+pillar
+async function checkMonthlyAuditLimit(projectId, pillar) {
+  const { rows } = await pool.query(
+    `SELECT id, completed_at FROM audits
+     WHERE project_id=$1 AND pillar=$2 AND status='completed'
+     AND completed_at >= date_trunc('month', CURRENT_DATE)
+     ORDER BY completed_at DESC LIMIT 1`,
+    [projectId, pillar]
+  );
+  if (rows.length > 0) {
+    const completedAt = new Date(rows[0].completed_at);
+    const nextMonth = new Date(completedAt.getFullYear(), completedAt.getMonth() + 1, 1);
+    const daysUntil = Math.ceil((nextMonth - Date.now()) / 86400000);
+    return { limited: true, lastAudit: completedAt, nextAvailable: nextMonth, daysUntil };
+  }
+  return { limited: false };
+}
+
 // Run speed audit on ALL pages (via Google PageSpeed Insights) — async background job
 app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   try {
+    const limit = await checkMonthlyAuditLimit(req.params.projectId, 'speed');
+    if (limit.limited) return res.status(429).json({ error: `Speed audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = projRes.rows[0];
@@ -3893,6 +3914,65 @@ app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
   }
 });
 
+// Import RC keywords as regular map keywords (with project location as default suburb)
+app.post('/api/projects/:projectId/rc-import-keywords', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Get project location as default suburb (strip state/country)
+    const rawLoc = (project.location || '').trim();
+    const defaultLocation = rawLoc.replace(/\s*(QLD|NSW|VIC|SA|WA|TAS|NT|ACT)\s*\d*\s*,?\s*Australia\s*/gi, '').replace(/\s*,\s*$/, '').trim() || rawLoc;
+    if (!defaultLocation) return res.status(400).json({ error: 'No project location set. Add a location in Project Settings first.' });
+
+    // Get RC keywords from grid_scans (those with empty location)
+    const rcScans = await pool.query(`SELECT DISTINCT keyword FROM grid_scans WHERE project_id=$1 AND (location IS NULL OR location = '')`, [projectId]);
+    if (rcScans.rows.length === 0) {
+      return res.json({ imported: 0, message: 'No RC keywords found. Ask Cowork to sync RC data first.' });
+    }
+
+    // Get existing rank_keywords to avoid duplicates
+    const existing = await pool.query('SELECT id, keyword, location FROM rank_keywords WHERE project_id=$1', [projectId]);
+    const existingMap = {};
+    for (const r of existing.rows) {
+      const key = r.keyword.toLowerCase();
+      if (!existingMap[key]) existingMap[key] = [];
+      existingMap[key].push(r);
+    }
+
+    let imported = 0;
+    for (const row of rcScans.rows) {
+      const kw = row.keyword;
+      const kwLower = kw.toLowerCase();
+      const entries = existingMap[kwLower] || [];
+      const hasWithLocation = entries.some(e => e.location && e.location !== '' && e.location !== '__serpapi__');
+      const emptyEntry = entries.find(e => !e.location || e.location === '');
+
+      if (hasWithLocation) continue; // already exists with a location, skip
+
+      if (emptyEntry) {
+        // Update the empty-location entry to have the project location
+        await pool.query('UPDATE rank_keywords SET location=$1 WHERE id=$2', [defaultLocation, emptyEntry.id]);
+      } else {
+        // Insert new
+        await pool.query('INSERT INTO rank_keywords (project_id, keyword, location) VALUES ($1, $2, $3)', [projectId, kw, defaultLocation]);
+      }
+      imported++;
+    }
+
+    // Clean up any remaining empty-location RC keywords
+    await pool.query(`DELETE FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = '')`, [projectId]);
+
+    console.log(`[rc-import] Imported ${imported} RC keywords for project ${projectId} with location "${defaultLocation}"`);
+    res.json({ ok: true, imported, total: rcScans.rows.length, location: defaultLocation });
+  } catch (e) {
+    console.error('[rc-import] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // RC Locations — list all active RC profiles for dropdown in Project Settings
 app.get('/api/rc/locations', async (req, res) => {
   const RC_TOKEN = process.env.RC_API_TOKEN;
@@ -4153,6 +4233,9 @@ app.get('/api/projects/:projectId/rc-profile', async (req, res) => {
 app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const limit = await checkMonthlyAuditLimit(projectId, 'gbp-internal');
+    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
@@ -5245,6 +5328,9 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
 app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const limit = await checkMonthlyAuditLimit(projectId, 'onpage');
+    if (limit.limited) return res.status(429).json({ error: `On-Page audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     // Get WP URL from project
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -13974,6 +14060,9 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
 app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const limit = await checkMonthlyAuditLimit(projectId, 'gsc');
+    if (limit.limited) return res.status(429).json({ error: `GSC audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
@@ -14612,6 +14701,9 @@ const AUSTRALIAN_DIRECTORIES = [
 app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const limit = await checkMonthlyAuditLimit(projectId, 'gbp');
+    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
@@ -15868,6 +15960,12 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
 
+    // Monthly audit limit check
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gbp_external');
+    if (limitCheck.limited) {
+      return res.status(429).json({ error: `GBP External audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+    }
+
     // Delete old external findings
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gbp_external'`, [projectId]);
     await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='gbp_external' AND status='running'`, [projectId]);
@@ -16296,6 +16394,9 @@ app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res)
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const limit = await checkMonthlyAuditLimit(projectId, 'website');
+    if (limit.limited) return res.status(429).json({ error: `Website audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
@@ -16813,6 +16914,12 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
 
+    // Monthly audit limit check
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'website');
+    if (limitCheck.limited) {
+      return res.status(429).json({ error: `Website audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+    }
+
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]);
     await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='website' AND status='running'`, [projectId]);
 
@@ -16925,6 +17032,12 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
+
+    // Monthly audit limit check
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gsc_agent');
+    if (limitCheck.limited) {
+      return res.status(429).json({ error: `GSC audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+    }
 
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gsc_agent'`, [projectId]);
     // Mark any stuck running audits as failed
@@ -17059,6 +17172,13 @@ app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
+
+    // Monthly audit limit check
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'technical');
+    if (limitCheck.limited) {
+      return res.status(429).json({ error: `Technical audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+    }
+
     const wpUrl = project.wordpress_url;
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const siteUrl = wpUrl || (domain ? `https://${domain}` : '');
@@ -18091,9 +18211,14 @@ app.post('/api/projects/:projectId/rank-tracking/keywords/bulk-delete', async (r
 // Delete ALL tracked keywords for a project
 app.delete('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   try {
-    await pool.query('DELETE FROM rank_tracking WHERE project_id=$1', [req.params.projectId]);
-    await pool.query('DELETE FROM rank_keywords WHERE project_id=$1', [req.params.projectId]);
-    res.json({ ok: true });
+    // Only delete SERP keywords (those without a location) — Maps keywords have locations
+    const serpKws = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = \'\')', [req.params.projectId]);
+    const serpIds = serpKws.rows.map(r => r.id);
+    if (serpIds.length > 0) {
+      await pool.query('DELETE FROM rank_tracking WHERE keyword_id = ANY($1)', [serpIds]);
+      await pool.query('DELETE FROM rank_keywords WHERE id = ANY($1)', [serpIds]);
+    }
+    res.json({ ok: true, deleted: serpIds.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
