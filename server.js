@@ -18577,6 +18577,110 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
   }
 });
 
+// SerpAPI grid scan for RC keywords (keyword-only, no suburb — for comparison with RC data)
+app.post('/api/projects/:projectId/maps/grid-scan-rc', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  const { projectId } = req.params;
+  const { keywords: keywordList, grid_size = 5, radius_km = 10 } = req.body;
+
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const businessName = project.business_name || project.name || '';
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+    if (!businessName) return res.status(400).json({ error: 'Business name not set' });
+
+    // Get center GPS
+    const rawLocation = (project.location || '').trim();
+    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+    let centerGps = null;
+    for (const c of [rawLocation.toLowerCase().trim(), locParts[0], locParts.slice(0, 2).join(' ')]) {
+      if (c && SUBURB_GPS[c]) { centerGps = SUBURB_GPS[c]; break; }
+    }
+    if (!centerGps) {
+      const areas = project.service_areas || [];
+      if (areas.length > 0) {
+        const firstArea = (areas[0].name || areas[0] || '').toLowerCase().trim();
+        if (SUBURB_GPS[firstArea]) centerGps = SUBURB_GPS[firstArea];
+      }
+    }
+    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for "${rawLocation}"` });
+
+    // Use provided keywords or get RC keywords (those without location)
+    let keywords = keywordList;
+    if (!keywords || keywords.length === 0) {
+      const kwRes = await pool.query(`SELECT DISTINCT keyword FROM grid_scans WHERE project_id=$1 AND (location IS NULL OR location = '')`, [projectId]);
+      keywords = kwRes.rows.map(r => r.keyword);
+    }
+    if (keywords.length === 0) return res.status(400).json({ error: 'No RC keywords found to scan' });
+
+    const gridSizeInt = Math.min(Math.max(parseInt(grid_size) || 5, 3), 7);
+    const radiusFloat = Math.min(Math.max(parseFloat(radius_km) || 10, 2), 30);
+    const nameLower = businessName.toLowerCase();
+    const nameNoSpaces = nameLower.replace(/\s+/g, '');
+    const nameWords = nameLower.split(/\s+/).filter(w => w.length > 2);
+
+    console.log(`[grid-scan-rc] Starting: ${keywords.length} RC keywords, grid=${gridSizeInt}×${gridSizeInt}, radius=${radiusFloat}km`);
+    const results = [];
+
+    for (const keyword of keywords) {
+      const gridPoints = generateGrid(centerGps.lat, centerGps.lng, radiusFloat, gridSizeInt);
+      const pointResults = [];
+
+      for (let i = 0; i < gridPoints.length; i += 5) {
+        const batch = gridPoints.slice(i, i + 5);
+        const promises = batch.map(async (point) => {
+          try {
+            const data = await serpApiSearch({ engine: 'google_maps', q: keyword, ll: `@${point.lat},${point.lng},14z`, type: 'search' });
+            const localResults = data.local_results || [];
+            let position = null, found = false;
+            const top3 = [];
+
+            for (let p = 0; p < localResults.length && p < 20; p++) {
+              const place = localResults[p];
+              const titleLower = (place.title || '').toLowerCase();
+              const titleNoSpaces = titleLower.replace(/\s+/g, '');
+              const placePos = place.position || (p + 1);
+              if (placePos <= 3) top3.push({ position: placePos, title: place.title || '', rating: place.rating || null, reviews: place.reviews || 0 });
+              const nameMatch = nameLower && (titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) || (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w))));
+              const placeWebsite = (place.website || '').toLowerCase();
+              const domainMatch = domain && placeWebsite && (placeWebsite.includes(domain) || domain.includes(placeWebsite.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')));
+              if ((nameMatch || domainMatch) && !found) { position = placePos; found = true; }
+            }
+            return { ...point, position, found, top3, error: null };
+          } catch (err) { return { ...point, position: null, found: false, error: err.message }; }
+        });
+        pointResults.push(...(await Promise.all(promises)));
+      }
+
+      const successPoints = pointResults.filter(p => !p.error);
+      const foundPoints = successPoints.filter(p => p.found);
+      const arp = foundPoints.length > 0 ? +(foundPoints.reduce((s, p) => s + p.position, 0) / foundPoints.length).toFixed(1) : null;
+      const atrp = successPoints.length > 0 ? +(successPoints.reduce((s, p) => s + (p.found ? p.position : 21), 0) / successPoints.length).toFixed(1) : null;
+      const top3Count = foundPoints.filter(p => p.position <= 3).length;
+      const solv = successPoints.length > 0 ? +((top3Count / successPoints.length) * 100).toFixed(1) : 0;
+
+      // Store with location='__serpapi__' to distinguish from RC data
+      await pool.query('DELETE FROM grid_scans WHERE project_id=$1 AND keyword=$2 AND location=$3', [projectId, keyword, '__serpapi__']);
+      await pool.query(
+        `INSERT INTO grid_scans (project_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())`,
+        [projectId, keyword, '__serpapi__', gridSizeInt, centerGps.lat, centerGps.lng, radiusFloat, JSON.stringify(pointResults), arp, atrp, solv, foundPoints.length, successPoints.length]
+      );
+
+      results.push({ keyword, arp, atrp, solv, found_in: foundPoints.length, data_points: successPoints.length });
+      console.log(`[grid-scan-rc] "${keyword}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%`);
+    }
+
+    console.log(`[grid-scan-rc] Done. Scanned ${keywords.length} keywords.`);
+    res.json({ ok: true, scanned: keywords.length, results });
+  } catch (e) {
+    console.error('[grid-scan-rc] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get latest grid scan results for a project
 app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
   try {

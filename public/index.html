@@ -19129,36 +19129,97 @@
             </div>
           )}
 
-          {/* RC Grid Scans — keywords tracked in Rating Captain (keyword-level, no suburb) */}
+          {/* RC Grid Scans — keywords tracked in Rating Captain, side-by-side with SerpAPI */}
           {(() => {
             const rcOnlyScans = Object.entries(gridScans)
               .filter(([key, scan]) => key.endsWith('|||') && scan.grid_points)
               .map(([key, scan]) => ({ keyword: key.replace('|||', ''), ...scan }));
             if (rcOnlyScans.length === 0) return null;
+            // Get SerpAPI comparison scans (stored with location='__serpapi__')
+            const serpScans = {};
+            Object.entries(gridScans).forEach(([key, scan]) => {
+              if (key.endsWith('|||__serpapi__')) {
+                serpScans[key.replace('|||__serpapi__', '')] = scan;
+              }
+            });
+            const hasSerpData = Object.keys(serpScans).length > 0;
             return (
               <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginTop: 20 }}>
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <i className="fa-solid fa-satellite-dish" style={{ color: '#f97316', fontSize: 16 }} />
-                    <span style={{ fontWeight: 700, fontSize: 15 }}>Rating Captain Grid Scans</span>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>RC vs SerpAPI Grid Comparison</span>
                     <span style={{ fontSize: 11, color: 'var(--text3)' }}>({rcOnlyScans.length} keywords)</span>
                   </div>
+                  <button className="btn btn-primary" onClick={async () => {
+                    if (!confirm(`Scan ${rcOnlyScans.length} RC keywords via SerpAPI? This uses ${rcOnlyScans.length * gridSize * gridSize} API calls (~$${(rcOnlyScans.length * gridSize * gridSize * 0.005).toFixed(2)}).`)) return;
+                    setRcSyncing(true);
+                    try {
+                      const result = await api(`/projects/${project.id}/maps/grid-scan-rc`, {
+                        method: 'POST',
+                        body: JSON.stringify({ keywords: rcOnlyScans.map(s => s.keyword), grid_size: gridSize, radius_km: parseInt(document.querySelector('[data-radius]')?.value) || 10 })
+                      });
+                      if (result.error) { alert('Error: ' + result.error); } else {
+                        alert(`Scanned ${result.scanned} keywords via SerpAPI`);
+                        loadData();
+                      }
+                    } catch (e) { alert('Error: ' + e.message); }
+                    setRcSyncing(false);
+                  }} disabled={rcSyncing} style={{ fontSize: 12 }}>
+                    {rcSyncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Scanning...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />Scan via SerpAPI</>}
+                  </button>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 16, padding: 20 }}>
+                <div style={{ padding: 20 }}>
                   {rcOnlyScans.map((scan, si) => {
-                    const gp = typeof scan.grid_points === 'string' ? JSON.parse(scan.grid_points) : (scan.grid_points || []);
-                    const size = scan.grid_size || Math.round(Math.sqrt(gp.length));
+                    const rcGp = typeof scan.grid_points === 'string' ? JSON.parse(scan.grid_points) : (scan.grid_points || []);
+                    const rcSize = scan.grid_size || Math.round(Math.sqrt(rcGp.length));
+                    const serpScan = serpScans[scan.keyword];
+                    const serpGp = serpScan ? (typeof serpScan.grid_points === 'string' ? JSON.parse(serpScan.grid_points) : (serpScan.grid_points || [])) : [];
+                    const serpSize = serpScan ? (serpScan.grid_size || Math.round(Math.sqrt(serpGp.length))) : rcSize;
                     return (
-                      <div key={si} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 16 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4, color: 'var(--text1)' }}>{scan.keyword}</div>
-                        <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 11, color: 'var(--text3)' }}>
-                          <span>ARP: <strong style={{ color: scan.arp && scan.arp < 20 ? '#22c55e' : '#ef4444' }}>{scan.arp ?? '—'}</strong></span>
-                          <span>ATRP: <strong style={{ color: scan.atrp && scan.atrp < 15 ? '#22c55e' : '#ef4444' }}>{scan.atrp ?? '—'}</strong></span>
-                          <span>Visibility: <strong style={{ color: (scan.solv || 0) >= 50 ? '#22c55e' : (scan.solv || 0) > 0 ? '#f59e0b' : '#ef4444' }}>{scan.solv ?? 0}%</strong></span>
-                          <span>Coverage: <strong>{scan.found_in ?? 0}/{scan.data_points ?? 0}</strong></span>
+                      <div key={si} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 16, marginBottom: 16 }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, color: 'var(--text1)' }}>{scan.keyword}</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: serpScan ? '1fr 1fr' : '1fr', gap: 24 }}>
+                          {/* RC Grid */}
+                          <div>
+                            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: '#f97316', textTransform: 'uppercase', letterSpacing: 1 }}>
+                                <i className="fa-solid fa-satellite-dish" style={{ marginRight: 4 }} />Rating Captain
+                              </span>
+                              <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 4, fontSize: 11, color: 'var(--text3)' }}>
+                                <span>ARP: <strong style={{ color: scan.arp && scan.arp < 20 ? '#22c55e' : '#ef4444' }}>{scan.arp ?? '—'}</strong></span>
+                                <span>ATRP: <strong>{scan.atrp ?? '—'}</strong></span>
+                                <span>Vis: <strong style={{ color: (scan.solv || 0) >= 50 ? '#22c55e' : (scan.solv || 0) > 0 ? '#f59e0b' : '#ef4444' }}>{scan.solv ?? 0}%</strong></span>
+                                <span>{scan.found_in ?? 0}/{scan.data_points ?? 0}</span>
+                              </div>
+                            </div>
+                            <GridHeatmap gridPoints={rcGp} gridSize={rcSize} keyword={scan.keyword} location="" />
+                            {scan.scanned_at && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6, textAlign: 'center' }}>{new Date(scan.scanned_at).toLocaleDateString()}</div>}
+                          </div>
+                          {/* SerpAPI Grid */}
+                          {serpScan && (
+                            <div>
+                              <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1 }}>
+                                  <i className="fa-solid fa-magnifying-glass" style={{ marginRight: 4 }} />SerpAPI
+                                </span>
+                                <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 4, fontSize: 11, color: 'var(--text3)' }}>
+                                  <span>ARP: <strong style={{ color: serpScan.arp && serpScan.arp < 20 ? '#22c55e' : '#ef4444' }}>{serpScan.arp ?? '—'}</strong></span>
+                                  <span>ATRP: <strong>{serpScan.atrp ?? '—'}</strong></span>
+                                  <span>Vis: <strong style={{ color: (serpScan.solv || 0) >= 50 ? '#22c55e' : (serpScan.solv || 0) > 0 ? '#f59e0b' : '#ef4444' }}>{serpScan.solv ?? 0}%</strong></span>
+                                  <span>{serpScan.found_in ?? 0}/{serpScan.data_points ?? 0}</span>
+                                </div>
+                              </div>
+                              <GridHeatmap gridPoints={serpGp} gridSize={serpSize} keyword={scan.keyword} location="" />
+                              {serpScan.scanned_at && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6, textAlign: 'center' }}>{new Date(serpScan.scanned_at).toLocaleDateString()}</div>}
+                            </div>
+                          )}
+                          {!serpScan && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', fontSize: 13 }}>
+                              Click "Scan via SerpAPI" to compare
+                            </div>
+                          )}
                         </div>
-                        <GridHeatmap gridPoints={gp} gridSize={size} keyword={scan.keyword} location="" />
-                        {scan.scanned_at && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8, textAlign: 'center' }}>Scanned: {new Date(scan.scanned_at).toLocaleDateString()}</div>}
                       </div>
                     );
                   })}
