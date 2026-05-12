@@ -19130,7 +19130,7 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
   try {
     let keywords = new Set();
 
-    // Import from GSC
+    // Try gsc_keywords table first
     try {
       const gscRes = await pool.query(
         `SELECT keyword FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT $2`,
@@ -19139,8 +19139,36 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
       gscRes.rows.forEach(r => keywords.add(r.keyword.toLowerCase()));
     } catch (e) { console.log('gsc_keywords table error, skipping:', e.message); }
 
+    // If table empty, pull live from GSC API
     if (keywords.size === 0) {
-      return res.json({ error: 'No keywords found. Connect Google Search Console first to import keywords.' });
+      const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+      if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+      const project = proj.rows[0];
+      const userId = project.user_id;
+      const accessToken = await getGscAccessToken(userId);
+      if (!accessToken) return res.json({ error: 'Google Search Console not connected. Go to Agency Integrations to connect.' });
+
+      const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }).then(r => r.json());
+      const available = (sites.siteEntry || []).map(s => s.siteUrl);
+      let matchedSite = project.gsc_property || available.find(s => s.includes(domain.replace(/^www\./, '')));
+      if (!matchedSite && available.length > 0) matchedSite = available[0];
+      if (!matchedSite) return res.json({ error: 'No GSC property found. Set it in Project Settings.' });
+
+      const endDate = new Date().toISOString().split('T')[0];
+      const startDate = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0];
+      const kwRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: maxKw || 50 })
+      }).then(r => r.json());
+      (kwRes.rows || []).forEach(r => keywords.add(r.keys[0].toLowerCase()));
+    }
+
+    if (keywords.size === 0) {
+      return res.json({ error: 'No keywords found in GSC data. Make sure GSC is connected and has data.' });
     }
 
     let added = 0;
@@ -19152,7 +19180,7 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
       if (r.rows.length > 0) added++;
     }
 
-    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
+    const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location = \'\') ORDER BY keyword', [projectId]);
     res.json({ ok: true, imported: added, total: rows.length, keywords: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
