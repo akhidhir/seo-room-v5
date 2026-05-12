@@ -3920,7 +3920,7 @@
                   { key: 'profile', label: 'Profile', value: `${gbpC.filledCount || 0}/${gbpC.totalFields || 9}`, color: gbpComplete ? '#22c55e' : '#ef4444' },
                   { key: 'posts', label: 'Posts', value: `${s.gbpPostsThisMonth || 0}/3`, color: (s.gbpPostsThisMonth || 0) >= 3 ? '#22c55e' : '#ef4444' },
                   { key: 'citations', label: 'Citations', value: `${directoryList.filter(d => d.listed).length}/${directoryList.length}`, color: directoryList.filter(d => d.listed).length >= 15 ? '#22c55e' : '#f59e0b' },
-                  { key: 'reviews', label: 'Reviews', value: myReviews, color: beating ? '#22c55e' : '#f59e0b' },
+                  { key: 'reviews', label: 'Reviews', value: myReviews, color: myReviews > 0 ? '#f59e0b' : '#ef4444' },
                   { key: 'audit', label: 'Audit', value: gbpFindings.length > 0 ? gbpFindings.length : '—', color: gbpFindings.filter(f => (f.severity || '').toLowerCase() === 'critical').length > 0 ? '#ef4444' : gbpFindings.length > 0 ? '#f59e0b' : '#64748b' },
                 ].map((box) => {
                   const isActive = activeBizTab === box.key;
