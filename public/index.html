@@ -4838,10 +4838,14 @@
                         </button>
                       </div>
                     );
+                    const pageUrl = sub.pages && sub.pages[0] ? sub.pages[0].url : null;
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: isIndexed ? '#22c55e06' : hasIssue ? '#ef444406' : 'var(--bg)', border: `1px solid ${isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--border)'}18` }}>
                         <i className={`fas fa-${isIndexed ? 'check-circle' : hasIssue ? 'exclamation-triangle' : 'minus-circle'}`} style={{ color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)', fontSize: 18 }} />
-                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                          {pageUrl && <a href={pageUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: 12, color: 'var(--text3)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }} onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text3)'}>{pageUrl.replace(/^https?:\/\//, '')}</a>}
+                        </div>
                         <span style={{ fontSize: 14, fontWeight: 700, color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : isUnchecked ? '#f59e0b' : 'var(--text3)' }}>
                           {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : isUnchecked ? 'Not Checked' : 'No Page'}
                         </span>

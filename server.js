@@ -19871,6 +19871,7 @@ app.post('/api/projects/:id/discover-suburbs', async (req, res) => {
     }
 
     // 2b. Also detect suburbs from custom URL patterns (e.g. /plumber-warner/) by matching GBP suburb names
+    let source = 'website';
     if (suburbs.length === 0 && gbpSuburbs.length > 0) {
       for (const page of allPages) {
         const url = (page.url || '').toLowerCase();
@@ -19892,7 +19893,6 @@ app.post('/api/projects/:id/discover-suburbs', async (req, res) => {
     }
 
     // 3. Fallback: if no location pages, use GBP service areas
-    let source = 'website';
     if (suburbs.length === 0 && gbpSuburbs.length > 0) {
       source = 'gbp';
       for (const s of gbpSuburbs) {
@@ -20098,6 +20098,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     // Patterns: /plumber-{suburb}/, /service-areas/{suburb}/, /locations/{suburb}/
     // Then cross-reference with GBP service areas to find gaps
     const normalize = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const projectBase = project.domain?.startsWith('http') ? project.domain.replace(/\/+$/, '') : `https://${project.domain}`.replace(/\/+$/, '');
+    const absUrl = (u) => u && u.startsWith('/') ? projectBase + u : u;
     const allSuburbNames = new Set();
     const suburbSources = {};
     let suburbSource = 'website';
@@ -20138,7 +20140,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         }
         const normUrl = (page.url || '').replace(/\/+$/, '');
         if (!suburbSources[n].pages.find(p => p.url.replace(/\/+$/, '') === normUrl)) {
-          suburbSources[n].pages.push({ url: page.url, title: page.title || cap });
+          suburbSources[n].pages.push({ url: absUrl(page.url), title: page.title || cap });
         }
       }
     }
@@ -20368,9 +20370,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       // Separate: main service page (no suburb or the primary city page) vs suburb-specific pages
       // Main page = shortest matching URL (most likely the core service page)
       allMatches.sort((a, b) => a.rawSlug.length - b.rawSlug.length);
-      // Ensure all URLs are absolute (some discovered pages store only the path)
-      const projectBase = project.domain?.startsWith('http') ? project.domain.replace(/\/+$/, '') : `https://${project.domain}`.replace(/\/+$/, '');
-      const absUrl = (u) => u && u.startsWith('/') ? projectBase + u : u;
+      // URLs made absolute using projectBase/absUrl defined above
       let mainPage = allMatches[0] ? { ...allMatches[0], url: absUrl(allMatches[0].url) } : null;
       const nonSuburbPages = allMatches.filter(m => !m.suburb).map(m => ({ url: absUrl(m.url), title: m.title }));
       const suburbPages = allMatches.filter(m => m.suburb).map(m => ({
