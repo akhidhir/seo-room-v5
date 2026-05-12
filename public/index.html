@@ -3588,6 +3588,8 @@
       const [editingService, setEditingService] = useState(null);
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
+      const [visibleSvcSections, setVisibleSvcSections] = useState({ services: true, products: true }); // toggle sections inside Service KPI
+      const toggleSvcSection = (key) => setVisibleSvcSections(prev => ({ ...prev, [key]: !prev[key] }));
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
@@ -4509,22 +4511,29 @@
               {/* Summary stat boxes */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
                 {[
-                  { id: 'svc-section', label: 'Services', value: services.length, color: '#3b82f6' },
-                  { id: 'prod-section', label: 'Products', value: products.length, color: '#8b5cf6' },
-                  { id: 'svc-section', label: 'Suburb Pages', value: `${servicesWithSuburbPages}/${services.length}`, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' },
-                  { id: 'prod-section', label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' },
-                ].map((box, idx) => (
-                  <div key={idx} onClick={() => { const el = document.getElementById(box.id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                    style={{ padding: '20px 16px', borderRadius: 14, background: `${box.color}0a`, border: `2px solid ${box.color}25`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s' }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${box.color}50`; e.currentTarget.style.background = `${box.color}14`; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = `${box.color}25`; e.currentTarget.style.background = `${box.color}0a`; }}>
+                  { key: 'services', label: 'Services', value: services.length, color: '#3b82f6' },
+                  { key: 'products', label: 'Products', value: products.length, color: '#8b5cf6' },
+                  { key: 'services', label: 'Suburb Pages', value: `${servicesWithSuburbPages}/${services.length}`, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' },
+                  { key: 'products', label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' },
+                ].map((box, idx) => {
+                  const isActive = visibleSvcSections[box.key];
+                  return (
+                  <div key={idx} onClick={() => toggleSvcSection(box.key)}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${box.color}50`; e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; e.currentTarget.style.opacity = isActive ? '1' : '0.5'; }}>
                     <div style={{ fontSize: 40, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      {box.label}
+                      <i className={`fas fa-eye${isActive ? '' : '-slash'}`} style={{ fontSize: 11, color: isActive ? box.color : 'var(--text3)' }} />
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* ── SERVICES TABLE ── */}
+              {visibleSvcSections.services && (<React.Fragment>
               <div id="svc-section" style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-wrench" />Services ({services.length})
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
@@ -4547,7 +4556,9 @@
                       style={{ padding: '6px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
                   </div>
                 </div>
+              </React.Fragment>)}
               {/* ── PRODUCTS TABLE ── */}
+              {visibleSvcSections.products && (<React.Fragment>
               <div id="prod-section" style={{ fontSize: 15, fontWeight: 800, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-box" />Products ({products.length})
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
@@ -4570,6 +4581,7 @@
                       style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
                   </div>
                 </div>
+              </React.Fragment>)}
 
             </div>
             );
