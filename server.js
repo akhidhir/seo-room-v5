@@ -19957,6 +19957,15 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       for (const c of profile.categories.additionalCategories) gbpCategories.push(c.displayName);
     }
 
+    // Extract GBP products (from extension data or RC profile)
+    const gbpProductNames = new Set();
+    if (profile?.products && Array.isArray(profile.products)) {
+      for (const prod of profile.products) {
+        const pName = prod.name || prod.title || prod.productName || (typeof prod === 'string' ? prod : '');
+        if (pName) gbpProductNames.add(normalize(pName));
+      }
+    }
+
     // Extract GBP posts topics
     const gbpPosts = [];
     const now = new Date();
@@ -20292,13 +20301,20 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const gbpServiceNames = new Set();
     const gbpServiceList = [];
     let rcCacheServices = [];
+    let rcCacheProducts = [];
     try {
       const rcCacheR = await pool.query('SELECT profile FROM rc_profile_cache WHERE project_id=$1', [projectId]);
       if (rcCacheR.rows[0]?.profile?.services) rcCacheServices = rcCacheR.rows[0].profile.services;
+      if (rcCacheR.rows[0]?.profile?.products) rcCacheProducts = rcCacheR.rows[0].profile.products;
     } catch (e) {}
     for (const s of rcCacheServices) { gbpServiceNames.add(normalize(s)); gbpServiceList.push(s); }
     for (const s of gbpServices) { const n = normalize(s); if (!gbpServiceNames.has(n)) { gbpServiceNames.add(n); gbpServiceList.push(s); } }
     for (const cat of gbpCategories) { const n = normalize(cat); if (!gbpServiceNames.has(n)) { gbpServiceNames.add(n); gbpServiceList.push(cat); } }
+    // Also add RC cache products to gbpProductNames
+    for (const p of rcCacheProducts) {
+      const pName = typeof p === 'string' ? p : (p.name || p.title || '');
+      if (pName) gbpProductNames.add(normalize(pName));
+    }
 
     // For each defined service/product, find matching pages and cross-reference
     // Stem matching: "plumbing" matches "plumber", "drains" matches "drain"
@@ -20369,13 +20385,28 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         .filter(n => !coveredSuburbs.has(n))
         .map(n => ({ suburb: suburbSources[n]?.original || n, hasPage: !!suburbSources[n]?.hasPage }));
 
-      // Check if in GBP (fuzzy match)
+      // Check if in GBP (fuzzy match against services + products + description + posts)
       let inGbp = false;
-      for (const gn of gbpServiceNames) {
-        if (gn === nameNorm) { inGbp = true; break; }
-        if (nameWords.length > 0 && nameWords.every(w => gn.includes(w))) { inGbp = true; break; }
-        const gnWords = gn.split(/\s+/).filter(w => w.length >= 3);
-        if (gnWords.length > 0 && gnWords.every(w => nameNorm.includes(w))) { inGbp = true; break; }
+      const gbpSetsToCheck = type === 'product' ? [gbpProductNames, gbpServiceNames] : [gbpServiceNames, gbpProductNames];
+      for (const gbpSet of gbpSetsToCheck) {
+        if (inGbp) break;
+        for (const gn of gbpSet) {
+          if (gn === nameNorm) { inGbp = true; break; }
+          if (nameWords.length > 0 && nameWords.every(w => gn.includes(w))) { inGbp = true; break; }
+          const gnWords = gn.split(/\s+/).filter(w => w.length >= 3);
+          if (gnWords.length > 0 && gnWords.every(w => nameNorm.includes(w))) { inGbp = true; break; }
+        }
+      }
+      // For products, also check if name appears in GBP description or posts
+      if (!inGbp && type === 'product') {
+        const gbpDesc = normalize(profile?.profile?.description || '');
+        if (gbpDesc && nameWords.filter(w => w.length >= 3).some(w => gbpDesc.includes(w))) inGbp = true;
+        if (!inGbp) {
+          for (const post of gbpPosts) {
+            const postText = normalize(post.summary || '');
+            if (nameWords.filter(w => w.length >= 3).some(w => postText.includes(w))) { inGbp = true; break; }
+          }
+        }
       }
 
       // Match keywords
@@ -20985,6 +21016,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         gbpCategories,
         gbpPostCount: gbpPosts.length,
         gbpPostsThisMonth,
+        gbpProductCount: gbpProductNames.size,
         competitorCount: topCompetitors.length,
         totalCombos,
         coveredCombos,
