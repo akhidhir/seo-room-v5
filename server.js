@@ -20119,8 +20119,6 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
 
       if (suburbName) {
-        // Clean: remove city qualifiers
-        suburbName = suburbName.replace(/\s*(brisbane|north brisbane|south brisbane|perth|sydney|melbourne)$/i, '').trim();
         if (suburbName.length < 2) continue;
         const n = normalize(suburbName);
         const cap = n.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -20303,63 +20301,69 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     for (const cat of gbpCategories) { const n = normalize(cat); if (!gbpServiceNames.has(n)) { gbpServiceNames.add(n); gbpServiceList.push(cat); } }
 
     // For each defined service/product, find matching pages and cross-reference
+    // Stem matching: "plumbing" matches "plumber", "drains" matches "drain"
+    const stemMatch = (word, text) => {
+      if (text.includes(word)) return true;
+      const stem = word.substring(0, Math.min(word.length, 5));
+      return stem.length >= 4 && text.includes(stem);
+    };
+
     const serviceMatrix = allOfferings.map(({ name, type }) => {
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const nameNorm = normalize(name);
       const nameWords = nameNorm.split(/\s+/).filter(w => w.length >= 3);
+      const slugWords = slug.split('-').filter(w => w.length >= 3);
 
-      // Find main page: match by slug containment in URL
-      let mainPage = null;
+      // Find ALL pages matching this service (stem matching, skip blog-style URLs)
+      const allMatches = [];
       for (const page of websitePages) {
         let rawSlug = '';
         try { rawSlug = new URL(page.url?.startsWith('http') ? page.url : 'https://x.com' + (page.url || '')).pathname.replace(/^\/|\/$/g, '').toLowerCase(); } catch { rawSlug = (page.slug || '').toLowerCase(); }
         if (!rawSlug) continue;
-        // Remove location suffixes for matching
-        const cleanedSlug = rawSlug.replace(/-(brisbane|north-brisbane|south-brisbane|perth|sydney|melbourne)$/, '');
-        // Check if this page matches the service/product slug
-        if (cleanedSlug === slug || cleanedSlug.includes(slug) || slug.split('-').every(w => w.length >= 3 && cleanedSlug.includes(w))) {
-          // But not if it's a suburb combo page (for services, those are separate)
-          // Use cleanedSlug for this check — city qualifiers (brisbane, perth etc) are NOT suburbs
-          let isSuburbCombo = false;
-          if (cleanedSlug !== slug) {
-            // Only check for suburb combo if after stripping city qualifier it's NOT an exact service match
-            for (const subSlug of suburbSlugsSet) {
-              if (subSlug.length >= 3 && (cleanedSlug.endsWith('-' + subSlug) || cleanedSlug.startsWith(subSlug + '-'))) {
-                isSuburbCombo = true; break;
-              }
-            }
-          }
-          if (!isSuburbCombo) {
-            mainPage = { url: page.url, title: page.title || name };
-            break;
+        // Skip blog-style URLs (long slug with many words = likely a blog post, not a service page)
+        const slugParts = rawSlug.split('-');
+        if (slugParts.length > 8) continue; // e.g. "blocked-drains-can-worsen-during-the-holiday-rush" = 8 words
+        // Check if URL contains service words (stem matching)
+        const hasServiceMatch = slugWords.length > 0 && slugWords.every(w => stemMatch(w, rawSlug));
+        if (!hasServiceMatch) continue;
+        // Detect suburb in URL: check against known suburbs
+        let matchedSuburb = null;
+        for (const subSlug of suburbSlugsSet) {
+          if (subSlug.length >= 3 && rawSlug.includes(subSlug)) {
+            // Verify it's a word boundary match (not partial word)
+            const idx = rawSlug.indexOf(subSlug);
+            const before = idx === 0 || rawSlug[idx - 1] === '-';
+            const after = idx + subSlug.length === rawSlug.length || rawSlug[idx + subSlug.length] === '-';
+            if (before && after) { matchedSuburb = subSlug; break; }
           }
         }
+        // Also check for brisbane/north-brisbane even if not in suburbSlugsSet
+        if (!matchedSuburb) {
+          const citySuburbs = ['brisbane', 'north-brisbane', 'south-brisbane'];
+          for (const cs of citySuburbs) {
+            if (rawSlug.endsWith('-' + cs) || rawSlug.startsWith(cs + '-')) {
+              matchedSuburb = cs; break;
+            }
+          }
+        }
+        allMatches.push({ url: page.url, title: page.title || name, suburb: matchedSuburb, rawSlug });
       }
 
-      // Find suburb combo pages (only for services)
-      // e.g. /water-leak-detection-north-lakes/ = service "Water Leak Detection" + suburb "North Lakes"
-      const suburbPages = [];
-      const mainPageSlug = mainPage ? (mainPage.url || '').replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/+$/, '').toLowerCase() : '';
-      if (type === 'service') {
-        for (const page of websitePages) {
-          let rawSlug = '';
-          try { rawSlug = new URL(page.url?.startsWith('http') ? page.url : 'https://x.com' + (page.url || '')).pathname.replace(/^\/|\/$/g, '').toLowerCase(); } catch { rawSlug = (page.slug || '').toLowerCase(); }
-          if (!rawSlug || rawSlug === mainPageSlug) continue;
-          // Strip city qualifiers before matching
-          const cleanedRaw = rawSlug.replace(/-(brisbane|north-brisbane|south-brisbane|perth|sydney|melbourne)$/, '');
-          // Check if slug contains the service slug words
-          const hasServiceMatch = slug.split('-').filter(w => w.length >= 3).every(w => cleanedRaw.includes(w));
-          if (!hasServiceMatch) continue;
-          // Check if it also contains a suburb name
-          for (const subSlug of suburbSlugsSet) {
-            if (subSlug.length < 3) continue;
-            if (cleanedRaw.includes(subSlug) && cleanedRaw !== slug) {
-              suburbPages.push({ suburb: subSlug.replace(/-/g, ' '), url: page.url, title: page.title });
-              break;
-            }
-          }
-        }
-      }
+      // Separate: main service page (no suburb or the primary city page) vs suburb-specific pages
+      // Main page = shortest matching URL (most likely the core service page)
+      allMatches.sort((a, b) => a.rawSlug.length - b.rawSlug.length);
+      let mainPage = allMatches[0] || null;
+      const suburbPages = allMatches.filter(m => m.suburb).map(m => ({
+        suburb: m.suburb.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        url: m.url, title: m.title
+      }));
+      const hasPage = allMatches.length > 0;
+
+      // Missing suburbs: locations with website pages but no service-specific page
+      const coveredSuburbs = new Set(suburbPages.map(sp => normalize(sp.suburb)));
+      const missingSuburbs = Array.from(allSuburbNames)
+        .filter(n => !coveredSuburbs.has(n))
+        .map(n => ({ suburb: suburbSources[n]?.original || n, hasPage: !!suburbSources[n]?.hasPage }));
 
       // Check if in GBP (fuzzy match)
       let inGbp = false;
@@ -20395,30 +20399,50 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         }
       }
 
+      // Match reviews mentioning this service
+      const reviewMentions = [];
+      for (const review of allReviews) {
+        const text = normalize(review.comment || review.text || '');
+        const replyText = normalize(review.review_reply?.comment || review.response || '');
+        const fullText = text + ' ' + replyText;
+        if (nameWords.length > 0 && nameWords.filter(w => w.length >= 3).some(w => fullText.includes(w))) {
+          reviewMentions.push({
+            reviewer: review.reviewer?.displayName || review.reviewer || '',
+            rating: review.rating || review.starRating || 0,
+            snippet: (review.comment || review.text || '').substring(0, 120),
+          });
+        }
+      }
+
       // Build gaps
       const gaps = [];
-      if (!mainPage) gaps.push(type === 'product' ? 'Create product page' : 'Create service page');
+      if (!hasPage) gaps.push(type === 'product' ? 'Create product page' : 'Create service page');
       if (!inGbp) gaps.push('Add to GBP services');
+      if (reviewMentions.length === 0) gaps.push('Get reviews mentioning this service');
       if (type === 'service' && suburbPages.length === 0 && allSuburbNames.size > 0) gaps.push('Create suburb landing pages');
       if (!keywords.length) gaps.push('Add keyword tracking');
 
       const score = type === 'product'
-        ? (mainPage ? 40 : 0) + (inGbp ? 30 : 0) + (keywords.length ? 15 : 0) + (gscData.length ? 15 : 0)
-        : (mainPage ? 25 : 0) + (inGbp ? 20 : 0) + (suburbPages.length > 0 ? 15 : 0) + (keywords.length ? 15 : 0) + (posts.length ? 10 : 0) + (gscData.length ? 15 : 0);
+        ? (hasPage ? 40 : 0) + (inGbp ? 30 : 0) + (keywords.length ? 15 : 0) + (gscData.length ? 15 : 0)
+        : (hasPage ? 25 : 0) + (inGbp ? 20 : 0) + (suburbPages.length > 0 ? 15 : 0) + (keywords.length ? 15 : 0) + (posts.length ? 10 : 0) + (gscData.length ? 15 : 0);
 
       return {
         service: name,
         type,
         source: 'defined',
         inGbp,
-        hasPage: !!mainPage,
-        mainPage,
+        hasPage,
+        mainPage: mainPage ? { url: mainPage.url, title: mainPage.title } : null,
         suburbPageCount: suburbPages.length,
-        suburbPages: suburbPages.slice(0, 10),
+        suburbPages: suburbPages.slice(0, 50),
+        missingSuburbs: missingSuburbs.slice(0, 50),
         totalSuburbs: allSuburbNames.size,
-        pageCount: (mainPage ? 1 : 0) + suburbPages.length,
+        pageCount: allMatches.length,
         keywordCount: keywords.length,
         postCount: posts.length,
+        postSnippets: posts.slice(0, 5).map(p => ({ summary: (p.summary || '').substring(0, 120), date: p.date || p.createTime || '' })),
+        reviewMentionCount: reviewMentions.length,
+        reviewSnippets: reviewMentions.slice(0, 3),
         gscImpressions: gscData.reduce((sum, g) => sum + (g.impressions || 0), 0),
         gaps,
         score,

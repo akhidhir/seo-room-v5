@@ -4327,38 +4327,47 @@
                 .then(() => reload())
                 .catch(e => alert(e.message));
             };
+            const COL_GRID = '2fr 0.5fr 0.5fr 0.5fr 0.5fr 0.25fr';
             const renderRow = (svc, i, prefix, showSuburbs) => {
               const isExpanded = expandedKpiItem === `${prefix}-${i}`;
               const isService = prefix === 'svc';
+              const reviewCount = svc.reviewMentionCount || 0;
+              const postCount = svc.postCount || 0;
               return (
                 <React.Fragment key={i}>
                   <div onClick={() => setExpandedKpiItem(isExpanded ? null : `${prefix}-${i}`)}
-                    style={{ display: 'grid', gridTemplateColumns: showSuburbs ? '2fr 0.6fr 0.6fr 0.6fr 0.4fr' : '2fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '14px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? '#3b82f608' : i % 2 === 0 ? 'transparent' : 'var(--bg)', transition: 'background 0.1s' }}
+                    style={{ display: 'grid', gridTemplateColumns: COL_GRID, gap: 0, padding: '14px 16px', borderBottom: '1px solid var(--border)', cursor: 'pointer', background: isExpanded ? '#3b82f608' : i % 2 === 0 ? 'transparent' : 'var(--bg)', transition: 'background 0.1s' }}
                     onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = '#3b82f608'; }}
                     onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'var(--bg)'; }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ color: 'var(--text3)', fontSize: 10, width: 12 }} />
+                      <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ color: '#3b82f6', fontSize: 11, width: 12 }} />
                       <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}>{svc.service}</span>
                     </div>
                     <div style={{ textAlign: 'center' }}>
-                      <i className={`fas fa-${svc.hasPage ? 'check-circle' : 'times-circle'}`} style={{ color: svc.hasPage ? '#22c55e' : '#ef4444', fontSize: 16 }} />
+                      {svc.mainPage ? (
+                        <a href={svc.mainPage.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                          title={svc.mainPage.title || svc.mainPage.url}
+                          style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          {svc.pageCount || 0}<i className="fas fa-external-link-alt" style={{ fontSize: 9, opacity: 0.7 }} />
+                        </a>
+                      ) : (
+                        <span style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>0</span>
+                      )}
                     </div>
-                    {showSuburbs && (
-                      <div style={{ textAlign: 'center' }}>
-                        {svc.suburbPageCount > 0
-                          ? <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{svc.suburbPageCount}</span>
-                          : <span style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>0</span>}
-                      </div>
-                    )}
                     <div style={{ textAlign: 'center' }}>
-                      <i className={`fas fa-${svc.inGbp ? 'check-circle' : 'minus-circle'}`} style={{ color: svc.inGbp ? '#22c55e' : '#f59e0b', fontSize: 16 }} />
+                      <i className={`fas fa-${svc.inGbp ? 'check-circle' : 'times-circle'}`} style={{ color: svc.inGbp ? '#22c55e' : '#ef4444', fontSize: 16 }} />
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      {reviewCount > 0
+                        ? <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{reviewCount}</span>
+                        : <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 16 }} />}
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      {postCount > 0
+                        ? <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}>{postCount}</span>
+                        : <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 16 }} />}
                     </div>
                     <div style={{ textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center' }}>
-                      <button onClick={(e) => { e.stopPropagation(); moveOffering(svc, isService ? 'product' : 'service', isService ? 'service' : 'product'); }}
-                        title={isService ? 'Move to Products' : 'Move to Services'}
-                        style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: 'var(--text3)', cursor: 'pointer', fontWeight: 600 }}>
-                        <i className={`fas fa-${isService ? 'box' : 'wrench'}`} style={{ fontSize: 10 }} />
-                      </button>
                       <button onClick={(e) => { e.stopPropagation(); if (confirm(`Remove "${svc.service}"?`)) removeOffering(svc.service, isService ? 'service' : 'product'); }}
                         title="Remove"
                         style={{ background: 'none', border: '1px solid #ef444430', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: '#ef4444', cursor: 'pointer', fontWeight: 600 }}>
@@ -4368,32 +4377,92 @@
                   </div>
                   {isExpanded && (
                     <div style={{ padding: '16px 20px 16px 38px', background: '#3b82f606', borderBottom: '1px solid var(--border)' }}>
-                      {svc.mainPage && (
-                        <div style={{ marginBottom: 10 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Main Page: </span>
-                          <a href={svc.mainPage.url} target="_blank" rel="noopener" style={{ fontSize: 13, color: '#3b82f6' }}>{svc.mainPage.title || svc.mainPage.url}</a>
+                      {/* Pages section */}
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                          <i className="fas fa-file-alt" style={{ marginRight: 6, fontSize: 11 }} />Pages ({svc.pageCount || 0})
                         </div>
-                      )}
-                      {showSuburbs && svc.suburbPages && svc.suburbPages.length > 0 && (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Suburb Pages ({svc.suburbPageCount}):</div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                            {svc.suburbPages.map((sp, j) => (
-                              <a key={j} href={sp.url} target="_blank" rel="noopener" style={{ padding: '4px 10px', borderRadius: 6, background: '#22c55e12', border: '1px solid #22c55e25', fontSize: 12, color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
-                                {sp.suburb}
-                              </a>
+                        {svc.mainPage ? (
+                          <div style={{ marginBottom: 6 }}>
+                            <a href={svc.mainPage.url} target="_blank" rel="noopener" style={{ fontSize: 13, color: '#3b82f6', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />{svc.mainPage.title || svc.mainPage.url}
+                            </a>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 13, color: '#ef4444', fontStyle: 'italic' }}>No dedicated page found on website</div>
+                        )}
+                        {svc.suburbPages && svc.suburbPages.length > 0 && (
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4 }}>Suburb pages:</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                              {svc.suburbPages.map((sp, j) => (
+                                <a key={j} href={sp.url} target="_blank" rel="noopener" style={{ padding: '3px 9px', borderRadius: 6, background: '#22c55e10', border: '1px solid #22c55e20', fontSize: 11, color: '#22c55e', fontWeight: 600, textDecoration: 'none' }}>
+                                  {sp.suburb}
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {/* Review mentions */}
+                      {svc.reviewSnippets && svc.reviewSnippets.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                            <i className="fas fa-star" style={{ marginRight: 6, fontSize: 11, color: '#f59e0b' }} />Review Mentions ({reviewCount})
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            {svc.reviewSnippets.map((rv, j) => (
+                              <div key={j} style={{ padding: '6px 10px', borderRadius: 8, background: '#f59e0b06', border: '1px solid #f59e0b12', fontSize: 12, color: 'var(--text2)' }}>
+                                <span style={{ color: '#f59e0b', fontWeight: 700 }}>{'★'.repeat(rv.rating || 0)}</span>
+                                {' '}{rv.snippet}
+                              </div>
                             ))}
                           </div>
                         </div>
                       )}
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      {/* GBP Post mentions */}
+                      {svc.postSnippets && svc.postSnippets.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                            <i className="fas fa-bullhorn" style={{ marginRight: 6, fontSize: 11, color: '#8b5cf6' }} />GBP Posts ({postCount})
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            {svc.postSnippets.map((ps, j) => (
+                              <div key={j} style={{ padding: '6px 10px', borderRadius: 8, background: '#8b5cf606', border: '1px solid #8b5cf612', fontSize: 12, color: 'var(--text2)' }}>
+                                {ps.date && <span style={{ color: '#8b5cf6', fontWeight: 600, marginRight: 6 }}>{ps.date}</span>}
+                                {ps.summary}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                        {!svc.hasPage && (
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Create page for "${svc.service}"`, `Create a dedicated landing page for "${svc.service}" on your website.\n\nOptimise for "${svc.service}" + location keywords.`, 'website', 'high'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Create Page
+                          </button>
+                        )}
                         {!svc.inGbp && (
                           <button onClick={(e) => { e.stopPropagation(); createAction(`Add "${svc.service}" to GBP`, `Add "${svc.service}" as a service in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Services → Add Service.`, 'gbp', 'medium'); }}
                             style={{ padding: '6px 12px', borderRadius: 8, background: '#3b82f615', border: '1px solid #3b82f630', color: '#3b82f6', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
                             <i className="fas fa-plus" style={{ marginRight: 4 }} />Add to GBP
                           </button>
                         )}
-                        {showSuburbs && svc.suburbPageCount === 0 && suburbs.length > 0 && (
+                        {reviewCount === 0 && (
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Get reviews mentioning "${svc.service}"`, `Ask satisfied customers to mention "${svc.service}" in their Google reviews.\n\nThis helps Google associate your business with this service for local searches.`, 'gbp', 'medium'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                            <i className="fas fa-star" style={{ marginRight: 4 }} />Get Service Reviews
+                          </button>
+                        )}
+                        {postCount === 0 && (
+                          <button onClick={(e) => { e.stopPropagation(); createAction(`Create GBP post about "${svc.service}"`, `Create a Google Business Profile post mentioning "${svc.service}".\n\nGBP posts help reinforce service relevance and appear in your business listing.`, 'gbp', 'medium'); }}
+                            style={{ padding: '6px 12px', borderRadius: 8, background: '#8b5cf615', border: '1px solid #8b5cf630', color: '#8b5cf6', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                            <i className="fas fa-bullhorn" style={{ marginRight: 4 }} />Create GBP Post
+                          </button>
+                        )}
+                        {svc.suburbPageCount === 0 && suburbs.length > 0 && isService && (
                           <button onClick={(e) => { e.stopPropagation(); createAction(`Create suburb pages for ${svc.service}`, `Create dedicated landing pages combining "${svc.service}" with each target suburb.\n\nExample: /${svc.service.toLowerCase().replace(/\s+/g, '-')}-{suburb}/\n\nEach page should target "{svc.service} {suburb}" keywords.`, 'website', 'high'); }}
                             style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
                             <i className="fas fa-plus" style={{ marginRight: 4 }} />Create Suburb Pages
@@ -4452,12 +4521,13 @@
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
               </div>
                 <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: COL_GRID, gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Service</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Page</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Locations</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Pages</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>In GBP</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Type</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Reviews</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Posts</div>
+                    <div></div>
                   </div>
                   {services.map((svc, i) => renderRow(svc, i, 'svc', true))}
                   {/* Add service input */}
@@ -4474,11 +4544,13 @@
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
               </div>
                 <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: COL_GRID, gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Product</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Page</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Pages</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>In GBP</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Type</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Reviews</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Posts</div>
+                    <div></div>
                   </div>
                   {products.map((svc, i) => renderRow(svc, i, 'prod', false))}
                   {/* Add product input */}
