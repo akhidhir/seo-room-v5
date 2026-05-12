@@ -4311,9 +4311,18 @@
                 title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
               }}).then(() => alert('Action item created!')).catch(e => alert(e.message));
             };
-            const toggleProduct = (svc, makeProduct) => {
-              const slug = svc.service.toLowerCase().replace(/\s+/g, '-');
-              api(`/projects/${project.id}/local-intel/toggle-product`, { method: 'POST', body: { slug, isProduct: makeProduct } })
+            const moveOffering = (svc, toType, fromType) => {
+              api(`/projects/${project.id}/local-intel/offerings`, { method: 'POST', body: { action: 'move', name: svc.service, type: toType, fromType } })
+                .then(() => reload())
+                .catch(e => alert(e.message));
+            };
+            const addOffering = (name, type) => {
+              api(`/projects/${project.id}/local-intel/offerings`, { method: 'POST', body: { action: 'add', name, type } })
+                .then(() => reload())
+                .catch(e => alert(e.message));
+            };
+            const removeOffering = (name, type) => {
+              api(`/projects/${project.id}/local-intel/offerings`, { method: 'POST', body: { action: 'remove', name, type } })
                 .then(() => reload())
                 .catch(e => alert(e.message));
             };
@@ -4343,11 +4352,16 @@
                     <div style={{ textAlign: 'center' }}>
                       <i className={`fas fa-${svc.inGbp ? 'check-circle' : 'minus-circle'}`} style={{ color: svc.inGbp ? '#22c55e' : '#f59e0b', fontSize: 16 }} />
                     </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <button onClick={(e) => { e.stopPropagation(); toggleProduct(svc, isService); }}
+                    <div style={{ textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center' }}>
+                      <button onClick={(e) => { e.stopPropagation(); moveOffering(svc, isService ? 'product' : 'service', isService ? 'service' : 'product'); }}
                         title={isService ? 'Move to Products' : 'Move to Services'}
                         style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: 'var(--text3)', cursor: 'pointer', fontWeight: 600 }}>
                         <i className={`fas fa-${isService ? 'box' : 'wrench'}`} style={{ fontSize: 10 }} />
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); if (confirm(`Remove "${svc.service}"?`)) removeOffering(svc.service, isService ? 'service' : 'product'); }}
+                        title="Remove"
+                        style={{ background: 'none', border: '1px solid #ef444430', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: '#ef4444', cursor: 'pointer', fontWeight: 600 }}>
+                        <i className="fas fa-times" style={{ fontSize: 10 }} />
                       </button>
                     </div>
                   </div>
@@ -4432,12 +4446,10 @@
               </div>
 
               {/* ── SERVICES TABLE ── */}
-              {services.length > 0 && (
-                <>
-                <div style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-wrench" />Services ({services.length})
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
-                </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fas fa-wrench" />Services ({services.length})
+                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
+              </div>
                 <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Service</div>
@@ -4447,17 +4459,19 @@
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Type</div>
                   </div>
                   {services.map((svc, i) => renderRow(svc, i, 'svc', true))}
+                  {/* Add service input */}
+                  <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input id="add-service-input" placeholder="Add service..." onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { addOffering(e.target.value.trim(), 'service'); e.target.value = ''; } }}
+                      style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 300 }} />
+                    <button onClick={() => { const inp = document.getElementById('add-service-input'); if (inp?.value?.trim()) { addOffering(inp.value.trim(), 'service'); inp.value = ''; } }}
+                      style={{ padding: '6px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
+                  </div>
                 </div>
-                </>
-              )}
-
               {/* ── PRODUCTS TABLE ── */}
-              {products.length > 0 && (
-                <>
-                <div style={{ fontSize: 15, fontWeight: 800, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: services.length > 0 ? 8 : 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-box" />Products ({products.length})
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
-                </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fas fa-box" />Products ({products.length})
+                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
+              </div>
                 <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.4fr', gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Product</div>
@@ -4466,9 +4480,14 @@
                     <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' }}>Type</div>
                   </div>
                   {products.map((svc, i) => renderRow(svc, i, 'prod', false))}
+                  {/* Add product input */}
+                  <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input id="add-product-input" placeholder="Add product..." onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { addOffering(e.target.value.trim(), 'product'); e.target.value = ''; } }}
+                      style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text1)', fontSize: 13, maxWidth: 300 }} />
+                    <button onClick={() => { const inp = document.getElementById('add-product-input'); if (inp?.value?.trim()) { addOffering(inp.value.trim(), 'product'); inp.value = ''; } }}
+                      style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
+                  </div>
                 </div>
-                </>
-              )}
 
               {/* ── GBP-ONLY SERVICES ── */}
               {gbpOnlyServices.length > 0 && (
