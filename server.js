@@ -2732,8 +2732,32 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
       if (elapsed > 10 * 60 * 1000) {
         await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
-        return res.json({ status: 'failed', error: 'Audit timed out (server may have restarted). Please run again.' });
+        // Fall through to failed handler below
+        audit.status = 'failed';
       }
+    }
+    // If latest audit failed, try to return the last completed results as fallback
+    if (audit.status === 'failed') {
+      const lastGood = await pool.query(
+        `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [req.params.projectId]
+      );
+      if (lastGood.rows.length > 0) {
+        const goodData = typeof lastGood.rows[0].audit_data === 'string' ? JSON.parse(lastGood.rows[0].audit_data) : (lastGood.rows[0].audit_data || {});
+        return res.json({
+          status: 'completed',
+          auditId: lastGood.rows[0].id,
+          results: goodData.results || null,
+          total_pages: (goodData.results || []).length,
+          error: null,
+          warning: 'A recent audit failed (server restarted), showing last successful results.',
+          startedAt: lastGood.rows[0].started_at,
+          completedAt: lastGood.rows[0].completed_at,
+        });
+      }
+      // No previous completed audit — return the failure
+      const failData = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+      return res.json({ status: 'failed', error: failData.error || 'Speed audit failed. Please run again.' });
     }
     const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
     res.json({
