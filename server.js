@@ -17818,6 +17818,30 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       }
     } catch {}
 
+    // Auto-detect suburb pages by prefix pattern: if 8+ URLs share the same prefix (e.g. "plumber-"), suffix is a suburb
+    const topLevelSlugs = urls.map(u => u.replace(/https?:\/\/[^/]+\//, '').replace(/\/$/, '').split('/')[0]).filter(Boolean);
+    const prefixCounts = {};
+    for (const slug of topLevelSlugs) {
+      const m = slug.match(/^([a-z]+-)/);
+      if (m) prefixCounts[m[1]] = (prefixCounts[m[1]] || 0) + 1;
+    }
+    const suburbPrefixes = Object.entries(prefixCounts).filter(([, count]) => count >= 8).map(([prefix]) => prefix);
+    if (suburbPrefixes.length > 0) {
+      const seen3 = new Set(suburbs.map(s => s.toLowerCase().trim()));
+      for (const slug of topLevelSlugs) {
+        for (const prefix of suburbPrefixes) {
+          if (slug.startsWith(prefix) && slug.length > prefix.length) {
+            const suburbSlug = slug.slice(prefix.length);
+            const suburbName = suburbSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            if (!seen3.has(suburbName.toLowerCase()) && suburbName.length > 2) {
+              seen3.add(suburbName.toLowerCase());
+              suburbs.push(suburbName);
+            }
+          }
+        }
+      }
+    }
+
     // Extract service pages — anything that's not a suburb, not a brand index, not generic
     const brandIndexes = new Set(['a-f','g-j','k-o','p-z']);
     const suburbSlugs = new Set(suburbs.map(s => s.toLowerCase().replace(/\s+/g, '-')));
