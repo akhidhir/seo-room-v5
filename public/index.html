@@ -17834,6 +17834,16 @@
       const costPerKw = modelCosts[analysisModel] || 0.015;
       const analysisCheckedCount = Object.values(analysisChecked).filter(Boolean).length;
 
+      // Load saved analysis results from DB on mount
+      useEffect(() => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/rank-tracking/analyses`).then(saved => {
+          if (saved && !saved.error && typeof saved === 'object') {
+            setAnalysisResults(saved);
+          }
+        }).catch(() => {});
+      }, [project?.id]);
+
       const toggleSort = (col) => {
         if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else { setSortCol(col); setSortDir('asc'); }

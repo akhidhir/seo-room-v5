@@ -677,6 +677,22 @@ async function initDb() {
       )
     `);
 
+    // SERP Analysis results persistence
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS serp_analysis (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        model TEXT,
+        analysis JSONB,
+        user_page JSONB,
+        competitors JSONB,
+        cost JSONB,
+        analyzed_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, keyword)
+      )
+    `);
+
     // GBP tasks are manual — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
@@ -19275,7 +19291,7 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
     const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
     const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
 
-    res.json({
+    const result = {
       ok: true,
       keyword,
       model: aiModel,
@@ -19283,11 +19299,44 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
       userPage: { url: userPage.url, title: userPage.title, wordCount: userPage.wordCount, error: userPage.error },
       competitors: compPages.map((cp, i) => ({ position: top3[i]?.position, url: cp.url, title: cp.title, wordCount: cp.wordCount, error: cp.error })),
       cost: { inputTokens, outputTokens, total: Math.round(actualCost * 10000) / 10000 }
-    });
+    };
+
+    // Persist to DB so user doesn't pay twice
+    try {
+      await pool.query(`
+        INSERT INTO serp_analysis (project_id, keyword, model, analysis, user_page, competitors, cost, analyzed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (project_id, keyword) DO UPDATE SET
+          model = EXCLUDED.model, analysis = EXCLUDED.analysis, user_page = EXCLUDED.user_page,
+          competitors = EXCLUDED.competitors, cost = EXCLUDED.cost, analyzed_at = NOW()
+      `, [projectId, keyword, aiModel, JSON.stringify(analysis), JSON.stringify(result.userPage), JSON.stringify(result.competitors), JSON.stringify(result.cost)]);
+    } catch (dbErr) { console.error('[serp-analysis] DB save error:', dbErr.message); }
+
+    res.json(result);
   } catch (e) {
     console.error('[serp-analysis]', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Get saved SERP analysis results
+app.get('/api/projects/:projectId/rank-tracking/analyses', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT keyword, model, analysis, user_page, competitors, cost, analyzed_at FROM serp_analysis WHERE project_id=$1`,
+      [req.params.projectId]
+    );
+    const results = {};
+    for (const r of rows) {
+      results[r.keyword] = {
+        ok: true, keyword: r.keyword, model: r.model,
+        analysis: r.analysis, userPage: r.user_page,
+        competitors: r.competitors, cost: r.cost,
+        analyzed_at: r.analyzed_at
+      };
+    }
+    res.json(results);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Get rank history for a keyword (for charts)
