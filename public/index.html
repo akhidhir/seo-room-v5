@@ -3589,7 +3589,7 @@
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
       const [activeSvcTab, setActiveSvcTab] = useState('services'); // 'services' | 'products'
-      const [activeLocTab, setActiveLocTab] = useState('pages'); // 'pages' | 'indexed' | 'gbp' | 'tracked' | 'reviews'
+      const [activeLocTab, setActiveLocTab] = useState('pages'); // 'pages' | 'indexed' | 'gbp' | 'reviews'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
@@ -4701,12 +4701,11 @@
               </div>
 
               {/* Summary stat boxes — clickable tabs */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
                 {[
                   { key: 'pages', label: 'Has Page', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' },
                   { key: 'indexed', label: 'Indexed', value: `${suburbsIndexed}/${suburbs.length}`, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' },
                   { key: 'gbp', label: 'In GBP', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' },
-                  { key: 'tracked', label: 'Tracked', value: `${suburbsTracked}/${suburbs.length}`, color: suburbsTracked === suburbs.length ? '#22c55e' : '#ef4444' },
                   { key: 'reviews', label: 'Reviews', value: `${subWithReviews.length}/${suburbs.length}`, color: subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444' },
                 ].map((box) => {
                   const isActive = activeLocTab === box.key;
@@ -4896,47 +4895,6 @@
                           <button onClick={(e) => { e.stopPropagation(); createAction(`Add ${sub.suburb} to GBP Service Areas`, `Add "${sub.suburb}" as a service area in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Location & Areas → Service Areas → Add "${sub.suburb}".`, 'gbp', 'medium'); }}
                             style={{ padding: '6px 12px', borderRadius: 8, background: '#22c55e15', border: '1px solid #22c55e30', color: '#22c55e', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                             <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </KpiItem>}
-
-              {/* ── KEYWORD TRACKING ── */}
-              {activeLocTab === 'tracked' && <KpiItem itemKey="sub-track" icon="chart-line" iconColor="#f59e0b"
-                title="Keyword Tracking"
-                subtitle={subNoTrack.length === 0 ? 'All locations have keyword tracking' : `${subNoTrack.length} locations not being tracked`}
-                badge={`${suburbsTracked}/${suburbs.length}`}
-                badgeColor={subNoTrack.length === 0 ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  {suburbsTracked > 0 && (
-                    <div style={{ marginBottom: 14 }}>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />Tracked ({suburbsTracked})
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {suburbs.filter(sub => sub.keywordCount > 0).map((sub, i) => (
-                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
-                            {sub.suburb} <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.8 }}>({sub.keywordCount} kw)</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {subNoTrack.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />Not Tracked ({subNoTrack.length})
-                      </div>
-                      {subNoTrack.map((sub, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                          <button onClick={(e) => { e.stopPropagation(); onNavigate && onNavigate('maps-rankings'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#f59e0b15', border: '1px solid #f59e0b30', color: '#f59e0b', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Add Keywords
                           </button>
                         </div>
                       ))}
