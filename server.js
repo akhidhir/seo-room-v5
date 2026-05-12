@@ -20319,10 +20319,14 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         // Check if this page matches the service/product slug
         if (cleanedSlug === slug || cleanedSlug.includes(slug) || slug.split('-').every(w => w.length >= 3 && cleanedSlug.includes(w))) {
           // But not if it's a suburb combo page (for services, those are separate)
+          // Use cleanedSlug for this check — city qualifiers (brisbane, perth etc) are NOT suburbs
           let isSuburbCombo = false;
-          for (const subSlug of suburbSlugsSet) {
-            if (subSlug.length >= 3 && (rawSlug.endsWith('-' + subSlug) || rawSlug.startsWith(subSlug + '-'))) {
-              isSuburbCombo = true; break;
+          if (cleanedSlug !== slug) {
+            // Only check for suburb combo if after stripping city qualifier it's NOT an exact service match
+            for (const subSlug of suburbSlugsSet) {
+              if (subSlug.length >= 3 && (cleanedSlug.endsWith('-' + subSlug) || cleanedSlug.startsWith(subSlug + '-'))) {
+                isSuburbCombo = true; break;
+              }
             }
           }
           if (!isSuburbCombo) {
@@ -20333,18 +20337,23 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
 
       // Find suburb combo pages (only for services)
+      // e.g. /water-leak-detection-north-lakes/ = service "Water Leak Detection" + suburb "North Lakes"
       const suburbPages = [];
+      const mainPageSlug = mainPage ? (mainPage.url || '').replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/+$/, '').toLowerCase() : '';
       if (type === 'service') {
         for (const page of websitePages) {
           let rawSlug = '';
           try { rawSlug = new URL(page.url?.startsWith('http') ? page.url : 'https://x.com' + (page.url || '')).pathname.replace(/^\/|\/$/g, '').toLowerCase(); } catch { rawSlug = (page.slug || '').toLowerCase(); }
-          if (!rawSlug) continue;
-          // Check if slug contains both service slug words AND a suburb
-          const hasServiceMatch = slug.split('-').filter(w => w.length >= 3).every(w => rawSlug.includes(w));
+          if (!rawSlug || rawSlug === mainPageSlug) continue;
+          // Strip city qualifiers before matching
+          const cleanedRaw = rawSlug.replace(/-(brisbane|north-brisbane|south-brisbane|perth|sydney|melbourne)$/, '');
+          // Check if slug contains the service slug words
+          const hasServiceMatch = slug.split('-').filter(w => w.length >= 3).every(w => cleanedRaw.includes(w));
           if (!hasServiceMatch) continue;
+          // Check if it also contains a suburb name
           for (const subSlug of suburbSlugsSet) {
             if (subSlug.length < 3) continue;
-            if (rawSlug.includes(subSlug) && rawSlug !== (mainPage?.url || '').replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/$/, '').toLowerCase()) {
+            if (cleanedRaw.includes(subSlug) && cleanedRaw !== slug) {
               suburbPages.push({ suburb: subSlug.replace(/-/g, ' '), url: page.url, title: page.title });
               break;
             }
