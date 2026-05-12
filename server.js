@@ -19271,11 +19271,12 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
 
     const aiResp = await anthropic.messages.create({
       model: aiModel,
-      max_tokens: 2000,
+      max_tokens: 8000,
       messages: [{ role: 'user', content: prompt }]
     });
 
     const text = aiResp.content[0].text;
+    const wasTruncated = aiResp.stop_reason === 'max_tokens';
     let analysis;
     try {
       // Strip markdown code fences (```json ... ```) before parsing
@@ -19284,17 +19285,35 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
       if (!jsonMatch) throw new Error('No JSON found');
       analysis = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      // Second attempt: try extracting JSON more aggressively
+      // Second attempt: try to repair truncated JSON by closing open braces/brackets
       try {
-        const start = text.indexOf('{');
-        const end = text.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-          analysis = JSON.parse(text.substring(start, end + 1));
-        } else {
-          throw new Error('No braces');
+        let cleaned = text.replace(/```(?:json)?\s*/gi, '');
+        const start = cleaned.indexOf('{');
+        if (start < 0) throw new Error('No braces');
+        let partial = cleaned.substring(start);
+        // If truncated, try closing open structures
+        if (wasTruncated) {
+          // Remove trailing incomplete string/value
+          partial = partial.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '');
+          // Count and close open braces/brackets
+          let openBraces = 0, openBrackets = 0;
+          let inString = false, escaped = false;
+          for (const ch of partial) {
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\') { escaped = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') openBraces++;
+            if (ch === '}') openBraces--;
+            if (ch === '[') openBrackets++;
+            if (ch === ']') openBrackets--;
+          }
+          partial += ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, openBraces));
         }
+        analysis = JSON.parse(partial);
       } catch (e2) {
-        analysis = { verdict: text.substring(0, 500), score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
+        console.error('[serp-analysis] JSON parse failed:', e2.message, 'truncated:', wasTruncated);
+        analysis = { verdict: text.replace(/```(?:json)?\s*/gi, '').substring(0, 500), score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
       }
     }
 
