@@ -21574,12 +21574,11 @@
                       const data = await api(`/projects/${project.id}/rank-tracking/website-keywords`);
                       const subs = data.suburbs || [];
                       if (subs.length === 0) { alert('No suburb pages found on the website'); return; }
-                      const existing = (serviceAreas || []).map(s => s.toLowerCase());
-                      const newSubs = subs.filter(s => !existing.includes(s.toLowerCase()));
+                      const existing = new Set((formData.serviceAreas || []).map(a => (a.name || a).toLowerCase()));
+                      const newSubs = subs.filter(s => !existing.has(s.toLowerCase()));
                       if (newSubs.length === 0) { alert('All website suburbs already added'); return; }
-                      const updated = [...(serviceAreas || []), ...newSubs];
-                      await api(`/projects/${project.id}`, { method: 'PUT', body: { service_areas: updated } });
-                      setServiceAreas(updated);
+                      const newAreas = newSubs.map(s => ({ name: s, distance: 20 }));
+                      setFormData(prev => ({ ...prev, serviceAreas: [...prev.serviceAreas, ...newAreas] }));
                       alert(`Added ${newSubs.length} suburbs from website`);
                     } catch(e) { alert('Error: ' + e.message); }
                   }} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 12, padding: 0 }}>
