@@ -19122,7 +19122,14 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
   if (!keyword) return res.status(400).json({ error: 'Keyword required' });
   if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
-  const aiModel = model === 'opus' ? 'claude-opus-4-6' : 'claude-haiku-4-5-20251001';
+  const modelMap = {
+    'haiku-4.5': 'claude-haiku-4-5-20251001',
+    'sonnet-4.5': 'claude-sonnet-4-5-20241022',
+    'sonnet-4.6': 'claude-sonnet-4-6-20250514',
+    'opus-4.6': 'claude-opus-4-6',
+    'opus-4.7': 'claude-opus-4-7-20250715'
+  };
+  const aiModel = modelMap[model] || 'claude-sonnet-4-6-20250514';
 
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -19262,8 +19269,11 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
     // Calculate actual token usage for cost display
     const inputTokens = aiResp.usage?.input_tokens || 0;
     const outputTokens = aiResp.usage?.output_tokens || 0;
-    const costPerInputM = model === 'opus' ? 15 : 0.80;
-    const costPerOutputM = model === 'opus' ? 75 : 4;
+    const costRates = {
+      'haiku-4.5': [0.80, 4], 'sonnet-4.5': [3, 15], 'sonnet-4.6': [3, 15],
+      'opus-4.6': [15, 75], 'opus-4.7': [15, 75]
+    };
+    const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
     const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
 
     res.json({
