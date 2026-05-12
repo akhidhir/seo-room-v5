@@ -18491,6 +18491,10 @@
         const scanKey = `${kw.keyword}|||${kw.location}`;
         const scan = gridScans[scanKey];
         if (scan) return scan;
+        // Fallback: check for keyword-only grid scan (RC data has no location)
+        const rcKey = `${kw.keyword}|||`;
+        const rcScan = gridScans[rcKey];
+        if (rcScan) return rcScan;
         // Fallback: check competitors array for serpapi_grid or local_falcon source
         const comps = kw.competitors || [];
         const gridMeta = comps.find(c => c.source === 'serpapi_grid') || comps.find(c => c.source === 'local_falcon');
@@ -18718,7 +18722,7 @@
                     const statusIcon = !hasData ? 'fa-circle-question' : solv >= 50 ? 'fa-circle-check' : solv >= 20 ? 'fa-circle-minus' : solv > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
                     const isExpanded = expandedMapRow === kw.id;
                     const scanKey = `${kw.keyword}|||${kw.location}`;
-                    const gridScanData = gridScans[scanKey];
+                    const gridScanData = gridScans[scanKey] || gridScans[`${kw.keyword}|||`];
                     const gridPointsData = gridScanData?.grid_points || [];
                     // Dynamic advice from audit insights — actions are { text, color } objects
                     const buildAdvice = (status, kwObj) => {
@@ -19124,6 +19128,45 @@
               </div>
             </div>
           )}
+
+          {/* RC Grid Scans — keywords tracked in Rating Captain (keyword-level, no suburb) */}
+          {(() => {
+            const rcOnlyScans = Object.entries(gridScans)
+              .filter(([key, scan]) => key.endsWith('|||') && scan.grid_points)
+              .map(([key, scan]) => ({ keyword: key.replace('|||', ''), ...scan }));
+            if (rcOnlyScans.length === 0) return null;
+            return (
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginTop: 20 }}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <i className="fa-solid fa-satellite-dish" style={{ color: '#f97316', fontSize: 16 }} />
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>Rating Captain Grid Scans</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>({rcOnlyScans.length} keywords)</span>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 16, padding: 20 }}>
+                  {rcOnlyScans.map((scan, si) => {
+                    const gp = typeof scan.grid_points === 'string' ? JSON.parse(scan.grid_points) : (scan.grid_points || []);
+                    const size = scan.grid_size || Math.round(Math.sqrt(gp.length));
+                    return (
+                      <div key={si} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 16 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4, color: 'var(--text1)' }}>{scan.keyword}</div>
+                        <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 11, color: 'var(--text3)' }}>
+                          <span>ARP: <strong style={{ color: scan.arp && scan.arp < 20 ? '#22c55e' : '#ef4444' }}>{scan.arp ?? '—'}</strong></span>
+                          <span>ATRP: <strong style={{ color: scan.atrp && scan.atrp < 15 ? '#22c55e' : '#ef4444' }}>{scan.atrp ?? '—'}</strong></span>
+                          <span>Visibility: <strong style={{ color: (scan.solv || 0) >= 50 ? '#22c55e' : (scan.solv || 0) > 0 ? '#f59e0b' : '#ef4444' }}>{scan.solv ?? 0}%</strong></span>
+                          <span>Coverage: <strong>{scan.found_in ?? 0}/{scan.data_points ?? 0}</strong></span>
+                        </div>
+                        <GridHeatmap gridPoints={gp} gridSize={size} keyword={scan.keyword} location="" />
+                        {scan.scanned_at && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8, textAlign: 'center' }}>Scanned: {new Date(scan.scanned_at).toLocaleDateString()}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Generate Maps Keywords Modal */}
           {showGenerator && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
