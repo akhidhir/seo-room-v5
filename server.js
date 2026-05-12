@@ -17803,7 +17803,9 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
         if (Array.isArray(saList)) {
           const seen2 = new Set(suburbs.map(s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()));
           for (const sub of saList) {
-            const subName = (typeof sub === 'string' ? sub : sub.name || '').trim();
+            const rawName = (typeof sub === 'string' ? sub : sub.name || '').trim();
+            // Strip state/country: "Kedron QLD, Australia" → "Kedron", "Kedron QLD 4000, Australia" → "Kedron"
+            const subName = rawName.replace(/\s*(QLD|NSW|VIC|SA|WA|TAS|NT|ACT)\s*\d*\s*,?\s*Australia\s*/gi, '').replace(/\s*,\s*$/, '').trim() || rawName;
             const n = subName.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
             if (n.length < 3 || seen2.has(n)) continue;
             const slug = n.replace(/\s+/g, '-');

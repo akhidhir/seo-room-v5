@@ -19214,13 +19214,17 @@
                             <i className="fa-solid fa-globe" style={{ marginRight: 4 }} />Pull from Website
                           </button>
                           <button onClick={async () => {
-                            const resp = await api(`/projects/${project.id}/service-areas`);
-                            const areas = (resp.service_areas || resp || []).filter(a => !cityNames.has((a.name || '').toLowerCase()));
-                            const sorted = areas.sort((a, b) => (a.distance || 99) - (b.distance || 99));
-                            setGenSuburbsText(prev => {
-                              const existing = prev.split('\n').filter(s => s.trim());
-                              return [...new Set([...existing, ...sorted.map(a => a.name)])].join('\n');
-                            });
+                            try {
+                              const resp = await api(`/projects/${project.id}/service-areas`);
+                              const areas = (resp.service_areas || resp || []).filter(a => !cityNames.has((a.name || '').toLowerCase()));
+                              if (areas.length === 0) { alert('No service areas found in Project Settings. Add them first.'); return; }
+                              const sorted = areas.sort((a, b) => (a.distance || 99) - (b.distance || 99));
+                              const cleanName = (n) => n.replace(/\s*(QLD|NSW|VIC|SA|WA|TAS|NT|ACT)\s*\d*\s*,?\s*Australia\s*/gi, '').replace(/\s*,\s*$/, '').trim();
+                              setGenSuburbsText(prev => {
+                                const existing = prev.split('\n').filter(s => s.trim());
+                                return [...new Set([...existing, ...sorted.map(a => cleanName(a.name || a))])].filter(s => s).join('\n');
+                              });
+                            } catch (e) { alert('Error loading service areas: ' + e.message); }
                           }} className="btn" style={{ fontSize: 11, padding: '6px 12px', flex: 1 }}>
                             <i className="fa-solid fa-location-dot" style={{ marginRight: 4 }} />Load from Settings
                           </button>
