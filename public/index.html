@@ -3589,6 +3589,7 @@
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
       const [activeSvcTab, setActiveSvcTab] = useState('services'); // 'services' | 'products'
+      const [activeLocTab, setActiveLocTab] = useState('pages'); // 'pages' | 'indexed' | 'gbp' | 'tracked' | 'reviews'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
@@ -4699,28 +4700,26 @@
                 </div>
               </div>
 
-              {/* Summary stat boxes — 3 core signals */}
-              <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsWithPages}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Has Page</div>
-                </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsIndexed}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Indexed</div>
-                </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' }}>{suburbsInGbp}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>In GBP</div>
-                </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#f59e0b08', border: '1px solid #f59e0b20', textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: suburbsTracked === suburbs.length ? '#22c55e' : '#ef4444' }}>{suburbsTracked}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Tracked</div>
-                </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#f9731608', border: '1px solid #f9731620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444' }}>{subWithReviews.length}/{suburbs.length}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Reviews</div>
-                </div>
+              {/* Summary stat boxes — clickable tabs */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+                {[
+                  { key: 'pages', label: 'Has Page', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' },
+                  { key: 'indexed', label: 'Indexed', value: `${suburbsIndexed}/${suburbs.length}`, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' },
+                  { key: 'gbp', label: 'In GBP', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' },
+                  { key: 'tracked', label: 'Tracked', value: `${suburbsTracked}/${suburbs.length}`, color: suburbsTracked === suburbs.length ? '#22c55e' : '#ef4444' },
+                  { key: 'reviews', label: 'Reviews', value: `${subWithReviews.length}/${suburbs.length}`, color: subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444' },
+                ].map((box) => {
+                  const isActive = activeLocTab === box.key;
+                  return (
+                  <div key={box.key} onClick={() => setActiveLocTab(box.key)}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = `${box.color}40`; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = isActive ? '1' : '0.5'; e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; }}>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
+                  </div>
+                  );
+                })}
               </div>
 
               {/* Warning: No location pages on website */}
@@ -4743,7 +4742,7 @@
               )}
 
               {/* ── LANDING PAGES ── */}
-              <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
+              {activeLocTab === 'pages' && <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
                 title="Location Landing Pages"
                 subtitle={subNoPage.length === 0 ? 'All locations have a landing page' : `${subNoPage.length} locations missing a page`}
                 badge={`${suburbsWithPages}/${suburbs.length}`}
@@ -4806,10 +4805,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── INDEXING ── */}
-              <KpiItem itemKey="sub-index" icon="search" iconColor="#3b82f6"
+              {activeLocTab === 'indexed' && <KpiItem itemKey="sub-index" icon="search" iconColor="#3b82f6"
                 title="Indexing Status"
                 subtitle={subNotIndexed.length === 0 && suburbsWithPages === suburbs.length ? 'All pages indexed by Google' : subNotIndexed.length > 0 ? `${subNotIndexed.length} pages not indexed` : `${subNoPage.length} suburbs need a page first`}
                 badge={`${suburbsIndexed}/${suburbs.length}`}
@@ -4864,10 +4863,10 @@
                     );
                   })}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── GBP SERVICE AREAS ── */}
-              <KpiItem itemKey="sub-gbp" icon="map-marker-alt" iconColor="#22c55e"
+              {activeLocTab === 'gbp' && <KpiItem itemKey="sub-gbp" icon="map-marker-alt" iconColor="#22c55e"
                 title="Locations in GBP Service Areas"
                 subtitle={subNoGbp.length === 0 ? 'All locations listed as service areas' : `${subNoGbp.length} locations not in GBP`}
                 badge={`${suburbsInGbp}/${suburbs.length}`}
@@ -4903,10 +4902,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── KEYWORD TRACKING ── */}
-              <KpiItem itemKey="sub-track" icon="chart-line" iconColor="#f59e0b"
+              {activeLocTab === 'tracked' && <KpiItem itemKey="sub-track" icon="chart-line" iconColor="#f59e0b"
                 title="Keyword Tracking"
                 subtitle={subNoTrack.length === 0 ? 'All locations have keyword tracking' : `${subNoTrack.length} locations not being tracked`}
                 badge={`${suburbsTracked}/${suburbs.length}`}
@@ -4944,10 +4943,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── REVIEW MENTIONS ── */}
-              <KpiItem itemKey="sub-reviews" icon="star" iconColor="#f97316"
+              {activeLocTab === 'reviews' && <KpiItem itemKey="sub-reviews" icon="star" iconColor="#f97316"
                 title="Review Mentions"
                 subtitle={subNoReviews.length === 0 ? 'All locations mentioned in Google reviews' : `${subNoReviews.length} locations with no review mentions`}
                 badge={`${subWithReviews.length}/${suburbs.length}`}
@@ -4988,10 +4987,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── GBP-ONLY LOCATIONS (in GBP but no website page) ── */}
-              {(data.gbpOnlyLocations || []).length > 0 && (
+              {activeLocTab === 'gbp' && (data.gbpOnlyLocations || []).length > 0 && (
                 <KpiItem itemKey="sub-gbp-only" icon="exclamation-circle" iconColor="#f97316"
                   title="GBP-Only Locations"
                   subtitle={`${data.gbpOnlyLocations.length} in GBP but no website page`}
