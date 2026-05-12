@@ -17782,7 +17782,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
     if (!sitemapXml) return res.status(400).json({ error: 'Could not fetch sitemap from ' + domain });
 
     const urls = [...sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
-    const skip = new Set(['','contact-us','about-us','blog','privacy-policy','terms-conditions','faq','reviews','sitemap','service-areas','services','photo-gallery','refund-exchange','thank-you','cart','checkout','my-account','shop','sample-page']);
+    const skip = new Set(['','contact-us','about-us','about-the-team','blog','privacy-policy','terms-conditions','faq','faqs','reviews','sitemap','service-areas','services','photo-gallery','refund-exchange','thank-you','cart','checkout','my-account','shop','sample-page','testimonials','gallery','portfolio','careers','team','our-team','contact']);
 
     // Extract suburb pages — standard patterns + custom patterns (e.g. /plumber-{suburb}/)
     const suburbs = urls
@@ -17818,14 +17818,21 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       }
     } catch {}
 
-    // Auto-detect suburb pages by prefix pattern: if 8+ URLs share the same prefix (e.g. "plumber-"), suffix is a suburb
+    // Auto-detect suburb pages by prefix pattern: if 8+ URLs share the same prefix, suffix is a suburb
+    // Handles both single-word (plumber-{suburb}) and multi-word (blocked-drain-{suburb}) prefixes
     const topLevelSlugs = urls.map(u => u.replace(/https?:\/\/[^/]+\//, '').replace(/\/$/, '').split('/')[0]).filter(Boolean);
     const prefixCounts = {};
     for (const slug of topLevelSlugs) {
-      const m = slug.match(/^([a-z]+-)/);
-      if (m) prefixCounts[m[1]] = (prefixCounts[m[1]] || 0) + 1;
+      // Try all possible prefix splits: "blocked-drain-kedron" → "blocked-", "blocked-drain-"
+      const parts = slug.split('-');
+      for (let i = 1; i < parts.length; i++) {
+        const prefix = parts.slice(0, i).join('-') + '-';
+        prefixCounts[prefix] = (prefixCounts[prefix] || 0) + 1;
+      }
     }
-    const suburbPrefixes = Object.entries(prefixCounts).filter(([, count]) => count >= 8).map(([prefix]) => prefix);
+    const suburbPrefixes = Object.entries(prefixCounts).filter(([, count]) => count >= 8).map(([prefix]) => prefix)
+      // Remove shorter prefixes if a longer one also qualifies (prefer "blocked-drain-" over "blocked-")
+      .filter((prefix, _, arr) => !arr.some(other => other !== prefix && other.startsWith(prefix) && prefixCounts[other] >= 8));
     if (suburbPrefixes.length > 0) {
       const seen3 = new Set(suburbs.map(s => s.toLowerCase().trim()));
       for (const slug of topLevelSlugs) {
@@ -17852,7 +17859,7 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       if (!path || skip.has(path) || u.includes('/service-areas/') || u.includes('/suburbs/') || u.includes('/locations/')) continue;
       if (path.startsWith('category/') || path.startsWith('tag/') || path.startsWith('blog/')) continue;
       if (path.match(/^elementor-|^dsfs$|^vbn|^sample/)) continue;
-      // Skip suburb pages (e.g. plumber-kedron, plumber-albany-creek)
+      // Skip suburb pages (e.g. plumber-kedron, blocked-drain-albany-creek)
       const pathLower = path.toLowerCase();
       if (suburbSlugs.has(pathLower) || [...suburbSlugs].some(ss => pathLower.endsWith('-' + ss) || pathLower.includes('/' + ss))) continue;
 
@@ -17864,15 +17871,37 @@ app.get('/api/projects/:projectId/rank-tracking/website-keywords', async (req, r
       } else if (parts.length === 1 && brandIndexes.has(parts[0])) {
         continue; // brand index page
       } else {
-        // Service page
-        const name = path.replace(/services?\//g, '').replace(/-/g, ' ')
-          .replace(/\b(in|services?|perth)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+        // Service page — clean slug to human-readable name
+        let name = path.replace(/services?\//g, '').replace(/-/g, ' ')
+          .replace(/\b(in|services?)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+        // Strip location suffixes using project location (brisbane, north brisbane, south perth, etc.)
+        const cityWord = (p.location || '').toLowerCase().split(/[\s,]+/).find(w => ['brisbane','perth','melbourne','sydney','adelaide','hobart','darwin','canberra','gold coast'].includes(w)) || '';
+        if (cityWord) name = name.replace(new RegExp('\\b(north|south|east|west|inner|outer|greater)?\\s*' + cityWord + '\\b', 'gi'), '').trim();
+        // Also strip all suburb names from the service name (catches "plumber kedron" → "plumber")
+        for (const sub of suburbs) {
+          const subLower = sub.toLowerCase().trim();
+          if (subLower.length > 2) name = name.replace(new RegExp('\\b' + subLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '').trim();
+        }
+        // Remove trailing numbers (duplicate pages like "2", "3") and title case
+        name = name.replace(/\s+\d+$/, '').replace(/\s{2,}/g, ' ').trim();
+        name = name.replace(/\b\w/g, c => c.toUpperCase());
         if (name.length > 2) servicePages.push({ slug: path, name });
       }
     }
 
-    console.log(`[website-keywords] ${domain}: ${servicePages.length} services, ${brandPages.length} brands, ${suburbs.length} suburbs`);
-    res.json({ services: servicePages, brands: brandPages, suburbs });
+    // Deduplicate services (after location stripping, "toilet repair brisbane" and "toilet repair north brisbane" both become "toilet repair")
+    const seenServiceNames = new Set();
+    const dedupedServices = [];
+    for (const svc of servicePages) {
+      const key = svc.name.toLowerCase().trim();
+      if (!seenServiceNames.has(key)) {
+        seenServiceNames.add(key);
+        dedupedServices.push(svc);
+      }
+    }
+
+    console.log(`[website-keywords] ${domain}: ${dedupedServices.length} services (${servicePages.length} before dedup), ${brandPages.length} brands, ${suburbs.length} suburbs`);
+    res.json({ services: dedupedServices, brands: brandPages, suburbs });
   } catch (e) {
     console.error('[website-keywords] Error:', e.message);
     res.status(500).json({ error: e.message });
