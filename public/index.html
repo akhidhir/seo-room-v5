@@ -22546,7 +22546,7 @@
             return <LocalIntelPage project={project} onNavigate={(tab) => setActiveTab(tab)} />;
           case 'gbp-audit':
           case 'gbp-audit-internal':
-            return <InternalGBPAuditPage project={project} />;
+            setActiveTab('local-intel'); return null;
           case 'gbp-audit-external':
             return <ExternalGBPAuditPage project={project} section="full" setActiveTab={setActiveTab} />;
           case 'gsc-audit':
