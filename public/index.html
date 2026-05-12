@@ -4488,27 +4488,27 @@
               </div>
 
               {/* Summary stat boxes */}
-              <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#3b82f608', border: '1px solid #3b82f620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#3b82f6' }}>{services.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Services</div>
+              <div style={{ display: 'grid', gridTemplateColumns: gbpOnlyServices.length > 0 ? 'repeat(5, 1fr)' : 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
+                <div style={{ padding: '20px 16px', borderRadius: 14, background: '#3b82f60a', border: '2px solid #3b82f625', textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: '#3b82f6', lineHeight: 1.1 }}>{services.length}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>Services</div>
                 </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#8b5cf608', border: '1px solid #8b5cf620', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#8b5cf6' }}>{products.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Products</div>
+                <div style={{ padding: '20px 16px', borderRadius: 14, background: '#8b5cf60a', border: '2px solid #8b5cf625', textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: '#8b5cf6', lineHeight: 1.1 }}>{products.length}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>Products</div>
                 </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' }}>{servicesWithSuburbPages}/{services.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Suburb Pages</div>
+                <div style={{ padding: '20px 16px', borderRadius: 14, background: servicesWithSuburbPages === services.length ? '#22c55e0a' : '#ef44440a', border: `2px solid ${servicesWithSuburbPages === services.length ? '#22c55e25' : '#ef444425'}`, textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{servicesWithSuburbPages}/{services.length}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>Suburb Pages</div>
                 </div>
-                <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' }}>{servicesInGbp + productsInGbp}/{services.length + products.length}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>In GBP</div>
+                <div style={{ padding: '20px 16px', borderRadius: 14, background: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e0a' : '#f59e0b0a', border: `2px solid ${(servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e25' : '#f59e0b25'}`, textAlign: 'center' }}>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b', lineHeight: 1.1 }}>{servicesInGbp + productsInGbp}/{services.length + products.length}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>In GBP</div>
                 </div>
                 {gbpOnlyServices.length > 0 && (
-                  <div style={{ flex: 1, padding: '16px', borderRadius: 12, background: '#f59e0b08', border: '1px solid #f59e0b20', textAlign: 'center' }}>
-                    <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b' }}>{gbpOnlyServices.length}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>GBP Only</div>
+                  <div style={{ padding: '20px 16px', borderRadius: 14, background: '#f59e0b0a', border: '2px solid #f59e0b25', textAlign: 'center' }}>
+                    <div style={{ fontSize: 40, fontWeight: 800, color: '#f59e0b', lineHeight: 1.1 }}>{gbpOnlyServices.length}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>GBP Only</div>
                   </div>
                 )}
               </div>
@@ -4579,25 +4579,33 @@
                     These items appear in your Google Business Profile but don't match any service or product you've defined above. Consider adding relevant ones as services/products, or ignore if they're GBP auto-generated entries.
                   </div>
                   {gbpCats.length > 0 && (
-                    <div style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Categories ({gbpCats.length})</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 }}>Categories ({gbpCats.length})</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {gbpCats.map((cat, i) => (
-                          <span key={i} style={{ padding: '4px 10px', borderRadius: 6, background: '#6366f110', border: '1px solid #6366f125', fontSize: 12, color: '#818cf8', fontWeight: 600 }}>{cat}</span>
+                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#6366f110', border: '1px solid #6366f125', fontSize: 13, color: '#818cf8', fontWeight: 600 }}>{cat}</span>
                         ))}
                       </div>
                     </div>
                   )}
                   {pureServices.length > 0 && (
-                    <div style={{ marginBottom: longItems.length > 0 ? 12 : 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Services ({pureServices.length})</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    <div style={{ marginBottom: longItems.length > 0 ? 14 : 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        Services ({pureServices.length})
+                        <span style={{ fontSize: 11, fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--text3)' }}>— click to add as service</span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                         {displayServices.map((gs, i) => (
-                          <span key={i} style={{ padding: '4px 10px', borderRadius: 6, background: '#f59e0b08', border: '1px solid #f59e0b18', fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>{gs}</span>
+                          <button key={i} onClick={() => { if (confirm(`Add "${gs}" as a service?`)) addOffering(gs, 'service'); }}
+                            style={{ padding: '6px 14px', borderRadius: 8, background: '#f59e0b08', border: '1px solid #f59e0b20', fontSize: 13, color: '#f59e0b', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f59e0b18'; e.currentTarget.style.borderColor = '#f59e0b40'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = '#f59e0b08'; e.currentTarget.style.borderColor = '#f59e0b20'; }}>
+                            <i className="fas fa-plus" style={{ fontSize: 9 }} />{gs}
+                          </button>
                         ))}
                       </div>
                       {pureServices.length > SHOW_LIMIT && (
-                        <button onClick={() => setShowAllGbpOnly(!showAllGbpOnly)} style={{ marginTop: 8, background: 'none', border: '1px solid #f59e0b25', borderRadius: 6, padding: '4px 12px', fontSize: 12, color: '#f59e0b', cursor: 'pointer', fontWeight: 600 }}>
+                        <button onClick={() => setShowAllGbpOnly(!showAllGbpOnly)} style={{ marginTop: 10, background: 'none', border: '1px solid #f59e0b25', borderRadius: 8, padding: '6px 14px', fontSize: 13, color: '#f59e0b', cursor: 'pointer', fontWeight: 600 }}>
                           {showAllGbpOnly ? 'Show less' : `Show all ${pureServices.length} services`}
                         </button>
                       )}
