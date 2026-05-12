@@ -3588,6 +3588,7 @@
       const [editingService, setEditingService] = useState(null);
       const [expandedKpi, setExpandedKpi] = useState(null); // 'business' | 'service' | 'suburb'
       const [showAllGbpOnly, setShowAllGbpOnly] = useState(false);
+      const [activeBizTab, setActiveBizTab] = useState('profile'); // 'profile' | 'posts' | 'citations' | 'reviews' | 'audit'
       const [activeSvcTab, setActiveSvcTab] = useState('services'); // 'services' | 'products'
       const [activeLocTab, setActiveLocTab] = useState('pages'); // 'pages' | 'indexed' | 'gbp' | 'reviews'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
@@ -3913,8 +3914,30 @@
                 <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
               </div>
 
+              {/* Summary stat boxes — clickable tabs */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+                {[
+                  { key: 'profile', label: 'Profile', value: `${gbpC.filledCount || 0}/${gbpC.totalFields || 9}`, color: gbpComplete ? '#22c55e' : '#ef4444' },
+                  { key: 'posts', label: 'Posts', value: `${s.gbpPostsThisMonth || 0}/3`, color: (s.gbpPostsThisMonth || 0) >= 3 ? '#22c55e' : '#ef4444' },
+                  { key: 'citations', label: 'Citations', value: `${directoryList.filter(d => d.listed).length}/${directoryList.length}`, color: directoryList.filter(d => d.listed).length >= 15 ? '#22c55e' : '#f59e0b' },
+                  { key: 'reviews', label: 'Reviews', value: myReviews, color: beating ? '#22c55e' : '#f59e0b' },
+                  { key: 'audit', label: 'Audit', value: gbpFindings.length > 0 ? gbpFindings.length : '—', color: gbpFindings.filter(f => (f.severity || '').toLowerCase() === 'critical').length > 0 ? '#ef4444' : gbpFindings.length > 0 ? '#f59e0b' : '#64748b' },
+                ].map((box) => {
+                  const isActive = activeBizTab === box.key;
+                  return (
+                  <div key={box.key} onClick={() => setActiveBizTab(box.key)}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = `${box.color}40`; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = isActive ? '1' : '0.5'; e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; }}>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
+                  </div>
+                  );
+                })}
+              </div>
+
               {/* ── GBP PROFILE ── */}
-              <KpiItem itemKey="gbp-profile" icon="id-card" iconColor="#8b5cf6"
+              {activeBizTab === 'profile' && <KpiItem itemKey="gbp-profile" icon="id-card" iconColor="#8b5cf6"
                 title="GBP Profile Completeness"
                 subtitle={`All ${gbpC.totalFields || 9} fields must be filled for maximum visibility`}
                 badge={`${gbpC.filledCount || 0}/${gbpC.totalFields || 9}`}
@@ -3949,10 +3972,10 @@
                     );
                   })}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── GBP AUDIT CHECKS (Google ranking factors) ── */}
-              {gbpAuditChecks.length > 0 && (() => {
+              {activeBizTab === 'profile' && gbpAuditChecks.length > 0 && (() => {
                 const criticals = gbpAuditChecks.filter(c => c.status === 'critical');
                 const warnings = gbpAuditChecks.filter(c => c.status === 'warning');
                 const passed = gbpAuditChecks.filter(c => c.status === 'pass');
@@ -4006,7 +4029,7 @@
               })()}
 
               {/* ── GBP CATEGORIES ── */}
-              <KpiItem itemKey="gbp-cats" icon="tags" iconColor="#f59e0b"
+              {activeBizTab === 'profile' && <KpiItem itemKey="gbp-cats" icon="tags" iconColor="#f59e0b"
                 title="GBP Categories"
                 subtitle={gbpC.primaryCategory ? `Primary: ${gbpC.primaryCategory}` : 'No categories set'}
                 badge={`${gbpC.categoriesCount || 0}`}
@@ -4034,10 +4057,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── GBP POSTS ── */}
-              <KpiItem itemKey="gbp-posts" icon="pen-square" iconColor="#3b82f6"
+              {activeBizTab === 'posts' && <KpiItem itemKey="gbp-posts" icon="pen-square" iconColor="#3b82f6"
                 title="GBP Posts"
                 subtitle={(s.gbpPostsThisMonth || 0) >= 3 ? 'On track — keep posting regularly' : `Need ${3 - (s.gbpPostsThisMonth || 0)} more posts this month`}
                 badge={`${s.gbpPostsThisMonth || 0}/3 this month`}
@@ -4062,10 +4085,10 @@
                     </button>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── CITATIONS / DIRECTORIES ── */}
-              <KpiItem itemKey="citations" icon="building" iconColor="#06b6d4"
+              {activeBizTab === 'citations' && <KpiItem itemKey="citations" icon="building" iconColor="#06b6d4"
                 title="Citations & Directories"
                 subtitle={notCheckedDirs.length === directoryList.length ? 'Run a citation scan to check listings' : `Listed in ${listedDirs.length} of ${directoryList.length - notCheckedDirs.length} checked directories${notCheckedDirs.length > 0 ? ` (${notCheckedDirs.length} not checked)` : ''}`}
                 badge={notCheckedDirs.length === directoryList.length ? '—' : `${listedDirs.length}/${directoryList.length - notCheckedDirs.length}`}
@@ -4115,10 +4138,10 @@
                     </div>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── REVIEWS vs COMPETITION ── */}
-              <KpiItem itemKey="biz-reviews" icon="star" iconColor="#f97316"
+              {activeBizTab === 'reviews' && <KpiItem itemKey="biz-reviews" icon="star" iconColor="#f97316"
                 title="Reviews vs Competition"
                 subtitle={compB.topCompetitorName ? `#1 threat: ${compB.topCompetitorName} (${compB.topCompetitorReviews} reviews)` : 'Run a grid scan to discover competitors'}
                 badge={beating ? 'Winning' : reviewGap != null ? `Need ${reviewGap}` : `${myReviews}`}
@@ -4173,7 +4196,7 @@
               </KpiItem>
 
               {/* ── RATING ── */}
-              <KpiItem itemKey="biz-rating" icon="star-half-alt" iconColor="#eab308"
+              {activeBizTab === 'reviews' && <KpiItem itemKey="biz-rating" icon="star-half-alt" iconColor="#eab308"
                 title="Rating vs Competition"
                 subtitle={myRating >= 4.8 ? 'Excellent — above 4.8★ threshold' : `Below 4.8★ — needs improvement`}
                 badge={`${myRating}★`}
@@ -4209,10 +4232,10 @@
                     </button>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── REVIEW REPLIES ── */}
-              <KpiItem itemKey="biz-replies" icon="reply-all" iconColor="#10b981"
+              {activeBizTab === 'reviews' && <KpiItem itemKey="biz-replies" icon="reply-all" iconColor="#10b981"
                 title="Review Reply Rate"
                 subtitle={replyRate >= 100 ? 'All reviews replied — excellent!' : `${unreplied} reviews need a reply`}
                 badge={`${replyRate}%`}
@@ -4248,10 +4271,10 @@
                     </button>
                   )}
                 </div>
-              </KpiItem>
+              </KpiItem>}
 
               {/* ── GBP INTERNAL AUDIT FINDINGS ── */}
-              {(() => {
+              {activeBizTab === 'audit' && (() => {
                 const critCount = gbpFindings.filter(f => (f.severity || '').toLowerCase() === 'critical').length;
                 const highCount = gbpFindings.filter(f => (f.severity || '').toLowerCase() === 'high').length;
                 const medCount = gbpFindings.filter(f => (f.severity || '').toLowerCase() === 'medium').length;
