@@ -10756,12 +10756,12 @@
               </p>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div style={{ display: 'flex', background: 'var(--bg2)', borderRadius: 8, padding: 2, marginRight: 8 }}>
-                <button onClick={() => setViewMode('list')} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'transparent', color: viewMode === 'list' ? '#fff' : 'var(--text3)', transition: 'all 0.2s' }}>
-                  <i className="fas fa-list" style={{ marginRight: 5 }} />List
+              <div style={{ display: 'flex', background: 'var(--bg2)', borderRadius: 10, padding: 3, marginRight: 10, border: '1px solid var(--border)' }}>
+                <button onClick={() => setViewMode('list')} style={{ padding: '10px 22px', borderRadius: 8, fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'transparent', color: viewMode === 'list' ? '#fff' : 'var(--text1)', transition: 'all 0.2s', letterSpacing: '0.3px' }}>
+                  <i className="fas fa-list" style={{ marginRight: 7 }} />List
                 </button>
-                <button onClick={() => setViewMode('calendar')} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? '#fff' : 'var(--text3)', transition: 'all 0.2s' }}>
-                  <i className="fas fa-calendar-alt" style={{ marginRight: 5 }} />Calendar
+                <button onClick={() => setViewMode('calendar')} style={{ padding: '10px 22px', borderRadius: 8, fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? '#fff' : 'var(--text1)', transition: 'all 0.2s', letterSpacing: '0.3px' }}>
+                  <i className="fas fa-calendar-alt" style={{ marginRight: 7 }} />Calendar
                 </button>
               </div>
               <button className="btn" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text1)' }}>
