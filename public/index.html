@@ -18795,20 +18795,24 @@
         const totalCalls = mapKws.length * gridSize * gridSize;
         if (!confirm(`Grid scan ${mapKws.length} keyword${mapKws.length > 1 ? 's' : ''} × ${gridSize}×${gridSize} grid = ${totalCalls} SerpAPI calls.\n\nEstimated cost: ~$${(totalCalls * 0.005).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
         setSyncing(true);
-        setScanProgress(`Scanning 0/${mapKws.length} keywords...`);
-        try {
-          const kwIds = mapKws.map(k => k.id);
-          const r = await api(`/projects/${project.id}/maps/grid-scan`, {
-            method: 'POST',
-            body: { grid_size: gridSize, radius_km: gridRadius, keyword_ids: kwIds }
-          });
-          if (r.ok && r.results) {
-            const scanMap = { ...gridScans };
-            r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
-            setGridScans(scanMap);
-            await loadData();
-          } else if (r.error) alert(r.error);
-        } catch (e) { alert(e.message); }
+        const scanMap = { ...gridScans };
+        let failed = 0;
+        // Scan one keyword at a time to avoid timeout
+        for (let i = 0; i < mapKws.length; i++) {
+          setScanProgress(`Scanning ${i + 1}/${mapKws.length}: ${mapKws[i].keyword} ${mapKws[i].location || ''}...`);
+          try {
+            const r = await api(`/projects/${project.id}/maps/grid-scan`, {
+              method: 'POST',
+              body: { grid_size: gridSize, radius_km: gridRadius, keyword_ids: [mapKws[i].id] }
+            });
+            if (r.ok && r.results) {
+              r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
+              setGridScans({ ...scanMap });
+            } else if (r.error) { console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++; }
+          } catch (e) { console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++; }
+        }
+        if (failed > 0) alert(`${failed} of ${mapKws.length} keywords failed to scan. Check console for details.`);
+        await loadData();
         setSyncing(false);
         setScanProgress('');
         setMapsChecked(true);
