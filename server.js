@@ -430,6 +430,9 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_slugs JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS defined_services JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS defined_products JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_ai_budget NUMERIC DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_hours NUMERIC DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -1265,14 +1268,14 @@ app.get('/api/projects', async (req, res) => {
 
 // Create project
 app.post('/api/projects', async (req, res) => {
-  const { name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url } = req.body;
+  const { name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url, monthly_fee, monthly_ai_budget, monthly_hours } = req.body;
   if (!name || !domain) return res.status(400).json({ error: 'Name and domain required' });
   try {
     const result = await pool.query(
-      `INSERT INTO projects (user_id, name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO projects (user_id, name, domain, business_name, industry, location, competitors, is_local_business, is_elementor_site, wordpress_url, monthly_fee, monthly_ai_budget, monthly_hours)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
-      [req.auth.userId, name, domain, business_name || null, industry || null, location || null, competitors || [], is_local_business !== false, is_elementor_site !== false, wordpress_url || null]
+      [req.auth.userId, name, domain, business_name || null, industry || null, location || null, competitors || [], is_local_business !== false, is_elementor_site !== false, wordpress_url || null, parseFloat(monthly_fee) || 0, parseFloat(monthly_ai_budget) || 0, parseFloat(monthly_hours) || 0]
     );
     res.status(201).json({ project: result.rows[0] });
   } catch (e) {
@@ -1335,6 +1338,9 @@ app.put('/api/projects/:id', async (req, res) => {
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
   const defined_products = b.defined_products;
+  const monthly_ai_budget = b.monthly_ai_budget;
+  const monthly_hours = b.monthly_hours;
+  const monthly_fee = b.monthly_fee;
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -1368,7 +1374,10 @@ app.put('/api/projects/:id', async (req, res) => {
            phone=COALESCE($33, phone),
            product_slugs=COALESCE($34::jsonb, product_slugs),
            defined_services=COALESCE($35::jsonb, defined_services),
-           defined_products=COALESCE($36::jsonb, defined_products)
+           defined_products=COALESCE($36::jsonb, defined_products),
+           monthly_ai_budget=COALESCE($37, monthly_ai_budget),
+           monthly_hours=COALESCE($38, monthly_hours),
+           monthly_fee=COALESCE($39, monthly_fee)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1388,7 +1397,10 @@ app.put('/api/projects/:id', async (req, res) => {
        clarity_project_id || null, clarity_api_token || null, phone || null,
        product_slugs ? JSON.stringify(product_slugs) : null,
        defined_services ? JSON.stringify(defined_services) : null,
-       defined_products ? JSON.stringify(defined_products) : null]
+       defined_products ? JSON.stringify(defined_products) : null,
+       monthly_ai_budget !== undefined ? parseFloat(monthly_ai_budget) || null : null,
+       monthly_hours !== undefined ? parseFloat(monthly_hours) || null : null,
+       monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
