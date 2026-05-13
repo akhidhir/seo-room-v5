@@ -19192,7 +19192,35 @@ app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
       WHERE project_id=$1
       ORDER BY keyword, location, scanned_at DESC
     `, [req.params.projectId]);
-    res.json(rows);
+
+    // Get previous scan per keyword (oldest scan older than 7 days for comparison)
+    const { rows: prevRows } = await pool.query(`
+      SELECT DISTINCT ON (keyword, location) keyword, location, arp AS prev_arp, atrp AS prev_atrp, solv AS prev_solv, found_in AS prev_found_in, data_points AS prev_data_points, scanned_at AS prev_scanned_at
+      FROM grid_scans
+      WHERE project_id=$1 AND scanned_at < NOW() - INTERVAL '7 days'
+      ORDER BY keyword, location, scanned_at ASC
+    `, [req.params.projectId]);
+
+    const prevMap = {};
+    for (const p of prevRows) {
+      prevMap[`${p.keyword.toLowerCase()}|||${p.location || ''}`] = p;
+    }
+
+    const merged = rows.map(r => {
+      const prev = prevMap[`${r.keyword.toLowerCase()}|||${r.location || ''}`];
+      const arpChange = (r.arp != null && prev?.prev_arp != null) ? Math.round((prev.prev_arp - r.arp) * 10) / 10 : null;
+      const solvChange = (r.solv != null && prev?.prev_solv != null) ? Math.round((r.solv - prev.prev_solv) * 10) / 10 : null;
+      return {
+        ...r,
+        prev_arp: prev?.prev_arp ?? null,
+        prev_solv: prev?.prev_solv ?? null,
+        prev_scanned_at: prev?.prev_scanned_at ?? null,
+        arp_change: arpChange,
+        solv_change: solvChange,
+      };
+    });
+
+    res.json(merged);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -19425,6 +19453,7 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
 // Get latest rankings for a project
 app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
   try {
+    // Get latest rank per keyword
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.maps_rating, rt.maps_reviews, rt.competitors, rt.checked_at,
              g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
@@ -19433,7 +19462,37 @@ app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
       WHERE rt.project_id=$1
       ORDER BY rt.keyword, rt.location, rt.checked_at DESC
     `, [req.params.projectId]);
-    res.json(rows);
+
+    // Get previous rank per keyword (oldest record from 25-35 days ago, or the second-oldest if no 30-day data)
+    const { rows: prevRows } = await pool.query(`
+      SELECT DISTINCT ON (keyword, location) keyword, location, serp_position AS prev_serp, maps_position AS prev_maps, checked_at AS prev_checked_at
+      FROM rank_tracking
+      WHERE project_id=$1 AND checked_at < NOW() - INTERVAL '7 days'
+      ORDER BY keyword, location, checked_at ASC
+    `, [req.params.projectId]);
+
+    // Build lookup for previous ranks
+    const prevMap = {};
+    for (const p of prevRows) {
+      prevMap[`${p.keyword.toLowerCase()}|||${p.location || ''}`] = p;
+    }
+
+    // Merge previous ranks into latest
+    const merged = rows.map(r => {
+      const prev = prevMap[`${r.keyword.toLowerCase()}|||${r.location || ''}`];
+      const serpChange = (r.serp_position != null && prev?.prev_serp != null) ? prev.prev_serp - r.serp_position : null;
+      const mapsChange = (r.maps_position != null && prev?.prev_maps != null) ? prev.prev_maps - r.maps_position : null;
+      return {
+        ...r,
+        prev_serp: prev?.prev_serp ?? null,
+        prev_maps: prev?.prev_maps ?? null,
+        prev_checked_at: prev?.prev_checked_at ?? null,
+        serp_change: serpChange,
+        maps_change: mapsChange,
+      };
+    });
+
+    res.json(merged);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

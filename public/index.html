@@ -17703,6 +17703,17 @@
     // ============ RANK TRACKING HELPERS ============
     const posColor = (pos, checked) => !pos ? (checked ? '#ef4444' : 'var(--text3)') : pos <= 3 ? '#22c55e' : pos <= 10 ? '#3b82f6' : pos <= 20 ? '#f59e0b' : '#ef4444';
     const posLabel = (pos, checked) => pos ? `#${pos}` : (checked ? '>100' : '—');
+    // Rank change badge: positive = improved (green ▲), negative = dropped (red ▼), 0 = no change (gray —)
+    const RankChangeBadge = ({ change }) => {
+      if (change == null) return null;
+      if (change === 0) return React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', marginLeft: 4 } }, '—');
+      const up = change > 0;
+      return React.createElement('span', {
+        style: { display: 'inline-flex', alignItems: 'center', gap: 2, marginLeft: 5, fontSize: 11, fontWeight: 700,
+          color: up ? '#22c55e' : '#ef4444', background: up ? '#22c55e12' : '#ef444412',
+          padding: '1px 6px', borderRadius: 4, verticalAlign: 'middle' }
+      }, React.createElement('i', { className: up ? 'fas fa-caret-up' : 'fas fa-caret-down', style: { fontSize: 12 } }), Math.abs(change));
+    };
 
     function useRankData(project) {
       const [keywords, setKeywords] = useState([]);
@@ -18172,6 +18183,7 @@
                         </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                           <span style={{ color: posColor(kw.serp_position, kw.checked_at), fontWeight: 800, fontSize: kw.serp_position ? 18 : 15 }}>{posLabel(kw.serp_position, kw.checked_at)}</span>
+                          <RankChangeBadge change={kw.serp_change} />
                         </td>
                         <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--accent)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : '—'}
@@ -19470,8 +19482,11 @@
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                         {hasData && arp ? (
-                          <span style={{ color: arp <= 3 ? '#22c55e' : arp <= 10 ? '#3b82f6' : arp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
-                            {arp.toFixed(1)}
+                          <span>
+                            <span style={{ color: arp <= 3 ? '#22c55e' : arp <= 10 ? '#3b82f6' : arp <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
+                              {arp.toFixed(1)}
+                            </span>
+                            {g.arp_change != null && g.arp_change !== 0 && <RankChangeBadge change={Math.round(g.arp_change)} />}
                           </span>
                         ) : hasData ? <span style={{ color: '#ef4444', fontWeight: 700 }}>20+</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
@@ -19484,8 +19499,15 @@
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                         {hasData && solv !== undefined ? (
-                          <span style={{ color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
-                            {solv.toFixed(0)}%
+                          <span>
+                            <span style={{ color: solv >= 50 ? '#22c55e' : solv >= 20 ? '#3b82f6' : solv > 0 ? '#f59e0b' : '#ef4444', fontWeight: 700, fontSize: 15 }}>
+                              {solv.toFixed(0)}%
+                            </span>
+                            {g.solv_change != null && g.solv_change !== 0 && React.createElement('span', {
+                              style: { display: 'inline-flex', alignItems: 'center', gap: 2, marginLeft: 5, fontSize: 11, fontWeight: 700,
+                                color: g.solv_change > 0 ? '#22c55e' : '#ef4444', background: g.solv_change > 0 ? '#22c55e12' : '#ef444412',
+                                padding: '1px 6px', borderRadius: 4, verticalAlign: 'middle' }
+                            }, React.createElement('i', { className: g.solv_change > 0 ? 'fas fa-caret-up' : 'fas fa-caret-down', style: { fontSize: 12 } }), Math.abs(g.solv_change).toFixed(0) + '%')}
                           </span>
                         ) : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
