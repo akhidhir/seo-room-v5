@@ -10252,61 +10252,111 @@
       const renderEditModal = () => {
         if (!editItem) return null;
         const sev = (editItem.severity || 'medium').toLowerCase();
+        const pillar = (editItem.pillar || '').toLowerCase();
+        const pillarLabel = { gbp: 'GBP', gbp_internal: 'GBP', gsc: 'GSC', technical: 'Technical', onpage: 'On-Page', speed: 'Speed' }[pillar] || pillar;
+        const pillarIcon = { gbp: 'map-marker-alt', gbp_internal: 'map-marker-alt', gsc: 'chart-line', technical: 'cogs', onpage: 'file-alt', speed: 'tachometer-alt' }[pillar] || 'tasks';
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={() => setEditItem(null)}>
-            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: 14, padding: 24, width: 480, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-edit" style={{ color: 'var(--accent)' }} /> Edit Task
-                </h3>
-                <button onClick={() => setEditItem(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}><i className="fas fa-times" /></button>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: 16, padding: 28, width: 600, maxHeight: '85vh', overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.4)', borderLeft: `5px solid ${sevColors[sev] || '#6366f1'}` }}>
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <span style={{ padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: sevBg[sev] || '#6366f112', color: sevColors[sev] || '#6366f1', textTransform: 'uppercase' }}>{sev}</span>
+                    {pillarLabel && <span style={{ padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: (pillarColors[pillar] || '#6366f1') + '18', color: pillarColors[pillar] || '#6366f1' }}><i className={`fas fa-${pillarIcon}`} style={{ marginRight: 5 }} />{pillarLabel}</span>}
+                    {editItem.execution_type && <span style={{ padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: editItem.execution_type === 'automated' ? '#22c55e18' : '#6366f118', color: editItem.execution_type === 'automated' ? '#22c55e' : '#6366f1' }}>{editItem.execution_type === 'automated' ? '⚡ Automated' : '✋ Manual'}</span>}
+                  </div>
+                  <h3 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: 'var(--text1)', lineHeight: 1.3 }}>{editItem.title}</h3>
+                </div>
+                <button onClick={() => setEditItem(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 4 }}><i className="fas fa-times" /></button>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>TITLE</label>
-                  <input value={editItem.title || ''} onChange={e => setEditItem(p => ({ ...p, title: e.target.value }))}
-                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+
+              {/* Description / Recommendation */}
+              {editItem.description && (
+                <div style={{ padding: 16, borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 8 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Recommendation</div>
+                  <div style={{ fontSize: 15, color: 'var(--text1)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{editItem.description}</div>
                 </div>
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>DESCRIPTION</label>
-                  <textarea value={editItem.description || ''} onChange={e => setEditItem(p => ({ ...p, description: e.target.value }))} rows={3}
-                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
+              )}
+
+              {/* Current vs Target */}
+              {(editItem.current_value || editItem.new_value) && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                  {editItem.current_value && (
+                    <div style={{ padding: 14, borderRadius: 12, background: '#ef444408', border: '1px solid #ef444420' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6 }}>Current</div>
+                      <div style={{ fontSize: 14, color: 'var(--text1)', lineHeight: 1.5, wordBreak: 'break-word' }}>{editItem.current_value}</div>
+                    </div>
+                  )}
+                  {editItem.new_value && (
+                    <div style={{ padding: 14, borderRadius: 12, background: '#22c55e08', border: '1px solid #22c55e20' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}>Target</div>
+                      <div style={{ fontSize: 14, color: 'var(--text1)', lineHeight: 1.5, wordBreak: 'break-word' }}>{editItem.new_value}</div>
+                    </div>
+                  )}
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>SEVERITY</label>
-                    <select value={editItem.severity || 'medium'} onChange={e => setEditItem(p => ({ ...p, severity: e.target.value }))}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
-                      <option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>STATUS</label>
-                    <select value={editItem.status || 'pending'} onChange={e => setEditItem(p => ({ ...p, status: e.target.value }))}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
-                      <option value="pending">Pending</option><option value="in-progress">In Progress</option><option value="done">Done</option>
-                    </select>
-                  </div>
+              )}
+
+              {/* How-to Steps */}
+              {editItem.how_to_steps && (
+                <div style={{ padding: 16, borderRadius: 12, background: '#6366f108', border: '1px solid #6366f120', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', marginBottom: 8 }}><i className="fas fa-list-ol" style={{ marginRight: 6 }} />How to Fix</div>
+                  <div style={{ fontSize: 14, color: 'var(--text1)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{editItem.how_to_steps}</div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+              )}
+
+              {/* Expected Impact */}
+              {editItem.expected_impact && (
+                <div style={{ padding: 12, borderRadius: 10, background: '#f59e0b08', border: '1px solid #f59e0b20', marginBottom: 16, fontSize: 14, color: 'var(--text1)' }}>
+                  <span style={{ fontWeight: 700, color: '#f59e0b' }}><i className="fas fa-chart-line" style={{ marginRight: 6 }} />Impact:</span> {editItem.expected_impact}
+                </div>
+              )}
+
+              {/* Schedule & Edit Fields */}
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)', marginBottom: 12, textTransform: 'uppercase' }}><i className="fas fa-sliders-h" style={{ marginRight: 6 }} />Schedule & Settings</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>DATE</label>
-                    <input type="date" value={editItem.scheduled_date?.split('T')[0] || ''} onChange={e => setEditItem(p => ({ ...p, scheduled_date: e.target.value }))}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>TITLE</label>
+                    <input value={editItem.title || ''} onChange={e => setEditItem(p => ({ ...p, title: e.target.value }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 14, boxSizing: 'border-box' }} />
                   </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOUR</label>
-                    <select value={editItem.scheduled_hour ?? 9} onChange={e => setEditItem(p => ({ ...p, scheduled_hour: parseInt(e.target.value) }))}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
-                      {Array.from({ length: 12 }, (_, i) => i + 7).map(h => <option key={h} value={h}>{h > 12 ? (h-12)+' PM' : h === 12 ? '12 PM' : h+' AM'}</option>)}
-                    </select>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>SEVERITY</label>
+                      <select value={editItem.severity || 'medium'} onChange={e => setEditItem(p => ({ ...p, severity: e.target.value }))}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                        <option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>STATUS</label>
+                      <select value={editItem.status || 'pending'} onChange={e => setEditItem(p => ({ ...p, status: e.target.value }))}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                        <option value="pending">Pending</option><option value="in-progress">In Progress</option><option value="done">Done</option>
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOURS</label>
-                    <input type="number" step="0.25" min="0.25" max="8" value={editItem.estimated_hours || 0.5}
-                      onChange={e => setEditItem(p => ({ ...p, estimated_hours: parseFloat(e.target.value) }))}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>DATE</label>
+                      <input type="date" value={editItem.scheduled_date?.split('T')[0] || ''} onChange={e => setEditItem(p => ({ ...p, scheduled_date: e.target.value }))}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOUR</label>
+                      <select value={editItem.scheduled_hour ?? 9} onChange={e => setEditItem(p => ({ ...p, scheduled_hour: parseInt(e.target.value) }))}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                        {Array.from({ length: 12 }, (_, i) => i + 7).map(h => <option key={h} value={h}>{h > 12 ? (h-12)+' PM' : h === 12 ? '12 PM' : h+' AM'}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOURS</label>
+                      <input type="number" step="0.25" min="0.25" max="8" value={editItem.estimated_hours || 0.5}
+                        onChange={e => setEditItem(p => ({ ...p, estimated_hours: parseFloat(e.target.value) }))}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                    </div>
                   </div>
                 </div>
               </div>
