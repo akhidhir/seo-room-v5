@@ -18403,19 +18403,45 @@
                                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                                     {a.content_recommendations.title_suggestion && (
                                       <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', gridColumn: '1 / -1' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-heading" style={{ marginRight: 6 }} />Suggested Title Tag</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-heading" style={{ marginRight: 6 }} />Suggested Title Tag</div>
+                                          <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: 'Update title tag to: ' + a.content_recommendations.title_suggestion, fix: 'Change the page title tag to the suggested version for better SERP visibility', category: 'On-Page', impact: 'high' }, 'title')}
+                                            disabled={sentToActionPlan[`${kw.keyword}::title`]}
+                                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::title`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::title`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::title`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::title`] ? 'default' : 'pointer' }}>
+                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::title`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
+                                            {sentToActionPlan[`${kw.keyword}::title`] ? 'Sent' : 'Send to Action Plan'}
+                                          </button>
+                                        </div>
                                         <div style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600, padding: '10px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px dashed rgba(34,197,94,0.3)' }}>{a.content_recommendations.title_suggestion}</div>
                                       </div>
                                     )}
                                     {a.content_recommendations.meta_suggestion && (
                                       <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', gridColumn: '1 / -1' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-align-left" style={{ marginRight: 6 }} />Suggested Meta Description</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-align-left" style={{ marginRight: 6 }} />Suggested Meta Description</div>
+                                          <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: 'Update meta description to: ' + a.content_recommendations.meta_suggestion, fix: 'Change the page meta description to the suggested version for better CTR', category: 'On-Page', impact: 'medium' }, 'meta')}
+                                            disabled={sentToActionPlan[`${kw.keyword}::meta`]}
+                                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::meta`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::meta`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::meta`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::meta`] ? 'default' : 'pointer' }}>
+                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::meta`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
+                                            {sentToActionPlan[`${kw.keyword}::meta`] ? 'Sent' : 'Send to Action Plan'}
+                                          </button>
+                                        </div>
                                         <div style={{ fontSize: 14, color: 'var(--text2)', padding: '10px 14px', background: 'rgba(59,130,246,0.06)', borderRadius: 8, border: '1px dashed rgba(59,130,246,0.3)', lineHeight: 1.6 }}>{a.content_recommendations.meta_suggestion}</div>
                                       </div>
                                     )}
                                     {a.content_recommendations.target_word_count && (
                                       <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-text-width" style={{ marginRight: 6 }} />Target Word Count</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-text-width" style={{ marginRight: 6 }} />Target Word Count</div>
+                                          {ar.userPage?.wordCount < a.content_recommendations.target_word_count && (
+                                            <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: `Increase word count from ${ar.userPage?.wordCount || '?'} to ${a.content_recommendations.target_word_count} words`, fix: `Add ${a.content_recommendations.target_word_count - (ar.userPage?.wordCount || 0)} more words of quality content covering missing topics`, category: 'Content', impact: 'high' }, 'wordcount')}
+                                              disabled={sentToActionPlan[`${kw.keyword}::wordcount`]}
+                                              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::wordcount`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::wordcount`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::wordcount`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::wordcount`] ? 'default' : 'pointer' }}>
+                                              <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::wordcount`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
+                                              {sentToActionPlan[`${kw.keyword}::wordcount`] ? 'Sent' : 'Send to Action Plan'}
+                                            </button>
+                                          )}
+                                        </div>
                                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                                           <span style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent)' }}>{a.content_recommendations.target_word_count.toLocaleString()}</span>
                                           <span style={{ fontSize: 13, color: 'var(--text3)' }}>words (yours: {ar.userPage?.wordCount?.toLocaleString() || '?'})</span>
@@ -18429,12 +18455,18 @@
                                     )}
                                     {a.content_recommendations.missing_topics && a.content_recommendations.missing_topics.length > 0 && (
                                       <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#ec4899', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}><i className="fa-solid fa-puzzle-piece" style={{ marginRight: 6 }} />Missing Topics</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#ec4899', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-puzzle-piece" style={{ marginRight: 6 }} />Missing Topics</div>
+                                        </div>
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                          {a.content_recommendations.missing_topics.map((t, i) => (
-                                            <span key={i} style={{ fontSize: 12, padding: '5px 12px', borderRadius: 20, background: 'rgba(236,72,153,0.08)', color: '#ec4899', fontWeight: 600, border: '1px solid rgba(236,72,153,0.15)' }}>{t}</span>
+                                          {a.content_recommendations.missing_topics.map((t, ti) => (
+                                            <span key={ti} onClick={() => { if (!sentToActionPlan[`${kw.keyword}::topic_${ti}`]) sendGapToActionPlan(kw.keyword, { issue: `Add missing topic: ${t}`, fix: `Create a section or expand existing content to cover: ${t}`, category: 'Content', impact: 'medium' }, `topic_${ti}`); }}
+                                              style={{ fontSize: 12, padding: '5px 12px', borderRadius: 20, background: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'rgba(34,197,94,0.08)' : 'rgba(236,72,153,0.08)', color: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? '#22c55e' : '#ec4899', fontWeight: 600, border: `1px solid ${sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'rgba(34,197,94,0.15)' : 'rgba(236,72,153,0.15)'}`, cursor: 'pointer', textDecoration: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'line-through' : 'none', opacity: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 0.6 : 1 }}>
+                                              {sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? '✓ ' : ''}{t}
+                                            </span>
                                           ))}
                                         </div>
+                                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8, fontStyle: 'italic' }}>Click a topic to send it to Action Plan</div>
                                       </div>
                                     )}
                                   </div>
