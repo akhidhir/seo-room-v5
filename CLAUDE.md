@@ -19,8 +19,8 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 ## Architecture
 
 - **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
-- **Single-file React**: `public/index.html` via Babel standalone (~7000+ lines)
-- **Server**: `server.js` (~6000+ lines)
+- **Single-file React**: `public/index.html` via Babel standalone (~24500+ lines)
+- **Server**: `server.js` (~23500+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
@@ -39,7 +39,7 @@ Sandbox can't git push. The workflow is:
 ## APIs & Integrations
 
 - **SerpAPI**: SERPAPI_KEY env var — used for rank tracking (SERP + Maps), GBP profile lookup, competitor analysis, **grid scanning** (replaces Local Falcon)
-- **Anthropic (Claude Haiku)**: ANTHROPIC_API_KEY — AI analysis for all audits (GBP, GSC, Technical). Model: claude-haiku-4-5-20251001
+- **Anthropic (Claude)**: ANTHROPIC_API_KEY — AI analysis for audits (GBP, GSC). Model: claude-haiku-4-5-20251001. Future: user-selectable model (Sonnet/Opus) per project.
 - **Google OAuth 2.0**: GSC + GBP connections (user-level via `user_integrations` table)
 - **Google Search Console API**: searchconsole.googleapis.com — URL Inspection for indexing checks, search analytics for GSC audit
 - **PageSpeed Insights API**: PAGESPEED_API_KEY — Core Web Vitals scoring per page (mobile). Batched 5-at-a-time for speed.
@@ -62,16 +62,28 @@ Sandbox can't git push. The workflow is:
   - **Internal Audit**: Database-stored GBP profile data
   - **External Audit**: AI-powered via SerpAPI + Haiku managed agent. Covers 3 pillars (Proximity, Relevance, Prominence), competitor gap analysis (top 5 competitors from maps data), citations/directories (25 Australian directories with metadata: free/paid, price, difficulty), reviews, photos. Sub-sections in sidebar. Category boxes in 2-column grid, collapsible with chevron + CRITICAL badge. Loading spinner overlay.
 - **GSC Audit** ✅ WORKING — AI-powered managed agent via OAuth + Haiku. Checks: Quick Wins (pos 4-20), Low CTR, Zero Clicks, Cannibalization, Underperforming Pages. Sub-sections in sidebar. Category boxes in 2-column grid.
-- **Website Audit** ✅ WORKING — AI-powered managed agent. Crawls pages, analyzes with Haiku. Sub-sections: Site Health, Crawlability, On-Page Issues, Content Quality, Core Web Vitals, Schema & Data, **PageSpeed Scores** (dedicated CWV page), Summary. Category boxes in 2-column grid.
-  - **PageSpeed Scores**: Dedicated sub-section under Website Audit. Runs Google PageSpeed Insights API on all discovered pages (up to 50 via sitemap index + sub-sitemaps or WP REST API). Shows sortable table with Performance Score (circular badge), LCP, FCP, CLS, TBT, Speed Index — all color-coded against Google's pass/fail thresholds. Parallel batches of 5 for speed. Results saved to DB for persistence.
+- **Website Audit** ✅ WORKING — **Dual system**: Rule-based technical audit engine (no AI cost) + AI agent analysis.
+  - **Rule-based engine** (`/audits/website/run`): Crawls up to 15 pages from sitemap. Checks: broken pages, HTTPS, redirects, robots.txt, sitemap, noindex, canonicals, meta titles/descriptions, H1s, duplicate titles, thin content, internal linking, Open Graph, schema, viewport. Saves findings to `audit_findings` table.
+  - **Fix buttons**: Green "Fix" button on auto-fixable findings (schema, canonical, noindex, mixed content, H1). "Review" button on manual-only issues. Fix detail view has "Fix Now" button with live status feedback.
+  - **Technical fix endpoint** (`/projects/:id/technical-fix`): 7 fix types via WordPress REST API:
+    1. **Schema** — Deterministic JSON-LD from RC profile data (LocalBusiness) or page content Q&A headings (FAQPage). Writes to `_seoroom_schema` post meta → rendered by SEO Room Schema plugin in `<head>`.
+    2. **Canonical** — Self-referencing canonical via Yoast `_yoast_wpseo_canonical`
+    3. **Noindex removal** — Clears via `_yoast_wpseo_meta_robots_noindex: '0'`
+    4. **Mixed content** — Search-replaces `http://domain` → `https://domain` in post content
+    5. **Missing H1** — Injects `<h1>` from page title into post content
+    6. **Open Graph** — Manual message (Yoast auto-generates)
+    7. **Viewport** — Manual message (theme header.php change)
+  - **PageSpeed Scores**: Dedicated sub-section. Runs Google PageSpeed Insights API on all discovered pages (up to 50). Sortable table with Performance Score (circular badge), LCP, FCP, CLS, TBT, Speed Index — color-coded. Parallel batches of 5. Results saved to DB.
+  - **Speed fixes**: Handled by BerqWP (automatic on all client sites, no API — fully automatic optimization). Dashboard handles content-level speed fixes only.
 - **On-Page Audit & Fix** ✅ WORKING — WordPress REST API + Yoast. Fetches all pages/posts, reads yoast_head_json for meta data. Analyzes word count, links, images. Shows table with SEO score dots, focus keyword, word count, links, issues. **AI Fix system**: select pages → AI suggests meta title/desc/focus keyword → preview modal with current (red) vs suggested (green) → apply to WordPress via Application Passwords. **Universal rollback** via `wp_change_history` table. Change History panel with per-change and per-page rollback.
 - **Indexing** ✅ WORKING — Dedicated page. Checks home + service + suburb pages via URL Inspection API. Table with status (color-coded badges), last crawl, mobile, robots. Expandable rows for not-indexed pages with "Why not indexed" explanation, fix steps, "Create Fix Action Item" button. **Results persist to DB** — loaded on mount, not lost on navigation.
 
 ### ACTION PLAN
-- **GBP Actions**, **GSC Actions**, **Website Actions**
-- Pillar mapping handles agent vs manual audit pillar names: `gbp` → `['gbp', 'gbp_external']`, `gsc` → `['gsc', 'gsc_agent']`, `website` → `['website', 'technical']`
-- Agent audit findings auto-extracted via `extractFindingsFromReport()` → saved to `audit_findings` as approved → auto-creates `action_items`
-- "Sync from Audit" button to backfill findings from existing completed audits
+- **Calendar view** ✅ WORKING — Month/Week/Day views with navigation arrows. Tasks color-coded by pillar. Auto-distribute endpoint assigns tasks across months based on monthly hours budget.
+- **List view** — Table with Finding, Severity, Details, Category, Status, Action columns. Filters by severity, status, search.
+- **Rankings-driven priority** (architectural decision): Maps Rankings + SERP Rankings are the PRIMARY source of action items for the Action Plan. Rankings determine severity (position-based, not AI-subjective). GBP, GSC, Website audits are read-only diagnostics — they inform but don't auto-push to Action Plan.
+- Pillar mapping: `gbp` → `['gbp', 'gbp_external']`, `gsc` → `['gsc', 'gsc_agent']`, `website` → `['website', 'technical']`
+- `action_items` table has scheduling columns: `scheduled_date`, `estimated_hours`, `assigned_to`
 
 ### COPYWRITER
 - Content Queue, Drafts, Approved, Published — ALL FAKE DATA. Needs real implementation.
@@ -186,32 +198,35 @@ const PILLAR_CATEGORIES = {
 
 ## Pending / Next Up (Priority Order)
 
-1. **Shared helper refactor** — CRITICAL technical debt. Extract duplicated logic into shared functions. Do incrementally (one function at a time, deploy, verify). No test suite so be careful. Best done during off-hours. Target functions:
-   - `resolvePageId(project, item)` — homepage WP page ID resolution (currently in `fetchLivePageContent`, `import-current`, `parse-sections`)
-   - `resolvePageUrl(project, item)` — URL normalization for homepage "/" handling (currently in 3+ server locations + 2 frontend locations)
-   - `getPageContent(project, pageUrl, pageId)` — single content fetching function combining WP REST + live HTML (currently duplicated in `fetchLivePageContent`, `import-current`, `optimise`, `generate-draft`)
-   - `loadItemIntoEditor(item)` — frontend: set editContent/editMeta/targetKeywords from item (currently duplicated in `handleSelectItem`, `handleApplyOptimise`, `handleItemUpdate`, `handleGenerateDraft`)
-2. **GBP fix automation** — Chrome extension executes approved GBP action items (update description, add categories, respond to reviews, create posts). Flow: audit → approve → extension executes.
-3. **Copywriter pages** — replace fake data with real content workflow connected to action items.
-4. **Ahrefs data ingestion** — port from v4 (handleAhrefsIngest + parseAhrefsFindings functions), store backlinks/referring domains for citation analysis in GBP audit.
-5. **DataForSEO integration** — for richer GBP profile data (description, hours, full reviews with responses). User has account. Better than SerpAPI for GBP details.
-6. **Build own SERP API** — future cost optimization, replace SerpAPI with direct Google scraping via proxies.
-7. **Grid scan history** — track position changes over time, show trend arrows in table.
-8. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
+1. **Update technical-fix endpoint** — Switch schema injection from post_content to `_seoroom_schema` meta field. Install seoroom-schema plugin on all client sites. Clean up old auto-fix routes (remove seoroom-helper dependency from Route 2/3).
+2. **Model selector** — Add AI model dropdown to Project Settings (Sonnet/Opus/Haiku). Currently hardcoded Haiku.
+3. **Remove "Sync from Audits" button** — Audits are diagnostic only, don't auto-push to Action Plan.
+4. **Monthly hours budget** — Settings field for monthly hours per project. Calendar auto-distributes tasks within budget.
+5. **Shared helper refactor** — Extract duplicated logic: `resolvePageId`, `resolvePageUrl`, `getPageContent`, `loadItemIntoEditor`. Do incrementally.
+6. **GBP fix automation** — Chrome extension executes approved GBP action items.
+7. **Copywriter pages** — replace fake data with real content workflow.
+8. **Ahrefs data ingestion** — port from v4.
+9. **DataForSEO integration** — richer GBP profile data.
+10. **Grid scan history** — track position changes over time.
+11. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
 ## Recent Changes (This Session)
 
-- **Preview (Design-Safe) button** — always shows green on all pages. Auto-parses sections on click if not yet parsed. Uses `sections_count` from list API as fallback for `page_sections`.
-- **Project switch reload** — `handleProjectSwitch` sets project to null briefly, clears cached audit reports, remounts all components fresh after 50ms.
-- **Reset button** — full wipe via `/content-queue/:id/reset` endpoint. Clears ALL fields: page_id, page_url, current_content, draft_content, meta, sections, wireframe, keywords, AI notes, comments. Returns item to queue stage.
-- **Discover URL** — always visible on all items (not just items without URLs). Saves both URL and WP `page_id` when picked from sitemap/WP REST. Button styled as subtle "Discover URL" link next to page URL.
-- **Import Current Copy** — always force-refreshes (`force: true`), never returns stale cache. Tries both WP REST API and live HTML fetch, uses whichever has more content.
-- **fetchLivePageContent** — now always tries live HTML fetch regardless of WP REST word count. Extracts content between `</header>` and `<footer>`. Falls back to `<main>`/`<article>` tags, then full body with chrome stripped.
-- **Homepage page_id resolution** — 3 methods: WP settings API (`page_on_front`), slug search (home/homepage/front-page), link matching (all pages, find domain root match). Also tries `discoverPages()`. Persists discovered page_id to DB.
-- **Late.dev GBP publishing** — endpoint fixed to `https://getlate.dev/api/v1/posts`, body `{content, platforms: [{platform: 'googlebusiness', accountId}], publishNow: true}`. Account ID: `69f9e327157a6202f6ce3b82`. Env var: `LATE_GBP_ACCOUNT_ID`.
-- **GBP audit accuracy** — SerpAPI Place Details call for exact review count, rating, photos, categories.
-- **Competitor analysis persistence** — saved to `competitor_analysis` JSONB column with accept/reject status per topic gap.
-- **Action Plan filters** — always shows all 4 types (Automated, Copywriter Current, Copywriter New, Manual) regardless of existing data.
+- **Action Plan Calendar** — Month/Week/Day views with navigation. Week view shows date range header ("May 11 — May 17, 2026"). Auto-distribute endpoint assigns tasks across months.
+- **Rule-based Technical Audit Engine** — No AI cost. Crawls 15 pages, checks 15+ technical SEO factors, saves findings to DB.
+- **Fix buttons on Website Audit** — Green "Fix" for auto-fixable issues (schema, canonical, noindex, mixed content, H1), "Review" for manual. In review detail: "Fix Now" with live feedback.
+- **Technical fix endpoint** — `/projects/:id/technical-fix` handles 7 fix types via WP REST API. Schema uses `_seoroom_schema` meta field (works with Elementor).
+- **SEO Room Schema plugin** — Tiny WP plugin replacing seoroom-helper. Outputs JSON-LD from post meta in `<head>`. Universal page builder support.
+- **Rankings-first architecture** — Audits are diagnostic only. Rankings (Maps + SERP) drive Action Plan priorities.
+- **List view table fix** — Removed `tableLayout: 'fixed'` that caused vertical text in ACTION column. Normalized font sizes.
+
+### Previous Session
+- **Preview (Design-Safe) button** — always shows green on all pages.
+- **Project switch reload** — clears cached audit reports, remounts components.
+- **Import Current Copy** — force-refreshes, tries WP REST + live HTML.
+- **Homepage page_id resolution** — 3 methods (WP settings, slug search, link matching).
+- **GBP audit accuracy** — SerpAPI Place Details for exact data.
+- **Action Plan filters** — always shows all 4 types.
 
 ## Google Local Business Ranking — Official Documentation (Last checked: May 2026, check every 3 months)
 
@@ -264,13 +279,15 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 
 ## Known Issues
 
-- **Import Current Copy on some sites** — WP REST API returns classic editor content only; sites using ACF, theme builders, or custom fields may have real content stored elsewhere. Live HTML fetch works but depends on server-side rendering (JS-rendered content won't be captured). Gold PC homepage page_id = 5.
-- **Duplicated logic** — URL resolution, content fetching, editor state loading all duplicated across multiple endpoints/handlers. Root cause of most recent bugs. See "Shared helper refactor" in Pending.
-- GBP audit AI sometimes flags "Missing Business Description" even when SerpAPI doesn't return that field. Prompt updated to say "don't flag null fields" but may still occur.
-- GBP Management API: 0 quota, can't list locations in Project Settings dropdown. Using manual Place ID input instead.
-- Places API (New): billing project limit reached, can't enable. Would give better GBP profile data than SerpAPI.
-- PageSpeed audit with 50 pages takes ~2 minutes (5 parallel batches). Railway may timeout on very large sites.
-- Grid scan with 25 keywords × 25 points = 625 API calls takes ~4 minutes. Cost: ~$3.12 per full scan at $0.005/call. Railway timeout risk for 7×7 grids with many keywords.
+- **Schema fix writes to post_content** — Currently injects into `post_content` which Elementor ignores. NEEDS UPDATE: switch to `_seoroom_schema` meta field (requires seoroom-schema plugin on WP sites). Endpoint code ready, just needs the injection method swap.
+- **Old auto-fix endpoint still references seoroom-helper** — Route 2 (schema) and Route 3 (CWV) at `/projects/:id/auto-fix` still try to call seoroom-helper plugin. Should be cleaned up to use standard WP API.
+- **Import Current Copy on some sites** — WP REST API returns classic editor content only; Elementor/ACF sites may have content elsewhere. Live HTML fetch works but depends on server-side rendering.
+- **Duplicated logic** — URL resolution, content fetching, editor state loading duplicated across endpoints. See "Shared helper refactor" in Pending.
+- GBP audit AI sometimes flags "Missing Business Description" even when SerpAPI doesn't return that field.
+- GBP Management API: 0 quota. Using manual Place ID input.
+- Places API (New): billing project limit reached, can't enable.
+- PageSpeed audit with 50 pages takes ~2 minutes. Railway may timeout on very large sites.
+- Grid scan with 25 keywords × 25 points = 625 API calls takes ~4 minutes. Cost: ~$3.12 per full scan.
 
 ## v4 Reference
 
@@ -287,7 +304,28 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 - Future: extend to automate GBP fixes (update description, categories, respond to reviews)
 - Future: extend to scrape Google Maps for grid scan (cost optimization — replace SerpAPI for maps)
 
-## WordPress Plugin (seoroom-helper)
+## WordPress Plugin: SEO Room Schema (seoroom-schema)
 
-- Still needed for SEO score and focus keyword data in On-Page Audit
-- Provides Yoast meta data via WP REST API
+- **Replaces seoroom-helper** — no more custom plugin dependency
+- Tiny plugin (~30 lines PHP): registers `_seoroom_schema` post meta for REST API, outputs JSON-LD in `<head>` via `wp_head` action
+- Install: WP Admin → Plugins → Add New → Upload `seoroom-schema.zip` → Activate
+- Plugin zip at `~/Desktop/seoroom-schema.zip` — install on all client WordPress sites
+- All technical fixes (schema, canonical, noindex, etc.) use standard WP REST API + Yoast meta fields
+- Schema injection works with ANY page builder (Elementor, Gutenberg, Classic Editor) because it renders in `<head>`, not in post content
+- On-Page Audit reads Yoast data via standard `yoast_head_json` field (no plugin needed)
+
+## Architecture Decisions
+
+### Rankings-First Priority Model
+- AI (Haiku) should NOT make subjective severity calls
+- Rankings pages (Maps + SERP) are the source of truth for what matters
+- Position in search results determines priority, not AI opinion
+- GBP/GSC/Website audits are diagnostic — they find issues but don't auto-assign severity
+- User chooses AI model per project (future: model selector in Project Settings)
+- Monthly hours budget controls task distribution on calendar
+
+### Technical Fixes: Rule-Based, Not AI
+- Technical issues detected by rule-based engine (no AI cost)
+- Fixes executed via WordPress REST API (no custom plugins needed beyond seoroom-schema)
+- Schema generated deterministically from RC profile data (not AI-generated)
+- Speed handled by BerqWP (automatic, no API)

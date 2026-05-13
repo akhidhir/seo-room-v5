@@ -17970,26 +17970,22 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         return res.json({ success: false, error: 'Could not find target page in WordPress' });
       }
 
-      // Inject schema into page content
-      const scriptTag = `\n<!-- SEO Room Schema -->\n<script type="application/ld+json">\n${JSON.stringify(schemaJson, null, 2)}\n</script>\n<!-- /SEO Room Schema -->`;
-
-      const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
-      if (!pageResp.ok) return res.status(500).json({ error: `WP returned ${pageResp.status}` });
-      const pageData = await pageResp.json();
-      let content = pageData.content?.raw || pageData.content?.rendered || '';
-
-      // Remove old SEO Room Schema if exists
-      content = content.replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
-      content += scriptTag;
+      // Write schema to _seoroom_schema meta field (rendered in <head> by SEO Room Schema plugin)
+      const schemaString = JSON.stringify(schemaJson, null, 2);
+      console.log(`[technical-fix] Writing schema to ${targetPageType}/${targetPageId} via _seoroom_schema meta`);
 
       const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ meta: { _seoroom_schema: schemaString } }),
         signal: AbortSignal.timeout(15000)
       });
 
-      if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+      if (!writeResp.ok) {
+        const errText = await writeResp.text().catch(() => '');
+        console.error(`[technical-fix] WP write failed: ${writeResp.status} ${errText}`);
+        return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+      }
 
       await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
       await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
