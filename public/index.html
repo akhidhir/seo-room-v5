@@ -18680,8 +18680,7 @@
             const d = Math.pow(lat - coords.lat, 2) + Math.pow(lng - coords.lng, 2);
             if (d < bestDist) { bestDist = d; best = name; }
           }
-          // Only show if within ~5km (~0.045 degrees)
-          return bestDist < 0.002 ? best : null;
+          return best;
         };
       }, [suburbGps]);
       const [hoverIdx, setHoverIdx] = useState(null);
