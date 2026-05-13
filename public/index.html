@@ -20759,7 +20759,7 @@
 
     // ============ GBP POSTS PAGE ============
     function GBPPostsPage({ project }) {
-      const [posts, setPosts] = useState([]);
+      const [posts, setPosts] = useState({ published: [], planned: [] });
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -20767,126 +20767,119 @@
       const [editingPost, setEditingPost] = useState(null);
       const [generating, setGenerating] = useState(false);
       const [publishingId, setPublishingId] = useState(null);
+      const [suggestions, setSuggestions] = useState([]);
+      const [aiTopic, setAiTopic] = useState('');
+      const [aiTone, setAiTone] = useState('professional');
+      const [aiKeywords, setAiKeywords] = useState('');
+      const [aiGenerating, setAiGenerating] = useState(false);
 
       // Form state
       const [formData, setFormData] = useState({
-        title: '',
-        body: '',
-        post_type: 'update',
-        cta_type: '',
-        cta_url: '',
-        offer_code: '',
-        event_title: '',
-        event_start: '',
-        event_end: '',
+        summary: '',
+        action_type: '',
+        action_url: '',
         image_url: '',
-        scheduled_date: new Date().toISOString().split('T')[0],
+        scheduled_date: '',
         scheduled_time: '09:00',
-        status: 'draft'
+        mode: 'publish' // 'publish' or 'schedule'
       });
 
       useEffect(() => {
-        if (project?.id) loadPosts();
+        if (project?.id) { loadPosts(); loadSuggestions(); }
       }, [project?.id]);
 
       const loadPosts = async () => {
         setLoading(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/gbp-posts`);
+          const data = await api(`/projects/${project.id}/rc-posts?status=all&per_page=100`);
           if (data.error) throw new Error(data.error);
-          setPosts(data.posts || []);
+          setPosts({ published: data.published_posts || [], planned: data.planned_posts || [] });
         } catch (err) {
-          // Retry once after 2s (deploy might be in progress)
-          try {
-            await new Promise(r => setTimeout(r, 2000));
-            const data = await api(`/projects/${project.id}/gbp-posts`);
-            if (data.error) throw new Error(data.error);
-            setPosts(data.posts || []);
-          } catch (err2) {
-            setError(err2.message);
-          }
+          setError(err.message);
         } finally {
           setLoading(false);
         }
       };
 
+      const loadSuggestions = async () => {
+        try {
+          const data = await api(`/projects/${project.id}/rc-posts/suggestions?count=5`);
+          if (Array.isArray(data)) setSuggestions(data);
+          else if (data.suggestions) setSuggestions(data.suggestions);
+        } catch (e) {}
+      };
+
+      const allPosts = [
+        ...posts.published.map(p => ({ ...p, _type: 'published', _date: p.createTime || p.updateTime, _id: p.name, _summary: p.summary })),
+        ...posts.planned.map(p => ({ ...p, _type: 'planned', _date: p.scheduled_at || p.created_at, _id: String(p.id), _summary: p.summary || p.content }))
+      ];
+
       const handleOpenModal = (date = null, post = null) => {
         if (post) {
           setEditingPost(post);
           setFormData({
-            title: post.title || '',
-            body: post.body || '',
-            post_type: post.post_type || 'update',
-            cta_type: post.cta_type || '',
-            cta_url: post.cta_url || '',
-            offer_code: post.offer_code || '',
-            event_title: post.event_title || '',
-            event_start: post.event_start ? post.event_start.split('T')[0] : '',
-            event_end: post.event_end ? post.event_end.split('T')[0] : '',
-            image_url: post.image_url || '',
-            scheduled_date: (post.scheduled_date || '').substring(0,10),
-            scheduled_time: post.scheduled_time || '09:00',
-            status: post.status || 'draft'
+            summary: post._summary || '',
+            action_type: post.callToAction?.actionType || '',
+            action_url: post.callToAction?.url || '',
+            image_url: (post.media || [])[0]?.googleUrl || '',
+            scheduled_date: date ? date.toISOString().split('T')[0] : '',
+            scheduled_time: '09:00',
+            mode: post._type === 'planned' ? 'schedule' : 'publish'
           });
         } else {
           setEditingPost(null);
           setFormData({
-            title: '',
-            body: '',
-            post_type: 'update',
-            cta_type: '',
-            cta_url: '',
-            offer_code: '',
-            event_title: '',
-            event_start: '',
-            event_end: '',
+            summary: '',
+            action_type: '',
+            action_url: '',
             image_url: '',
             scheduled_date: date ? date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
             scheduled_time: '09:00',
-            status: 'draft'
+            mode: 'schedule'
           });
         }
         setModalOpen(true);
       };
 
       const handleSavePost = async () => {
-        if (!formData.body || !formData.scheduled_date) {
-          setError('Body and scheduled date are required');
-          return;
-        }
+        if (!formData.summary) { setError('Post content is required'); return; }
         try {
-          if (editingPost) {
-            const data = await api(`/gbp-posts/${editingPost.id}`, { method: 'PUT', body: formData });
-            setPosts(prev => prev.map(p => p.id === editingPost.id ? data.post : p));
-          } else {
-            const data = await api(`/projects/${project.id}/gbp-posts`, { method: 'POST', body: formData });
-            setPosts(prev => [...prev, data.post]);
+          const body = {
+            summary: formData.summary,
+            action_type: formData.action_type || undefined,
+            action_url: formData.action_url || undefined,
+            images: formData.image_url ? [formData.image_url] : undefined
+          };
+          if (formData.mode === 'schedule' && formData.scheduled_date) {
+            body.scheduled_at = `${formData.scheduled_date}T${formData.scheduled_time || '09:00'}:00`;
           }
+          await api(`/projects/${project.id}/rc-posts`, { method: 'POST', body });
           setModalOpen(false);
           setEditingPost(null);
           setError('');
+          await loadPosts();
         } catch (err) {
           setError(err.message);
         }
       };
 
-      const handleDeletePost = async (postId) => {
+      const handleDeletePost = async (post) => {
         if (!window.confirm('Delete this post?')) return;
         try {
-          await api(`/gbp-posts/${postId}`, { method: 'DELETE' });
-          setPosts(prev => prev.filter(p => p.id !== postId));
+          await api(`/projects/${project.id}/rc-posts/${encodeURIComponent(post._id)}`, { method: 'DELETE', body: { post_type: post._type } });
+          await loadPosts();
         } catch (err) {
           setError(err.message);
         }
       };
 
-      const handlePublishPost = async (postId) => {
-        setPublishingId(postId);
+      const handlePublishPost = async (post) => {
+        setPublishingId(post._id);
         setError('');
         try {
-          const data = await api(`/gbp-posts/${postId}/publish`, { method: 'POST' });
-          setPosts(prev => prev.map(p => p.id === postId ? data.post : p));
+          await api(`/projects/${project.id}/rc-posts/${post.id}/publish`, { method: 'POST' });
+          await loadPosts();
         } catch (err) {
           setError(err.message);
         } finally {
@@ -20894,33 +20887,35 @@
         }
       };
 
-      const handleGeneratePosts = async () => {
-        setGenerating(true);
+      const handleAiGenerate = async (topic) => {
+        setAiGenerating(true);
         setError('');
         try {
-          const data = await api(`/projects/${project.id}/gbp-posts/generate`, { method: 'POST' });
-          setPosts(prev => [...prev, ...data.posts]);
+          const data = await api(`/projects/${project.id}/rc-posts/ai-generate`, { method: 'POST', body: { topic: topic || aiTopic, tone: aiTone, keywords: aiKeywords } });
+          if (data.error) throw new Error(data.error);
+          const text = data.content || data.summary || data.text || (typeof data === 'string' ? data : '');
+          setFormData(prev => ({ ...prev, summary: text }));
+          if (!modalOpen) { setEditingPost(null); setModalOpen(true); }
         } catch (err) {
           setError(err.message);
         } finally {
-          setGenerating(false);
+          setAiGenerating(false);
         }
       };
 
       // Calculate stats
-      const now = new Date();
       const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
       const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
-      const msStr = monthStart.getFullYear() + '-' + String(monthStart.getMonth()+1).padStart(2,'0') + '-01';
-      const meStr = monthEnd.getFullYear() + '-' + String(monthEnd.getMonth()+1).padStart(2,'0') + '-' + String(monthEnd.getDate()).padStart(2,'0');
-      const monthPosts = posts.filter(p => {
-        const ds = (p.scheduled_date || '').substring(0,10);
+      const msStr = monthStart.toISOString().substring(0,10);
+      const meStr = monthEnd.toISOString().substring(0,10);
+      const monthPosts = allPosts.filter(p => {
+        const ds = (p._date || '').substring(0,10);
         return ds >= msStr && ds <= meStr;
       });
       const stats = {
-        draft: monthPosts.filter(p => p.status === 'draft').length,
-        scheduled: monthPosts.filter(p => p.status === 'scheduled').length,
-        published: monthPosts.filter(p => p.status === 'published').length
+        planned: posts.planned.length,
+        published: posts.published.length,
+        thisMonth: monthPosts.length
       };
 
       // Generate calendar grid
@@ -20931,8 +20926,8 @@
       let week = Array(firstDay).fill(null);
       for (let d = 1; d <= daysInMonth; d++) {
         const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), d);
-        const dateStr = date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
-        const dayPosts = posts.filter(p => (p.scheduled_date || '').substring(0,10) === dateStr);
+        const dateStr = date.toISOString().substring(0,10);
+        const dayPosts = allPosts.filter(p => (p._date || '').substring(0,10) === dateStr);
         week.push({ date, dayPosts });
         if (week.length === 7) {
           weeks.push(week);
@@ -20944,17 +20939,10 @@
         weeks.push(week);
       }
 
-      const postTypeIcons = {
-        update: 'fas fa-edit',
-        offer: 'fas fa-tag',
-        event: 'fas fa-calendar-day'
-      };
-
       const statusColors = {
-        draft: '#a1a1aa',
-        scheduled: '#3b82f6',
         published: '#22c55e',
-        failed: '#ef4444'
+        planned: '#3b82f6',
+        LIVE: '#22c55e'
       };
 
       return React.createElement('div', { style: { padding: '24px', maxWidth: 1200, margin: '0 auto' } },
@@ -20978,26 +20966,38 @@
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16, flexWrap: 'wrap' } },
           React.createElement('div', { style: { display: 'flex', gap: 12 } },
             React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
-              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#a1a1aa' } }, stats.draft),
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Drafts')
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#22c55e' } }, stats.published),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Published')
             ),
             React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
-              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#3b82f6' } }, stats.scheduled),
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#3b82f6' } }, stats.planned),
               React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Scheduled')
             ),
             React.createElement('div', { style: { padding: 12, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' } },
-              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#22c55e' } }, stats.published),
-              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'Published')
+              React.createElement('div', { style: { fontSize: 20, fontWeight: 700, color: '#f59e0b' } }, stats.thisMonth),
+              React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4 } }, 'This Month')
             )
           ),
-          React.createElement('button', { className: 'btn btn-primary', onClick: handleGeneratePosts, disabled: generating, style: { fontSize: 13 } },
-            generating ? React.createElement(React.Fragment, null,
-              React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }),
-              'Generating...'
-            ) : React.createElement(React.Fragment, null,
-              React.createElement('i', { className: 'fas fa-sparkles', style: { marginRight: 6 } }),
-              'AI Generate Month'
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('button', { className: 'btn', onClick: () => handleOpenModal(), style: { fontSize: 13 } },
+              React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'New Post'
+            ),
+            React.createElement('button', { className: 'btn btn-primary', onClick: () => { setModalOpen(true); setEditingPost(null); setFormData(prev => ({ ...prev, summary: '', mode: 'schedule' })); }, disabled: aiGenerating, style: { fontSize: 13 } },
+              React.createElement('i', { className: 'fas fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Post'
             )
+          )
+        ),
+
+        // AI Suggestions bar
+        suggestions.length > 0 && React.createElement('div', { style: { marginBottom: 16, padding: 14, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10 } },
+          React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } },
+            React.createElement('i', { className: 'fa-solid fa-lightbulb', style: { marginRight: 6 } }), 'Post Ideas (click to generate)'
+          ),
+          React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+            suggestions.map((s, i) => React.createElement('button', { key: i, className: 'btn', onClick: () => handleAiGenerate(s.topic || s.title || s),
+              style: { fontSize: 12, padding: '6px 14px', borderRadius: 20, background: 'rgba(139,92,246,0.08)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.2)', cursor: 'pointer' } },
+              s.topic || s.title || s
+            ))
           )
         ),
 
@@ -21032,10 +21032,10 @@
                 const isToday = date.toDateString() === new Date().toDateString();
                 return React.createElement('div', { key: key, onClick: function() { handleOpenModal(date); }, style: { padding: 12, minHeight: 120, borderRight: di < 6 ? '1px solid var(--border)' : 'none', borderBottom: wi < weeks.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', background: isToday ? 'rgba(99,102,241,0.05)' : 'transparent', transition: 'background 0.2s', position: 'relative' } },
                   React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: isToday ? 'var(--accent)' : 'var(--text)', marginBottom: 8 } }, date.getDate()),
-                  dayPosts.map(p =>
-                    React.createElement('div', { key: p.id, onClick: function(e) { e.stopPropagation(); handleOpenModal(null, p); }, style: { marginBottom: 4, padding: 6, background: statusColors[p.status] || 'var(--border)', borderRadius: 4, fontSize: 10, color: '#000', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 } },
-                      React.createElement('i', { className: postTypeIcons[p.post_type] || postTypeIcons.update, style: { fontSize: 8, flexShrink: 0, color: '#000' } }),
-                      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.title || '(no title)')
+                  dayPosts.map((p, pi) =>
+                    React.createElement('div', { key: pi, onClick: function(e) { e.stopPropagation(); handleOpenModal(null, p); }, style: { marginBottom: 4, padding: 6, background: p._type === 'published' ? '#22c55e' : '#3b82f6', borderRadius: 4, fontSize: 10, color: '#000', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 } },
+                      React.createElement('i', { className: p._type === 'published' ? 'fas fa-check' : 'fas fa-clock', style: { fontSize: 8, flexShrink: 0 } }),
+                      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (p._summary || '').substring(0, 40) || '(post)')
                     )
                   )
                 );
@@ -21054,114 +21054,95 @@
               )
             ),
 
-            // Title
-            React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Title (optional)'),
-              React.createElement('input', { type: 'text', value: formData.title, onChange: function(e) { setFormData({ ...formData, title: e.target.value }); }, placeholder: 'Post title', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
-            ),
-
-            // Body
-            React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, `Body (${formData.body.length}/1500 characters)`),
-              React.createElement('textarea', { value: formData.body, onChange: function(e) { if (e.target.value.length <= 1500) setFormData({ ...formData, body: e.target.value }); }, placeholder: 'Post content...', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit', minHeight: 120, resize: 'vertical' } })
-            ),
-
-            // Post type
-            React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Post Type'),
-              React.createElement('select', { value: formData.post_type, onChange: function(e) { setFormData({ ...formData, post_type: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
-                React.createElement('option', { value: 'update' }, 'Update'),
-                React.createElement('option', { value: 'offer' }, 'Offer'),
-                React.createElement('option', { value: 'event' }, 'Event')
-              )
-            ),
-
-            // Conditional fields based on post type
-            formData.post_type === 'offer' && React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Offer Code'),
-              React.createElement('input', { type: 'text', value: formData.offer_code, onChange: function(e) { setFormData({ ...formData, offer_code: e.target.value }); }, placeholder: 'e.g. SUMMER20', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
-            ),
-
-            formData.post_type === 'event' && React.createElement(React.Fragment, null,
-              React.createElement('div', { style: { marginBottom: 16 } },
-                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Event Title'),
-                React.createElement('input', { type: 'text', value: formData.event_title, onChange: function(e) { setFormData({ ...formData, event_title: e.target.value }); }, placeholder: 'Event name', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            // AI Generate section
+            !editingPost && React.createElement('div', { style: { marginBottom: 16, padding: 14, borderRadius: 10, background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)' } },
+              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 } },
+                React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'AI Generate Content'
               ),
-              React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 } },
-                React.createElement('div', null,
-                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Start Date'),
-                  React.createElement('input', { type: 'date', value: formData.event_start, onChange: function(e) { setFormData({ ...formData, event_start: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
-                ),
-                React.createElement('div', null,
-                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'End Date'),
-                  React.createElement('input', { type: 'date', value: formData.event_end, onChange: function(e) { setFormData({ ...formData, event_end: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+              React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginBottom: 8 } },
+                React.createElement('input', { type: 'text', value: aiTopic, onChange: e => setAiTopic(e.target.value), placeholder: 'Topic (e.g. hot water system replacement)', style: { padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } }),
+                React.createElement('button', { className: 'btn btn-primary', onClick: () => handleAiGenerate(), disabled: aiGenerating || !aiTopic, style: { fontSize: 12, whiteSpace: 'nowrap' } },
+                  aiGenerating ? React.createElement(React.Fragment, null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Generating...') :
+                  React.createElement(React.Fragment, null, React.createElement('i', { className: 'fa-solid fa-sparkles', style: { marginRight: 4 } }), 'Generate')
                 )
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('select', { value: aiTone, onChange: e => setAiTone(e.target.value), style: { padding: 6, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 12 } },
+                  React.createElement('option', { value: 'professional' }, 'Professional'),
+                  React.createElement('option', { value: 'casual' }, 'Casual'),
+                  React.createElement('option', { value: 'friendly' }, 'Friendly')
+                ),
+                React.createElement('input', { type: 'text', value: aiKeywords, onChange: e => setAiKeywords(e.target.value), placeholder: 'Keywords (optional)', style: { flex: 1, padding: 6, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 12 } })
               )
             ),
 
-            // CTA type
+            // Post content
             React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Call to Action'),
-              React.createElement('select', { value: formData.cta_type, onChange: function(e) { setFormData({ ...formData, cta_type: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
-                React.createElement('option', { value: '' }, 'None'),
-                React.createElement('option', { value: 'LEARN_MORE' }, 'Learn More'),
-                React.createElement('option', { value: 'BOOK' }, 'Book'),
-                React.createElement('option', { value: 'ORDER' }, 'Order'),
-                React.createElement('option', { value: 'CALL' }, 'Call')
-              )
+              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, `Post Content (${(formData.summary || '').length}/1500)`),
+              React.createElement('textarea', { value: formData.summary, onChange: e => { if (e.target.value.length <= 1500) setFormData({ ...formData, summary: e.target.value }); }, placeholder: 'Post content...', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit', minHeight: 150, resize: 'vertical' } })
             ),
 
-            formData.cta_type && React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'CTA URL'),
-              React.createElement('input', { type: 'url', value: formData.cta_url, onChange: function(e) { setFormData({ ...formData, cta_url: e.target.value }); }, placeholder: 'https://example.com', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+            // CTA
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 } },
+              React.createElement('div', null,
+                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Call to Action'),
+                React.createElement('select', { value: formData.action_type, onChange: e => setFormData({ ...formData, action_type: e.target.value }), style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 } },
+                  React.createElement('option', { value: '' }, 'None'),
+                  React.createElement('option', { value: 'LEARN_MORE' }, 'Learn More'),
+                  React.createElement('option', { value: 'BOOK' }, 'Book'),
+                  React.createElement('option', { value: 'ORDER' }, 'Order'),
+                  React.createElement('option', { value: 'CALL' }, 'Call'),
+                  React.createElement('option', { value: 'SIGN_UP' }, 'Sign Up'),
+                  React.createElement('option', { value: 'SHOP' }, 'Shop')
+                )
+              ),
+              formData.action_type && formData.action_type !== 'CALL' ? React.createElement('div', null,
+                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'CTA URL'),
+                React.createElement('input', { type: 'url', value: formData.action_url, onChange: e => setFormData({ ...formData, action_url: e.target.value }), placeholder: 'https://...', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 } })
+              ) : null
             ),
 
             // Image URL
             React.createElement('div', { style: { marginBottom: 16 } },
               React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Image URL (optional)'),
-              React.createElement('input', { type: 'url', value: formData.image_url, onChange: function(e) { setFormData({ ...formData, image_url: e.target.value }); }, placeholder: 'https://example.com/image.jpg', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
+              React.createElement('input', { type: 'url', value: formData.image_url, onChange: e => setFormData({ ...formData, image_url: e.target.value }), placeholder: 'https://example.com/image.jpg', style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 } }),
+              formData.image_url && React.createElement('img', { src: formData.image_url, style: { marginTop: 8, maxHeight: 120, borderRadius: 8, objectFit: 'cover' }, onError: e => { e.target.style.display = 'none'; } })
             ),
 
-            // Scheduled date & time
-            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 } },
-              React.createElement('div', null,
-                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Scheduled Date'),
-                React.createElement('input', { type: 'date', value: (formData.scheduled_date || '').substring(0,10), onChange: function(e) { setFormData({ ...formData, scheduled_date: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 14, fontFamily: 'inherit', fontWeight: 600 } })
-              ),
-              React.createElement('div', null,
-                React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Time'),
-                React.createElement('input', { type: 'time', value: formData.scheduled_time, onChange: function(e) { setFormData({ ...formData, scheduled_time: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } })
-              )
-            ),
-
-            // Status
+            // Mode toggle + Schedule
             React.createElement('div', { style: { marginBottom: 16 } },
-              React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Status'),
-              React.createElement('select', { value: formData.status, onChange: function(e) { setFormData({ ...formData, status: e.target.value }); }, style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' } },
-                React.createElement('option', { value: 'draft' }, 'Draft'),
-                React.createElement('option', { value: 'scheduled' }, 'Scheduled')
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+                React.createElement('button', { className: `btn ${formData.mode === 'publish' ? 'btn-primary' : ''}`, onClick: () => setFormData({ ...formData, mode: 'publish' }), style: { fontSize: 12, flex: 1 } },
+                  React.createElement('i', { className: 'fa-solid fa-paper-plane', style: { marginRight: 4 } }), 'Publish Now'
+                ),
+                React.createElement('button', { className: `btn ${formData.mode === 'schedule' ? 'btn-primary' : ''}`, onClick: () => setFormData({ ...formData, mode: 'schedule' }), style: { fontSize: 12, flex: 1 } },
+                  React.createElement('i', { className: 'fa-solid fa-clock', style: { marginRight: 4 } }), 'Schedule'
+                )
+              ),
+              formData.mode === 'schedule' && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
+                React.createElement('div', null,
+                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Date'),
+                  React.createElement('input', { type: 'date', value: formData.scheduled_date, onChange: e => setFormData({ ...formData, scheduled_date: e.target.value }), style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 14, fontWeight: 600 } })
+                ),
+                React.createElement('div', null,
+                  React.createElement('label', { style: { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text3)' } }, 'Time'),
+                  React.createElement('input', { type: 'time', value: formData.scheduled_time, onChange: e => setFormData({ ...formData, scheduled_time: e.target.value }), style: { width: '100%', padding: 10, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 } })
+                )
               )
             ),
 
             // Buttons
             React.createElement('div', { style: { display: 'flex', gap: 12, justifyContent: 'flex-end' } },
-              editingPost && React.createElement('button', { className: 'btn', onClick: function() { handleDeletePost(editingPost.id); setModalOpen(false); }, style: { fontSize: 13, color: '#ef4444', borderColor: '#ef4444' } },
-                React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 6 } }),
-                'Delete'
+              editingPost && editingPost._type !== 'published' && React.createElement('button', { className: 'btn', onClick: () => { handleDeletePost(editingPost); setModalOpen(false); }, style: { fontSize: 13, color: '#ef4444', borderColor: '#ef4444' } },
+                React.createElement('i', { className: 'fas fa-trash', style: { marginRight: 6 } }), 'Delete'
               ),
-              React.createElement('button', { className: 'btn', onClick: function() { setModalOpen(false); }, style: { fontSize: 13 } }, 'Cancel'),
-              editingPost && editingPost.status !== 'published' && React.createElement('button', { className: 'btn btn-primary', onClick: function() { handlePublishPost(editingPost.id); }, disabled: publishingId === editingPost.id, style: { fontSize: 13 } },
-                publishingId === editingPost.id ? React.createElement(React.Fragment, null,
-                  React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }),
-                  'Publishing...'
-                ) : React.createElement(React.Fragment, null,
-                  React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }),
-                  'Publish Now'
-                )
+              React.createElement('button', { className: 'btn', onClick: () => setModalOpen(false), style: { fontSize: 13 } }, 'Cancel'),
+              editingPost && editingPost._type === 'planned' && React.createElement('button', { className: 'btn btn-primary', onClick: () => { handlePublishPost(editingPost); setModalOpen(false); }, disabled: publishingId, style: { fontSize: 13 } },
+                React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }), 'Publish Now'
               ),
-              React.createElement('button', { className: 'btn btn-primary', onClick: handleSavePost, style: { fontSize: 13 } },
-                React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }),
-                editingPost ? 'Update' : 'Save Draft'
+              !editingPost && React.createElement('button', { className: 'btn btn-primary', onClick: handleSavePost, style: { fontSize: 13 } },
+                React.createElement('i', { className: `fas ${formData.mode === 'publish' ? 'fa-paper-plane' : 'fa-clock'}`, style: { marginRight: 6 } }),
+                formData.mode === 'publish' ? 'Publish Now' : 'Schedule Post'
               )
             )
           )
@@ -23086,10 +23067,20 @@
       const [newMonthlyHours, setNewMonthlyHours] = useState('');
       const [editingQuota, setEditingQuota] = useState(null);
       const [quotaDraft, setQuotaDraft] = useState({});
+      const [quotaUsage, setQuotaUsage] = useState({});
 
       useEffect(() => {
         loadProjects();
       }, []);
+
+      useEffect(() => {
+        if (projects.length === 0) return;
+        projects.forEach(p => {
+          api(`/projects/${p.id}/quota-usage`).then(u => {
+            if (u && !u.error) setQuotaUsage(prev => ({ ...prev, [p.id]: u }));
+          }).catch(() => {});
+        });
+      }, [projects.length]);
 
       const loadProjects = async () => {
         setLoading(true);
@@ -23201,6 +23192,62 @@
                       </div>
                     ))}
                   </div>
+                  {/* Quota usage panel */}
+                  {(() => {
+                    const u = quotaUsage[proj.id];
+                    if (!u) return null;
+                    const aiBudget = parseFloat(proj.monthly_ai_budget) || 0;
+                    const aiPct = aiBudget > 0 ? Math.min(100, (u.ai_spend / aiBudget) * 100) : 0;
+                    const aiRemaining = Math.max(0, aiBudget - u.ai_spend);
+                    const hourlyRate = (parseFloat(proj.monthly_hours) || 0) > 0 ? Math.round((parseFloat(proj.monthly_fee) || 0) / (parseFloat(proj.monthly_hours) || 1)) : 0;
+                    const serpCapacity = aiRemaining > 0 ? Math.floor(aiRemaining / 0.015) : 0;
+                    const mapsCapacity = aiRemaining > 0 ? Math.floor(aiRemaining / 0.015) : 0;
+                    return (
+                      <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                          <i className="fa-solid fa-chart-pie" style={{ marginRight: 6 }} />This Month's Usage
+                        </div>
+                        {/* AI Budget bar */}
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, color: 'var(--text2)' }}><i className="fa-solid fa-brain" style={{ marginRight: 4, color: '#8b5cf6' }} />AI Spend</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: aiPct > 80 ? '#ef4444' : '#8b5cf6' }}>${u.ai_spend.toFixed(3)} / ${aiBudget}</span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${aiPct}%`, background: aiPct > 80 ? '#ef4444' : '#8b5cf6', borderRadius: 3, transition: 'width 0.3s' }} />
+                          </div>
+                        </div>
+                        {/* Stats grid */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                          <div style={{ textAlign: 'center', padding: 8, borderRadius: 8, background: 'var(--card)' }}>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--accent)' }}>{u.serp_analyses}</div>
+                            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>SERP Analyses</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: 8, borderRadius: 8, background: 'var(--card)' }}>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--accent)' }}>{u.maps_analyses}</div>
+                            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>Maps Analyses</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: 8, borderRadius: 8, background: 'var(--card)' }}>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: '#22c55e' }}>{u.done_actions}/{u.total_actions}</div>
+                            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>Actions Done</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: 8, borderRadius: 8, background: 'var(--card)' }}>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: '#f59e0b' }}>{u.audits_run}</div>
+                            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>Audits Run</div>
+                          </div>
+                        </div>
+                        {/* Capacity notes */}
+                        <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.1)' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', marginBottom: 6 }}><i className="fa-solid fa-calculator" style={{ marginRight: 4 }} />Remaining Capacity</div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.8 }}>
+                            <span style={{ display: 'inline-block', marginRight: 16 }}><strong style={{ color: '#8b5cf6' }}>${aiRemaining.toFixed(2)}</strong> AI budget left</span>
+                            <span style={{ display: 'inline-block', marginRight: 16 }}>≈ <strong style={{ color: 'var(--accent)' }}>{serpCapacity}</strong> more analyses</span>
+                            {hourlyRate > 0 && <span style={{ display: 'inline-block' }}>Effective rate: <strong style={{ color: '#22c55e' }}>${hourlyRate}/hr</strong></span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
                     {editingQuota === proj.id ? (
                       <div style={{ display: 'flex', gap: 8 }}>
@@ -23586,14 +23633,18 @@ case 'action-plan':
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
           ] },
         ]},
+        { section: 'RANKINGS', items: [
+          { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
+          { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
+        ]},
         { section: 'GBP', items: [
           { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },
         ]},
-        { section: 'BLOG', items: [
-          { id: 'blog', label: 'Blog Manager', icon: 'fas fa-blog' },
-        ]},
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
+        ]},
+        { section: 'BLOG', items: [
+          { id: 'blog', label: 'Blog Manager', icon: 'fas fa-blog' },
         ]},
         { section: 'COPYWRITER', items: [
           { id: 'ow-project', label: 'Optimise Website Copy', icon: 'fas fa-wand-magic-sparkles', expandable: true, children: [
@@ -23607,8 +23658,6 @@ case 'action-plan':
           ]},
         ]},
         { section: 'REPORTS', items: [
-          { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
-          { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'monthly-reports', label: 'Monthly Reports', icon: 'fas fa-file-pdf' },
         ]},
         { section: 'SETTINGS', items: [
@@ -23727,8 +23776,8 @@ case 'action-plan':
                 )
               ) : navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'BLOG': '#ec4899', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
-                  {(() => { const sColor = { 'AUDIT': '#f97316', 'GBP': '#4ade80', 'BLOG': '#ec4899', 'ACTION PLAN': '#22c55e', 'COPYWRITER': '#eab308', 'REPORTS': '#3b82f6', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
+                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
+                  {(() => { const sColor = { 'AUDIT': '#f97316', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
                     const isActive = activeTab === item.id
