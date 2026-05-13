@@ -2030,21 +2030,35 @@ app.post('/api/projects/:id/calendar/distribute', async (req, res) => {
     };
 
     // Work schedule: Mon-Fri, 9am-5pm (8 working hours), fill based on monthly hours quota
-    const now = new Date();
+    // Use AEST timezone (UTC+10) for Australian agency
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Australia/Brisbane' }));
     let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    // Start from next business day if today is past noon
-    if (now.getHours() >= 12) currentDate.setDate(currentDate.getDate() + 1);
+    const currentRealHour = now.getHours();
 
     const isWeekday = (d) => d.getDay() !== 0 && d.getDay() !== 6;
     const nextWeekday = (d) => { const n = new Date(d); n.setDate(n.getDate() + 1); while (!isWeekday(n)) n.setDate(n.getDate() + 1); return n; };
-    while (!isWeekday(currentDate)) currentDate = nextWeekday(currentDate);
+
+    // If today is past 5pm or weekend, start from next weekday
+    if (currentRealHour >= 17 || !isWeekday(currentDate)) {
+      currentDate = isWeekday(currentDate) ? nextWeekday(currentDate) : currentDate;
+      while (!isWeekday(currentDate)) currentDate = nextWeekday(currentDate);
+    }
 
     // Calculate how many hours per day we can work (distribute monthly hours across ~22 working days)
     const workingDaysPerMonth = 22;
     const hoursPerDay = Math.min(8, Math.max(1, monthlyHours / workingDaysPerMonth));
 
     let dayHoursUsed = 0;
-    let currentHour = 9; // Start at 9am
+    // If scheduling on today, start from the next full hour (minimum 9am)
+    const isSchedulingToday = currentDate.toISOString().split('T')[0] === new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().split('T')[0];
+    let currentHour = isSchedulingToday ? Math.max(9, currentRealHour + 1) : 9;
+    // If today has no usable hours left, skip to next weekday
+    if (isSchedulingToday && currentHour >= 17) {
+      currentDate = nextWeekday(currentDate);
+      currentHour = 9;
+    } else if (isSchedulingToday) {
+      dayHoursUsed = currentHour - 9; // account for hours already passed
+    }
     let totalScheduled = 0;
     let monthHoursUsed = 0;
     let currentMonth = currentDate.getMonth();
