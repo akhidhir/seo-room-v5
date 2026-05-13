@@ -408,7 +408,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
     // Set RC location IDs for known projects (one-time seed, safe to re-run)
     await client.query(`UPDATE projects SET rc_location_id = 15047 WHERE id = 2 AND rc_location_id IS NULL`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_project_id TEXT`).catch(() => {});
@@ -1294,6 +1294,50 @@ app.get('/api/projects/:id', async (req, res) => {
     const result = await pool.query(query, params);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     res.json({ project: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get project quota usage for current month
+app.get('/api/projects/:id/quota-usage', async (req, res) => {
+  try {
+    const pid = req.params.id;
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+    // AI spend from SERP analyses this month
+    const serpCosts = await pool.query(
+      `SELECT COALESCE(SUM((cost->>'total')::numeric), 0) as total, COUNT(*) as count FROM serp_analysis WHERE project_id=$1 AND analyzed_at >= $2`,
+      [pid, monthStart]
+    );
+    // AI spend from Maps analyses this month
+    const mapsCosts = await pool.query(
+      `SELECT COALESCE(SUM((cost->>'total')::numeric), 0) as total, COUNT(*) as count FROM maps_analysis WHERE project_id=$1 AND analyzed_at >= $2`,
+      [pid, monthStart]
+    );
+    // Action items stats this month
+    const actionStats = await pool.query(
+      `SELECT status, COUNT(*) as count FROM action_items WHERE project_id=$1 GROUP BY status`,
+      [pid]
+    );
+    // Audits run this month
+    const auditCount = await pool.query(
+      `SELECT COUNT(*) as count FROM audits WHERE project_id=$1 AND created_at >= $2`,
+      [pid, monthStart]
+    );
+    const serpTotal = parseFloat(serpCosts.rows[0]?.total || 0);
+    const mapsTotal = parseFloat(mapsCosts.rows[0]?.total || 0);
+    const aiSpend = Math.round((serpTotal + mapsTotal) * 1000) / 1000;
+    const actionCounts = {};
+    (actionStats.rows || []).forEach(r => { actionCounts[r.status] = parseInt(r.count); });
+    res.json({
+      ai_spend: aiSpend,
+      serp_analyses: parseInt(serpCosts.rows[0]?.count || 0),
+      maps_analyses: parseInt(mapsCosts.rows[0]?.count || 0),
+      audits_run: parseInt(auditCount.rows[0]?.count || 0),
+      action_items: actionCounts,
+      total_actions: Object.values(actionCounts).reduce((s, v) => s + v, 0),
+      done_actions: (actionCounts.done || 0) + (actionCounts.completed || 0)
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -4168,6 +4212,229 @@ app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
   }
 });
 
+// ==================== RC POSTS — GBP Post Management via RankingCoach API ====================
+
+// In-memory cache for RC location details (location_id, account_id)
+const rcLocationCache = new Map();
+const RC_LOCATION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getRcLocationDetails(projectId) {
+  const cacheKey = `proj_${projectId}`;
+  const cached = rcLocationCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < RC_LOCATION_CACHE_TTL) return cached.data;
+
+  const proj = await pool.query('SELECT rc_location_id FROM projects WHERE id=$1', [projectId]);
+  if (proj.rows.length === 0) throw new Error('Project not found');
+  const rcLocId = proj.rows[0].rc_location_id;
+  if (!rcLocId) throw new Error('No rc_location_id set for this project');
+
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) throw new Error('RC_API_TOKEN not configured');
+
+  const resp = await fetch('https://local.ratingcaptain.com/api/locations/extended?current_page=1&type=active_profiles', {
+    headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' }
+  });
+  if (!resp.ok) throw new Error(`RC locations API returned ${resp.status}`);
+  const data = await resp.json();
+  const locations = data.data || [];
+  const match = locations.find(l => l.id === rcLocId);
+  if (!match) throw new Error(`RC location with id=${rcLocId} not found. Available: ${locations.map(l => `${l.id}:${l.name}`).join(', ')}`);
+
+  const result = { location_id: match.location_id, account_id: match.account_id, name: match.name };
+  rcLocationCache.set(cacheKey, { data: result, ts: Date.now() });
+  console.log(`[rc-posts] Cached RC location for project ${projectId}: ${JSON.stringify(result)}`);
+  return result;
+}
+
+// GET /api/projects/:id/rc-posts — List posts
+app.get('/api/projects/:id/rc-posts', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const status = req.query.status || 'all';
+    const page = req.query.page || 1;
+    const perPage = req.query.per_page || 25;
+    const url = `https://local.ratingcaptain.com/api/posts?location_id=${encodeURIComponent(loc.location_id)}&status=${status}&page=${page}&per_page=${perPage}`;
+    console.log(`[rc-posts] GET ${url}`);
+    const resp = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' }
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] List posts failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    res.json(JSON.parse(body));
+  } catch (e) {
+    console.error('[rc-posts] List error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/rc-posts — Create or schedule a post
+app.post('/api/projects/:id/rc-posts', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const { summary, images, action_type, action_url, scheduled_at } = req.body;
+    if (!summary) return res.status(400).json({ error: 'summary is required' });
+
+    const payload = {
+      account_id: loc.account_id,
+      location_id: loc.location_id,
+      summary,
+      ...(images && { images }),
+      ...(action_type && { action_type }),
+      ...(action_url && { action_url })
+    };
+
+    let url, logLabel;
+    if (scheduled_at) {
+      payload.scheduled_at = scheduled_at;
+      url = 'https://local.ratingcaptain.com/api/posts/schedule';
+      logLabel = 'Schedule';
+    } else {
+      url = 'https://local.ratingcaptain.com/api/posts';
+      logLabel = 'Create';
+    }
+
+    console.log(`[rc-posts] ${logLabel} post: ${url}`, JSON.stringify(payload).substring(0, 300));
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] ${logLabel} post failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    console.log(`[rc-posts] ${logLabel} post success`);
+    res.json(JSON.parse(body));
+  } catch (e) {
+    console.error('[rc-posts] Create error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/projects/:id/rc-posts/:postId — Delete a post
+app.delete('/api/projects/:id/rc-posts/:postId', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const { post_type } = req.body;
+    if (!post_type) return res.status(400).json({ error: 'post_type is required (published or planned)' });
+
+    const url = `https://local.ratingcaptain.com/api/posts/${req.params.postId}`;
+    const payload = { post_type, account_id: loc.account_id, location_id: loc.location_id };
+    console.log(`[rc-posts] DELETE ${url}`, JSON.stringify(payload));
+    const resp = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] Delete post failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    console.log(`[rc-posts] Delete post ${req.params.postId} success`);
+    res.json(body ? JSON.parse(body) : { ok: true });
+  } catch (e) {
+    console.error('[rc-posts] Delete error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/rc-posts/:postId/publish — Publish a planned post
+app.post('/api/projects/:id/rc-posts/:postId/publish', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const url = `https://local.ratingcaptain.com/api/posts/${req.params.postId}/publish`;
+    const payload = { account_id: loc.account_id, location_id: loc.location_id };
+    console.log(`[rc-posts] Publish planned post ${req.params.postId}: ${url}`);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] Publish post failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    console.log(`[rc-posts] Publish post ${req.params.postId} success`);
+    res.json(body ? JSON.parse(body) : { ok: true });
+  } catch (e) {
+    console.error('[rc-posts] Publish error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/rc-posts/ai-generate — AI-generated post text
+app.post('/api/projects/:id/rc-posts/ai-generate', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const { topic, tone, keywords } = req.body;
+    if (!topic) return res.status(400).json({ error: 'topic is required' });
+
+    const payload = {
+      location_id: loc.location_id,
+      topic,
+      ...(tone && { tone }),
+      ...(keywords && { keywords })
+    };
+    const url = 'https://local.ratingcaptain.com/api/posts/ai';
+    console.log(`[rc-posts] AI generate: ${url}`, JSON.stringify(payload));
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] AI generate failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    console.log(`[rc-posts] AI generate success`);
+    res.json(JSON.parse(body));
+  } catch (e) {
+    console.error('[rc-posts] AI generate error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/projects/:id/rc-posts/suggestions — Post topic suggestions
+app.get('/api/projects/:id/rc-posts/suggestions', async (req, res) => {
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RC_API_TOKEN not configured' });
+  try {
+    const loc = await getRcLocationDetails(req.params.id);
+    const count = req.query.count || 3;
+    const url = `https://local.ratingcaptain.com/api/posts/suggestions?location_id=${encodeURIComponent(loc.location_id)}&count=${count}`;
+    console.log(`[rc-posts] GET suggestions: ${url}`);
+    const resp = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' }
+    });
+    const body = await resp.text();
+    if (!resp.ok) {
+      console.error(`[rc-posts] Suggestions failed: ${resp.status} ${body}`);
+      return res.status(500).json({ error: `RC API returned ${resp.status}`, detail: body });
+    }
+    res.json(JSON.parse(body));
+  } catch (e) {
+    console.error('[rc-posts] Suggestions error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== GBP PROFILE (from Chrome Extension) ====================
 
 // Store GBP profile data scraped by the extension
@@ -5186,41 +5453,48 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
 
     // Parse the Clarity response — it returns an array of metric groups
     // Each group has { metricName, information: [...] }
+    // Actual API field names: Url (title-case), subTotal, sessionsCount, averageScrollDepth, activeTime
+    // Actual metric names: DeadClickCount, RageClickCount, ExcessiveScroll, QuickbackClick, ScriptErrorCount, ErrorClickCount, ScrollDepth, Traffic, EngagementTime
     const metricMap = {};
     for (const group of (Array.isArray(clarityData) ? clarityData : [])) {
       const metricName = group.metricName;
       for (const row of (group.information || [])) {
-        const url = row.URL || row.url;
+        const url = row.Url || row.URL || row.url;
         if (!url) continue;
         if (!metricMap[url]) metricMap[url] = { page_url: url };
+        // Every metric row has sessionsCount — use it as fallback for sessions
+        if (!metricMap[url].sessions && row.sessionsCount) {
+          metricMap[url].sessions = parseInt(row.sessionsCount || 0);
+        }
         switch (metricName) {
           case 'Traffic':
-            metricMap[url].sessions = parseInt(row.totalSessionCount || 0);
+            metricMap[url].sessions = parseInt(row.totalSessionCount || row.sessionsCount || 0);
+            metricMap[url].distinct_users = parseInt(row.distinctUserCount || 0);
             metricMap[url].page_title = row.PageTitle || row.pageTitle || null;
             break;
-          case 'Dead Click Count':
-            metricMap[url].dead_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'DeadClickCount':
+            metricMap[url].dead_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
-          case 'Rage Click Count':
-            metricMap[url].rage_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'RageClickCount':
+            metricMap[url].rage_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
-          case 'Excessive Scroll':
-            metricMap[url].excessive_scrolls = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'ExcessiveScroll':
+            metricMap[url].excessive_scrolls = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
-          case 'Quickback Click':
-            metricMap[url].quick_backs = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'QuickbackClick':
+            metricMap[url].quick_backs = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
-          case 'Scroll Depth':
-            metricMap[url].scroll_depth = parseFloat(row.Percentage || row.percentage || row.avgScrollDepth || 0);
+          case 'ScrollDepth':
+            metricMap[url].scroll_depth = parseFloat(row.averageScrollDepth || row.Percentage || row.avgScrollDepth || 0);
             break;
-          case 'Engagement Time':
-            metricMap[url].engagement_time = parseFloat(row.AvgTime || row.avgTime || row.avgEngagementTime || 0);
+          case 'EngagementTime':
+            metricMap[url].engagement_time = parseFloat(row.activeTime || row.totalTime || row.AvgTime || 0);
             break;
-          case 'Error Click Count':
-            metricMap[url].error_clicks = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'ErrorClickCount':
+            metricMap[url].error_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
-          case 'Script Error Count':
-            metricMap[url].script_errors = parseInt(row.Count || row.count || row.totalCount || 0);
+          case 'ScriptErrorCount':
+            metricMap[url].script_errors = parseInt(row.subTotal || row.Count || row.count || 0);
             break;
         }
       }
