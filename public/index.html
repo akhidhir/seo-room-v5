@@ -9981,6 +9981,7 @@
       const [dragItem, setDragItem] = useState(null);
       const [addModal, setAddModal] = useState(null); // { date, hour }
       const [addForm, setAddForm] = useState({ title: '', description: '', severity: 'medium', estimated_hours: 0.5 });
+      const [showSidebar, setShowSidebar] = useState(false);
 
       const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
       const sevBg = { critical: '#ef444418', high: '#ef444412', medium: '#f59e0b12', low: '#22c55e12' };
@@ -10133,7 +10134,7 @@
               <div key={d} style={{ padding: '12px 6px', textAlign: 'center', fontSize: 13, fontWeight: 800, color: 'var(--text2)', background: 'var(--card)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{d}</div>
             ))}
             {cells.map((day, idx) => {
-              if (!day) return <div key={idx} style={{ background: 'var(--bg1)', minHeight: 120 }} />;
+              if (!day) return <div key={idx} style={{ background: 'var(--bg1)', minHeight: 'calc((100vh - 280px) / 6)' }} />;
               const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const dayItems = itemsForDate(dateStr);
               const isWknd = (idx % 7) >= 5;
@@ -10141,7 +10142,7 @@
               return (
                 <div key={idx} onDragOver={onDragOver} onDrop={(e) => onDropCell(e, dateStr)}
                   onClick={() => { setCalView('day'); setCalDate(new Date(y, m, day)); }}
-                  style={{ background: isToday(dateStr) ? '#6366f110' : isWknd ? 'var(--bg1)' : 'var(--card)', minHeight: 120, padding: 6, cursor: 'pointer', position: 'relative' }}>
+                  style={{ background: isToday(dateStr) ? '#6366f110' : isWknd ? 'var(--bg1)' : 'var(--card)', minHeight: 'calc((100vh - 280px) / 6)', padding: 8, cursor: 'pointer', position: 'relative' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
                     <span style={{ fontSize: 15, fontWeight: isToday(dateStr) ? 800 : 700,
                       background: isToday(dateStr) ? 'var(--accent)' : 'transparent', color: isToday(dateStr) ? '#fff' : 'var(--text1)',
@@ -10368,57 +10369,65 @@
       return (
         <div>
           {/* Calendar toolbar */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button onClick={prevPeriod} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer' }}><i className="fas fa-chevron-left" /></button>
-              <button onClick={goToday} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Today</button>
-              <button onClick={nextPeriod} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer' }}><i className="fas fa-chevron-right" /></button>
-              <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12, padding: '8px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button onClick={prevPeriod} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-chevron-left" /></button>
+              <button onClick={goToday} style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>Today</button>
+              <button onClick={nextPeriod} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-chevron-right" /></button>
+              <span style={{ fontSize: 22, fontWeight: 800, marginLeft: 12, color: 'var(--text1)' }}>
                 {calView === 'day' ? calDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) :
                  calDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 11, color: 'var(--text3)' }}>{scheduledCount} scheduled ({totalHours}h) · {unscheduled.length} unscheduled</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 13, color: 'var(--text2)', fontWeight: 600 }}>{scheduledCount} scheduled ({totalHours}h)</span>
+              <button onClick={() => setShowSidebar(true)}
+                style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--accent)', background: '#6366f115', color: 'var(--accent)', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>
+                <i className="fas fa-inbox" style={{ marginRight: 6 }} />Unscheduled ({unscheduled.length})
+              </button>
               {['month', 'week', 'day'].map(v => (
                 <button key={v} onClick={() => setCalView(v)}
-                  style={{ padding: '6px 12px', borderRadius: 8, border: calView === v ? '1px solid var(--accent)' : '1px solid var(--border)',
-                    background: calView === v ? '#6366f115' : 'var(--card)', color: calView === v ? 'var(--accent)' : 'var(--text2)',
-                    cursor: 'pointer', fontSize: 12, fontWeight: 600, textTransform: 'capitalize' }}>{v}</button>
+                  style={{ padding: '10px 18px', borderRadius: 10, border: calView === v ? '2px solid var(--accent)' : '1px solid var(--border)',
+                    background: calView === v ? '#6366f120' : 'var(--card)', color: calView === v ? 'var(--accent)' : 'var(--text1)',
+                    cursor: 'pointer', fontSize: 14, fontWeight: 700, textTransform: 'capitalize' }}>{v}</button>
               ))}
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 16 }}>
-            {/* Main calendar area */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {calView === 'month' && renderMonth()}
-              {calView === 'week' && renderWeek()}
-              {calView === 'day' && renderDay()}
-            </div>
-
-            {/* Unscheduled sidebar */}
-            <div style={{ width: 220, flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>Unscheduled ({unscheduled.length})</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <button onClick={handleDistribute} disabled={distributing || unscheduled.length === 0}
-                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 11, cursor: 'pointer', marginBottom: 6, opacity: unscheduled.length === 0 ? 0.5 : 1 }}>
-                  {distributing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Distributing...</> : <><i className="fas fa-magic" style={{ marginRight: 4 }} />Auto-Distribute</>}
-                </button>
-                {scheduledCount > 0 && (
-                  <button onClick={handleClearSchedule} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text3)', fontWeight: 600, fontSize: 10, cursor: 'pointer', marginBottom: 6 }}>
-                    <i className="fas fa-eraser" style={{ marginRight: 4 }} />Clear Schedule
-                  </button>
-                )}
-              </div>
-              <div style={{ maxHeight: 500, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {unscheduled.slice(0, 50).map(item => <TaskPill key={item.id} item={item} />)}
-                {unscheduled.length === 0 && <div style={{ fontSize: 11, color: 'var(--text3)', padding: 8, textAlign: 'center' }}>All tasks scheduled</div>}
-              </div>
-            </div>
+          {/* Full-width calendar */}
+          <div style={{ width: '100%' }}>
+            {calView === 'month' && renderMonth()}
+            {calView === 'week' && renderWeek()}
+            {calView === 'day' && renderDay()}
           </div>
+
+          {/* Unscheduled drawer — slides in from right */}
+          {showSidebar && (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 900, display: 'flex', justifyContent: 'flex-end' }} onClick={() => setShowSidebar(false)}>
+              <div onClick={e => e.stopPropagation()} style={{ width: 360, height: '100vh', background: 'var(--card)', borderLeft: '2px solid var(--border)', padding: 24, overflowY: 'auto', boxShadow: '-8px 0 32px rgba(0,0,0,0.4)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text1)' }}>Unscheduled ({unscheduled.length})</span>
+                  <button onClick={() => setShowSidebar(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20 }}><i className="fas fa-times" /></button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                  <button onClick={handleDistribute} disabled={distributing || unscheduled.length === 0}
+                    style={{ padding: '12px 16px', borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: unscheduled.length === 0 ? 0.5 : 1 }}>
+                    {distributing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Distributing...</> : <><i className="fas fa-magic" style={{ marginRight: 6 }} />Auto-Distribute All</>}
+                  </button>
+                  {scheduledCount > 0 && (
+                    <button onClick={handleClearSchedule} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text2)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                      <i className="fas fa-eraser" style={{ marginRight: 6 }} />Clear Schedule
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {unscheduled.slice(0, 100).map(item => <TaskPill key={item.id} item={item} />)}
+                  {unscheduled.length > 100 && <div style={{ fontSize: 13, color: 'var(--text2)', padding: 12, textAlign: 'center', fontWeight: 600 }}>+{unscheduled.length - 100} more</div>}
+                  {unscheduled.length === 0 && <div style={{ fontSize: 14, color: 'var(--text2)', padding: 20, textAlign: 'center', fontWeight: 600 }}>All tasks scheduled</div>}
+                </div>
+              </div>
+            </div>
+          )}
 
           {renderEditModal()}
           {renderAddModal()}
