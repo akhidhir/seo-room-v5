@@ -10100,14 +10100,14 @@
         const pillar = (item.pillar || '').toLowerCase();
         return (
           <div draggable onDragStart={(e) => onDragStart(e, item)} onClick={(e) => { e.stopPropagation(); setEditItem({ ...item }); }}
-            style={{ padding: compact ? '8px 14px' : '12px 20px', borderRadius: 10, fontSize: compact ? 25 : 28, fontWeight: 800,
-              background: sevBg[sev] || '#6366f112', borderLeft: `6px solid ${sevColors[sev] || '#6366f1'}`,
-              color: 'var(--text1)', cursor: 'grab', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              display: 'flex', alignItems: 'center', gap: 10, opacity: item.status === 'done' || item.status === 'completed' ? 0.5 : 1,
+            style={{ padding: compact ? '4px 8px' : '6px 10px', borderRadius: 8, fontSize: compact ? 13 : 14, fontWeight: 700,
+              background: sevBg[sev] || '#6366f112', borderLeft: `4px solid ${sevColors[sev] || '#6366f1'}`,
+              color: 'var(--text1)', cursor: 'grab', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', gap: 6, opacity: item.status === 'done' || item.status === 'completed' ? 0.5 : 1,
               textDecoration: item.status === 'done' || item.status === 'completed' ? 'line-through' : 'none', lineHeight: 1.3 }}>
-            {!compact && <span style={{ width: 14, height: 14, borderRadius: '50%', background: pillarColors[pillar] || '#6366f1', flexShrink: 0 }} />}
+            {!compact && <span style={{ width: 8, height: 8, borderRadius: '50%', background: pillarColors[pillar] || '#6366f1', flexShrink: 0 }} />}
             {(item.title || '').substring(0, compact ? 30 : 50)}
-            {!compact && item.estimated_hours && <span style={{ marginLeft: 'auto', fontSize: 20, color: 'var(--text3)', flexShrink: 0 }}>{item.estimated_hours}h</span>}
+            {!compact && item.estimated_hours && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>{item.estimated_hours}h</span>}
           </div>
         );
       };
