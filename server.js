@@ -17044,8 +17044,11 @@ app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res)
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    const limit = await checkMonthlyAuditLimit(projectId, 'website');
-    if (limit.limited) return res.status(429).json({ error: `Website audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    const force = req.body?.force === true || req.query?.force === 'true';
+    if (!force) {
+      const limit = await checkMonthlyAuditLimit(projectId, 'website');
+      if (limit.limited) return res.status(429).json({ error: `Website audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    }
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
