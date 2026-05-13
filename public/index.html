@@ -17826,6 +17826,32 @@
       const [analysisResults, setAnalysisResults] = useState({});
       const [showCostConfirm, setShowCostConfirm] = useState(false);
       const [expandedAnalysis, setExpandedAnalysis] = useState(null);
+      const [sentToActionPlan, setSentToActionPlan] = useState({});
+
+      const sendGapToActionPlan = async (keyword, gap, index) => {
+        const key = `${keyword}::${index}`;
+        if (sentToActionPlan[key]) return;
+        try {
+          const pillarMap = { Content: 'content', Technical: 'technical', 'On-Page': 'onpage', Authority: 'authority', UX: 'technical' };
+          await api(`/projects/${project.id}/action-items`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pillar: pillarMap[gap.category] || 'content',
+              type: 'serp_analysis',
+              title: gap.issue,
+              description: gap.fix || '',
+              severity: gap.impact || 'medium',
+              category: gap.category || 'general',
+              current_value: `Keyword: ${keyword}`,
+              new_value: gap.competitor_benchmark || ''
+            })
+          });
+          setSentToActionPlan(prev => ({ ...prev, [key]: true }));
+        } catch (e) {
+          console.error('Failed to send to action plan:', e);
+        }
+      };
 
       const modelCosts = {
         'haiku-4.5': 0.002, 'sonnet-4.5': 0.015, 'sonnet-4.6': 0.015,
@@ -18346,6 +18372,17 @@
                                           </div>
                                         </div>
                                       )}
+                                      {/* Send to Action Plan button */}
+                                      {g.status !== 'done' && (
+                                        <div style={{ padding: '10px 18px 10px 62px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+                                          <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, i); }}
+                                            disabled={sentToActionPlan[`${kw.keyword}::${i}`]}
+                                            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 8, background: sentToActionPlan[`${kw.keyword}::${i}`] ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', color: sentToActionPlan[`${kw.keyword}::${i}`] ? '#22c55e' : 'var(--accent)', border: `1px solid ${sentToActionPlan[`${kw.keyword}::${i}`] ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, cursor: sentToActionPlan[`${kw.keyword}::${i}`] ? 'default' : 'pointer', fontWeight: 600 }}>
+                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::${i}`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 6 }} />
+                                            {sentToActionPlan[`${kw.keyword}::${i}`] ? 'Sent to Action Plan' : 'Send to Action Plan'}
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
                                   ))}
                                 </div>
@@ -18778,8 +18815,34 @@
       const [mapsAnalysisResults, setMapsAnalysisResults] = useState({});
       const [showMapsCostConfirm, setShowMapsCostConfirm] = useState(false);
       const [expandedMapsAnalysis, setExpandedMapsAnalysis] = useState(null);
+      const [mapsSentToAction, setMapsSentToAction] = useState({});
       const mapsModelCosts = { 'haiku-4.5': 0.002, 'sonnet-4.5': 0.015, 'sonnet-4.6': 0.015, 'opus-4.6': 0.075 };
       const mapsCostPerKw = mapsModelCosts[mapsAnalysisModel] || 0.015;
+
+      const sendMapsGapToActionPlan = async (keyword, location, gap, index) => {
+        const key = `${keyword}::${location}::${index}`;
+        if (mapsSentToAction[key]) return;
+        try {
+          const pillarMap = { Citations: 'gbp_external', Reviews: 'gbp_external', 'GBP Optimization': 'gbp', Categories: 'gbp', 'Service Areas': 'gbp', Photos: 'gbp', Posts: 'gbp' };
+          await api(`/projects/${project.id}/action-items`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pillar: pillarMap[gap.category] || 'gbp_external',
+              type: 'maps_analysis',
+              title: gap.issue,
+              description: gap.fix || '',
+              severity: gap.impact || 'medium',
+              category: gap.category || 'general',
+              current_value: `Keyword: ${keyword} | Location: ${location}`,
+              new_value: gap.competitor_benchmark || ''
+            })
+          });
+          setMapsSentToAction(prev => ({ ...prev, [key]: true }));
+        } catch (e) {
+          console.error('Failed to send to action plan:', e);
+        }
+      };
 
       // Load saved Maps analysis on mount
       useEffect(() => {
@@ -19552,6 +19615,17 @@
                                       <div style={{ padding: '12px 18px 12px 62px', background: 'rgba(99,102,241,0.03)', borderTop: '1px solid var(--border)' }}>
                                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}><i className="fa-solid fa-users" style={{ marginRight: 6 }} />What Competitors Do</div>
                                         <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{g.competitor_benchmark}</div>
+                                      </div>
+                                    )}
+                                    {/* Send to Action Plan button */}
+                                    {g.status !== 'done' && (
+                                      <div style={{ padding: '10px 18px 10px 62px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+                                        <button className="btn" onClick={e => { e.stopPropagation(); sendMapsGapToActionPlan(kw.keyword, kw.location, g, i); }}
+                                          disabled={mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`]}
+                                          style={{ fontSize: 12, padding: '6px 14px', borderRadius: 8, background: mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', color: mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? '#22c55e' : 'var(--accent)', border: `1px solid ${mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, cursor: mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? 'default' : 'pointer', fontWeight: 600 }}>
+                                          <i className={`fa-solid ${mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 6 }} />
+                                          {mapsSentToAction[`${kw.keyword}::${kw.location}::${i}`] ? 'Sent to Action Plan' : 'Send to Action Plan'}
+                                        </button>
                                       </div>
                                     )}
                                   </div>
