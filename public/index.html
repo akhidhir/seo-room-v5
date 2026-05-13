@@ -10426,6 +10426,7 @@
               <button onClick={nextPeriod} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-chevron-right" /></button>
               <span style={{ fontSize: 22, fontWeight: 800, marginLeft: 12, color: 'var(--text1)' }}>
                 {calView === 'day' ? calDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) :
+                 calView === 'week' ? (() => { const d = new Date(calDate); const day = d.getDay(); const mon = new Date(d); mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1)); const sun = new Date(mon); sun.setDate(mon.getDate() + 6); return mon.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' — ' + sun.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); })() :
                  calDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
               </span>
             </div>
