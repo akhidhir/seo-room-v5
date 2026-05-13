@@ -18649,7 +18649,7 @@
     }
 
     // ============ GRID HEATMAP COMPONENT ============
-    function GridHeatmap({ gridPoints, gridSize, keyword, location }) {
+    function GridHeatmap({ gridPoints, gridSize, keyword, location, suburbGps }) {
       if (!gridPoints || gridPoints.length === 0) return null;
       const cellSize = gridSize <= 3 ? 56 : gridSize <= 5 ? 44 : 36;
       const getColor = (p) => {
@@ -18670,12 +18670,33 @@
         if (p.position <= 15) return 'rgba(249,115,22,0.12)';
         return 'rgba(239,68,68,0.12)';
       };
+      // Find nearest suburb name for a lat/lng
+      const nearestSuburb = useMemo(() => {
+        if (!suburbGps) return () => null;
+        const entries = Object.entries(suburbGps);
+        return (lat, lng) => {
+          let best = null, bestDist = Infinity;
+          for (const [name, coords] of entries) {
+            const d = Math.pow(lat - coords.lat, 2) + Math.pow(lng - coords.lng, 2);
+            if (d < bestDist) { bestDist = d; best = name; }
+          }
+          // Only show if within ~5km (~0.045 degrees)
+          return bestDist < 0.002 ? best : null;
+        };
+      }, [suburbGps]);
+      const [hoverIdx, setHoverIdx] = useState(null);
       const center = Math.floor(gridSize / 2);
       return (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridSize}, ${cellSize}px)`, gap: 3, justifyContent: 'center' }}>
-            {gridPoints.map((p, i) => (
-              <div key={i} title={`(${p.lat.toFixed(3)}, ${p.lng.toFixed(3)})${p.found ? ` — Rank #${p.position}` : ' — Not found'}`}
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridSize}, ${cellSize}px)`, gap: 3, justifyContent: 'center', position: 'relative' }}>
+            {gridPoints.map((p, i) => {
+              const suburb = nearestSuburb(p.lat, p.lng);
+              const tooltip = suburb
+                ? `${suburb.charAt(0).toUpperCase() + suburb.slice(1)}${p.found ? ` — #${p.position}` : ' — Not found'}`
+                : `(${p.lat.toFixed(3)}, ${p.lng.toFixed(3)})${p.found ? ` — #${p.position}` : ' — Not found'}`;
+              return (
+              <div key={i} title={tooltip}
+                onMouseEnter={() => setHoverIdx(i)} onMouseLeave={() => setHoverIdx(null)}
                 style={{
                   width: cellSize, height: cellSize, borderRadius: 6,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -18689,8 +18710,17 @@
                     <i className="fa-solid fa-location-dot" />
                   </div>
                 )}
+                {hoverIdx === i && suburb && (
+                  <div style={{ position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4,
+                    background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px',
+                    fontSize: 10, fontWeight: 600, color: 'var(--text1)', whiteSpace: 'nowrap', zIndex: 10, pointerEvents: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+                    {suburb.charAt(0).toUpperCase() + suburb.slice(1)}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 10, fontSize: 10, color: 'var(--text3)' }}>
             {[
@@ -18741,6 +18771,12 @@
       const [rcSyncing, setRcSyncing] = useState(false);
 
       const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: [] });
+      const [suburbGps, setSuburbGps] = useState(null);
+
+      // Load suburb GPS data for grid tooltips
+      useEffect(() => {
+        api('/suburb-gps').then(data => { if (data && !data.error) setSuburbGps(data); }).catch(() => {});
+      }, []);
 
       // Load grid scans + audit data on mount
       useEffect(() => {
@@ -19775,7 +19811,7 @@
                                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textAlign: 'center' }}>
                                     <i className="fa-solid fa-th" style={{ marginRight: 4 }} />Grid Scan — {gridScanData.grid_size}×{gridScanData.grid_size}, {gridScanData.radius_km}km radius
                                   </div>
-                                  <GridHeatmap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} keyword={kw.keyword} location={kw.location} />
+                                  <GridHeatmap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} keyword={kw.keyword} location={kw.location} suburbGps={suburbGps} />
                                   {gridScanData.scanned_at && (
                                     <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 6 }}>
                                       Scanned: {new Date(gridScanData.scanned_at).toLocaleDateString()} {new Date(gridScanData.scanned_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}

@@ -1586,6 +1586,9 @@ const SUBURB_GPS = {
   'darwin': { lat: -12.4634, lng: 130.8456 }, 'canberra': { lat: -35.2809, lng: 149.1300 },
 };
 
+// Expose suburb GPS data for grid heatmap tooltips
+app.get('/api/suburb-gps', (req, res) => { res.json(SUBURB_GPS); });
+
 // Get/set service areas for a project
 app.get('/api/projects/:id/service-areas', async (req, res) => {
   try {
