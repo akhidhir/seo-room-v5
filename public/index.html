@@ -17715,8 +17715,8 @@
           api(`/projects/${project.id}/rank-tracking/keywords`),
           api(`/projects/${project.id}/rank-tracking/latest`)
         ]);
-        // SERP Rankings only shows keywords WITHOUT a location (Maps keywords have locations)
-        if (Array.isArray(kwRes)) setKeywords(kwRes.filter(kw => !kw.location));
+        // Return ALL keywords — each page filters by location presence
+        if (Array.isArray(kwRes)) setKeywords(kwRes);
         if (Array.isArray(rankRes)) setRankings(rankRes);
       };
 
@@ -17850,9 +17850,12 @@
       };
       const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
+      // SERP only: filter out Maps keywords (those with location)
+      const serpOnly = useMemo(() => merged.filter(kw => !kw.location), [merged]);
+
       const sorted = useMemo(() => {
-        if (!sortCol) return merged;
-        return [...merged].sort((a, b) => {
+        if (!sortCol) return serpOnly;
+        return [...serpOnly].sort((a, b) => {
           let va, vb;
           if (sortCol === 'keyword') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
           else if (sortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
@@ -17865,7 +17868,7 @@
           if (va > vb) return sortDir === 'asc' ? 1 : -1;
           return 0;
         });
-      }, [merged, sortCol, sortDir]);
+      }, [serpOnly, sortCol, sortDir]);
 
       const allChecked = sorted.length > 0 && analysisCheckedCount === sorted.length;
       const toggleAnalysisCheck = (id) => setAnalysisChecked(prev => ({ ...prev, [id]: !prev[id] }));
@@ -17992,7 +17995,7 @@
           {rankings.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
               {[
-                { label: 'Tracked', value: keywords.length, color: 'var(--text)' },
+                { label: 'Tracked', value: serpOnly.length, color: 'var(--text)' },
                 { label: 'Top 3', value: rankings.filter(r => r.serp_position && r.serp_position <= 3).length, color: '#22c55e' },
                 { label: 'Top 10', value: rankings.filter(r => r.serp_position && r.serp_position <= 10).length, color: '#3b82f6' },
                 { label: 'Top 20', value: rankings.filter(r => r.serp_position && r.serp_position <= 20).length, color: '#f59e0b' },
