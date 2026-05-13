@@ -10962,7 +10962,7 @@
 
           {!loading && filtered.length > 0 && (
             <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 18, tableLayout: 'fixed' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)' }}>
                     {[
@@ -10974,7 +10974,7 @@
                       { key: 'status', label: 'STATUS', w: 120, align: 'center' },
                     ].map(col => (
                       <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
-                        style={{ padding: '16px 18px', textAlign: col.align, fontSize: 15, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none' }}>
+                        style={{ padding: '12px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                         {col.label}
                         {sortCol === col.key && <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10 }} />}
                       </th>
@@ -10992,14 +10992,14 @@
                     return (
                       <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px 14px', verticalAlign: 'top' }}>
-                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 17, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
+                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 13, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
                         </td>
-                        <td style={{ padding: '18px', verticalAlign: 'top', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          <div style={{ fontWeight: 600, fontSize: 20, lineHeight: 1.5, color: 'var(--text1)' }}>
+                        <td style={{ padding: '14px 18px', verticalAlign: 'top', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.5, color: 'var(--text1)' }}>
                             {item.title}
                             {item.is_duplicate && <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700, padding: '3px 7px', borderRadius: 4, background: '#8b5cf620', color: '#8b5cf6', verticalAlign: 'middle' }} title={`Consolidates ${item.duplicate_ids.length} duplicate(s) — fixing this fixes all`}>DP ×{item.duplicate_ids.length}</span>}
                           </div>
-                          <div style={{ fontSize: 16, color: 'var(--text2)', lineHeight: 1.7, marginTop: 6 }}>{item.description}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, marginTop: 4 }}>{item.description}</div>
                           {(() => {
                             const pLower = (item._pillar || item.pillar || '').toLowerCase();
                             const isGBP = pLower.includes('gbp');
@@ -11028,12 +11028,12 @@
                         </td>
                         {activePillar === 'all' && (
                           <td style={{ padding: '14px', verticalAlign: 'top' }}>
-                            <span style={{ fontSize: 15, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '5px 12px', borderRadius: 5 }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '4px 10px', borderRadius: 5 }}>
                               {pillarLabels[itemPillar] || itemPillar}
                             </span>
                           </td>
                         )}
-                        <td style={{ padding: '18px', verticalAlign: 'top', fontSize: 16, color: 'var(--text2)' }}>{item._category || item.category}</td>
+                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>{item._category || item.category}</td>
                         <td style={{ padding: '10px 8px', verticalAlign: 'top', fontSize: 13, whiteSpace: 'nowrap' }}>
                           <select value={assigneeLabel} onChange={async (e) => {
                             const newLabel = e.target.value;
