@@ -21944,9 +21944,54 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const project = projR.rows[0];
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '').toLowerCase();
 
-    // 1. RC profile (GBP data)
-    const rcR = await pool.query("SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
-    const rc = rcR.rows[0]?.config ? (typeof rcR.rows[0].config === 'string' ? JSON.parse(rcR.rows[0].config) : rcR.rows[0].config) : null;
+    // 1. RC profile (GBP data) — auto-fetch from RC API if missing
+    let rcR = await pool.query("SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
+    let rc = rcR.rows[0]?.config ? (typeof rcR.rows[0].config === 'string' ? JSON.parse(rcR.rows[0].config) : rcR.rows[0].config) : null;
+
+    // Auto-sync from RC API if no rc_profile exists and project has gbp_location_id
+    if (!rc && project.gbp_location_id) {
+      const RC_TOKEN = process.env.RC_API_TOKEN;
+      if (RC_TOKEN) {
+        try {
+          const numericId = project.gbp_location_id.replace(/^locations\//, '');
+          const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+          const RC_BASE = 'https://local.ratingcaptain.com/api';
+          console.log(`[local-intel] Auto-fetching RC profile for project ${projectId} (location ${numericId})...`);
+
+          const [profileResp, extResp] = await Promise.allSettled([
+            fetch(`${RC_BASE}/locations/${numericId}`, { headers: rcHeaders }),
+            fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders }),
+          ]);
+
+          let profile = null, reviews_stats = null;
+          if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
+            profile = await profileResp.value.json();
+          }
+          if (extResp.status === 'fulfilled' && extResp.value.ok) {
+            const extData = await extResp.value.json();
+            const loc = (extData.data || []).find(l => l.location_id === project.gbp_location_id);
+            if (loc) {
+              reviews_stats = { total_reviews: loc.reviews_amount || 0, average_rating: loc.rating || 0, reply_rate: 0, replied_count: 0, unreplied_count: 0 };
+            }
+          }
+
+          if (profile) {
+            const rcData = { location_id: project.gbp_location_id, profile, healthcheck: [], reviews_stats: reviews_stats || {}, posts: { count: 0, published_posts: [] }, synced_at: new Date().toISOString() };
+            await pool.query(
+              `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+               VALUES ($1, 'rc_profile', $2, 'connected', NOW())
+               ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+              [projectId, JSON.stringify(rcData)]
+            );
+            rc = rcData;
+            console.log(`[local-intel] Auto-synced RC profile for project ${projectId}: ${profile.title}`);
+          }
+        } catch (e) {
+          console.log(`[local-intel] Auto-sync failed for project ${projectId}: ${e.message}`);
+        }
+      }
+    }
+
     const profile = rc?.profile || null;
 
     // Extract GBP suburbs from service areas
