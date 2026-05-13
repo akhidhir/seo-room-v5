@@ -22021,13 +22021,21 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         if (name) gbpSuburbs.push(name);
       }
     }
-    // Extract GBP services — skip raw serviceTypeId entries (job_type_id:*)
+    // Extract GBP services — resolve structuredServiceItem IDs via category serviceTypes
     const gbpServices = [];
     if (profile?.serviceItems) {
+      // Build serviceTypeId → displayName map from categories
+      const svcTypeMap = {};
+      const allCats = [profile.categories?.primaryCategory, ...(profile.categories?.additionalCategories || [])].filter(Boolean);
+      for (const cat of allCats) {
+        for (const st of (cat.serviceTypes || [])) {
+          if (st.serviceTypeId && st.displayName) svcTypeMap[st.serviceTypeId] = st.displayName;
+        }
+      }
       for (const si of profile.serviceItems) {
         const label = si.freeFormServiceItem?.label?.displayName || '';
-        // Only use structuredServiceItem if it has a human-readable displayName, not a raw ID
-        const structLabel = si.structuredServiceItem?.description || '';
+        const structId = si.structuredServiceItem?.serviceTypeId || '';
+        const structLabel = si.structuredServiceItem?.description || svcTypeMap[structId] || '';
         const finalLabel = label || structLabel;
         if (finalLabel && !finalLabel.startsWith('job_type_id:')) gbpServices.push(finalLabel);
       }
