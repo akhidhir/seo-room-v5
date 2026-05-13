@@ -18767,6 +18767,25 @@
       const [mapsSelected, setMapsSelected] = useState({});
       const mapsSelCount = Object.values(mapsSelected).filter(Boolean).length;
 
+      // Maps AI Analysis state
+      const [mapsAnalysisModel, setMapsAnalysisModel] = useState('sonnet-4.6');
+      const [mapsAnalysisChecked, setMapsAnalysisChecked] = useState({});
+      const [mapsAnalyzing, setMapsAnalyzing] = useState(false);
+      const [mapsAnalysisResults, setMapsAnalysisResults] = useState({});
+      const [showMapsCostConfirm, setShowMapsCostConfirm] = useState(false);
+      const [expandedMapsAnalysis, setExpandedMapsAnalysis] = useState(null);
+      const mapsModelCosts = { 'haiku-4.5': 0.002, 'sonnet-4.5': 0.015, 'sonnet-4.6': 0.015, 'opus-4.6': 0.075 };
+      const mapsCostPerKw = mapsModelCosts[mapsAnalysisModel] || 0.015;
+      const mapsAnalysisCheckedCount = Object.values(mapsAnalysisChecked).filter(Boolean).length;
+
+      // Load saved Maps analysis on mount
+      useEffect(() => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/maps/analyses`).then(saved => {
+          if (saved && !saved.error && typeof saved === 'object') setMapsAnalysisResults(saved);
+        }).catch(() => {});
+      }, [project?.id]);
+
       const bulkDeleteMaps = async () => {
         const ids = Object.entries(mapsSelected).filter(([k, v]) => v).map(([k]) => parseInt(k));
         if (ids.length === 0) return;
@@ -18946,6 +18965,44 @@
         });
       }, [mapsKeywordsRaw, mSortCol, mSortDir, gridScans]);
 
+      // Maps analysis helpers
+      const mapsAllChecked = mapsKeywords.length > 0 && mapsAnalysisCheckedCount === mapsKeywords.length;
+      const toggleMapsAnalysisCheck = (id) => setMapsAnalysisChecked(prev => ({ ...prev, [id]: !prev[id] }));
+      const toggleAllMapsAnalysis = () => {
+        if (mapsAllChecked) setMapsAnalysisChecked({});
+        else setMapsAnalysisChecked(Object.fromEntries(mapsKeywords.map(kw => [kw.id, true])));
+      };
+      const runMapsAnalysis = async () => {
+        setShowMapsCostConfirm(false);
+        setMapsAnalyzing(true);
+        const toAnalyze = mapsKeywords.filter(kw => mapsAnalysisChecked[kw.id]);
+        let lastKey = null;
+        for (const kw of toAnalyze) {
+          const g = getGridData(kw);
+          try {
+            const r = await api(`/projects/${project.id}/maps/analyze`, {
+              method: 'POST',
+              body: {
+                keyword: kw.keyword, location: kw.location, model: mapsAnalysisModel,
+                avg_rank: g.arp, visibility: g.solv, coverage: `${g.found_in || 0}/${g.data_points || 0}`,
+                found_in: g.found_in, data_points: g.data_points
+              }
+            });
+            const key = `${kw.keyword}|||${kw.location}`;
+            if (r.ok) {
+              setMapsAnalysisResults(prev => ({ ...prev, [key]: r }));
+              lastKey = key;
+            } else {
+              setMapsAnalysisResults(prev => ({ ...prev, [key]: { error: r.error || 'Unknown error' } }));
+            }
+          } catch (e) {
+            setMapsAnalysisResults(prev => ({ ...prev, [`${kw.keyword}|||${kw.location}`]: { error: e.message } }));
+          }
+        }
+        setMapsAnalyzing(false);
+        if (toAnalyze.length === 1 && lastKey) setExpandedMapsAnalysis(lastKey);
+      };
+
       const handleAdd = () => {
         if (!service.trim() || !location.trim()) return;
         addKeyword(service.trim(), location.trim());
@@ -19092,6 +19149,57 @@
               </button>
             </div>
           </div>
+
+          {/* Maps AI Analysis toolbar */}
+          {mapsKeywords.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '10px 16px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#22c55e' }}><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Maps Analysis</span>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>Model:</span>
+              <select value={mapsAnalysisModel} onChange={e => setMapsAnalysisModel(e.target.value)} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', fontSize: 13 }}>
+                <option value="haiku-4.5">Haiku 4.5 (~$0.002/kw)</option>
+                <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
+                <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
+                <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
+              </select>
+              {mapsAnalysisCheckedCount > 0 && (
+                <span style={{ fontSize: 13, color: '#22c55e', fontWeight: 600 }}>{mapsAnalysisCheckedCount} keyword{mapsAnalysisCheckedCount > 1 ? 's' : ''} selected — Est. ${(mapsAnalysisCheckedCount * mapsCostPerKw).toFixed(3)}</span>
+              )}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                {mapsAnalysisCheckedCount > 0 && <button className="btn" onClick={() => setMapsAnalysisChecked({})} style={{ fontSize: 12 }}>Deselect All</button>}
+                <button className="btn btn-primary" onClick={() => {
+                  if (mapsAnalysisCheckedCount === 0) return alert('Select keywords to analyze (use checkboxes)');
+                  setShowMapsCostConfirm(true);
+                }} disabled={mapsAnalyzing || mapsAnalysisCheckedCount === 0} style={{ fontSize: 13 }}>
+                  {mapsAnalyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Analyze</>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Maps cost confirmation modal */}
+          {showMapsCostConfirm && (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowMapsCostConfirm(false)}>
+              <div style={{ background: 'var(--card)', borderRadius: 14, padding: 28, maxWidth: 420, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+                <h3 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--text)' }}><i className="fa-solid fa-brain" style={{ marginRight: 8, color: '#22c55e' }} />Run Maps Analysis</h3>
+                <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 12 }}>
+                  <div style={{ marginBottom: 8 }}><strong>Keywords:</strong> {mapsAnalysisCheckedCount}</div>
+                  <div style={{ marginBottom: 8 }}><strong>Model:</strong> <select value={mapsAnalysisModel} onChange={e => setMapsAnalysisModel(e.target.value)} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
+                    <option value="haiku-4.5">Haiku 4.5 (~$0.002/kw)</option>
+                    <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
+                    <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
+                    <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
+                  </select></div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e', marginTop: 12 }}>Est. Cost: ${(mapsAnalysisCheckedCount * mapsCostPerKw).toFixed(3)}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                  <button className="btn" onClick={() => setShowMapsCostConfirm(false)} style={{ flex: 1 }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={runMapsAnalysis} style={{ flex: 1 }}>
+                    <i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Run Analysis
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Maps rankings table */}
           {mapsKeywords.length === 0 ? (
@@ -19300,12 +19408,229 @@
                           </span>
                         ) : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
-                      <td style={{ padding: '6px' }}>
-                        <button onClick={(e) => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
-                          <i className="fa-solid fa-trash" />
-                        </button>
+                      <td style={{ padding: '6px', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center' }}>
+                          <input type="checkbox" checked={!!mapsAnalysisChecked[kw.id]} onChange={() => toggleMapsAnalysisCheck(kw.id)} title="Select for AI analysis" style={{ cursor: 'pointer' }} />
+                          {(() => { const aKey = `${kw.keyword}|||${kw.location}`; const ar = mapsAnalysisResults[aKey]; return ar ? (
+                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedMapsAnalysis(expandedMapsAnalysis === aKey ? null : aKey); }}
+                              style={{ fontSize: 11, padding: '3px 8px', color: ar.error ? '#ef4444' : '#22c55e', borderColor: ar.error ? '#ef4444' : '#22c55e' }}>
+                              <i className={`fa-solid ${ar.error ? 'fa-exclamation-triangle' : 'fa-eye'}`} style={{ marginRight: 3 }} />
+                              {ar.error ? 'Err' : 'View'}
+                            </button>
+                          ) : null; })()}
+                          <button onClick={(e) => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
+                            <i className="fa-solid fa-trash" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
+                    {/* Maps AI Analysis results panel */}
+                    {(() => {
+                      const aKey = `${kw.keyword}|||${kw.location}`;
+                      if (expandedMapsAnalysis !== aKey || !mapsAnalysisResults[aKey]) return null;
+                      const ar = mapsAnalysisResults[aKey];
+                      if (ar.error) return (
+                        <tr><td colSpan={9} style={{ padding: '16px 24px', background: 'rgba(239,68,68,0.05)', borderTop: '2px solid #ef4444' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <i className="fa-solid fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 18 }} />
+                            <div>
+                              <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>Analysis Failed</div>
+                              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{ar.error}</div>
+                            </div>
+                            <button className="btn" onClick={() => { setMapsAnalysisResults(prev => { const n = {...prev}; delete n[aKey]; return n; }); setExpandedMapsAnalysis(null); }}
+                              style={{ marginLeft: 'auto', fontSize: 12 }}>Dismiss</button>
+                          </div>
+                        </td></tr>
+                      );
+                      const a = ar.analysis || {};
+                      const scoreColor = a.score >= 70 ? '#22c55e' : a.score >= 40 ? '#f59e0b' : '#ef4444';
+                      const scoreLabel = a.score >= 70 ? 'Strong' : a.score >= 40 ? 'Needs Work' : 'Critical';
+                      const highGaps = (a.gaps || []).filter(g => g.impact === 'high');
+                      const medGaps = (a.gaps || []).filter(g => g.impact === 'medium');
+                      const lowGaps = (a.gaps || []).filter(g => g.impact === 'low');
+                      const catIcon = { Proximity: 'fa-location-dot', 'GBP Optimization': 'fa-store', Reviews: 'fa-star', Citations: 'fa-list-check', Categories: 'fa-tags', Content: 'fa-file-lines', Engagement: 'fa-comments' };
+                      const catColor = { Proximity: '#ef4444', 'GBP Optimization': '#8b5cf6', Reviews: '#f59e0b', Citations: '#06b6d4', Categories: '#ec4899', Content: '#3b82f6', Engagement: '#22c55e' };
+                      const gbpRec = a.gbp_recommendations || {};
+                      return (
+                        <tr><td colSpan={9} style={{ padding: 0 }}>
+                          <div style={{ borderTop: `3px solid ${scoreColor}` }}>
+                            {/* Header: Score + Verdict */}
+                            <div style={{ padding: '28px 32px 24px', background: `linear-gradient(135deg, ${scoreColor}08, transparent)` }}>
+                              <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+                                <div style={{ position: 'relative', width: 90, height: 90, flexShrink: 0 }}>
+                                  <svg viewBox="0 0 36 36" style={{ width: 90, height: 90, transform: 'rotate(-90deg)' }}>
+                                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+                                    <circle cx="18" cy="18" r="15.9" fill="none" stroke={scoreColor} strokeWidth="3" strokeDasharray={`${a.score} ${100 - a.score}`} strokeLinecap="round" />
+                                  </svg>
+                                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                                    <span style={{ fontSize: 26, fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{a.score}</span>
+                                    <span style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{scoreLabel}</span>
+                                  </div>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.5, color: scoreColor, fontWeight: 800, marginBottom: 6 }}>
+                                    <i className="fa-solid fa-map-location-dot" style={{ marginRight: 6 }} />MAPS VISIBILITY ANALYSIS
+                                  </div>
+                                  <div style={{ fontSize: 16, fontWeight: 500, color: 'var(--text)', lineHeight: 1.6 }}>{a.verdict}</div>
+                                </div>
+                                <button className="btn" onClick={e => { e.stopPropagation(); setExpandedMapsAnalysis(null); }} style={{ alignSelf: 'flex-start', fontSize: 12 }}>
+                                  <i className="fa-solid fa-xmark" style={{ marginRight: 4 }} />Close
+                                </button>
+                              </div>
+                              {/* Stats */}
+                              <div style={{ display: 'flex', gap: 16, marginTop: 20 }}>
+                                {[
+                                  { icon: 'fa-fire', label: 'Critical', value: highGaps.length, color: '#ef4444' },
+                                  { icon: 'fa-exclamation', label: 'Warnings', value: medGaps.length, color: '#f59e0b' },
+                                  { icon: 'fa-info', label: 'Suggestions', value: lowGaps.length, color: '#3b82f6' },
+                                  { icon: 'fa-map-pin', label: 'Visibility', value: `${ar.gridSummary?.visibility || 0}%`, color: '#22c55e' },
+                                  { icon: 'fa-bullseye', label: 'Coverage', value: ar.gridSummary?.coverage || '?', color: 'var(--accent)' },
+                                ].map((s, i) => (
+                                  <div key={i} style={{ flex: 1, padding: '12px 14px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                                    <i className={`fa-solid ${s.icon}`} style={{ color: s.color, fontSize: 14, marginBottom: 4, display: 'block' }} />
+                                    <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
+                                    <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>{s.label}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            {/* Quick Wins */}
+                            {a.quick_wins && a.quick_wins.length > 0 && (
+                              <div style={{ padding: '0 32px 24px' }}>
+                                <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, rgba(34,197,94,0.06), rgba(34,197,94,0.02))', borderRadius: 14, border: '1px solid rgba(34,197,94,0.15)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                                    <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                      <i className="fa-solid fa-bolt" style={{ color: '#22c55e', fontSize: 16 }} />
+                                    </div>
+                                    <div>
+                                      <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e' }}>Quick Wins</div>
+                                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Do these first for fastest impact</div>
+                                    </div>
+                                  </div>
+                                  {a.quick_wins.map((qw, i) => (
+                                    <div key={i} style={{ display: 'flex', gap: 12, padding: '10px 0', borderTop: i > 0 ? '1px solid rgba(34,197,94,0.1)' : 'none' }}>
+                                      <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#22c55e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>{i + 1}</div>
+                                      <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6, paddingTop: 3 }}>{qw}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {/* Issues by Priority */}
+                            {[
+                              { title: 'Critical Issues', subtitle: 'Must fix to improve Maps visibility', items: highGaps, accent: '#ef4444', bgAccent: 'rgba(239,68,68,0.06)', icon: 'fa-fire' },
+                              { title: 'Warnings', subtitle: 'Important for better local rankings', items: medGaps, accent: '#f59e0b', bgAccent: 'rgba(245,158,11,0.06)', icon: 'fa-triangle-exclamation' },
+                              { title: 'Suggestions', subtitle: 'Nice to have optimizations', items: lowGaps, accent: '#3b82f6', bgAccent: 'rgba(59,130,246,0.06)', icon: 'fa-lightbulb' }
+                            ].filter(sec => sec.items.length > 0).map((sec, si) => (
+                              <div key={si} style={{ padding: '0 32px 24px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                                  <div style={{ width: 36, height: 36, borderRadius: 10, background: sec.bgAccent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <i className={`fa-solid ${sec.icon}`} style={{ color: sec.accent, fontSize: 16 }} />
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 16, fontWeight: 800, color: sec.accent }}>{sec.title} ({sec.items.length})</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>{sec.subtitle}</div>
+                                  </div>
+                                </div>
+                                {sec.items.map((g, i) => (
+                                  <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--card)' }}>
+                                    <div style={{ padding: '14px 18px', borderLeft: `4px solid ${catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                      <div style={{ width: 30, height: 30, borderRadius: 8, background: `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                                        <i className={`fa-solid ${catIcon[g.category] || 'fa-flag'}`} style={{ color: catColor[g.category] || sec.accent, fontSize: 13 }} />
+                                      </div>
+                                      <div style={{ flex: 1 }}>
+                                        <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: `${catColor[g.category] || '#6366f1'}15`, color: catColor[g.category] || '#6366f1', fontWeight: 700, marginBottom: 6, display: 'inline-block' }}>{g.category}</span>
+                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.5, marginTop: 6 }}>{g.issue}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{ padding: '14px 18px 14px 62px', background: 'rgba(34,197,94,0.04)', borderTop: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}><i className="fa-solid fa-wrench" style={{ marginRight: 6 }} />How to Fix</div>
+                                      <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{g.fix}</div>
+                                    </div>
+                                    {g.competitor_benchmark && (
+                                      <div style={{ padding: '12px 18px 12px 62px', background: 'rgba(99,102,241,0.03)', borderTop: '1px solid var(--border)' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}><i className="fa-solid fa-users" style={{ marginRight: 6 }} />What Competitors Do</div>
+                                        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{g.competitor_benchmark}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                            {/* GBP Recommendations */}
+                            {gbpRec && (gbpRec.primary_category || gbpRec.review_target || gbpRec.missing_citations?.length > 0) && (
+                              <div style={{ padding: '0 32px 24px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(139,92,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <i className="fa-solid fa-store" style={{ color: '#8b5cf6', fontSize: 16 }} />
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 16, fontWeight: 800, color: '#8b5cf6' }}>GBP Recommendations</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>Optimize your Google Business Profile</div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                                  {gbpRec.primary_category && (
+                                    <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-tag" style={{ marginRight: 6 }} />Primary Category</div>
+                                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{gbpRec.primary_category}</div>
+                                      {gbpRec.secondary_categories?.length > 0 && (
+                                        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                          {gbpRec.secondary_categories.map((c, i) => <span key={i} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 12, background: 'rgba(139,92,246,0.08)', color: '#8b5cf6', fontWeight: 600 }}>{c}</span>)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {gbpRec.review_target && (
+                                    <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-star" style={{ marginRight: 6 }} />Review Target</div>
+                                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{gbpRec.review_target}</div>
+                                    </div>
+                                  )}
+                                  {gbpRec.posting_frequency && (
+                                    <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-calendar" style={{ marginRight: 6 }} />Posting Frequency</div>
+                                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{gbpRec.posting_frequency}</div>
+                                    </div>
+                                  )}
+                                  {gbpRec.missing_citations?.length > 0 && (
+                                    <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: '#06b6d4', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}><i className="fa-solid fa-list-check" style={{ marginRight: 6 }} />Missing Citations</div>
+                                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                        {gbpRec.missing_citations.map((c, i) => <span key={i} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(6,182,212,0.08)', color: '#06b6d4', fontWeight: 600 }}>{c}</span>)}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            {/* Footer */}
+                            <div style={{ padding: '12px 32px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                                <i className="fa-solid fa-robot" style={{ marginRight: 4 }} />
+                                {ar.model?.includes('opus') ? 'Claude Opus' : ar.model?.includes('sonnet') ? 'Claude Sonnet' : 'Claude Haiku'} · {ar.cost?.inputTokens?.toLocaleString() || '?'} in + {ar.cost?.outputTokens?.toLocaleString() || '?'} out · ${ar.cost?.total?.toFixed(4) || '?'}
+                                {ar.analyzed_at && <span> · {new Date(ar.analyzed_at).toLocaleDateString()}</span>}
+                              </div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button className="btn" onClick={async e => {
+                                  e.stopPropagation();
+                                  if (!confirm('Re-analyze? This will use AI credits.')) return;
+                                  await api(`/projects/${project.id}/maps/analyses/${encodeURIComponent(kw.keyword)}/${encodeURIComponent(kw.location)}`, { method: 'DELETE' });
+                                  setMapsAnalysisResults(prev => { const n = {...prev}; delete n[aKey]; return n; });
+                                  setExpandedMapsAnalysis(null);
+                                  setMapsAnalysisChecked(prev => ({...prev, [kw.id]: true}));
+                                }} style={{ fontSize: 12, color: '#f59e0b', borderColor: '#f59e0b' }}>
+                                  <i className="fa-solid fa-rotate" style={{ marginRight: 4 }} />Re-analyze
+                                </button>
+                                <button className="btn" onClick={() => setExpandedMapsAnalysis(null)} style={{ fontSize: 12 }}>
+                                  <i className="fa-solid fa-chevron-up" style={{ marginRight: 4 }} />Collapse
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td></tr>
+                      );
+                    })()}
                     {isExpanded && (
                       <tr style={{ borderBottom: '1px solid var(--border)' }}>
                         <td colSpan={9} style={{ padding: 0 }}>

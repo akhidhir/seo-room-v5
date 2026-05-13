@@ -693,6 +693,23 @@ async function initDb() {
       )
     `);
 
+    // Maps Analysis results persistence
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS maps_analysis (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        model TEXT,
+        analysis JSONB,
+        grid_data JSONB,
+        competitors JSONB,
+        cost JSONB,
+        analyzed_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, keyword, location)
+      )
+    `);
+
     // GBP tasks are manual — no extension automation
     await client.query(`
       UPDATE action_items SET execution_type = 'manual'
@@ -19379,6 +19396,244 @@ app.get('/api/projects/:projectId/rank-tracking/analyses', async (req, res) => {
 app.delete('/api/projects/:projectId/rank-tracking/analyses/:keyword', async (req, res) => {
   try {
     await pool.query('DELETE FROM serp_analysis WHERE project_id=$1 AND keyword=$2', [req.params.projectId, req.params.keyword]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============ MAPS AI ANALYSIS ============
+
+// Run Maps analysis for a keyword+location
+app.post('/api/projects/:projectId/maps/analyze', async (req, res) => {
+  const { projectId } = req.params;
+  const { keyword, location, model, grid_data, avg_rank, visibility, coverage, found_in, data_points } = req.body;
+  if (!keyword || !location) return res.status(400).json({ error: 'Keyword and location required' });
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  const modelMap = {
+    'haiku-4.5': 'claude-haiku-4-5-20251001',
+    'sonnet-4.5': 'claude-sonnet-4-5-20241022',
+    'sonnet-4.6': 'claude-sonnet-4-6',
+    'opus-4.6': 'claude-opus-4-6'
+  };
+  const aiModel = modelMap[model] || 'claude-sonnet-4-6';
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Get grid scan data from DB
+    const scanRes = await pool.query(
+      `SELECT * FROM grid_scans WHERE project_id=$1 AND keyword=$2 AND location=$3 ORDER BY scanned_at DESC LIMIT 1`,
+      [projectId, keyword, location]
+    );
+    const scan = scanRes.rows[0];
+    const gridPoints = scan?.grid_points || grid_data?.grid_points || [];
+    const scanCompetitors = scan?.competitors || grid_data?.competitors || [];
+
+    // Get GBP audit findings if available
+    let gbpFindings = [];
+    try {
+      const findingsRes = await pool.query(
+        `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp', 'gbp_external') AND status != 'dismissed' ORDER BY severity DESC`,
+        [projectId]
+      );
+      gbpFindings = findingsRes.rows;
+    } catch (e) {}
+
+    // Get reviews stats if available
+    let reviewStats = {};
+    try {
+      const revRes = await pool.query(
+        `SELECT * FROM reviews_cache WHERE project_id=$1 ORDER BY synced_at DESC LIMIT 1`,
+        [projectId]
+      );
+      if (revRes.rows.length > 0) reviewStats = revRes.rows[0];
+    } catch (e) {}
+
+    // Get citations
+    let citations = [];
+    try {
+      const citRes = await pool.query(
+        `SELECT * FROM citations WHERE project_id=$1`,
+        [projectId]
+      );
+      citations = citRes.rows;
+    } catch (e) {}
+
+    // Analyze grid points — where are we found vs not found
+    const foundPoints = gridPoints.filter(p => p.rank && p.rank <= 20);
+    const notFoundPoints = gridPoints.filter(p => !p.rank || p.rank > 20);
+    const topCompetitors = {};
+    for (const p of gridPoints) {
+      for (const c of (p.competitors || []).slice(0, 3)) {
+        const name = c.title || c.name || 'Unknown';
+        if (!topCompetitors[name]) topCompetitors[name] = { name, appearances: 0, avgRank: 0, totalRank: 0 };
+        topCompetitors[name].appearances++;
+        topCompetitors[name].totalRank += (c.position || c.rank || 0);
+      }
+    }
+    const competitorList = Object.values(topCompetitors)
+      .map(c => ({ ...c, avgRank: c.appearances > 0 ? (c.totalRank / c.appearances).toFixed(1) : 'N/A' }))
+      .sort((a, b) => b.appearances - a.appearances)
+      .slice(0, 5);
+
+    const prompt = `You are an expert LOCAL SEO analyst specializing in Google Maps / Local Pack rankings. Analyze why this business is performing as it is for the target keyword in the given location, and provide specific actionable recommendations.
+
+TARGET KEYWORD: "${keyword}"
+LOCATION: "${location}"
+BUSINESS: ${project.business_name || project.name} (${project.domain})
+INDUSTRY: ${project.industry || 'Not specified'}
+
+GRID SCAN RESULTS:
+- Average Rank: ${avg_rank || scan?.arp || 'N/A'} (lower is better, 20+ means not found)
+- True Average Rank: ${scan?.atrp || 'N/A'}
+- Visibility %: ${visibility || scan?.solv || 0}% (% of scan points where business appears in top 3)
+- Coverage: ${found_in || scan?.found_in || 0}/${data_points || scan?.data_points || 0} scan points
+- Grid Size: ${scan?.grid_size || 5}x${scan?.grid_size || 5}, Radius: ${scan?.radius_km || 10}km
+
+POSITION DISTRIBUTION:
+- Found in top 3: ${gridPoints.filter(p => p.rank && p.rank <= 3).length} points
+- Found in top 10: ${gridPoints.filter(p => p.rank && p.rank <= 10).length} points
+- Found in top 20: ${gridPoints.filter(p => p.rank && p.rank <= 20).length} points
+- Not found at all: ${notFoundPoints.length} points
+
+TOP COMPETITORS IN LOCAL PACK:
+${competitorList.map((c, i) => `${i + 1}. ${c.name} — appears in ${c.appearances}/${gridPoints.length} scan points, avg rank: ${c.avgRank}`).join('\n')}
+
+${gbpFindings.length > 0 ? `EXISTING GBP AUDIT FINDINGS (${gbpFindings.length} issues):
+${gbpFindings.slice(0, 10).map(f => `- [${f.severity}] ${f.title}: ${f.description?.substring(0, 100)}`).join('\n')}` : 'No GBP audit findings available.'}
+
+${reviewStats.review_count ? `REVIEWS: ${reviewStats.review_count} reviews, ${reviewStats.avg_rating} avg rating` : 'Review data not available.'}
+
+${citations.length > 0 ? `CITATIONS: ${citations.filter(c => c.status === 'listed').length} listed out of ${citations.length} checked` : 'Citation data not available.'}
+
+SERVICE AREAS: ${JSON.stringify(project.service_areas || []).substring(0, 200)}
+
+Respond in this exact JSON format:
+{
+  "verdict": "One sentence summary of the main factor affecting Maps visibility",
+  "score": 0-100 (how competitive the business is for this keyword in Maps),
+  "gaps": [
+    {
+      "category": "Proximity|GBP Optimization|Reviews|Citations|Categories|Content|Engagement",
+      "issue": "Specific issue found",
+      "impact": "high|medium|low",
+      "fix": "Exact action to take",
+      "competitor_benchmark": "What top-ranking competitors do differently"
+    }
+  ],
+  "quick_wins": ["Immediate action 1", "Immediate action 2", "Immediate action 3"],
+  "gbp_recommendations": {
+    "primary_category": "Recommended primary GBP category",
+    "secondary_categories": ["category1", "category2"],
+    "posting_frequency": "Recommended GBP post frequency",
+    "review_target": "Target review count and rating",
+    "missing_citations": ["Directory 1", "Directory 2"]
+  }
+}
+
+Focus on LOCAL MAPS factors: proximity, GBP completeness, reviews, citations, categories, photos, posts. Reference the actual grid scan data and competitor positions. No generic advice.`;
+
+    const aiResp = await anthropic.messages.create({
+      model: aiModel,
+      max_tokens: 8000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const text = aiResp.content[0].text;
+    const wasTruncated = aiResp.stop_reason === 'max_tokens';
+    let analysis;
+    try {
+      let cleaned = text.replace(/```(?:json)?\s*/gi, '').trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found');
+      analysis = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      try {
+        let cleaned = text.replace(/```(?:json)?\s*/gi, '');
+        const start = cleaned.indexOf('{');
+        if (start < 0) throw new Error('No braces');
+        let partial = cleaned.substring(start);
+        if (wasTruncated) {
+          partial = partial.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '');
+          let openBraces = 0, openBrackets = 0, inString = false, escaped = false;
+          for (const ch of partial) {
+            if (escaped) { escaped = false; continue; }
+            if (ch === '\\') { escaped = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') openBraces++;
+            if (ch === '}') openBraces--;
+            if (ch === '[') openBrackets++;
+            if (ch === ']') openBrackets--;
+          }
+          partial += ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, openBraces));
+        }
+        analysis = JSON.parse(partial);
+      } catch (e2) {
+        analysis = { verdict: text.replace(/```(?:json)?\s*/gi, '').substring(0, 500), score: 0, gaps: [], quick_wins: [], gbp_recommendations: {} };
+      }
+    }
+
+    const inputTokens = aiResp.usage?.input_tokens || 0;
+    const outputTokens = aiResp.usage?.output_tokens || 0;
+    const costRates = {
+      'haiku-4.5': [0.80, 4], 'sonnet-4.5': [3, 15], 'sonnet-4.6': [3, 15],
+      'opus-4.6': [15, 75]
+    };
+    const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
+    const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
+
+    const result = {
+      ok: true, keyword, location, model: aiModel, analysis,
+      gridSummary: { avgRank: avg_rank || scan?.arp, visibility: visibility || scan?.solv, coverage: `${found_in || scan?.found_in || 0}/${data_points || scan?.data_points || 0}`, competitorList },
+      cost: { inputTokens, outputTokens, total: Math.round(actualCost * 10000) / 10000 }
+    };
+
+    // Persist
+    try {
+      await pool.query(`
+        INSERT INTO maps_analysis (project_id, keyword, location, model, analysis, grid_data, competitors, cost, analyzed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        ON CONFLICT (project_id, keyword, location) DO UPDATE SET
+          model = EXCLUDED.model, analysis = EXCLUDED.analysis, grid_data = EXCLUDED.grid_data,
+          competitors = EXCLUDED.competitors, cost = EXCLUDED.cost, analyzed_at = NOW()
+      `, [projectId, keyword, location, aiModel, JSON.stringify(analysis), JSON.stringify(result.gridSummary), JSON.stringify(competitorList), JSON.stringify(result.cost)]);
+    } catch (dbErr) { console.error('[maps-analysis] DB save error:', dbErr.message); }
+
+    res.json(result);
+  } catch (e) {
+    console.error('[maps-analysis]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get saved Maps analysis results
+app.get('/api/projects/:projectId/maps/analyses', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT keyword, location, model, analysis, grid_data, competitors, cost, analyzed_at FROM maps_analysis WHERE project_id=$1`,
+      [req.params.projectId]
+    );
+    const results = {};
+    for (const r of rows) {
+      const key = `${r.keyword}|||${r.location}`;
+      results[key] = {
+        ok: true, keyword: r.keyword, location: r.location, model: r.model,
+        analysis: r.analysis, gridSummary: r.grid_data,
+        competitors: r.competitors, cost: r.cost, analyzed_at: r.analyzed_at
+      };
+    }
+    res.json(results);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a saved Maps analysis
+app.delete('/api/projects/:projectId/maps/analyses/:keyword/:location', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM maps_analysis WHERE project_id=$1 AND keyword=$2 AND location=$3',
+      [req.params.projectId, decodeURIComponent(req.params.keyword), decodeURIComponent(req.params.location)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
