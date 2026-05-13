@@ -17816,6 +17816,328 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
 
 // ==================== TECHNICAL AUDIT (AI-Powered) ====================
 
+// ============ TECHNICAL FIX — deterministic, no AI, no plugins ============
+app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
+  const { projectId } = req.params;
+  const { finding_id } = req.body;
+  if (!finding_id) return res.status(400).json({ error: 'finding_id required' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const finding = (await pool.query('SELECT * FROM audit_findings WHERE id=$1 AND project_id=$2', [finding_id, projectId])).rows[0];
+    if (!finding) return res.status(404).json({ error: 'Finding not found' });
+
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    const cat = (finding.category || '').toLowerCase();
+    const title = (finding.title || '').toLowerCase();
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    // ---- FIX TYPE 1: Schema injection via WP post content ----
+    if (cat.includes('schema') || title.includes('schema') || title.includes('json-ld') || title.includes('structured data') || title.includes('localbusiness') || title.includes('faqpage')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+
+      // Get RC profile data for rich schema
+      let rcProfile = null;
+      try {
+        const rcRow = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId]);
+        if (rcRow.rows[0]?.config) {
+          const cfg = typeof rcRow.rows[0].config === 'string' ? JSON.parse(rcRow.rows[0].config) : rcRow.rows[0].config;
+          rcProfile = cfg.profile || null;
+        }
+      } catch {}
+
+      let schemaJson = null;
+      let targetPageType = 'pages'; // default to homepage
+      let targetPageId = null;
+
+      // LocalBusiness schema → inject on homepage
+      if (title.includes('localbusiness') || title.includes('local business') || (title.includes('schema') && !title.includes('faq'))) {
+        const biz = rcProfile || {};
+        const addr = biz.storefrontAddress || {};
+        const hours = (biz.regularHours?.periods || []).map(p => {
+          const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+          const open = p.openTime ? `${String(p.openTime.hours||0).padStart(2,'0')}:${String(p.openTime.minutes||0).padStart(2,'0')}` : '09:00';
+          const close = p.closeTime ? `${String(p.closeTime.hours||0).padStart(2,'0')}:${String(p.closeTime.minutes||0).padStart(2,'0')}` : '17:00';
+          return `${days[p.openDay] || p.openDay} ${open}-${close}`;
+        });
+        const cats = [];
+        if (biz.categories?.primaryCategory?.displayName) cats.push(biz.categories.primaryCategory.displayName);
+        (biz.categories?.additionalCategories || []).forEach(c => { if (c.displayName) cats.push(c.displayName); });
+
+        schemaJson = {
+          "@context": "https://schema.org",
+          "@type": "LocalBusiness",
+          "name": biz.title || project.business_name || project.name,
+          "url": `https://${domain}`,
+          ...(biz.phoneNumbers?.primaryPhone ? { "telephone": biz.phoneNumbers.primaryPhone } : {}),
+          ...(addr.addressLines?.length ? {
+            "address": {
+              "@type": "PostalAddress",
+              "streetAddress": addr.addressLines.join(', '),
+              ...(addr.locality ? { "addressLocality": addr.locality } : {}),
+              ...(addr.administrativeArea ? { "addressRegion": addr.administrativeArea } : {}),
+              ...(addr.postalCode ? { "postalCode": addr.postalCode } : {}),
+              "addressCountry": addr.regionCode || "AU"
+            }
+          } : {}),
+          ...(biz.latlng ? { "geo": { "@type": "GeoCoordinates", "latitude": biz.latlng.latitude, "longitude": biz.latlng.longitude } } : {}),
+          ...(hours.length ? { "openingHours": hours } : {}),
+          ...(cats.length ? { "additionalType": cats.join(', ') } : {}),
+          "image": biz.profilePhotoUrl || `https://${domain}/logo.png`,
+          ...(project.location ? { "areaServed": project.location } : {}),
+        };
+
+        // Find homepage
+        try {
+          for (const type of ['pages', 'posts']) {
+            const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=5&orderby=menu_order&order=asc&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+            if (resp.ok) {
+              const items = await resp.json();
+              const home = items.find(i => i.slug === 'home' || i.slug === '' || (i.link && new URL(i.link).pathname === '/'));
+              if (home) { targetPageId = home.id; targetPageType = type; break; }
+            }
+          }
+          // Fallback: get the page with the front-page setting
+          if (!targetPageId) {
+            const frontResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+            if (frontResp.ok) {
+              const settings = await frontResp.json();
+              if (settings.page_on_front) { targetPageId = settings.page_on_front; targetPageType = 'pages'; }
+            }
+          }
+        } catch {}
+      }
+
+      // FAQ schema → inject on specific page mentioned in finding
+      if (title.includes('faq') || title.includes('q&a')) {
+        // Extract page path from title like "30 Q&As on /blocked-drains/"
+        const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\//i);
+        if (pathMatch) {
+          const slug = pathMatch[1];
+          try {
+            for (const type of ['pages', 'posts']) {
+              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+              if (resp.ok) {
+                const items = await resp.json();
+                if (items.length > 0) {
+                  targetPageId = items[0].id;
+                  targetPageType = type;
+                  // Extract Q&As from page content (H2/H3 as questions, following content as answers)
+                  const content = items[0].content?.rendered || '';
+                  const qaPairs = [];
+                  const headingRegex = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
+                  let match;
+                  const headings = [];
+                  while ((match = headingRegex.exec(content)) !== null) {
+                    headings.push({ text: match[1].replace(/<[^>]+>/g, '').trim(), index: match.index + match[0].length });
+                  }
+                  for (let i = 0; i < headings.length; i++) {
+                    const q = headings[i].text;
+                    if (q.includes('?') || q.toLowerCase().startsWith('how') || q.toLowerCase().startsWith('what') || q.toLowerCase().startsWith('why') || q.toLowerCase().startsWith('when') || q.toLowerCase().startsWith('can') || q.toLowerCase().startsWith('do')) {
+                      const nextIdx = i + 1 < headings.length ? content.indexOf('<h', headings[i].index) : content.length;
+                      const answerHtml = content.substring(headings[i].index, nextIdx > headings[i].index ? nextIdx : headings[i].index + 500);
+                      const answer = answerHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 300);
+                      if (answer.length > 20) qaPairs.push({ q, a: answer });
+                    }
+                  }
+                  if (qaPairs.length > 0) {
+                    schemaJson = {
+                      "@context": "https://schema.org",
+                      "@type": "FAQPage",
+                      "mainEntity": qaPairs.slice(0, 20).map(qa => ({
+                        "@type": "Question",
+                        "name": qa.q,
+                        "acceptedAnswer": { "@type": "Answer", "text": qa.a }
+                      }))
+                    };
+                  }
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+
+      if (!schemaJson) {
+        return res.json({ success: false, error: 'Could not generate schema — missing business data or page not found' });
+      }
+
+      if (!targetPageId) {
+        return res.json({ success: false, error: 'Could not find target page in WordPress' });
+      }
+
+      // Inject schema into page content
+      const scriptTag = `\n<!-- SEO Room Schema -->\n<script type="application/ld+json">\n${JSON.stringify(schemaJson, null, 2)}\n</script>\n<!-- /SEO Room Schema -->`;
+
+      const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+      if (!pageResp.ok) return res.status(500).json({ error: `WP returned ${pageResp.status}` });
+      const pageData = await pageResp.json();
+      let content = pageData.content?.raw || pageData.content?.rendered || '';
+
+      // Remove old SEO Room Schema if exists
+      content = content.replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+      content += scriptTag;
+
+      const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+
+      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+      await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
+        [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
+
+      return res.json({ success: true, fix_type: 'schema', schema_type: schemaJson['@type'], page_id: targetPageId });
+    }
+
+    // ---- FIX TYPE 2: Canonical via Yoast meta ----
+    if (title.includes('canonical')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+      // Extract page path from finding
+      const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
+      if (pathMatch) {
+        const slug = pathMatch[1];
+        for (const type of ['pages', 'posts']) {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,link`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          if (resp.ok) {
+            const items = await resp.json();
+            if (items.length > 0) {
+              const canonicalUrl = items[0].link;
+              const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${items[0].id}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meta: { _yoast_wpseo_canonical: canonicalUrl } }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (writeResp.ok) {
+                await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+                return res.json({ success: true, fix_type: 'canonical', page: slug, canonical: canonicalUrl });
+              }
+            }
+          }
+        }
+      }
+      return res.json({ success: false, error: 'Could not identify page to fix canonical' });
+    }
+
+    // ---- FIX TYPE 3: Remove noindex via Yoast meta ----
+    if (title.includes('noindex')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+      const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
+      if (pathMatch) {
+        const slug = pathMatch[1];
+        for (const type of ['pages', 'posts']) {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          if (resp.ok) {
+            const items = await resp.json();
+            if (items.length > 0) {
+              const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${items[0].id}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meta: { _yoast_wpseo_meta_robots_noindex: '0' } }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (writeResp.ok) {
+                await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+                return res.json({ success: true, fix_type: 'noindex_removed', page: slug });
+              }
+            }
+          }
+        }
+      }
+      return res.json({ success: false, error: 'Could not identify page to remove noindex' });
+    }
+
+    // ---- FIX TYPE 4: Mixed content HTTP→HTTPS in post content ----
+    if (title.includes('https') || title.includes('mixed content') || title.includes('non-https')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+      let fixed = 0;
+      for (const type of ['pages', 'posts']) {
+        let page = 1;
+        while (page <= 10) {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${page}&status=publish&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          if (!resp.ok) break;
+          const items = await resp.json();
+          if (!Array.isArray(items) || items.length === 0) break;
+          for (const item of items) {
+            const content = item.content?.raw || item.content?.rendered || '';
+            if (content.includes('http://') && content.includes(domain)) {
+              const newContent = content.replace(new RegExp(`http://${domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), `https://${domain}`);
+              if (newContent !== content) {
+                await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, {
+                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+                });
+                fixed++;
+              }
+            }
+          }
+          if (items.length < 50) break;
+          page++;
+        }
+      }
+      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+      return res.json({ success: true, fix_type: 'mixed_content', pages_fixed: fixed });
+    }
+
+    // ---- FIX TYPE 5: Missing H1 — inject from page title ----
+    if (title.includes('missing h1') || title.includes('no h1')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+      const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
+      if (pathMatch) {
+        const slug = pathMatch[1];
+        for (const type of ['pages', 'posts']) {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          if (resp.ok) {
+            const items = await resp.json();
+            if (items.length > 0) {
+              const content = items[0].content?.raw || items[0].content?.rendered || '';
+              if (!/<h1[\s>]/i.test(content)) {
+                const h1Text = items[0].title?.rendered || items[0].title || slug;
+                const newContent = `<h1>${h1Text}</h1>\n${content}`;
+                const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${items[0].id}`, {
+                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+                });
+                if (writeResp.ok) {
+                  await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+                  return res.json({ success: true, fix_type: 'h1_injected', page: slug });
+                }
+              }
+            }
+          }
+        }
+      }
+      return res.json({ success: false, error: 'Could not find page or H1 already exists' });
+    }
+
+    // ---- FIX TYPE 6: Missing Open Graph via Yoast ----
+    if (title.includes('open graph') || title.includes('og:')) {
+      if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+      // Yoast auto-generates OG tags if the page has a title/desc — just ensure Yoast fields are set
+      return res.json({ success: false, fix_type: 'manual', message: 'Open Graph tags are generated by Yoast from meta title/description. Fix meta data first and OG tags will follow.' });
+    }
+
+    // ---- FIX TYPE 7: Missing viewport ----
+    if (title.includes('viewport')) {
+      return res.json({ success: false, fix_type: 'manual', message: 'Viewport meta tag must be added in the theme header.php or via a child theme. This is a one-time manual fix.' });
+    }
+
+    // ---- DEFAULT: Manual fix required ----
+    return res.json({ success: false, fix_type: 'manual', message: `"${(finding.title || '').slice(0, 80)}" requires manual intervention. See the recommendation for steps.` });
+
+  } catch (e) {
+    console.error('[technical-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
   const { projectId } = req.params;
   try {
