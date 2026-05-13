@@ -9971,7 +9971,463 @@
     }
 
     // ============ UNIFIED ACTION PLAN ============
+    // ============ ACTION PLAN CALENDAR COMPONENT ============
+    function ActionPlanCalendar({ project, items: allItems, onStatusChange, onReload }) {
+      const [calView, setCalView] = useState('month'); // month, week, day
+      const [calDate, setCalDate] = useState(new Date());
+      const [calItems, setCalItems] = useState([]);
+      const [distributing, setDistributing] = useState(false);
+      const [editItem, setEditItem] = useState(null);
+      const [dragItem, setDragItem] = useState(null);
+      const [addModal, setAddModal] = useState(null); // { date, hour }
+      const [addForm, setAddForm] = useState({ title: '', description: '', severity: 'medium', estimated_hours: 0.5 });
+
+      const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
+      const sevBg = { critical: '#ef444418', high: '#ef444412', medium: '#f59e0b12', low: '#22c55e12' };
+      const pillarColors = { gbp: '#ef4444', gsc: '#3b82f6', website: '#8b5cf6', technical: '#8b5cf6', gbp_external: '#ef4444', gsc_agent: '#3b82f6', clarity: '#f59e0b', content: '#10b981', serp_analysis: '#3b82f6', maps_analysis: '#22c55e' };
+
+      const loadCalendar = async () => {
+        const y = calDate.getFullYear(), m = calDate.getMonth();
+        const start = new Date(y, m - 1, 1).toISOString().split('T')[0];
+        const end = new Date(y, m + 2, 0).toISOString().split('T')[0];
+        try {
+          const data = await api(`/projects/${project.id}/calendar?start=${start}&end=${end}`);
+          if (Array.isArray(data)) setCalItems(data);
+        } catch (e) { console.error('Calendar load:', e); }
+      };
+
+      useEffect(() => { if (project?.id) loadCalendar(); }, [project?.id, calDate]);
+
+      const handleDistribute = async () => {
+        if (!confirm('Auto-distribute all unscheduled tasks across the calendar based on priority and your monthly hours quota?')) return;
+        setDistributing(true);
+        try {
+          const r = await api(`/projects/${project.id}/calendar/distribute`, { method: 'POST' });
+          if (r.ok) {
+            alert(`Scheduled ${r.scheduled} tasks over ${r.months_needed} month(s) (${r.total_hours}h total)`);
+            loadCalendar();
+            if (onReload) onReload();
+          } else alert(r.error || 'Failed');
+        } catch (e) { alert(e.message); }
+        setDistributing(false);
+      };
+
+      const handleClearSchedule = async () => {
+        if (!confirm('Remove all scheduled dates? Tasks will remain in the list but be removed from the calendar.')) return;
+        await api(`/projects/${project.id}/calendar/clear`, { method: 'POST' });
+        loadCalendar();
+        if (onReload) onReload();
+      };
+
+      const handleDrop = async (itemId, newDate, newHour) => {
+        await api(`/action-items/${itemId}/schedule`, { method: 'PUT', body: { scheduled_date: newDate, scheduled_hour: newHour } });
+        loadCalendar();
+      };
+
+      const handleEditSave = async () => {
+        if (!editItem) return;
+        await api(`/action-items/${editItem.id}/schedule`, { method: 'PUT', body: {
+          title: editItem.title, description: editItem.description, severity: editItem.severity,
+          estimated_hours: editItem.estimated_hours, scheduled_date: editItem.scheduled_date,
+          scheduled_hour: editItem.scheduled_hour, status: editItem.status
+        }});
+        setEditItem(null);
+        loadCalendar();
+        if (onReload) onReload();
+      };
+
+      const handleDelete = async (id) => {
+        if (!confirm('Delete this task permanently?')) return;
+        await api(`/action-items/${id}`, { method: 'DELETE' });
+        setEditItem(null);
+        loadCalendar();
+        if (onReload) onReload();
+      };
+
+      const handleAddTask = async () => {
+        if (!addForm.title.trim()) return;
+        const r = await api(`/projects/${project.id}/action-items`, { method: 'POST', body: { pillar: 'manual', type: 'manual', title: addForm.title, description: addForm.description, severity: addForm.severity } });
+        if (r.action_item) {
+          await api(`/action-items/${r.action_item.id}/schedule`, { method: 'PUT', body: { scheduled_date: addModal.date, scheduled_hour: addModal.hour || 9, estimated_hours: parseFloat(addForm.estimated_hours) || 0.5 } });
+        }
+        setAddModal(null);
+        setAddForm({ title: '', description: '', severity: 'medium', estimated_hours: 0.5 });
+        loadCalendar();
+        if (onReload) onReload();
+      };
+
+      const handleUnschedule = async (id) => {
+        await api(`/action-items/${id}/schedule`, { method: 'PUT', body: { scheduled_date: null, scheduled_hour: null } });
+        setEditItem(null);
+        loadCalendar();
+      };
+
+      // Calendar helpers
+      const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+      const firstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
+      const formatDate = (d) => d.toISOString().split('T')[0];
+      const isToday = (dateStr) => formatDate(new Date()) === dateStr;
+      const prevPeriod = () => {
+        const d = new Date(calDate);
+        if (calView === 'month') d.setMonth(d.getMonth() - 1);
+        else if (calView === 'week') d.setDate(d.getDate() - 7);
+        else d.setDate(d.getDate() - 1);
+        setCalDate(d);
+      };
+      const nextPeriod = () => {
+        const d = new Date(calDate);
+        if (calView === 'month') d.setMonth(d.getMonth() + 1);
+        else if (calView === 'week') d.setDate(d.getDate() + 7);
+        else d.setDate(d.getDate() + 1);
+        setCalDate(d);
+      };
+      const goToday = () => setCalDate(new Date());
+
+      // Get items for a specific date
+      const itemsForDate = (dateStr) => calItems.filter(i => i.scheduled_date?.split('T')[0] === dateStr);
+      // Get items for a specific date + hour
+      const itemsForHour = (dateStr, hour) => calItems.filter(i => i.scheduled_date?.split('T')[0] === dateStr && i.scheduled_hour === hour);
+
+      // Drag handlers
+      const onDragStart = (e, item) => { setDragItem(item); e.dataTransfer.effectAllowed = 'move'; };
+      const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+      const onDropCell = (e, dateStr, hour) => { e.preventDefault(); if (dragItem) { handleDrop(dragItem.id, dateStr, hour || dragItem.scheduled_hour || 9); setDragItem(null); } };
+
+      // Task pill component
+      const TaskPill = ({ item, compact }) => {
+        const sev = (item.severity || 'medium').toLowerCase();
+        const pillar = (item.pillar || '').toLowerCase();
+        return (
+          <div draggable onDragStart={(e) => onDragStart(e, item)} onClick={(e) => { e.stopPropagation(); setEditItem({ ...item }); }}
+            style={{ padding: compact ? '2px 6px' : '4px 8px', borderRadius: 6, fontSize: compact ? 10 : 11, fontWeight: 600,
+              background: sevBg[sev] || '#6366f112', borderLeft: `3px solid ${sevColors[sev] || '#6366f1'}`,
+              color: 'var(--text1)', cursor: 'grab', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', gap: 4, opacity: item.status === 'done' || item.status === 'completed' ? 0.5 : 1,
+              textDecoration: item.status === 'done' || item.status === 'completed' ? 'line-through' : 'none' }}>
+            {!compact && <span style={{ width: 6, height: 6, borderRadius: '50%', background: pillarColors[pillar] || '#6366f1', flexShrink: 0 }} />}
+            {(item.title || '').substring(0, compact ? 25 : 40)}
+            {!compact && item.estimated_hours && <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text3)', flexShrink: 0 }}>{item.estimated_hours}h</span>}
+          </div>
+        );
+      };
+
+      // Unscheduled items sidebar
+      const unscheduled = allItems.filter(i => !i.scheduled_date && (i.status === 'pending' || i.status === 'todo' || i.status === 'in_progress' || i.status === 'in-progress'));
+
+      // ---- MONTH VIEW ----
+      const renderMonth = () => {
+        const y = calDate.getFullYear(), m = calDate.getMonth();
+        const days = daysInMonth(y, m);
+        const startDay = firstDayOfMonth(y, m);
+        const cells = [];
+        // Leading blanks (Mon start: adjust so Mon=0)
+        const adjStart = startDay === 0 ? 6 : startDay - 1;
+        for (let i = 0; i < adjStart; i++) cells.push(null);
+        for (let d = 1; d <= days; d++) cells.push(d);
+        // Trailing blanks
+        while (cells.length % 7 !== 0) cells.push(null);
+
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, background: 'var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+            {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+              <div key={d} style={{ padding: '8px 4px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', background: 'var(--card)', textTransform: 'uppercase' }}>{d}</div>
+            ))}
+            {cells.map((day, idx) => {
+              if (!day) return <div key={idx} style={{ background: 'var(--bg1)', minHeight: 90 }} />;
+              const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const dayItems = itemsForDate(dateStr);
+              const isWknd = (idx % 7) >= 5;
+              const totalH = dayItems.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0.5), 0);
+              return (
+                <div key={idx} onDragOver={onDragOver} onDrop={(e) => onDropCell(e, dateStr)}
+                  onClick={() => { setCalView('day'); setCalDate(new Date(y, m, day)); }}
+                  style={{ background: isToday(dateStr) ? '#6366f108' : isWknd ? 'var(--bg1)' : 'var(--card)', minHeight: 90, padding: 4, cursor: 'pointer', position: 'relative' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                    <span style={{ fontSize: 12, fontWeight: isToday(dateStr) ? 800 : 600, color: isToday(dateStr) ? 'var(--accent)' : 'var(--text2)',
+                      background: isToday(dateStr) ? 'var(--accent)' : 'transparent', color: isToday(dateStr) ? '#fff' : 'var(--text2)',
+                      width: isToday(dateStr) ? 22 : 'auto', height: isToday(dateStr) ? 22 : 'auto', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{day}</span>
+                    {totalH > 0 && <span style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 600 }}>{totalH}h</span>}
+                  </div>
+                  {dayItems.slice(0, 3).map(item => <TaskPill key={item.id} item={item} compact />)}
+                  {dayItems.length > 3 && <div style={{ fontSize: 9, color: 'var(--text3)', textAlign: 'center' }}>+{dayItems.length - 3} more</div>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      };
+
+      // ---- WEEK VIEW ----
+      const renderWeek = () => {
+        const d = new Date(calDate);
+        const day = d.getDay();
+        const monday = new Date(d);
+        monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+        const weekDays = [];
+        for (let i = 0; i < 7; i++) {
+          const wd = new Date(monday);
+          wd.setDate(monday.getDate() + i);
+          weekDays.push(wd);
+        }
+        const hours = [];
+        for (let h = 8; h <= 18; h++) hours.push(h);
+
+        return (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '50px repeat(7, 1fr)', gap: 1, background: 'var(--border)', borderRadius: 10, overflow: 'hidden', minWidth: 700 }}>
+              {/* Header row */}
+              <div style={{ background: 'var(--card)', padding: 6 }} />
+              {weekDays.map((wd, i) => {
+                const dateStr = formatDate(wd);
+                const isWknd = i >= 5;
+                return (
+                  <div key={i} onClick={() => { setCalView('day'); setCalDate(wd); }}
+                    style={{ background: isToday(dateStr) ? '#6366f115' : 'var(--card)', padding: '8px 4px', textAlign: 'center', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: isWknd ? 'var(--text3)' : 'var(--text2)', textTransform: 'uppercase' }}>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i]}</div>
+                    <div style={{ fontSize: 16, fontWeight: isToday(dateStr) ? 800 : 600, color: isToday(dateStr) ? 'var(--accent)' : 'var(--text1)' }}>{wd.getDate()}</div>
+                  </div>
+                );
+              })}
+              {/* Hour rows */}
+              {hours.map(h => (
+                <React.Fragment key={h}>
+                  <div style={{ background: 'var(--card)', padding: '4px 6px', fontSize: 10, color: 'var(--text3)', fontWeight: 600, textAlign: 'right', display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end' }}>
+                    {h > 12 ? (h - 12) + 'pm' : h === 12 ? '12pm' : h + 'am'}
+                  </div>
+                  {weekDays.map((wd, i) => {
+                    const dateStr = formatDate(wd);
+                    const hourItems = itemsForHour(dateStr, h);
+                    return (
+                      <div key={i} onDragOver={onDragOver} onDrop={(e) => onDropCell(e, dateStr, h)}
+                        onClick={() => setAddModal({ date: dateStr, hour: h })}
+                        style={{ background: isToday(dateStr) ? '#6366f108' : i >= 5 ? 'var(--bg1)' : 'var(--card)', minHeight: 36, padding: 2, cursor: 'pointer', borderTop: h === 12 ? '1px dashed var(--border)' : 'none' }}>
+                        {hourItems.map(item => <TaskPill key={item.id} item={item} compact />)}
+                      </div>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        );
+      };
+
+      // ---- DAY VIEW ----
+      const renderDay = () => {
+        const dateStr = formatDate(calDate);
+        const dayName = calDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        const hours = [];
+        for (let h = 7; h <= 19; h++) hours.push(h);
+        const dayTotalH = calItems.filter(i => i.scheduled_date?.split('T')[0] === dateStr).reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0.5), 0);
+
+        return (
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {dayName}
+              {dayTotalH > 0 && <span style={{ fontSize: 12, padding: '2px 8px', background: 'var(--accent)', color: '#fff', borderRadius: 10, fontWeight: 700 }}>{dayTotalH}h scheduled</span>}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 1, background: 'var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              {hours.map(h => {
+                const hourItems = itemsForHour(dateStr, h);
+                return (
+                  <React.Fragment key={h}>
+                    <div style={{ background: 'var(--card)', padding: '10px 8px', fontSize: 12, color: 'var(--text3)', fontWeight: 600, textAlign: 'right' }}>
+                      {h > 12 ? (h - 12) + ' pm' : h === 12 ? '12 pm' : h + ' am'}
+                    </div>
+                    <div onDragOver={onDragOver} onDrop={(e) => onDropCell(e, dateStr, h)}
+                      onClick={() => setAddModal({ date: dateStr, hour: h })}
+                      style={{ background: 'var(--card)', minHeight: 48, padding: 6, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {hourItems.map(item => <TaskPill key={item.id} item={item} />)}
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+        );
+      };
+
+      // ---- EDIT MODAL ----
+      const renderEditModal = () => {
+        if (!editItem) return null;
+        const sev = (editItem.severity || 'medium').toLowerCase();
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={() => setEditItem(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: 14, padding: 24, width: 480, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className="fas fa-edit" style={{ color: 'var(--accent)' }} /> Edit Task
+                </h3>
+                <button onClick={() => setEditItem(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}><i className="fas fa-times" /></button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>TITLE</label>
+                  <input value={editItem.title || ''} onChange={e => setEditItem(p => ({ ...p, title: e.target.value }))}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>DESCRIPTION</label>
+                  <textarea value={editItem.description || ''} onChange={e => setEditItem(p => ({ ...p, description: e.target.value }))} rows={3}
+                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>SEVERITY</label>
+                    <select value={editItem.severity || 'medium'} onChange={e => setEditItem(p => ({ ...p, severity: e.target.value }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                      <option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>STATUS</label>
+                    <select value={editItem.status || 'pending'} onChange={e => setEditItem(p => ({ ...p, status: e.target.value }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                      <option value="pending">Pending</option><option value="in-progress">In Progress</option><option value="done">Done</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>DATE</label>
+                    <input type="date" value={editItem.scheduled_date?.split('T')[0] || ''} onChange={e => setEditItem(p => ({ ...p, scheduled_date: e.target.value }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOUR</label>
+                    <select value={editItem.scheduled_hour ?? 9} onChange={e => setEditItem(p => ({ ...p, scheduled_hour: parseInt(e.target.value) }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                      {Array.from({ length: 12 }, (_, i) => i + 7).map(h => <option key={h} value={h}>{h > 12 ? (h-12)+' PM' : h === 12 ? '12 PM' : h+' AM'}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 4, display: 'block' }}>HOURS</label>
+                    <input type="number" step="0.25" min="0.25" max="8" value={editItem.estimated_hours || 0.5}
+                      onChange={e => setEditItem(p => ({ ...p, estimated_hours: parseFloat(e.target.value) }))}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => handleDelete(editItem.id)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #ef4444', background: '#ef444412', color: '#ef4444', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    <i className="fas fa-trash" style={{ marginRight: 6 }} />Delete
+                  </button>
+                  <button onClick={() => handleUnschedule(editItem.id)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text2)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    <i className="fas fa-calendar-minus" style={{ marginRight: 6 }} />Unschedule
+                  </button>
+                </div>
+                <button onClick={handleEditSave} style={{ padding: '8px 20px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  <i className="fas fa-check" style={{ marginRight: 6 }} />Save
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ---- ADD MODAL ----
+      const renderAddModal = () => {
+        if (!addModal) return null;
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={() => setAddModal(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: 14, padding: 24, width: 420, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+              <h3 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}><i className="fas fa-plus-circle" style={{ color: '#22c55e', marginRight: 8 }} />Add Task — {addModal.date} at {addModal.hour > 12 ? (addModal.hour-12)+' PM' : addModal.hour+' AM'}</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <input placeholder="Task title..." value={addForm.title} onChange={e => setAddForm(p => ({ ...p, title: e.target.value }))}
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }} />
+                <textarea placeholder="Description (optional)" value={addForm.description} onChange={e => setAddForm(p => ({ ...p, description: e.target.value }))} rows={2}
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13, resize: 'vertical' }} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <select value={addForm.severity} onChange={e => setAddForm(p => ({ ...p, severity: e.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }}>
+                    <option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                  </select>
+                  <input type="number" step="0.25" min="0.25" max="8" value={addForm.estimated_hours} placeholder="Hours"
+                    onChange={e => setAddForm(p => ({ ...p, estimated_hours: e.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text1)', fontSize: 13 }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+                <button onClick={() => setAddModal(null)} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text2)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <button onClick={handleAddTask} disabled={!addForm.title.trim()} style={{ padding: '8px 20px', borderRadius: 8, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: addForm.title.trim() ? 1 : 0.5 }}>
+                  <i className="fas fa-plus" style={{ marginRight: 6 }} />Add Task
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // Scheduled stats
+      const scheduledCount = calItems.length;
+      const totalHours = calItems.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0.5), 0);
+
+      return (
+        <div>
+          {/* Calendar toolbar */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button onClick={prevPeriod} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer' }}><i className="fas fa-chevron-left" /></button>
+              <button onClick={goToday} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Today</button>
+              <button onClick={nextPeriod} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', cursor: 'pointer' }}><i className="fas fa-chevron-right" /></button>
+              <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 8 }}>
+                {calView === 'day' ? calDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) :
+                 calDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 11, color: 'var(--text3)' }}>{scheduledCount} scheduled ({totalHours}h) · {unscheduled.length} unscheduled</span>
+              {['month', 'week', 'day'].map(v => (
+                <button key={v} onClick={() => setCalView(v)}
+                  style={{ padding: '6px 12px', borderRadius: 8, border: calView === v ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    background: calView === v ? '#6366f115' : 'var(--card)', color: calView === v ? 'var(--accent)' : 'var(--text2)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: 600, textTransform: 'capitalize' }}>{v}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 16 }}>
+            {/* Main calendar area */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {calView === 'month' && renderMonth()}
+              {calView === 'week' && renderWeek()}
+              {calView === 'day' && renderDay()}
+            </div>
+
+            {/* Unscheduled sidebar */}
+            <div style={{ width: 220, flexShrink: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>Unscheduled ({unscheduled.length})</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button onClick={handleDistribute} disabled={distributing || unscheduled.length === 0}
+                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 11, cursor: 'pointer', marginBottom: 6, opacity: unscheduled.length === 0 ? 0.5 : 1 }}>
+                  {distributing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Distributing...</> : <><i className="fas fa-magic" style={{ marginRight: 4 }} />Auto-Distribute</>}
+                </button>
+                {scheduledCount > 0 && (
+                  <button onClick={handleClearSchedule} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg1)', color: 'var(--text3)', fontWeight: 600, fontSize: 10, cursor: 'pointer', marginBottom: 6 }}>
+                    <i className="fas fa-eraser" style={{ marginRight: 4 }} />Clear Schedule
+                  </button>
+                )}
+              </div>
+              <div style={{ maxHeight: 500, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {unscheduled.slice(0, 50).map(item => <TaskPill key={item.id} item={item} />)}
+                {unscheduled.length === 0 && <div style={{ fontSize: 11, color: 'var(--text3)', padding: 8, textAlign: 'center' }}>All tasks scheduled</div>}
+              </div>
+            </div>
+          </div>
+
+          {renderEditModal()}
+          {renderAddModal()}
+        </div>
+      );
+    }
+
     function UnifiedActionPlanPage({ project, setActiveTab }) {
+      const [viewMode, setViewMode] = useState('list');
       const [activePillar, setActivePillar] = useState('all');
       const [filterSeverity, setFilterSeverity] = useState('all');
       const [filterCategory, setFilterCategory] = useState('all');
@@ -10299,7 +10755,15 @@
                 All findings from audits — Automated, Copywriter, or Manual
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', background: 'var(--bg2)', borderRadius: 8, padding: 2, marginRight: 8 }}>
+                <button onClick={() => setViewMode('list')} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'transparent', color: viewMode === 'list' ? '#fff' : 'var(--text3)', transition: 'all 0.2s' }}>
+                  <i className="fas fa-list" style={{ marginRight: 5 }} />List
+                </button>
+                <button onClick={() => setViewMode('calendar')} style={{ padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? '#fff' : 'var(--text3)', transition: 'all 0.2s' }}>
+                  <i className="fas fa-calendar-alt" style={{ marginRight: 5 }} />Calendar
+                </button>
+              </div>
               <button className="btn" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text1)' }}>
                 {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audits</>}
               </button>
@@ -10325,6 +10789,11 @@
             </div>
           )}
 
+          {viewMode === 'calendar' && (
+            <ActionPlanCalendar project={project} items={itemsWithAssignee} onStatusChange={handleStatusChange} onReload={loadData} />
+          )}
+
+          {viewMode === 'list' && (<React.Fragment>
           {/* Stats cards — match audit pages */}
           {(() => {
             const auditStats = [
@@ -10646,6 +11115,7 @@
               <div style={{ fontSize: 13 }}>Run your audits first. Findings sync automatically to the Action Plan.</div>
             </div>
           )}
+          </React.Fragment>)}
         </div>
       );
     }

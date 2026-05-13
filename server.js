@@ -440,6 +440,11 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS expected_impact TEXT DEFAULT ''`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS assignee_label TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS how_to_steps TEXT`).catch(() => {});
+    // Calendar scheduling columns
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS scheduled_date DATE`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS scheduled_hour INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS estimated_hours NUMERIC DEFAULT 0.5`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
 
@@ -1954,6 +1959,170 @@ app.put('/api/action-items/:id', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ============ ACTION PLAN CALENDAR ============
+
+// Get calendar items for a project (scheduled action items for a date range)
+app.get('/api/projects/:id/calendar', async (req, res) => {
+  try {
+    const { start, end } = req.query; // ISO date strings
+    let query = `SELECT * FROM action_items WHERE project_id=$1 AND scheduled_date IS NOT NULL`;
+    const params = [req.params.id];
+    if (start) { query += ` AND scheduled_date >= $${params.length + 1}`; params.push(start); }
+    if (end) { query += ` AND scheduled_date <= $${params.length + 1}`; params.push(end); }
+    query += ' ORDER BY scheduled_date ASC, scheduled_hour ASC NULLS LAST, sort_order ASC';
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update a single action item's schedule (drag/drop, click-edit)
+app.put('/api/action-items/:id/schedule', async (req, res) => {
+  const { scheduled_date, scheduled_hour, estimated_hours, title, description, severity, status } = req.body;
+  try {
+    // Build dynamic SET clause — allow explicit null for unscheduling
+    const sets = [];
+    const vals = [];
+    let idx = 1;
+    if ('scheduled_date' in req.body) { sets.push(`scheduled_date=$${idx++}`); vals.push(scheduled_date); }
+    if ('scheduled_hour' in req.body) { sets.push(`scheduled_hour=$${idx++}`); vals.push(scheduled_hour); }
+    if (estimated_hours !== undefined && estimated_hours !== null) { sets.push(`estimated_hours=$${idx++}`); vals.push(estimated_hours); }
+    if (title !== undefined && title !== null) { sets.push(`title=$${idx++}`); vals.push(title); }
+    if (description !== undefined && description !== null) { sets.push(`description=$${idx++}`); vals.push(description); }
+    if (severity !== undefined && severity !== null) { sets.push(`severity=$${idx++}`); vals.push(severity); }
+    if (status !== undefined && status !== null) { sets.push(`status=$${idx++}`); vals.push(status); }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    vals.push(req.params.id);
+    const result = await pool.query(`UPDATE action_items SET ${sets.join(', ')} WHERE id=$${idx} RETURNING *`, vals);
+    if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto-distribute action items across the calendar based on priority + monthly hours
+app.post('/api/projects/:id/calendar/distribute', async (req, res) => {
+  const projectId = req.params.id;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!projRes.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const monthlyHours = parseFloat(project.monthly_hours) || 20;
+
+    // Get all pending/in-progress unscheduled action items
+    const { rows: items } = await pool.query(
+      `SELECT * FROM action_items WHERE project_id=$1 AND (status='pending' OR status='todo' OR status='in_progress') AND scheduled_date IS NULL ORDER BY
+        CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+        created_at ASC`,
+      [projectId]
+    );
+
+    if (items.length === 0) return res.json({ ok: true, scheduled: 0, message: 'No unscheduled items to distribute' });
+
+    // Estimate hours per item based on severity
+    const estHours = (item) => {
+      if (item.estimated_hours && item.estimated_hours > 0) return parseFloat(item.estimated_hours);
+      const sev = (item.severity || 'medium').toLowerCase();
+      if (sev === 'critical') return 1.5;
+      if (sev === 'high') return 1;
+      if (sev === 'medium') return 0.5;
+      return 0.25;
+    };
+
+    // Work schedule: Mon-Fri, 9am-5pm (8 working hours), fill based on monthly hours quota
+    const now = new Date();
+    let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // Start from next business day if today is past noon
+    if (now.getHours() >= 12) currentDate.setDate(currentDate.getDate() + 1);
+
+    const isWeekday = (d) => d.getDay() !== 0 && d.getDay() !== 6;
+    const nextWeekday = (d) => { const n = new Date(d); n.setDate(n.getDate() + 1); while (!isWeekday(n)) n.setDate(n.getDate() + 1); return n; };
+    while (!isWeekday(currentDate)) currentDate = nextWeekday(currentDate);
+
+    // Calculate how many hours per day we can work (distribute monthly hours across ~22 working days)
+    const workingDaysPerMonth = 22;
+    const hoursPerDay = Math.min(8, Math.max(1, monthlyHours / workingDaysPerMonth));
+
+    let dayHoursUsed = 0;
+    let currentHour = 9; // Start at 9am
+    let totalScheduled = 0;
+    let monthHoursUsed = 0;
+    let currentMonth = currentDate.getMonth();
+    let monthlyHoursLeft = monthlyHours;
+
+    const updates = [];
+
+    for (const item of items) {
+      const hours = estHours(item);
+
+      // Check if we need to move to next month
+      if (monthlyHoursLeft < hours && monthlyHoursLeft < 0.25) {
+        // Move to first weekday of next month
+        currentMonth++;
+        if (currentMonth > 11) { currentMonth = 0; currentDate.setFullYear(currentDate.getFullYear() + 1); }
+        currentDate = new Date(currentDate.getFullYear(), currentMonth, 1);
+        while (!isWeekday(currentDate)) currentDate = nextWeekday(currentDate);
+        dayHoursUsed = 0;
+        currentHour = 9;
+        monthlyHoursLeft = monthlyHours;
+      }
+
+      // Check if we need to move to next day
+      if (dayHoursUsed + hours > hoursPerDay || currentHour >= 17) {
+        currentDate = nextWeekday(currentDate);
+        if (currentDate.getMonth() !== currentMonth) {
+          currentMonth = currentDate.getMonth();
+          monthlyHoursLeft = monthlyHours;
+        }
+        dayHoursUsed = 0;
+        currentHour = 9;
+      }
+
+      const dateStr = currentDate.toISOString().split('T')[0];
+      updates.push({ id: item.id, date: dateStr, hour: currentHour, hours });
+
+      dayHoursUsed += hours;
+      currentHour = 9 + Math.floor(dayHoursUsed);
+      monthlyHoursLeft -= hours;
+      monthHoursUsed += hours;
+      totalScheduled++;
+    }
+
+    // Batch update
+    for (const u of updates) {
+      await pool.query(
+        `UPDATE action_items SET scheduled_date=$1, scheduled_hour=$2, estimated_hours=$3 WHERE id=$4`,
+        [u.date, u.hour, u.hours, u.id]
+      );
+    }
+
+    const lastDate = updates.length > 0 ? updates[updates.length - 1].date : null;
+    const monthsNeeded = lastDate ? Math.ceil((new Date(lastDate) - now) / (30 * 24 * 60 * 60 * 1000)) + 1 : 1;
+
+    res.json({ ok: true, scheduled: totalScheduled, total_hours: Math.round(monthHoursUsed * 10) / 10, months_needed: monthsNeeded, first_date: updates[0]?.date, last_date: lastDate });
+  } catch (e) {
+    console.error('[calendar] Distribute error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Clear all scheduled dates (reset calendar)
+app.post('/api/projects/:id/calendar/clear', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE action_items SET scheduled_date=NULL, scheduled_hour=NULL WHERE project_id=$1 AND scheduled_date IS NOT NULL RETURNING id`,
+      [req.params.id]
+    );
+    res.json({ ok: true, cleared: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete action item
+app.delete('/api/action-items/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM action_items WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Split a multi-location action item into individual items
