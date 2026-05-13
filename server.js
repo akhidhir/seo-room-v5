@@ -5614,7 +5614,7 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
 
     // Save findings to audit_findings
     const auditRes = await pool.query(
-      `INSERT INTO audits (project_id, type, status, report) VALUES ($1, 'clarity', 'completed', $2) RETURNING id`,
+      `INSERT INTO audits (project_id, pillar, status, audit_data, completed_at) VALUES ($1, 'clarity', 'completed', $2, NOW()) RETURNING id`,
       [projectId, JSON.stringify({ metrics: metricsData, findings_count: findings.length })]
     );
     const auditId = auditRes.rows[0].id;
