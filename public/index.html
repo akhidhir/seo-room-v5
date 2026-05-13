@@ -23085,6 +23085,7 @@
       const [newAiBudget, setNewAiBudget] = useState('');
       const [newMonthlyHours, setNewMonthlyHours] = useState('');
       const [editingQuota, setEditingQuota] = useState(null);
+      const [quotaDraft, setQuotaDraft] = useState({});
 
       useEffect(() => {
         loadProjects();
@@ -23118,10 +23119,15 @@
         }
       };
 
-      const handleUpdateQuota = async (projId, field, value) => {
+      const startEditQuota = (proj) => {
+        setEditingQuota(proj.id);
+        setQuotaDraft({ monthly_fee: proj.monthly_fee || 0, monthly_ai_budget: proj.monthly_ai_budget || 0, monthly_hours: proj.monthly_hours || 0 });
+      };
+
+      const handleSaveQuota = async (projId) => {
         try {
-          await api(`/projects/${projId}`, { method: 'PUT', body: { [field]: parseFloat(value) || 0 } });
-          setProjects(prev => prev.map(p => p.id === projId ? { ...p, [field]: parseFloat(value) || 0 } : p));
+          await api(`/projects/${projId}`, { method: 'PUT', body: quotaDraft });
+          setProjects(prev => prev.map(p => p.id === projId ? { ...p, ...quotaDraft } : p));
           setEditingQuota(null);
         } catch (err) { setError(err.message); }
       };
@@ -23176,28 +23182,40 @@
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                     {[
-                      { label: '$/month', field: 'monthly_fee', value: proj.monthly_fee, icon: 'fa-dollar-sign', color: '#22c55e' },
-                      { label: 'AI Budget', field: 'monthly_ai_budget', value: proj.monthly_ai_budget, icon: 'fa-brain', color: '#8b5cf6' },
-                      { label: 'Hours/month', field: 'monthly_hours', value: proj.monthly_hours, icon: 'fa-clock', color: '#3b82f6' }
+                      { label: '$/month', field: 'monthly_fee', value: proj.monthly_fee, icon: 'fa-dollar-sign', color: '#22c55e', prefix: '$' },
+                      { label: 'AI Budget', field: 'monthly_ai_budget', value: proj.monthly_ai_budget, icon: 'fa-brain', color: '#8b5cf6', prefix: '$' },
+                      { label: 'Hours/month', field: 'monthly_hours', value: proj.monthly_hours, icon: 'fa-clock', color: '#3b82f6', prefix: '' }
                     ].map(q => (
                       <div key={q.field} style={{ padding: 14, borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', textAlign: 'center' }}>
                         <div style={{ fontSize: 10, fontWeight: 700, color: q.color, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
                           <i className={`fa-solid ${q.icon}`} style={{ marginRight: 4 }} />{q.label}
                         </div>
-                        {editingQuota === `${proj.id}_${q.field}` ? (
-                          <input type="number" autoFocus defaultValue={q.value || 0}
-                            onBlur={e => handleUpdateQuota(proj.id, q.field, e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') handleUpdateQuota(proj.id, q.field, e.target.value); if (e.key === 'Escape') setEditingQuota(null); }}
-                            style={{ width: 80, fontSize: 20, fontWeight: 900, textAlign: 'center', background: 'var(--card)', border: `2px solid ${q.color}`, borderRadius: 8, color: q.color, outline: 'none', padding: '4px 0' }} />
+                        {editingQuota === proj.id ? (
+                          <input type="number" value={quotaDraft[q.field] || ''} onChange={e => setQuotaDraft(d => ({ ...d, [q.field]: e.target.value }))}
+                            style={{ width: '100%', fontSize: 20, fontWeight: 900, textAlign: 'center', background: 'var(--card)', border: `2px solid ${q.color}`, borderRadius: 8, color: q.color, outline: 'none', padding: '6px 0' }} />
                         ) : (
-                          <div onClick={() => setEditingQuota(`${proj.id}_${q.field}`)}
-                            style={{ fontSize: 24, fontWeight: 900, color: q.color, cursor: 'pointer' }}
-                            title="Click to edit">
-                            {q.field === 'monthly_hours' ? (q.value || 0) : `$${(q.value || 0).toLocaleString()}`}
+                          <div style={{ fontSize: 24, fontWeight: 900, color: q.color }}>
+                            {q.prefix}{(q.value || 0).toLocaleString()}
                           </div>
                         )}
                       </div>
                     ))}
+                  </div>
+                  <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                    {editingQuota === proj.id ? (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn btn-small" onClick={() => setEditingQuota(null)} style={{ fontSize: 12 }}>
+                          <i className="fa-solid fa-xmark" style={{ marginRight: 4 }} />Cancel
+                        </button>
+                        <button className="btn btn-primary btn-small" onClick={() => handleSaveQuota(proj.id)} style={{ fontSize: 12 }}>
+                          <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Save Quotas
+                        </button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-secondary btn-small" onClick={() => startEditQuota(proj)} style={{ fontSize: 12 }}>
+                        <i className="fa-solid fa-pen" style={{ marginRight: 4 }} />Edit Quotas
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
