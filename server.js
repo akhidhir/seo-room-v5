@@ -407,7 +407,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
     // Set RC location IDs for known projects (one-time seed, safe to re-run)
-    await client.query(`UPDATE projects SET rc_location_id = 15047 WHERE id = 2 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 2`).catch(() => {});
     await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
@@ -731,6 +731,145 @@ async function initDb() {
     await client.query(`DELETE FROM serp_analysis WHERE (analysis->>'score')::int = 0 AND length(analysis->>'verdict') > 200`).catch(() => {});
 
     console.log('[boot] Database schema initialized');
+
+    // Seed RC data for Houseworks (project 2) if not yet synced
+    const hw = await client.query(`SELECT 1 FROM project_integrations WHERE project_id=2 AND kind='rc_profile'`).catch(() => ({ rows: [] }));
+    if (hw.rows.length === 0) {
+      console.log('[boot] Seeding RC data for Houseworks (project 2)...');
+      const rcData = {
+        location_id: 'locations/12755344744730282615',
+        profile: {
+          title: 'Houseworks Plumbing & Gas',
+          phoneNumbers: { primaryPhone: '(08) 6400 5390' },
+          categories: {
+            primaryCategory: { name: 'categories/gcid:plumber', displayName: 'Plumber' },
+            additionalCategories: [
+              { name: 'categories/gcid:drainage_service', displayName: 'Drainage Service' },
+              { name: 'categories/gcid:bathroom_remodeler', displayName: 'Bathroom Renovator' },
+              { name: 'categories/gcid:gas_installation_service', displayName: 'Gas installation service' },
+              { name: 'categories/gcid:hot_water_system_supplier', displayName: 'Hot water system supplier' }
+            ]
+          },
+          websiteUri: 'https://houseworksplumbing.com.au/',
+          regularHours: {
+            periods: [
+              { openDay: 'MONDAY', openTime: { hours: 7 }, closeDay: 'MONDAY', closeTime: { hours: 16 } },
+              { openDay: 'TUESDAY', openTime: { hours: 7 }, closeDay: 'TUESDAY', closeTime: { hours: 16 } },
+              { openDay: 'WEDNESDAY', openTime: { hours: 7 }, closeDay: 'WEDNESDAY', closeTime: { hours: 16 } },
+              { openDay: 'THURSDAY', openTime: { hours: 7 }, closeDay: 'THURSDAY', closeTime: { hours: 16 } },
+              { openDay: 'FRIDAY', openTime: { hours: 7 }, closeDay: 'FRIDAY', closeTime: { hours: 16 } }
+            ]
+          },
+          serviceArea: {
+            businessType: 'CUSTOMER_LOCATION_ONLY',
+            places: { placeInfos: [
+              { placeName: 'Perth WA, Australia', placeId: 'ChIJPXNH22yWMioR0FXfNbXwBAM' },
+              { placeName: 'Leeming WA 6149, Australia', placeId: 'ChIJnwYx9SO9MioRoEnfNbXwBAU' },
+              { placeName: 'Melville WA 6156, Australia', placeId: 'ChIJVa6UerGiMioREEvfNbXwBAU' }
+            ] }
+          },
+          profile: { description: 'Houseworks Plumbing & Gas is a specialist Plumbing located in Leeming, WA. The services we offer include Leaking Taps, Burst Pipes, Blocked Drains, Hot Water Units, and Water filters. Although we are located in Leeming, we service clients from areas such as Fremantle, Spearwood, Hamilton Hill, Mosman Park, White Gum Valley, Attadale, Palmyra, Bicton, Murdoch, Bateman, North Lake, Bull Creek, Willetton, South Lake, Kardinya, Jandakot, Winthrop, Atwell, South Perth, Como, and all surrounding areas.' },
+          serviceItems: [
+            { freeFormServiceItem: { label: { displayName: 'Bathroom & Laundry Renovations' } } },
+            { freeFormServiceItem: { label: { displayName: 'Burst Pipes' } } },
+            { freeFormServiceItem: { label: { displayName: 'Clearing Blocked Drains' } } },
+            { freeFormServiceItem: { label: { displayName: 'Commercial & Industrial' } } },
+            { freeFormServiceItem: { label: { displayName: 'Emergency Callout' } } },
+            { freeFormServiceItem: { label: { displayName: 'Gas Bayonets' } } },
+            { freeFormServiceItem: { label: { displayName: 'Gas Fitter' } } },
+            { freeFormServiceItem: { label: { displayName: 'Gas Leaks' } } },
+            { freeFormServiceItem: { label: { displayName: 'Gas Systems' } } },
+            { freeFormServiceItem: { label: { displayName: 'Heating Systems' } } },
+            { freeFormServiceItem: { label: { displayName: 'Home & Commercial Plumbing Services' } } },
+            { freeFormServiceItem: { label: { displayName: 'Hot Water Units' } } },
+            { freeFormServiceItem: { label: { displayName: 'Leaking Taps' } } },
+            { freeFormServiceItem: { label: { displayName: 'New Gas Installations' } } },
+            { freeFormServiceItem: { label: { displayName: 'Plumbing & Gas Emergencies' } } },
+            { freeFormServiceItem: { label: { displayName: 'Water Filters' } } },
+            { freeFormServiceItem: { label: { displayName: 'Bbq Installs' } } },
+            { freeFormServiceItem: { label: { displayName: 'Blocked Drains' } } },
+            { freeFormServiceItem: { label: { displayName: 'Commercial Plumbing & Gas' } } },
+            { freeFormServiceItem: { label: { displayName: 'Emergency Gas' } } },
+            { freeFormServiceItem: { label: { displayName: 'Emergency Plumbing' } } },
+            { freeFormServiceItem: { label: { displayName: 'Home Plumbing' } } },
+            { freeFormServiceItem: { label: { displayName: 'Maintenance & Repair' } } },
+            { freeFormServiceItem: { label: { displayName: 'Ongoing Maintenance' } } },
+            { freeFormServiceItem: { label: { displayName: 'Plumbing Maintenance' } } },
+            { freeFormServiceItem: { label: { displayName: 'Reticulation System' } } },
+            { freeFormServiceItem: { label: { displayName: 'Shower Screens' } } },
+            { freeFormServiceItem: { label: { displayName: 'Water Line' } } },
+            { freeFormServiceItem: { label: { displayName: 'Rheem Hot Water Systems' } } },
+            { freeFormServiceItem: { label: { displayName: 'Rinnai Hot Water Systems' } } },
+            { freeFormServiceItem: { label: { displayName: 'Leaking Toilet Repairs' } } },
+            { freeFormServiceItem: { label: { displayName: 'Leaking Shower Repairs' } } }
+          ],
+          storefrontAddress: { addressLines: [], locality: 'Leeming', administrativeArea: 'WA', postalCode: '6149' },
+          metadata: { placeId: 'ChIJmdiEtgK9MioRF4p_205czqE', mapsUri: 'https://maps.google.com/maps?cid=11659357979068566039' }
+        },
+        healthcheck: [
+          { type: 'primary_category', valid: true, attention_needed: false },
+          { type: 'keywords_in_the_profile_name', valid: true, attention_needed: false },
+          { type: 'avg_reviews', valid: true, attention_needed: false, data: { current_reviews: 116 } },
+          { type: 'additional_category', valid: true, attention_needed: false },
+          { type: 'rating', valid: true, attention_needed: false },
+          { type: 'page_speed', valid: false, attention_needed: true, data: { totalPerformanceScore: 65 } },
+          { type: 'sentiment', valid: true, attention_needed: false, data: { negative: 4, positive: 137 } },
+          { type: 'nap_data', valid: false, attention_needed: true },
+          { type: 'opening_hours', valid: true, attention_needed: false },
+          { type: 'services', valid: true, attention_needed: false },
+          { type: 'profile_verification', valid: true, attention_needed: false }
+        ],
+        reviews_stats: { total_reviews: 117, average_rating: 4.7, reply_rate: 80.3, replied_count: 94, unreplied_count: 23, rating_distribution: { '5': 103, '4': 6, '3': 1, '2': 1, '1': 6 } },
+        posts: [
+          { summary: 'NDIS Bathroom Mods in Perth', state: 'SCHEDULED', createTime: '2026-05-09T04:30:16Z' },
+          { summary: 'Rheem Hot Water System Maintenance', state: 'LIVE', createTime: '2026-05-04T01:32:56Z' },
+          { summary: 'Perth Commercial Drain Odours', state: 'LIVE', createTime: '2026-04-26T23:42:47Z' },
+          { summary: 'NDIS Plumbing Modifications in Perth', state: 'LIVE', createTime: '2026-04-21T06:31:40Z' },
+          { summary: 'Commercial Plumbers Perth Tenant Handover', state: 'LIVE', createTime: '2026-04-21T06:27:50Z' },
+          { summary: 'Preventing Blocked Drains Perth', state: 'LIVE', createTime: '2026-04-21T06:23:41Z' },
+          { summary: 'Perth Hot Water Runs Out in Winter', state: 'LIVE', createTime: '2026-04-21T01:44:25Z' },
+          { summary: 'Common Hot Water Myths Perth', state: 'LIVE', createTime: '2026-04-14T22:46:51Z' },
+          { summary: 'How to Size a Hot Water System Perth', state: 'LIVE', createTime: '2026-04-07T01:19:20Z' }
+        ],
+        synced_at: new Date().toISOString()
+      };
+      await client.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+         VALUES (2, 'rc_profile', $1, 'connected', NOW())
+         ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
+        [JSON.stringify(rcData)]
+      );
+      await client.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+         VALUES (2, 'rc_sync', $1, 'connected', NOW())
+         ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
+        [JSON.stringify({ reviews_stats: rcData.reviews_stats, posts: rcData.posts, synced_at: rcData.synced_at })]
+      );
+      // Also store gbp_profile from RC data
+      const gbpProfile = {
+        business: { name: 'Houseworks Plumbing & Gas' },
+        source: 'rating_captain',
+        address: 'Leeming, WA, 6149',
+        phone: '(08) 6400 5390',
+        website: 'https://houseworksplumbing.com.au/',
+        description: rcData.profile.profile.description,
+        categories: ['Plumber', 'Drainage Service', 'Bathroom Renovator', 'Gas installation service', 'Hot water system supplier'],
+        hours: rcData.profile.regularHours.periods,
+        services: rcData.profile.serviceItems.map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId).filter(Boolean),
+        service_areas: ['Perth WA, Australia', 'Leeming WA 6149, Australia', 'Melville WA 6156, Australia'],
+        place_id: 'ChIJmdiEtgK9MioRF4p_205czqE',
+        maps_url: 'https://maps.google.com/maps?cid=11659357979068566039',
+        synced_at: new Date().toISOString()
+      };
+      await client.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+         VALUES (2, 'gbp_profile', $1, 'connected', NOW())
+         ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
+        [JSON.stringify(gbpProfile)]
+      );
+      console.log('[boot] Houseworks RC data seeded successfully');
+    }
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
