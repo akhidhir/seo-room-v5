@@ -406,9 +406,11 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_id TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
-    // Set RC location IDs for known projects (one-time seed, safe to re-run)
-    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 2`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
+    // Set RC location IDs + correct gbp_location_id for all projects
+    await client.query(`UPDATE projects SET rc_location_id = 16189, gbp_location_id = 'locations/12755344744730282615' WHERE id = 1`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 190720, gbp_location_id = 'locations/8702513397324148400' WHERE id = 2`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 192823, gbp_location_id = 'locations/17933670947974765351' WHERE id = 3`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 4 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_project_id TEXT`).catch(() => {});
@@ -732,10 +734,11 @@ async function initDb() {
 
     console.log('[boot] Database schema initialized');
 
-    // Seed RC data for Houseworks (project 2) if not yet synced
-    const hw = await client.query(`SELECT 1 FROM project_integrations WHERE project_id=2 AND kind='rc_profile'`).catch(() => ({ rows: [] }));
-    if (hw.rows.length === 0) {
-      console.log('[boot] Seeding RC data for Houseworks (project 2)...');
+    // Seed RC data for Houseworks (project 1) if missing or empty
+    const hw = await client.query(`SELECT config FROM project_integrations WHERE project_id=1 AND kind='rc_profile'`).catch(() => ({ rows: [] }));
+    const hwConfig = hw.rows[0]?.config ? (typeof hw.rows[0].config === 'string' ? JSON.parse(hw.rows[0].config) : hw.rows[0].config) : null;
+    if (!hwConfig?.profile?.title) {
+      console.log('[boot] Seeding RC data for Houseworks (project 1)...');
       const rcData = {
         location_id: 'locations/12755344744730282615',
         profile: {
@@ -835,13 +838,13 @@ async function initDb() {
       };
       await client.query(
         `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
-         VALUES (2, 'rc_profile', $1, 'connected', NOW())
+         VALUES (1, 'rc_profile', $1, 'connected', NOW())
          ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
         [JSON.stringify(rcData)]
       );
       await client.query(
         `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
-         VALUES (2, 'rc_sync', $1, 'connected', NOW())
+         VALUES (1, 'rc_sync', $1, 'connected', NOW())
          ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
         [JSON.stringify({ reviews_stats: rcData.reviews_stats, posts: rcData.posts, synced_at: rcData.synced_at })]
       );
@@ -863,7 +866,7 @@ async function initDb() {
       };
       await client.query(
         `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
-         VALUES (2, 'gbp_profile', $1, 'connected', NOW())
+         VALUES (1, 'gbp_profile', $1, 'connected', NOW())
          ON CONFLICT (project_id, kind) DO UPDATE SET config=$1, status='connected', updated_at=NOW()`,
         [JSON.stringify(gbpProfile)]
       );
@@ -21948,30 +21951,46 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     let rcR = await pool.query("SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'", [projectId]);
     let rc = rcR.rows[0]?.config ? (typeof rcR.rows[0].config === 'string' ? JSON.parse(rcR.rows[0].config) : rcR.rows[0].config) : null;
 
-    // Auto-sync from RC API if no rc_profile exists and project has gbp_location_id
-    if (!rc && project.gbp_location_id) {
+    // Auto-sync from RC API if rc_profile missing/empty and project has rc_location_id or gbp_location_id
+    if ((!rc || !rc.profile?.title) && (project.rc_location_id || project.gbp_location_id)) {
       const RC_TOKEN = process.env.RC_API_TOKEN;
       if (RC_TOKEN) {
         try {
-          const numericId = project.gbp_location_id.replace(/^locations\//, '');
+          // Use rc_location_id (RC internal DB ID) for profile fetch — more reliable than gbp_location_id
+          const rcDbId = project.rc_location_id;
           const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
           const RC_BASE = 'https://local.ratingcaptain.com/api';
-          console.log(`[local-intel] Auto-fetching RC profile for project ${projectId} (location ${numericId})...`);
+          console.log(`[local-intel] Auto-fetching RC profile for project ${projectId} (rc_id=${rcDbId}, gbp=${project.gbp_location_id})...`);
 
-          const [profileResp, extResp] = await Promise.allSettled([
-            fetch(`${RC_BASE}/locations/${numericId}`, { headers: rcHeaders }),
+          // Fetch profile by RC DB ID + extended list for reviews/rating
+          const fetches = [
             fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders }),
-          ]);
+          ];
+          if (rcDbId) fetches.unshift(fetch(`${RC_BASE}/locations/${rcDbId}`, { headers: rcHeaders }));
+
+          const results = await Promise.allSettled(fetches);
 
           let profile = null, reviews_stats = null;
-          if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
-            profile = await profileResp.value.json();
+          const profileIdx = rcDbId ? 0 : -1;
+          const extIdx = rcDbId ? 1 : 0;
+
+          if (profileIdx >= 0 && results[profileIdx].status === 'fulfilled' && results[profileIdx].value.ok) {
+            profile = await results[profileIdx].value.json();
+            console.log(`[local-intel] Fetched profile: ${profile.title || 'unknown'}`);
           }
-          if (extResp.status === 'fulfilled' && extResp.value.ok) {
-            const extData = await extResp.value.json();
-            const loc = (extData.data || []).find(l => l.location_id === project.gbp_location_id);
+          if (results[extIdx]?.status === 'fulfilled' && results[extIdx].value.ok) {
+            const extData = await results[extIdx].value.json();
+            // Match by gbp_location_id OR rc_location_id
+            const loc = (extData.data || []).find(l =>
+              l.location_id === project.gbp_location_id ||
+              l.id === project.rc_location_id
+            );
             if (loc) {
               reviews_stats = { total_reviews: loc.reviews_amount || 0, average_rating: loc.rating || 0, reply_rate: 0, replied_count: 0, unreplied_count: 0 };
+              // If profile fetch failed, use extended data name as fallback
+              if (!profile && loc.name) {
+                console.log(`[local-intel] Using extended data as profile fallback for ${loc.name}`);
+              }
             }
           }
 
