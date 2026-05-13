@@ -19151,6 +19151,390 @@ app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============ GAP VALIDATION ENGINE ============
+// Validates each AI gap against real data to mark as done/open/in_progress
+
+async function validateSerpGaps(gaps, userPage, keyword, projectId, contentRec) {
+  // Load completed action items for this project
+  let completedActions = [];
+  try {
+    const res = await pool.query(
+      `SELECT title, description, pillar FROM action_items WHERE project_id=$1 AND status='completed'`,
+      [projectId]
+    );
+    completedActions = res.rows;
+  } catch (e) {}
+
+  // Load resolved audit findings
+  let resolvedFindings = [];
+  try {
+    const res = await pool.query(
+      `SELECT title, description, category FROM audit_findings WHERE project_id=$1 AND status IN ('resolved', 'dismissed')`,
+      [projectId]
+    );
+    resolvedFindings = res.rows;
+  } catch (e) {}
+
+  const kwLower = keyword.toLowerCase();
+  const h1Text = (userPage.h1s || []).join(' ').toLowerCase();
+  const titleText = (userPage.title || '').toLowerCase();
+  const metaText = (userPage.metaDesc || '').toLowerCase();
+  const schemaTypes = (userPage.schemaTypes || []).map(s => s.toLowerCase());
+  const wordCount = userPage.wordCount || 0;
+
+  for (const gap of gaps) {
+    gap.status = 'open';
+    gap.status_reason = null;
+
+    const issue = (gap.issue || '').toLowerCase();
+    const fix = (gap.fix || '').toLowerCase();
+    const cat = (gap.category || '').toLowerCase();
+
+    // 1. Check against completed action items (fuzzy match)
+    for (const ai of completedActions) {
+      const aiTitle = (ai.title || '').toLowerCase();
+      const aiDesc = (ai.description || '').toLowerCase();
+      // Match if >50% of significant words overlap
+      const issueWords = issue.split(/\s+/).filter(w => w.length > 3);
+      const matchCount = issueWords.filter(w => aiTitle.includes(w) || aiDesc.includes(w)).length;
+      if (issueWords.length > 0 && matchCount / issueWords.length > 0.5) {
+        gap.status = 'done';
+        gap.status_reason = `Action item completed: "${ai.title}"`;
+        break;
+      }
+    }
+    if (gap.status === 'done') continue;
+
+    // 2. Check against resolved audit findings
+    for (const f of resolvedFindings) {
+      const fTitle = (f.title || '').toLowerCase();
+      const fDesc = (f.description || '').toLowerCase();
+      const issueWords = issue.split(/\s+/).filter(w => w.length > 3);
+      const matchCount = issueWords.filter(w => fTitle.includes(w) || fDesc.includes(w)).length;
+      if (issueWords.length > 0 && matchCount / issueWords.length > 0.5) {
+        gap.status = 'done';
+        gap.status_reason = `Audit finding resolved: "${f.title}"`;
+        break;
+      }
+    }
+    if (gap.status === 'done') continue;
+
+    // 3. Deterministic checks using actual crawl data
+    if (userPage.error) continue; // Can't validate if crawl failed
+
+    // H1 checks
+    if (issue.includes('h1')) {
+      if (issue.includes('missing') || issue.includes('no h1')) {
+        // Check if H1 exists now
+        if (userPage.h1s && userPage.h1s.length > 0) {
+          gap.status = 'done';
+          gap.status_reason = `H1 exists: "${userPage.h1s[0]}"`;
+        }
+      } else if (issue.includes('mismatch') || issue.includes('misalign') || issue.includes('doesn\'t contain') || issue.includes('not contain') || fix.includes('change h1')) {
+        // Check if H1 now contains the target keyword
+        if (h1Text.includes(kwLower) || h1Text.includes(kwLower.replace(/ /g, '').substring(0, 10))) {
+          gap.status = 'done';
+          gap.status_reason = `H1 now contains "${keyword}": "${userPage.h1s[0]}"`;
+        }
+      }
+    }
+
+    // Title tag checks
+    if (issue.includes('title tag') || issue.includes('title is') || (issue.includes('title') && cat === 'on-page')) {
+      if (issue.includes('missing') && titleText.length > 10) {
+        gap.status = 'done';
+        gap.status_reason = `Title exists: "${userPage.title}"`;
+      } else if ((issue.includes('keyword') || issue.includes('optimize') || fix.includes('title')) && titleText.includes(kwLower)) {
+        gap.status = 'done';
+        gap.status_reason = `Title contains keyword: "${userPage.title}"`;
+      }
+    }
+
+    // Meta description checks
+    if (issue.includes('meta description') || issue.includes('meta desc')) {
+      if (issue.includes('missing') && metaText.length > 30) {
+        gap.status = 'done';
+        gap.status_reason = `Meta description exists (${metaText.length} chars)`;
+      } else if ((issue.includes('keyword') || issue.includes('optimize')) && metaText.includes(kwLower)) {
+        gap.status = 'done';
+        gap.status_reason = `Meta description contains keyword`;
+      }
+    }
+
+    // Word count checks
+    if (issue.includes('word count') || issue.includes('thin content') || issue.includes('content is short') || issue.includes('content length')) {
+      const targetMatch = (fix + ' ' + issue).match(/(\d{3,})/);
+      if (targetMatch) {
+        const target = parseInt(targetMatch[0]);
+        if (wordCount >= target) {
+          gap.status = 'done';
+          gap.status_reason = `Word count ${wordCount} meets target ${target}`;
+        } else if (wordCount >= target * 0.8) {
+          gap.status = 'in_progress';
+          gap.status_reason = `Word count ${wordCount} is ${Math.round(wordCount/target*100)}% of target ${target}`;
+        }
+      }
+    }
+
+    // Schema checks
+    if (issue.includes('schema') || issue.includes('structured data')) {
+      if (issue.includes('faqpage') || issue.includes('faq schema') || fix.includes('faqpage') || fix.includes('faq schema')) {
+        if (schemaTypes.includes('faqpage')) {
+          gap.status = 'done';
+          gap.status_reason = 'FAQPage schema detected on page';
+        }
+      } else if (issue.includes('localbusiness') || fix.includes('localbusiness')) {
+        if (schemaTypes.includes('localbusiness')) {
+          gap.status = 'done';
+          gap.status_reason = 'LocalBusiness schema detected on page';
+        }
+      } else if (issue.includes('no schema') || issue.includes('missing schema')) {
+        if (userPage.hasSchema && schemaTypes.length > 0) {
+          gap.status = 'done';
+          gap.status_reason = `Schema found: ${schemaTypes.join(', ')}`;
+        }
+      }
+    }
+
+    // H2 checks
+    if (issue.includes('h2') && (issue.includes('phone') || issue.includes('wasted') || issue.includes('number'))) {
+      const h2s = userPage.h2s || [];
+      const phoneH2s = h2s.filter(h => /\d{4,}/.test(h) || /1[38]00/.test(h));
+      if (phoneH2s.length === 0 && h2s.length > 0) {
+        gap.status = 'done';
+        gap.status_reason = `No phone numbers in H2s. Current H2s are keyword-relevant.`;
+      }
+    }
+
+    // Internal links checks
+    if (issue.includes('internal link') && (issue.includes('too many') || issue.includes('excessive') || issue.includes('bloat'))) {
+      const linkCount = userPage.internalLinks || 0;
+      if (linkCount <= 50) {
+        gap.status = 'done';
+        gap.status_reason = `Internal links now at ${linkCount} (reasonable)`;
+      }
+    }
+
+    // Image alt tag checks
+    if (issue.includes('alt tag') || issue.includes('alt text') || issue.includes('image alt')) {
+      const images = userPage.images || 0;
+      const withAlt = userPage.hasAltTags || 0;
+      if (images > 0 && withAlt / images >= 0.8) {
+        gap.status = 'done';
+        gap.status_reason = `${withAlt}/${images} images have alt tags (${Math.round(withAlt/images*100)}%)`;
+      }
+    }
+
+    // Canonical / URL checks
+    if (issue.includes('canonical') || issue.includes('double-slash') || issue.includes('double slash')) {
+      // We can check if the URL we crawled is clean (no double slash in path)
+      const url = userPage.url || '';
+      const pathPart = url.replace(/^https?:\/\//, '');
+      if (!pathPart.includes('//')) {
+        gap.status = 'done';
+        gap.status_reason = `URL is clean (no double-slash): ${url}`;
+      }
+    }
+  }
+
+  return gaps;
+}
+
+async function validateMapsGaps(gaps, projectId, keyword, location) {
+  // Load completed action items
+  let completedActions = [];
+  try {
+    const res = await pool.query(
+      `SELECT title, description, pillar FROM action_items WHERE project_id=$1 AND status='completed'`,
+      [projectId]
+    );
+    completedActions = res.rows;
+  } catch (e) {}
+
+  // Load citations
+  let citations = [];
+  try {
+    const res = await pool.query(`SELECT * FROM citations WHERE project_id=$1`, [projectId]);
+    citations = res.rows;
+  } catch (e) {}
+  const listedCitations = citations.filter(c => c.status === 'listed').map(c => (c.directory_name || c.name || '').toLowerCase());
+
+  // Load reviews
+  let reviewData = {};
+  try {
+    const res = await pool.query(`SELECT * FROM reviews_cache WHERE project_id=$1 ORDER BY synced_at DESC LIMIT 1`, [projectId]);
+    if (res.rows.length > 0) reviewData = res.rows[0];
+  } catch (e) {}
+
+  // Load GBP posts
+  let gbpPostCount = 0;
+  try {
+    const res = await pool.query(`SELECT COUNT(*) as cnt FROM gbp_posts WHERE project_id=$1 AND created_at > NOW() - INTERVAL '30 days'`, [projectId]);
+    gbpPostCount = parseInt(res.rows[0]?.cnt || 0);
+  } catch (e) {}
+
+  // Load resolved audit findings
+  let resolvedFindings = [];
+  try {
+    const res = await pool.query(
+      `SELECT title, description, category FROM audit_findings WHERE project_id=$1 AND status IN ('resolved', 'dismissed') AND pillar IN ('gbp', 'gbp_external')`,
+      [projectId]
+    );
+    resolvedFindings = res.rows;
+  } catch (e) {}
+
+  for (const gap of gaps) {
+    gap.status = 'open';
+    gap.status_reason = null;
+
+    const issue = (gap.issue || '').toLowerCase();
+    const fix = (gap.fix || '').toLowerCase();
+    const cat = (gap.category || '').toLowerCase();
+
+    // 1. Check against completed action items
+    for (const ai of completedActions) {
+      const aiTitle = (ai.title || '').toLowerCase();
+      const aiDesc = (ai.description || '').toLowerCase();
+      const issueWords = issue.split(/\s+/).filter(w => w.length > 3);
+      const matchCount = issueWords.filter(w => aiTitle.includes(w) || aiDesc.includes(w)).length;
+      if (issueWords.length > 0 && matchCount / issueWords.length > 0.5) {
+        gap.status = 'done';
+        gap.status_reason = `Action item completed: "${ai.title}"`;
+        break;
+      }
+    }
+    if (gap.status === 'done') continue;
+
+    // 2. Check resolved audit findings
+    for (const f of resolvedFindings) {
+      const fTitle = (f.title || '').toLowerCase();
+      const issueWords = issue.split(/\s+/).filter(w => w.length > 3);
+      const matchCount = issueWords.filter(w => fTitle.includes(w)).length;
+      if (issueWords.length > 0 && matchCount / issueWords.length > 0.5) {
+        gap.status = 'done';
+        gap.status_reason = `GBP finding resolved: "${f.title}"`;
+        break;
+      }
+    }
+    if (gap.status === 'done') continue;
+
+    // 3. Deterministic checks
+
+    // Citation checks — check if specific directories are listed
+    if (cat === 'citations' || issue.includes('citation') || issue.includes('director')) {
+      // Extract directory names from the issue/fix text
+      const dirNames = ['yellow pages', 'true local', 'hotfrog', 'yelp', 'local search', 'start local',
+        'white pages', 'dLook', 'aussie web', 'word of mouth', 'oneflare', 'hipages', 'service seeking',
+        'airtasker', 'bark', 'localsearch', 'whereis', 'sensis', 'superpages', 'enroll business'];
+      const mentionedDirs = dirNames.filter(d => issue.includes(d) || fix.includes(d));
+
+      if (mentionedDirs.length > 0) {
+        const allListed = mentionedDirs.every(d => listedCitations.some(c => c.includes(d)));
+        if (allListed) {
+          gap.status = 'done';
+          gap.status_reason = `Listed in: ${mentionedDirs.join(', ')}`;
+        } else {
+          const listedOnes = mentionedDirs.filter(d => listedCitations.some(c => c.includes(d)));
+          if (listedOnes.length > 0) {
+            gap.status = 'in_progress';
+            gap.status_reason = `Listed in ${listedOnes.length}/${mentionedDirs.length}: ${listedOnes.join(', ')}`;
+          }
+        }
+      } else if (issue.includes('missing') || issue.includes('not listed')) {
+        // Generic citation check — if we have many listings, might be resolved
+        if (listedCitations.length >= 15) {
+          gap.status = 'done';
+          gap.status_reason = `${listedCitations.length} directories listed`;
+        } else if (listedCitations.length >= 8) {
+          gap.status = 'in_progress';
+          gap.status_reason = `${listedCitations.length} directories listed (target: 15+)`;
+        }
+      }
+    }
+
+    // Review checks
+    if (cat === 'reviews' || issue.includes('review')) {
+      const reviewCount = reviewData.review_count || reviewData.total_reviews || 0;
+      const avgRating = reviewData.avg_rating || reviewData.average_rating || 0;
+
+      if (issue.includes('respond') || issue.includes('reply') || issue.includes('unanswered')) {
+        // Check reply rate
+        const replyRate = reviewData.reply_rate || reviewData.response_rate || 0;
+        if (replyRate >= 80) {
+          gap.status = 'done';
+          gap.status_reason = `Review reply rate: ${replyRate}%`;
+        } else if (replyRate >= 50) {
+          gap.status = 'in_progress';
+          gap.status_reason = `Review reply rate: ${replyRate}% (target: 80%+)`;
+        }
+      }
+
+      if (issue.includes('count') || issue.includes('few review') || issue.includes('more review') || issue.includes('not enough')) {
+        // Extract target count from text
+        const targetMatch = (fix + ' ' + issue).match(/(\d+)\s*review/);
+        if (targetMatch) {
+          const target = parseInt(targetMatch[1]);
+          if (reviewCount >= target) {
+            gap.status = 'done';
+            gap.status_reason = `${reviewCount} reviews (target: ${target})`;
+          } else if (reviewCount >= target * 0.7) {
+            gap.status = 'in_progress';
+            gap.status_reason = `${reviewCount}/${target} reviews (${Math.round(reviewCount/target*100)}%)`;
+          }
+        }
+      }
+
+      if (issue.includes('rating') || issue.includes('star')) {
+        if (avgRating >= 4.5) {
+          gap.status = 'done';
+          gap.status_reason = `Average rating: ${avgRating} stars`;
+        }
+      }
+    }
+
+    // GBP posting frequency checks
+    if (issue.includes('post') && (issue.includes('frequency') || issue.includes('regularly') || issue.includes('inactive') || issue.includes('not posting'))) {
+      if (gbpPostCount >= 4) {
+        gap.status = 'done';
+        gap.status_reason = `${gbpPostCount} GBP posts in last 30 days`;
+      } else if (gbpPostCount >= 2) {
+        gap.status = 'in_progress';
+        gap.status_reason = `${gbpPostCount} GBP posts in 30 days (target: 4+/month)`;
+      }
+    }
+
+    // GBP category checks
+    if (cat === 'categories' || (issue.includes('categor') && (issue.includes('gbp') || issue.includes('google business')))) {
+      // We can't directly verify GBP categories without API access, but check audit findings
+      const catFindings = resolvedFindings.filter(f => (f.category || '').toLowerCase().includes('categor'));
+      if (catFindings.length > 0) {
+        gap.status = 'done';
+        gap.status_reason = 'Category-related audit finding resolved';
+      }
+    }
+
+    // GBP profile completeness
+    if (issue.includes('description') && (issue.includes('gbp') || issue.includes('business') || issue.includes('profile'))) {
+      const descFindings = resolvedFindings.filter(f => (f.title || '').toLowerCase().includes('description'));
+      if (descFindings.length > 0) {
+        gap.status = 'done';
+        gap.status_reason = 'GBP description finding resolved';
+      }
+    }
+
+    // Photos/images on GBP
+    if (issue.includes('photo') && (issue.includes('gbp') || issue.includes('business profile') || cat === 'engagement')) {
+      const photoFindings = resolvedFindings.filter(f => (f.title || '').toLowerCase().includes('photo'));
+      if (photoFindings.length > 0) {
+        gap.status = 'done';
+        gap.status_reason = 'Photo-related finding resolved';
+      }
+    }
+  }
+
+  return gaps;
+}
+
 // SERP Analysis — analyze why keyword isn't ranking by comparing against top 3 competitors
 app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
   const { projectId } = req.params;
@@ -19332,6 +19716,11 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
         console.error('[serp-analysis] JSON parse failed:', e2.message, 'truncated:', wasTruncated);
         analysis = { verdict: text.replace(/```(?:json)?\s*/gi, '').substring(0, 500), score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
       }
+    }
+
+    // Validate gaps against real data
+    if (analysis.gaps && analysis.gaps.length > 0) {
+      analysis.gaps = await validateSerpGaps(analysis.gaps, userPage, keyword, projectId, analysis.content_recommendations);
     }
 
     // Calculate actual token usage for cost display
@@ -19584,6 +19973,11 @@ Focus on LOCAL MAPS factors: proximity, GBP completeness, reviews, citations, ca
     };
     const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
     const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
+
+    // Validate Maps gaps against real data
+    if (analysis.gaps && analysis.gaps.length > 0) {
+      analysis.gaps = await validateMapsGaps(analysis.gaps, projectId, keyword, location);
+    }
 
     const result = {
       ok: true, keyword, location, model: aiModel, analysis,

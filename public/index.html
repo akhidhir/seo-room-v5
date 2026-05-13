@@ -18211,9 +18211,11 @@
                         const catColor = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
                         const scoreColor = a.score >= 70 ? '#22c55e' : a.score >= 40 ? '#f59e0b' : '#ef4444';
                         const scoreLabel = a.score >= 70 ? 'Good' : a.score >= 40 ? 'Needs Work' : 'Critical';
-                        const highGaps = (a.gaps || []).filter(g => g.impact === 'high');
-                        const medGaps = (a.gaps || []).filter(g => g.impact === 'medium');
-                        const lowGaps = (a.gaps || []).filter(g => g.impact === 'low');
+                        const openGaps = (a.gaps || []).filter(g => g.status !== 'done');
+                        const doneGaps = (a.gaps || []).filter(g => g.status === 'done');
+                        const highGaps = openGaps.filter(g => g.impact === 'high');
+                        const medGaps = openGaps.filter(g => g.impact === 'medium');
+                        const lowGaps = openGaps.filter(g => g.impact === 'low');
                         return (
                           <tr><td colSpan={9} style={{ padding: 0 }}>
                             <div style={{ borderTop: `3px solid ${scoreColor}` }}>
@@ -18302,17 +18304,20 @@
                                     </div>
                                   </div>
                                   {sec.items.map((g, i) => (
-                                    <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--card)' }}>
+                                    <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: `1px solid ${g.status === 'done' ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`, background: g.status === 'done' ? 'rgba(34,197,94,0.03)' : 'var(--card)', opacity: g.status === 'done' ? 0.7 : 1 }}>
                                       {/* Issue header */}
-                                      <div style={{ padding: '14px 18px', borderLeft: `4px solid ${catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                                        <div style={{ width: 30, height: 30, borderRadius: 8, background: `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
-                                          <i className={`fa-solid ${catIcon[g.category] || 'fa-flag'}`} style={{ color: catColor[g.category] || sec.accent, fontSize: 13 }} />
+                                      <div style={{ padding: '14px 18px', borderLeft: `4px solid ${g.status === 'done' ? '#22c55e' : catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                        <div style={{ width: 30, height: 30, borderRadius: 8, background: g.status === 'done' ? 'rgba(34,197,94,0.15)' : `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                                          <i className={`fa-solid ${g.status === 'done' ? 'fa-circle-check' : g.status === 'in_progress' ? 'fa-spinner' : catIcon[g.category] || 'fa-flag'}`} style={{ color: g.status === 'done' ? '#22c55e' : g.status === 'in_progress' ? '#f59e0b' : catColor[g.category] || sec.accent, fontSize: 13 }} />
                                         </div>
                                         <div style={{ flex: 1 }}>
-                                          <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                                          <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                                             <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: `${catColor[g.category] || '#6366f1'}15`, color: catColor[g.category] || '#6366f1', fontWeight: 700 }}>{g.category}</span>
+                                            {g.status === 'done' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 800 }}><i className="fa-solid fa-check" style={{ marginRight: 4 }} />ALREADY DONE</span>}
+                                            {g.status === 'in_progress' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 800 }}><i className="fa-solid fa-clock" style={{ marginRight: 4 }} />IN PROGRESS</span>}
                                           </div>
-                                          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.5 }}>{g.issue}</div>
+                                          <div style={{ fontSize: 15, fontWeight: 600, color: g.status === 'done' ? 'var(--text2)' : 'var(--text)', lineHeight: 1.5, textDecoration: g.status === 'done' ? 'line-through' : 'none' }}>{g.issue}</div>
+                                          {g.status_reason && <div style={{ fontSize: 12, color: g.status === 'done' ? '#22c55e' : '#f59e0b', marginTop: 4, fontStyle: 'italic' }}><i className="fa-solid fa-circle-info" style={{ marginRight: 4 }} />{g.status_reason}</div>}
                                         </div>
                                       </div>
                                       {/* Fix section */}
@@ -19524,14 +19529,19 @@
                                   </div>
                                 </div>
                                 {sec.items.map((g, i) => (
-                                  <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--card)' }}>
-                                    <div style={{ padding: '14px 18px', borderLeft: `4px solid ${catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                                      <div style={{ width: 30, height: 30, borderRadius: 8, background: `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
-                                        <i className={`fa-solid ${catIcon[g.category] || 'fa-flag'}`} style={{ color: catColor[g.category] || sec.accent, fontSize: 13 }} />
+                                  <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: `1px solid ${g.status === 'done' ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`, background: g.status === 'done' ? 'rgba(34,197,94,0.03)' : 'var(--card)', opacity: g.status === 'done' ? 0.7 : 1 }}>
+                                    <div style={{ padding: '14px 18px', borderLeft: `4px solid ${g.status === 'done' ? '#22c55e' : catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                      <div style={{ width: 30, height: 30, borderRadius: 8, background: g.status === 'done' ? 'rgba(34,197,94,0.15)' : `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                                        <i className={`fa-solid ${g.status === 'done' ? 'fa-circle-check' : g.status === 'in_progress' ? 'fa-spinner' : catIcon[g.category] || 'fa-flag'}`} style={{ color: g.status === 'done' ? '#22c55e' : g.status === 'in_progress' ? '#f59e0b' : catColor[g.category] || sec.accent, fontSize: 13 }} />
                                       </div>
                                       <div style={{ flex: 1 }}>
-                                        <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: `${catColor[g.category] || '#6366f1'}15`, color: catColor[g.category] || '#6366f1', fontWeight: 700, marginBottom: 6, display: 'inline-block' }}>{g.category}</span>
-                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', lineHeight: 1.5, marginTop: 6 }}>{g.issue}</div>
+                                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+                                          <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: `${catColor[g.category] || '#6366f1'}15`, color: catColor[g.category] || '#6366f1', fontWeight: 700 }}>{g.category}</span>
+                                          {g.status === 'done' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 800 }}><i className="fa-solid fa-check" style={{ marginRight: 4 }} />ALREADY DONE</span>}
+                                          {g.status === 'in_progress' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 800 }}><i className="fa-solid fa-clock" style={{ marginRight: 4 }} />IN PROGRESS</span>}
+                                        </div>
+                                        <div style={{ fontSize: 15, fontWeight: 600, color: g.status === 'done' ? 'var(--text2)' : 'var(--text)', lineHeight: 1.5, textDecoration: g.status === 'done' ? 'line-through' : 'none' }}>{g.issue}</div>
+                                        {g.status_reason && <div style={{ fontSize: 12, color: g.status === 'done' ? '#22c55e' : '#f59e0b', marginTop: 4, fontStyle: 'italic' }}><i className="fa-solid fa-circle-info" style={{ marginRight: 4 }} />{g.status_reason}</div>}
                                       </div>
                                     </div>
                                     <div style={{ padding: '14px 18px 14px 62px', background: 'rgba(34,197,94,0.04)', borderTop: '1px solid var(--border)' }}>
