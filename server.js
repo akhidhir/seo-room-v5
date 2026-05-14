@@ -18021,7 +18021,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // Fetch a live page and extract all schema types + check specific HTML elements
     const verifyLivePage = async (pageUrl) => {
       try {
-        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+        const bustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
+        const resp = await fetch(bustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache' } });
         if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [], checks: {} };
         const html = await resp.text();
         const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
@@ -18335,13 +18336,28 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
         [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
 
-      // POST-FIX VERIFICATION: 3-step check
-      // Step 1: Confirm schema was written to WordPress (check widget or content)
-      let wpWriteConfirmed = injected; // We already know if injection succeeded
+      // POST-FIX: Purge cache via SEO Room Connector plugin, then verify
+      let cachePurged = false;
+      try {
+        const purgeResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: targetUrls[0] || '' }),
+          signal: AbortSignal.timeout(15000)
+        });
+        if (purgeResp.ok) {
+          const purgeData = await purgeResp.json();
+          cachePurged = true;
+          console.log(`[technical-fix] Cache purged: ${purgeData.message || JSON.stringify(purgeData.purged)}`);
+        } else {
+          console.log(`[technical-fix] Cache purge failed: ${purgeResp.status}`);
+        }
+      } catch (e) { console.log(`[technical-fix] Cache purge error: ${e.message}`); }
 
-      // Step 2: Check live page for the schema AND detect duplications
-      // Small delay for WP object cache to clear
-      await new Promise(r => setTimeout(r, 2000));
+      // Wait for cache to clear (longer if CDN involved)
+      await new Promise(r => setTimeout(r, cachePurged ? 3000 : 2000));
+
+      // VERIFICATION
+      let wpWriteConfirmed = injected;
       const targetPageUrl = targetUrls[0] || `https://${domain}/`;
       const postCheck = await verifyLivePage(targetPageUrl);
       const schemaType = schemaJson['@type'];
@@ -18760,10 +18776,28 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
 
     console.log(`[verify-fix] Finding #${finding_id}: "${finding.title}" — checking ${targetUrls.length} page(s)`);
 
+    // Auto-purge cache before verification (via SEO Room Connector plugin)
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const wpAuth = getWpAuthHeaders(project);
+    if (wpUrl && wpAuth) {
+      try {
+        const purgeResp = await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
+          method: 'POST', headers: wpAuth,
+          body: JSON.stringify({ url: targetUrls[0] || '' }),
+          signal: AbortSignal.timeout(10000)
+        });
+        if (purgeResp.ok) {
+          console.log(`[verify-fix] Cache purged before verification`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } catch (e) { console.log(`[verify-fix] Cache purge skipped: ${e.message}`); }
+    }
+
     // Fetch and analyze each target page
     const verifyPage = async (pageUrl) => {
       try {
-        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+        const bustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
+        const resp = await fetch(bustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache' } });
         if (!resp.ok) return { url: pageUrl, error: `HTTP ${resp.status}` };
         const html = await resp.text();
 
