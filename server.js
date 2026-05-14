@@ -17640,6 +17640,22 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       thinPages: thinPages.length,
     };
 
+    // Topic-based dedup helpers (used in merge + old-finding cleanup)
+    const schemaTopicKeywords = [
+      { keyword: 'localbusiness', topic: 'localbusiness' },
+      { keyword: 'local business', topic: 'localbusiness' },
+      { keyword: 'faqpage', topic: 'faqpage' },
+      { keyword: 'faq schema', topic: 'faqpage' },
+      { keyword: 'q&a', topic: 'faqpage' },
+      { keyword: 'service schema', topic: 'service' },
+      { keyword: 'service markup', topic: 'service' },
+      { keyword: 'breadcrumb', topic: 'breadcrumb' },
+    ];
+    const getTopics = (title) => {
+      const t = (title || '').toLowerCase();
+      return schemaTopicKeywords.filter(k => t.includes(k.keyword)).map(k => k.topic);
+    };
+
     // MERGE findings: update existing, add new, keep unmatched existing (don't delete them)
     const newTitles = new Set(findings.map(f => f.title));
     const savedFindings = [];
@@ -17647,12 +17663,28 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let updated = 0;
     let added = 0;
 
+    // Build set of topics that are already fixed (to prevent AI re-generating them with different titles)
+    const fixedTopics = new Set();
+    for (const ef of existingFindings.rows) {
+      if (ef.status === 'fixed') {
+        getTopics(ef.title).forEach(t => fixedTopics.add(t));
+      }
+    }
+
     for (const f of findings) {
       const existing = existingByTitle.get(f.title);
 
       if (existing && existing.status === 'fixed') {
         // Already fixed — don't re-create
         console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
+        skippedFixed++;
+        continue;
+      }
+
+      // Topic-based fixed check: if this new finding's topic is already fixed, skip it
+      const newFindingTopics = getTopics(f.title);
+      if (newFindingTopics.length > 0 && newFindingTopics.some(t => fixedTopics.has(t))) {
+        console.log(`[website-audit] Skipping "${f.title}" — topic already fixed (${newFindingTopics.join(',')})`);
         skippedFixed++;
         continue;
       }
@@ -17686,20 +17718,6 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // Existing findings NOT reproduced by this audit: keep UNLESS they overlap with a rule-based finding
-    // This prevents old AI-generated schema findings from duplicating new rule-based ones
-    const schemaTopicKeywords = [
-      { keyword: 'localbusiness', topic: 'localbusiness' },
-      { keyword: 'local business', topic: 'localbusiness' },
-      { keyword: 'faqpage', topic: 'faqpage' },
-      { keyword: 'faq schema', topic: 'faqpage' },
-      { keyword: 'q&a', topic: 'faqpage' },
-      { keyword: 'service schema', topic: 'service' },
-      { keyword: 'breadcrumb', topic: 'breadcrumb' },
-    ];
-    const getTopics = (title) => {
-      const t = (title || '').toLowerCase();
-      return schemaTopicKeywords.filter(k => t.includes(k.keyword)).map(k => k.topic);
-    };
     const newTopics = new Set(findings.flatMap(f => getTopics(f.title)));
 
     const keptFromPrevious = [];
@@ -17717,6 +17735,23 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         removedDuplicates++;
       } else {
         keptFromPrevious.push(ef);
+      }
+    }
+
+    // Final cleanup: delete ANY status='new' Schema & Data finding whose topic overlaps with a 'fixed' one
+    // This catches zombie AI findings from old audits that survived previous merges
+    if (fixedTopics.size > 0) {
+      const allSchemaFindings = await pool.query(
+        `SELECT id, title, status FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Schema & Data' AND status='new'`,
+        [projectId]
+      );
+      for (const sf of allSchemaFindings.rows) {
+        const sfTopics = getTopics(sf.title);
+        if (sfTopics.some(t => fixedTopics.has(t))) {
+          await pool.query('DELETE FROM audit_findings WHERE id=$1', [sf.id]);
+          console.log(`[website-audit] Cleanup: deleted zombie finding "${sf.title}" (topic overlaps with fixed)`);
+          removedDuplicates++;
+        }
       }
     }
 
