@@ -2698,7 +2698,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
             return { assignee: 'Manual', execType: 'manual' };
           }
 
-          // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
+          // --- AUTOMATED: only things SEO Room Connector plugin or WP REST API can execute ---
           // Core Web Vitals — all can be attempted via seoroom-helper (preconnect, defer, preload, etc.)
           if (cat === 'core web vitals') return { assignee: 'Automated', execType: 'automated' };
           // Schema/structured data — inject JSON-LD via seoroom-helper custom_snippet
@@ -3315,7 +3315,7 @@ app.get('/api/projects/:projectId/audits/speed/latest', async (req, res) => {
   }
 });
 
-// ============ CWV AUTO-FIX: AI analyzes opportunities → generates fix → sends to seoroom-helper plugin ============
+// ============ CWV AUTO-FIX: AI analyzes opportunities → generates fix → sends to SEO Room Connector plugin ============
 app.post('/api/projects/:projectId/cwv-fix', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
@@ -3372,7 +3372,7 @@ Return ONLY a JSON array of fixes:
 
     if (!fixes.length) return res.json({ success: true, fixes_applied: 0, message: 'No applicable fixes found — BerqWP likely handles the remaining issues' });
 
-    // Apply each fix via seoroom-helper plugin API
+    // Apply each fix via SEO Room Connector plugin API
     const applied = [];
     const failed = [];
 
@@ -3448,9 +3448,9 @@ app.post('/api/projects/:projectId/auto-fix', async (req, res) => {
           headers: authHeaders, signal: AbortSignal.timeout(8000)
         });
         if (!ping.ok && ping.status === 404) {
-          console.error(`[auto-fix] seoroom-helper plugin not found at ${wpUrl}`);
+          console.error(`[auto-fix] SEO Room Connector plugin not found at ${wpUrl}`);
           return res.json({ success: true, fix_type: 'preflight', applied: false,
-            message: 'seoroom-helper plugin not found on WordPress site. Install & activate it first.' });
+            message: 'SEO Room Connector plugin not found on WordPress site. Install & activate it first.' });
         }
       } catch (pingErr) {
         console.error(`[auto-fix] WP unreachable: ${pingErr.message}`);
@@ -3637,7 +3637,7 @@ Return ONLY valid JSON-LD (the object, no wrapping).` }]
 
       const fullDesc = `${item.title}\n${item.description || ''}\n${item.finding_recommendation || ''}`;
 
-      const fixPrompt = `You are a WordPress CWV fix expert. Parse this audit finding and generate seoroom-helper plugin fix instructions.
+      const fixPrompt = `You are a WordPress CWV fix expert. Parse this audit finding and generate SEO Room Connector plugin fix instructions.
 
 FINDING:
 ${fullDesc}
@@ -3726,7 +3726,7 @@ If NOTHING can be fixed by the plugin (e.g. server config, hosting changes), ret
   }
 });
 
-// Rollback a CWV fix via seoroom-helper plugin
+// Rollback a CWV fix via SEO Room Connector plugin
 app.post('/api/projects/:projectId/cwv-fix/rollback', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
@@ -3757,7 +3757,7 @@ app.post('/api/projects/:projectId/cwv-fix/rollback', async (req, res) => {
   }
 });
 
-// List active CWV fixes from seoroom-helper plugin
+// List active CWV fixes from SEO Room Connector plugin
 app.get('/api/projects/:projectId/cwv-fixes', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
@@ -4836,7 +4836,7 @@ app.post('/api/projects/:projectId/reviews/sync', async (req, res) => {
   }
 });
 
-// Check if seoroom-helper plugin is installed on WordPress site
+// Check if SEO Room Connector plugin is installed on WordPress site
 app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -5998,7 +5998,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     const wpBase = wpUrl.replace(/\/$/, '');
     const domain = wpBase.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    // 1. Try to get Yoast scores from seoroom-helper plugin
+    // 1. Try to get Yoast scores from SEO Room Connector plugin
     let yoastMap = {};
     try {
       const yoastResp = await fetch(`${wpBase}/wp-json/seoroom/v1/yoast-scores`, {
@@ -6674,7 +6674,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 
           if (!verified) {
             console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
-            results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The seoroom-helper plugin may be needed to register Yoast meta fields for REST API writes.' });
+            results.push({ id: fix.id, success: false, error: 'WordPress accepted the request but meta fields were not updated. The SEO Room Connector plugin may be needed to register Yoast meta fields for REST API writes.' });
             continue;
           }
 

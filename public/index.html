@@ -1807,7 +1807,7 @@
         return MANUAL;
       }
 
-      // --- AUTOMATED: only things seoroom-helper plugin or WP REST API can execute ---
+      // --- AUTOMATED: only things SEO Room Connector plugin or WP REST API can execute ---
       if (cat === 'core web vitals') return AUTOMATED;
       if (cat === 'schema & data' || cat === 'schema') return AUTOMATED;
       if (/\b(schema|structured.?data|json.?ld|rich.?snippet|faqpage|localbusiness|aggregaterating|itemlist|howto|searchaction|breadcrumb|service.?schema|review.?schema)\b/.test(t)) return AUTOMATED;
@@ -14413,7 +14413,7 @@
             if (errMsg.includes('already match')) friendly = 'No changes needed — the current values already match the suggestions.';
             else if (errMsg.includes('401') || errMsg.includes('not allowed')) friendly = 'WordPress rejected the edit — check that the WP user has Administrator/Editor role and the Application Password is correct.';
             else if (errMsg.includes('not found')) friendly = 'Page not found in WordPress — try rescanning the site.';
-            else if (errMsg.includes('seoroom-helper')) friendly = 'WordPress accepted the request but the meta fields were not actually updated. You may need to install the seoroom-helper plugin to enable Yoast meta writes via REST API.';
+            else if (errMsg.includes('seoroom-helper')) friendly = 'WordPress accepted the request but the meta fields were not actually updated. You may need to install the SEO Room Connector plugin to enable Yoast meta writes via REST API.';
             else if (errMsg.includes('not configured')) friendly = errMsg;
             setApplyResult({ success: false, message: friendly });
           }
@@ -22953,7 +22953,7 @@
                 placeholder="https://yoursite.com"
               />
               <div style={{ color: 'var(--text2)', fontSize: '12px', marginTop: '4px' }}>
-                {formData.isElementorSite ? 'Requires seoroom-helper.php installed as mu-plugin' : 'Uses standard WP REST API for content updates'}
+                {formData.isElementorSite ? 'Requires SEO Room Connector plugin installed as mu-plugin' : 'Uses standard WP REST API for content updates'}
               </div>
             </div>
 
@@ -24152,7 +24152,7 @@
       const [allProjects, setAllProjects] = useState([]);
       const [pluginWarning, setPluginWarning] = useState(null); // { installed, reason }
 
-      // Check seoroom-helper plugin status for current project
+      // Check SEO Room Connector plugin status for current project
       useEffect(() => {
         if (!project?.id) { setPluginWarning(null); return; }
         if (!project.wordpress_url) { setPluginWarning({ installed: false, reason: 'no_wordpress_url' }); return; }
@@ -24662,13 +24662,13 @@ case 'action-plan':
               <div style={{ margin: '0 24px', padding: '14px 20px', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <i className="fas fa-exclamation-triangle" style={{ color: '#d97706', fontSize: 18, flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>SEO Room Plugin Not Detected</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>SEO Room Connector Not Detected</div>
                   <div style={{ fontSize: 13, color: '#92400e', marginTop: 2 }}>
                     {pluginWarning.reason === 'no_wordpress_url'
                       ? 'No WordPress URL configured. Set it in Project Settings → WordPress URL.'
                       : pluginWarning.reason === 'unreachable'
                       ? `WordPress site unreachable. Check the URL in Project Settings.`
-                      : 'The seoroom-helper plugin is not installed on this WordPress site. Some features (Yoast scores, CWV auto-fixes, schema injection) require it.'}
+                      : 'The SEO Room Connector plugin is not installed on this WordPress site. It enables Yoast scores, CWV auto-fixes, schema injection, and cache purging.'}
                   </div>
                 </div>
                 <button onClick={() => setPluginWarning(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 16, padding: 4 }}><i className="fas fa-times" /></button>
