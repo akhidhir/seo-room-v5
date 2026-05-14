@@ -17595,24 +17595,38 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Check for Service schema on service pages
     const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
     if (!hasServiceSchema && project.is_local_business) {
+      // Detect service pages: any page that isn't a utility page (about, contact, blog, privacy, etc.)
+      const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
+        'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
+        'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
+        'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
+        'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
+        'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs'];
       const servicePages = successPages.filter(p => {
-        const path = (p.path || '').toLowerCase();
-        return path.includes('service') || path.includes('plumb') || path.includes('drain') || path.includes('hot-water') ||
-               path.includes('repair') || path.includes('install') || path.includes('renovation') || path.includes('commercial') ||
-               path.includes('residential') || path.includes('maintenance') || path.includes('cleaning');
+        const path = (p.path || '').toLowerCase().replace(/^\/|\/$/g, '');
+        // Skip homepage
+        if (!path || path === '/' || path === 'home' || path === 'homepage') return false;
+        // Skip utility pages
+        if (nonServiceSlugs.includes(path) || nonServiceSlugs.includes(path.split('/').pop())) return false;
+        // Skip blog posts (usually have /blog/ or /news/ prefix, or date patterns)
+        if (/^(blog|news|category|tag|author|20\d{2})\//.test(path)) return false;
+        // Skip pages with no real content
+        if ((p.wordCount || 0) < 100) return false;
+        return true;
       });
       if (servicePages.length > 0) {
         const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-        const firstSvcUrl = servicePages[0].url || `https://${svcDomain}/${servicePages[0].path}/`;
+        // Store full URLs in description for Fix endpoint to use
+        const svcUrls = servicePages.slice(0, 20).map(p => p.url || `https://${svcDomain}/${(p.path || '').replace(/^\/|\/$/g, '')}/`);
+        const firstSvcUrl = svcUrls[0];
         findings.push({
           pillar: 'website', category: 'Schema & Data',
           title: 'Missing Service schema on service pages',
-          description: `${servicePages.length} service page(s) found without Service schema: ${servicePages.slice(0, 5).map(p => p.url || '/' + p.path + '/').join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
+          description: `${servicePages.length} service page(s) found without Service schema: ${svcUrls.slice(0, 5).join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
           recommendation: 'Add Service JSON-LD schema to each service page with name, description, provider (your business), and areaServed.',
           severity: 'Medium',
-          current_value: `${servicePages.length} service pages without Service schema`,
-          recommended_value: 'Service schema on all service pages',
-          page_url: firstSvcUrl
+          current_value: JSON.stringify(svcUrls),
+          recommended_value: 'Service schema on all service pages'
         });
       }
     }
@@ -18186,8 +18200,14 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         }
         const biz = rcProfile || {};
 
-        // Fetch all WP pages and find service pages using same keyword logic as audit
-        const serviceKeywords = ['service', 'plumb', 'drain', 'hot-water', 'repair', 'install', 'renovation', 'commercial', 'residential', 'maintenance', 'cleaning', 'gas-fit', 'bathroom', 'kitchen', 'leak', 'burst', 'sewer', 'water-heater', 'tap', 'toilet', 'shower'];
+        // Parse service page URLs from finding's current_value (stored by audit as JSON array)
+        let storedUrls = [];
+        try {
+          const cv = finding.current_value || '';
+          if (cv.startsWith('[')) storedUrls = JSON.parse(cv);
+        } catch {}
+
+        // Fetch all WP pages
         let allWpPages = [];
         try {
           const allPagesResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,title,link&status=publish`, {
@@ -18197,13 +18217,38 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           console.log(`[technical-fix] Fetched ${allWpPages.length} WP pages`);
         } catch (e) { console.log(`[technical-fix] Failed to fetch WP pages: ${e.message}`); }
 
-        // Filter to service pages (same logic as audit at line ~17581)
-        const wpServicePages = allWpPages.filter(p => {
-          const slug = (p.slug || '').toLowerCase();
-          const path = (p.link || '').toLowerCase();
-          return serviceKeywords.some(kw => slug.includes(kw) || path.includes(kw));
-        });
-        console.log(`[technical-fix] Found ${wpServicePages.length} service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
+        // Match WP pages to stored URLs (by slug match against URL path)
+        let wpServicePages = [];
+        if (storedUrls.length > 0) {
+          const storedSlugs = storedUrls.map(u => {
+            try { return new URL(u).pathname.replace(/^\/|\/$/g, '').split('/').pop(); } catch { return ''; }
+          }).filter(Boolean);
+          wpServicePages = allWpPages.filter(p => {
+            const slug = (p.slug || '').toLowerCase();
+            const link = (p.link || '').toLowerCase();
+            return storedSlugs.some(ss => slug === ss || link.includes(`/${ss}/`) || link.includes(`/${ss}`));
+          });
+          console.log(`[technical-fix] Matched ${wpServicePages.length} WP pages from ${storedUrls.length} stored URLs`);
+        }
+
+        // Fallback: exclusion-based detection (same as audit) if no stored URLs or no matches
+        if (wpServicePages.length === 0) {
+          const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
+            'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
+            'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
+            'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
+            'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
+            'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs', 'shop', 'sample-page'];
+          wpServicePages = allWpPages.filter(p => {
+            const slug = (p.slug || '').toLowerCase();
+            if (!slug || slug === 'home' || slug === 'homepage') return false;
+            if (nonServiceSlugs.includes(slug)) return false;
+            if (/^(blog|news|category|tag|author)/.test(slug)) return false;
+            return true;
+          });
+          console.log(`[technical-fix] Fallback exclusion-based: found ${wpServicePages.length} service pages`);
+        }
+        console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
 
         let fixedCount = 0;
         let firstPageId = null;
@@ -18293,7 +18338,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             verification: { post: liveVerified ? 'verified_on_live_page' : metaVerified ? 'verified_in_wordpress' : 'write_not_confirmed', pages_fixed: fixedCount }
           });
         } else {
-          return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Check that service pages exist and contain keywords like: service, plumb, drain, hot-water, repair, etc.` });
+          return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Make sure your site has published service/content pages (utility pages like About, Contact, Privacy are excluded).` });
         }
       }
 
@@ -18940,23 +18985,49 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
     let targetUrls = [];
     const homeUrl = `https://${domain}/`;
 
-    // For Service schema: fetch service pages from WP directly (same as fix logic)
+    // For Service schema: read stored URLs from finding's current_value (set by audit)
     if (title.includes('service') && title.includes('schema')) {
-      const wpUrl2 = (project.wordpress_url || '').replace(/\/$/, '');
-      const wpAuth2 = getWpAuthHeaders(project);
-      if (wpUrl2 && wpAuth2) {
-        try {
-          const pResp = await fetch(`${wpUrl2}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,link&status=publish`, {
-            headers: wpAuth2, signal: AbortSignal.timeout(15000)
-          });
-          if (pResp.ok) {
-            const allPages = await pResp.json();
-            const serviceKeywords = ['service', 'plumb', 'drain', 'hot-water', 'repair', 'install', 'renovation', 'commercial', 'residential', 'maintenance', 'cleaning', 'gas-fit', 'bathroom', 'kitchen', 'leak'];
-            const svcPages = allPages.filter(p => serviceKeywords.some(kw => (p.slug || '').includes(kw) || (p.link || '').toLowerCase().includes(kw)));
-            targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
-            console.log(`[verify-fix] Service schema: checking ${targetUrls.length} service pages`);
+      // First try: parse URLs from current_value (JSON array stored by audit)
+      try {
+        const cv = finding.current_value || '';
+        if (cv.startsWith('[')) {
+          const storedUrls = JSON.parse(cv);
+          if (Array.isArray(storedUrls) && storedUrls.length > 0) {
+            targetUrls = storedUrls.slice(0, 5);
+            console.log(`[verify-fix] Service schema: using ${targetUrls.length} stored URLs from current_value`);
           }
-        } catch {}
+        }
+      } catch {}
+
+      // Fallback: fetch WP pages with exclusion-based detection
+      if (targetUrls.length === 0) {
+        const wpUrl2 = (project.wordpress_url || '').replace(/\/$/, '');
+        const wpAuth2 = getWpAuthHeaders(project);
+        if (wpUrl2 && wpAuth2) {
+          try {
+            const pResp = await fetch(`${wpUrl2}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,link&status=publish`, {
+              headers: wpAuth2, signal: AbortSignal.timeout(15000)
+            });
+            if (pResp.ok) {
+              const allPages = await pResp.json();
+              const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
+                'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
+                'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
+                'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
+                'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
+                'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs', 'shop', 'sample-page'];
+              const svcPages = allPages.filter(p => {
+                const slug = (p.slug || '').toLowerCase();
+                if (!slug || slug === 'home' || slug === 'homepage') return false;
+                if (nonServiceSlugs.includes(slug)) return false;
+                if (/^(blog|news|category|tag|author)/.test(slug)) return false;
+                return true;
+              });
+              targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
+              console.log(`[verify-fix] Service schema fallback: checking ${targetUrls.length} service pages`);
+            }
+          } catch {}
+        }
       }
     }
 
