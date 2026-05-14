@@ -17047,14 +17047,13 @@ app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res)
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    // Rule-based audit is free (no AI cost) — only limit to once per day
+    // Rule-based audit is free — 5 min buffer to prevent accidental double-clicks
     const { rows: recentAudits } = await pool.query(
-      `SELECT completed_at FROM audits WHERE project_id=$1 AND pillar='website' AND status='completed' AND completed_at >= NOW() - INTERVAL '24 hours' ORDER BY completed_at DESC LIMIT 1`,
+      `SELECT completed_at FROM audits WHERE project_id=$1 AND pillar='website' AND status='completed' AND completed_at >= NOW() - INTERVAL '5 minutes' ORDER BY completed_at DESC LIMIT 1`,
       [projectId]
     );
     if (recentAudits.length > 0 && !(req.body?.force === true)) {
-      const hoursAgo = Math.round((Date.now() - new Date(recentAudits[0].completed_at).getTime()) / 3600000);
-      return res.status(429).json({ error: `Website audit ran ${hoursAgo}h ago. Available again in ${24 - hoursAgo}h.` });
+      return res.status(429).json({ error: `Website audit just ran. Wait a few minutes before running again.` });
     }
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
