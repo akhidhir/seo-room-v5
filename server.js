@@ -17842,9 +17842,56 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     const title = (finding.title || '').toLowerCase();
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    // ---- FIX TYPE 1: Schema injection via WP post content ----
+    // ======== VERIFICATION: Re-check live page before applying any fix ========
+    const verifySchemaOnPage = async (pageUrl) => {
+      try {
+        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+        if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [] };
+        const html = await resp.text();
+        const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+        const schemas = [];
+        for (const sm of schemaMatches) {
+          try {
+            const jsonStr = sm.replace(/<\/?script[^>]*>/gi, '');
+            const parsed = JSON.parse(jsonStr);
+            const types = parsed['@type'] || (Array.isArray(parsed['@graph']) ? parsed['@graph'].map(g => g['@type']).filter(Boolean) : []);
+            schemas.push(...(Array.isArray(types) ? types : [types]));
+          } catch {}
+        }
+        return { schemas, html };
+      } catch (e) {
+        return { error: e.message, schemas: [] };
+      }
+    };
+
+    // ---- FIX TYPE 1: Schema injection ----
     if (cat.includes('schema') || title.includes('schema') || title.includes('json-ld') || title.includes('structured data') || title.includes('localbusiness') || title.includes('faqpage')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+
+      // Verify: check if schema is actually missing on the live page
+      const targetUrl = `https://${domain}`;
+      const verification = await verifySchemaOnPage(targetUrl);
+      console.log(`[technical-fix] Verification on ${targetUrl}: found schemas = [${verification.schemas.join(', ')}]`);
+
+      // Check if the specific schema type is already present
+      const schemasLower = verification.schemas.map(s => (s || '').toLowerCase());
+      if (title.includes('localbusiness') && schemasLower.some(s => s.includes('localbusiness'))) {
+        // Mark as fixed — it already exists
+        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+        return res.json({ success: true, fix_type: 'already_present', message: 'LocalBusiness schema already exists on the live page. Marked as fixed.' });
+      }
+      if (title.includes('faq') && schemasLower.some(s => s.includes('faqpage'))) {
+        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+        return res.json({ success: true, fix_type: 'already_present', message: 'FAQPage schema already exists on the live page. Marked as fixed.' });
+      }
+      if (title.includes('aggregaterating') && schemasLower.some(s => s.includes('aggregaterating'))) {
+        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+        return res.json({ success: true, fix_type: 'already_present', message: 'AggregateRating schema already exists on the live page. Marked as fixed.' });
+      }
+      if (title.includes('service') && schemasLower.some(s => s.includes('service'))) {
+        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+        return res.json({ success: true, fix_type: 'already_present', message: 'Service schema already exists on the live page. Marked as fixed.' });
+      }
 
       // Get RC profile data for rich schema
       let rcProfile = null;
@@ -18137,6 +18184,161 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 
   } catch (e) {
     console.error('[technical-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== SPEED FIX: Safe optimizations via _seoroom_speed meta ====================
+app.post('/api/projects/:projectId/speed-fix', async (req, res) => {
+  const { projectId } = req.params;
+  const { page_url, page_id, page_type, opportunities } = req.body;
+  if (!page_url) return res.status(400).json({ error: 'page_url required' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+
+    const speedConfig = { preconnects: [], dns_prefetch: [], preload_image: null, font_display_swap: false };
+    const applied = [];
+
+    // Analyze opportunities from PageSpeed API
+    const opps = opportunities || [];
+
+    // 1. Preconnect hints — extract third-party domains from render-blocking/preconnect audits
+    const preconnectOpp = opps.find(o => o.id === 'uses-rel-preconnect');
+    if (preconnectOpp?.items?.length) {
+      for (const item of preconnectOpp.items) {
+        if (item.url) {
+          try {
+            const origin = new URL(item.url).origin;
+            if (!speedConfig.preconnects.includes(origin)) speedConfig.preconnects.push(origin);
+          } catch {}
+        }
+      }
+      if (speedConfig.preconnects.length) applied.push(`Preconnect: ${speedConfig.preconnects.length} origins`);
+    }
+
+    // Also add common third-party preconnects if render-blocking resources detected
+    const renderBlockingOpp = opps.find(o => o.id === 'render-blocking-resources');
+    if (renderBlockingOpp?.items?.length) {
+      const knownOrigins = ['https://fonts.googleapis.com', 'https://fonts.gstatic.com', 'https://www.googletagmanager.com', 'https://www.google-analytics.com'];
+      for (const item of renderBlockingOpp.items) {
+        if (item.url) {
+          for (const known of knownOrigins) {
+            if (item.url.startsWith(known) && !speedConfig.preconnects.includes(known)) {
+              speedConfig.preconnects.push(known);
+            }
+          }
+        }
+      }
+    }
+
+    // DNS prefetch for any third-party domains found
+    const thirdPartySummary = opps.find(o => o.id === 'third-party-summary');
+    if (thirdPartySummary?.items?.length) {
+      for (const item of thirdPartySummary.items) {
+        const url = item.url || item.source;
+        if (url) {
+          try {
+            const origin = new URL(url).origin;
+            if (!speedConfig.dns_prefetch.includes(origin) && !speedConfig.preconnects.includes(origin)) {
+              speedConfig.dns_prefetch.push(origin);
+            }
+          } catch {}
+        }
+      }
+      if (speedConfig.dns_prefetch.length) applied.push(`DNS prefetch: ${speedConfig.dns_prefetch.length} domains`);
+    }
+
+    // 2. Preload LCP image
+    const lcpOpp = opps.find(o => o.id === 'largest-contentful-paint-element');
+    if (lcpOpp?.items?.length) {
+      for (const item of lcpOpp.items) {
+        const imgUrl = item.url || (item.snippet && item.snippet.match(/src=["']([^"']+)/)?.[1]);
+        if (imgUrl && /\.(jpg|jpeg|png|webp|avif|gif|svg)/i.test(imgUrl)) {
+          speedConfig.preload_image = imgUrl;
+          applied.push('Preload LCP image');
+          break;
+        }
+      }
+    }
+
+    // 3. Font-display: swap
+    const fontOpp = opps.find(o => o.id === 'font-display');
+    if (fontOpp && fontOpp.score < 1) {
+      speedConfig.font_display_swap = true;
+      applied.push('Font-display: swap');
+    }
+
+    // Also check for Google Fonts preconnect if font-display is an issue
+    if (speedConfig.font_display_swap) {
+      if (!speedConfig.preconnects.includes('https://fonts.googleapis.com')) speedConfig.preconnects.push('https://fonts.googleapis.com');
+      if (!speedConfig.preconnects.includes('https://fonts.gstatic.com')) speedConfig.preconnects.push('https://fonts.gstatic.com');
+    }
+
+    if (applied.length === 0) {
+      return res.json({ success: false, message: 'No safe auto-fixes available for this page. The issues require manual developer intervention.' });
+    }
+
+    // Find the WP page/post ID
+    let wpPageId = page_id;
+    let wpPageType = page_type || 'pages';
+    if (!wpPageId) {
+      // Try to find by URL/slug
+      const slug = page_url.replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/$/, '') || 'home';
+      for (const type of ['pages', 'posts']) {
+        try {
+          const searchResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          if (searchResp.ok) {
+            const items = await searchResp.json();
+            if (items.length > 0) { wpPageId = items[0].id; wpPageType = type; break; }
+          }
+        } catch {}
+      }
+      // Try homepage
+      if (!wpPageId && (slug === 'home' || slug === '')) {
+        try {
+          const settingsResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          if (settingsResp.ok) {
+            const settings = await settingsResp.json();
+            if (settings.page_on_front) { wpPageId = settings.page_on_front; wpPageType = 'pages'; }
+          }
+        } catch {}
+      }
+    }
+
+    if (!wpPageId) {
+      return res.json({ success: false, error: 'Could not find page in WordPress. Set page_id manually.' });
+    }
+
+    // Write speed config to _seoroom_speed meta field
+    console.log(`[speed-fix] Writing speed hints to ${wpPageType}/${wpPageId}: ${applied.join(', ')}`);
+    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPageType}/${wpPageId}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meta: { _seoroom_speed: JSON.stringify(speedConfig) } }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!writeResp.ok) {
+      const errText = await writeResp.text().catch(() => '');
+      console.error(`[speed-fix] WP write failed: ${writeResp.status} ${errText}`);
+      return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+    }
+
+    // Log to change history
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, '', 'speed_fix', '_seoroom_speed', 'none', $4)`,
+      [projectId, wpPageId, page_url, JSON.stringify(speedConfig).substring(0, 1000)]
+    );
+
+    return res.json({ success: true, applied, speedConfig });
+  } catch (e) {
+    console.error('[speed-fix] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

@@ -6446,7 +6446,11 @@
           const r = await api(`/projects/${project.id}/technical-fix`, { method: 'POST', body: { finding_id: f.id } });
           if (r.success) {
             setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
-            setFixResult({ id: f.id, ok: true, msg: `Fixed: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''}` });
+            if (r.fix_type === 'already_present') {
+              setFixResult({ id: f.id, ok: true, msg: `✓ Verified: ${r.message}` });
+            } else {
+              setFixResult({ id: f.id, ok: true, msg: `Fixed: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''}` });
+            }
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
             setFixResult({ id: f.id, ok: false, msg: r.error || r.message || 'Fix failed' });
