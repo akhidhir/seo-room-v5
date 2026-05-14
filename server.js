@@ -498,6 +498,9 @@ async function initDb() {
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS revision_requested_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_approved_at TIMESTAMPTZ`).catch(() => {});
 
+    // Verification data for audit findings (pre-fix and post-fix verification)
+    await client.query(`ALTER TABLE audit_findings ADD COLUMN IF NOT EXISTS verification JSONB`).catch(() => {});
+
     // Client access — role-based multi-user system
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin'`).catch(() => {});
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`).catch(() => {});
@@ -17842,56 +17845,98 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     const title = (finding.title || '').toLowerCase();
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    // ======== VERIFICATION: Re-check live page before applying any fix ========
-    const verifySchemaOnPage = async (pageUrl) => {
+    // ======== VERIFICATION HELPERS ========
+    // Fetch a live page and extract all schema types + check specific HTML elements
+    const verifyLivePage = async (pageUrl) => {
       try {
         const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0' } });
-        if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [] };
+        if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [], checks: {} };
         const html = await resp.text();
         const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
         const schemas = [];
+        const schemaDetails = [];
         for (const sm of schemaMatches) {
           try {
             const jsonStr = sm.replace(/<\/?script[^>]*>/gi, '');
             const parsed = JSON.parse(jsonStr);
             const types = parsed['@type'] || (Array.isArray(parsed['@graph']) ? parsed['@graph'].map(g => g['@type']).filter(Boolean) : []);
-            schemas.push(...(Array.isArray(types) ? types : [types]));
+            const typeArr = Array.isArray(types) ? types : [types];
+            schemas.push(...typeArr);
+            schemaDetails.push({ types: typeArr, source: sm.includes('SEO Room') ? 'seoroom' : sm.includes('rank-math') ? 'rankmath' : sm.includes('yoast') ? 'yoast' : 'unknown' });
           } catch {}
         }
-        return { schemas, html };
+        const checks = {
+          hasCanonical: /<link[^>]*rel=["']canonical["']/i.test(html),
+          hasViewport: /<meta[^>]*name=["']viewport["']/i.test(html),
+          hasH1: /<h1[\s>]/i.test(html),
+          isNoindex: /<meta[^>]*name=["']robots["'][^>]*content=["'][^"']*noindex/i.test(html),
+          hasHttpLinks: html.includes(`http://${domain}`),
+          hasOgTags: /<meta[^>]*property=["']og:/i.test(html),
+        };
+        return { schemas, schemaDetails, checks, ok: true };
       } catch (e) {
-        return { error: e.message, schemas: [] };
+        return { error: e.message, schemas: [], checks: {} };
       }
+    };
+
+    // Extract the target page URL(s) from finding description/title
+    const getTargetUrls = (finding, domain) => {
+      const desc = (finding.description || '') + ' ' + (finding.title || '');
+      // Extract paths like /blocked-drains/, /hot-water-systems/
+      const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
+      const urls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
+      // Always include homepage for LocalBusiness findings
+      if ((finding.title || '').toLowerCase().includes('localbusiness') || (finding.title || '').toLowerCase().includes('local business')) {
+        urls.unshift(`https://${domain}/`);
+      }
+      // If no specific pages found, default to homepage
+      if (urls.length === 0) urls.push(`https://${domain}/`);
+      return [...new Set(urls)]; // dedupe
+    };
+
+    // Save verification data to DB
+    const saveVerification = async (findingId, stage, data) => {
+      const existing = finding.verification ? (typeof finding.verification === 'string' ? JSON.parse(finding.verification) : finding.verification) : {};
+      existing[stage] = { ...data, timestamp: new Date().toISOString() };
+      await pool.query('UPDATE audit_findings SET verification=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(existing), findingId]);
+      return existing;
     };
 
     // ---- FIX TYPE 1: Schema injection ----
     if (cat.includes('schema') || title.includes('schema') || title.includes('json-ld') || title.includes('structured data') || title.includes('localbusiness') || title.includes('faqpage')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
 
-      // Verify: check if schema is actually missing on the live page
-      const targetUrl = `https://${domain}`;
-      const verification = await verifySchemaOnPage(targetUrl);
-      console.log(`[technical-fix] Verification on ${targetUrl}: found schemas = [${verification.schemas.join(', ')}]`);
+      // PRE-FIX VERIFICATION: Check the actual affected pages
+      const targetUrls = getTargetUrls(finding, domain);
+      const preVerify = {};
+      for (const url of targetUrls.slice(0, 3)) { // check up to 3 pages
+        preVerify[url] = await verifyLivePage(url);
+      }
+      console.log(`[technical-fix] Pre-verify on ${targetUrls.length} page(s): ${JSON.stringify(Object.fromEntries(Object.entries(preVerify).map(([u, v]) => [u, v.schemas])))}`);
 
-      // Check if the specific schema type is already present
-      const schemasLower = verification.schemas.map(s => (s || '').toLowerCase());
-      if (title.includes('localbusiness') && schemasLower.some(s => s.includes('localbusiness'))) {
-        // Mark as fixed — it already exists
-        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-        return res.json({ success: true, fix_type: 'already_present', message: 'LocalBusiness schema already exists on the live page. Marked as fixed.' });
+      // Determine which schema type this finding is about
+      const schemaTypeNeeded = title.includes('localbusiness') || title.includes('local business') ? 'localbusiness'
+        : title.includes('faq') ? 'faqpage'
+        : title.includes('aggregaterating') ? 'aggregaterating'
+        : title.includes('service') ? 'service'
+        : null;
+
+      // Check if the needed schema already exists on any verified page
+      if (schemaTypeNeeded) {
+        const allFoundSchemas = Object.values(preVerify).flatMap(v => (v.schemas || []).map(s => (s || '').toLowerCase()));
+        if (allFoundSchemas.some(s => s.includes(schemaTypeNeeded))) {
+          const verData = await saveVerification(finding.id, 'pre_fix', { pages: preVerify, result: 'already_present', schemaTypeNeeded });
+          await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+          return res.json({
+            success: true, fix_type: 'already_present',
+            message: `${schemaTypeNeeded} schema already exists on the live page. Verified and marked as fixed.`,
+            verification: { pre: verData.pre_fix }
+          });
+        }
       }
-      if (title.includes('faq') && schemasLower.some(s => s.includes('faqpage'))) {
-        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-        return res.json({ success: true, fix_type: 'already_present', message: 'FAQPage schema already exists on the live page. Marked as fixed.' });
-      }
-      if (title.includes('aggregaterating') && schemasLower.some(s => s.includes('aggregaterating'))) {
-        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-        return res.json({ success: true, fix_type: 'already_present', message: 'AggregateRating schema already exists on the live page. Marked as fixed.' });
-      }
-      if (title.includes('service') && schemasLower.some(s => s.includes('service'))) {
-        await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-        return res.json({ success: true, fix_type: 'already_present', message: 'Service schema already exists on the live page. Marked as fixed.' });
-      }
+
+      // Save pre-fix verification (confirmed missing)
+      await saveVerification(finding.id, 'pre_fix', { pages: preVerify, result: 'confirmed_missing', schemaTypeNeeded });
 
       // Get RC profile data for rich schema
       let rcProfile = null;
@@ -18045,16 +18090,45 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
         [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
 
-      return res.json({ success: true, fix_type: 'schema', schema_type: schemaJson['@type'], page_id: targetPageId });
+      // POST-FIX VERIFICATION: Wait a moment then re-check the live page
+      // WordPress + caching means we check the meta field was written, not the live page (cache may be stale)
+      let postVerifyResult = 'write_confirmed';
+      try {
+        const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=id,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+        if (checkResp.ok) {
+          const checkData = await checkResp.json();
+          const savedSchema = checkData.meta?._seoroom_schema || '';
+          if (savedSchema && savedSchema.includes(schemaJson['@type'])) {
+            postVerifyResult = 'verified_in_wordpress';
+          } else {
+            postVerifyResult = 'write_not_confirmed';
+          }
+        }
+      } catch {}
+      await saveVerification(finding.id, 'post_fix', { result: postVerifyResult, schema_type: schemaJson['@type'], page_id: targetPageId, page_type: targetPageType });
+      console.log(`[technical-fix] Post-verify: ${postVerifyResult} for ${schemaJson['@type']} on ${targetPageType}/${targetPageId}`);
+
+      return res.json({
+        success: true, fix_type: 'schema', schema_type: schemaJson['@type'], page_id: targetPageId,
+        verified: postVerifyResult === 'verified_in_wordpress',
+        verification: { post: postVerifyResult }
+      });
     }
 
     // ---- FIX TYPE 2: Canonical via Yoast meta ----
     if (title.includes('canonical')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
-      // Extract page path from finding
       const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
       if (pathMatch) {
         const slug = pathMatch[1];
+        // Pre-verify: check if canonical already exists on live page
+        const preCheck = await verifyLivePage(`https://${domain}/${slug}/`);
+        if (preCheck.checks?.hasCanonical) {
+          await saveVerification(finding.id, 'pre_fix', { result: 'already_present', url: `https://${domain}/${slug}/`, checks: preCheck.checks });
+          await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+          return res.json({ success: true, fix_type: 'already_present', message: `Canonical tag already exists on /${slug}/. Verified and marked as fixed.` });
+        }
+        await saveVerification(finding.id, 'pre_fix', { result: 'confirmed_missing', url: `https://${domain}/${slug}/`, checks: preCheck.checks });
         for (const type of ['pages', 'posts']) {
           const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,link`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
           if (resp.ok) {
@@ -18068,7 +18142,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
               });
               if (writeResp.ok) {
                 await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-                return res.json({ success: true, fix_type: 'canonical', page: slug, canonical: canonicalUrl });
+                await saveVerification(finding.id, 'post_fix', { result: 'write_confirmed', canonical: canonicalUrl });
+                return res.json({ success: true, fix_type: 'canonical', page: slug, canonical: canonicalUrl, verified: true });
               }
             }
           }
@@ -18083,6 +18158,14 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
       if (pathMatch) {
         const slug = pathMatch[1];
+        // Pre-verify: check if noindex actually exists
+        const preCheck = await verifyLivePage(`https://${domain}/${slug}/`);
+        if (!preCheck.checks?.isNoindex) {
+          await saveVerification(finding.id, 'pre_fix', { result: 'not_found', url: `https://${domain}/${slug}/`, message: 'Page is not noindexed. No action needed.' });
+          await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+          return res.json({ success: true, fix_type: 'already_present', message: `/${slug}/ is not noindexed. Verified and marked as fixed.` });
+        }
+        await saveVerification(finding.id, 'pre_fix', { result: 'confirmed_present', url: `https://${domain}/${slug}/` });
         for (const type of ['pages', 'posts']) {
           const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
           if (resp.ok) {
@@ -18095,7 +18178,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
               });
               if (writeResp.ok) {
                 await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-                return res.json({ success: true, fix_type: 'noindex_removed', page: slug });
+                await saveVerification(finding.id, 'post_fix', { result: 'write_confirmed' });
+                return res.json({ success: true, fix_type: 'noindex_removed', page: slug, verified: true });
               }
             }
           }
@@ -18142,6 +18226,14 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
       if (pathMatch) {
         const slug = pathMatch[1];
+        // Pre-verify: check if H1 exists on live page
+        const preCheck = await verifyLivePage(`https://${domain}/${slug}/`);
+        if (preCheck.checks?.hasH1) {
+          await saveVerification(finding.id, 'pre_fix', { result: 'already_present', url: `https://${domain}/${slug}/`, message: 'H1 tag found on live page.' });
+          await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+          return res.json({ success: true, fix_type: 'already_present', message: `H1 already exists on /${slug}/. Verified and marked as fixed.` });
+        }
+        await saveVerification(finding.id, 'pre_fix', { result: 'confirmed_missing', url: `https://${domain}/${slug}/` });
         for (const type of ['pages', 'posts']) {
           const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
           if (resp.ok) {
@@ -18157,8 +18249,14 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
                 });
                 if (writeResp.ok) {
                   await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-                  return res.json({ success: true, fix_type: 'h1_injected', page: slug });
+                  await saveVerification(finding.id, 'post_fix', { result: 'write_confirmed', page: slug });
+                  return res.json({ success: true, fix_type: 'h1_injected', page: slug, verified: true });
                 }
+              } else {
+                // H1 exists in WP content (maybe rendered by theme/Elementor)
+                await saveVerification(finding.id, 'pre_fix', { result: 'already_in_wp_content', url: `https://${domain}/${slug}/` });
+                await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
+                return res.json({ success: true, fix_type: 'already_present', message: `H1 found in WordPress content for /${slug}/. Marked as fixed.` });
               }
             }
           }

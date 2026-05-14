@@ -6447,9 +6447,11 @@
           if (r.success) {
             setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
             if (r.fix_type === 'already_present') {
-              setFixResult({ id: f.id, ok: true, msg: `✓ Verified: ${r.message}` });
+              setFixResult({ id: f.id, ok: true, msg: `Verified on live page: already present. ${r.message}` });
+            } else if (r.verified) {
+              setFixResult({ id: f.id, ok: true, msg: `Fixed & verified: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''} — confirmed in WordPress` });
             } else {
-              setFixResult({ id: f.id, ok: true, msg: `Fixed: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''}` });
+              setFixResult({ id: f.id, ok: true, msg: `Fixed: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''} — verify on live site after cache clears` });
             }
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
@@ -6732,11 +6734,15 @@
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                           {f.status === 'fixed' ? (
-                            <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}><i className="fas fa-check-circle" style={{ marginRight: 4 }} />Fixed</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
+                              <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
+                              {f.verification?.post_fix?.result === 'verified_in_wordpress' ? 'Verified Fixed' :
+                               f.verification?.pre_fix?.result === 'already_present' ? 'Verified Present' : 'Fixed'}
+                            </span>
                           ) : isAutoFixable(f) ? (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixFinding(f); }} disabled={fixing === f.id}
                               style={{ fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40' }}>
-                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
+                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Verifying & Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
                             </button>
                           ) : (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
