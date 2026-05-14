@@ -4984,42 +4984,39 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       `${wpUrl}/wp-json/seoroom/v1/purge-cache`,
       `${wpUrl}/wp-json/seoroom/v1/cwv-fixes`,
     ];
-    // Primary check: look for seoroom namespace in WP REST index (most reliable)
-    let namespaceFound = false;
+    // 1. Check if seoroom namespace exists in WP REST index (most reliable)
     try {
-      const indexResp = await fetch(`${wpUrl}/wp-json`, { signal: AbortSignal.timeout(6000) });
+      const indexResp = await fetch(`${wpUrl}/wp-json`, {
+        signal: AbortSignal.timeout(6000),
+        ...(authHeaders ? { headers: authHeaders } : {}),
+      });
       if (indexResp.ok) {
         const indexData = await indexResp.json();
         if (indexData.namespaces && indexData.namespaces.includes('seoroom/v1')) {
-          namespaceFound = true;
+          return res.json({ installed: true });
         }
       }
     } catch {}
 
-    if (namespaceFound) {
-      return res.json({ installed: true });
-    }
-
-    // Secondary check: probe seoroom endpoints — only 200 means plugin is active
-    // (403/401 from firewalls like BerqWP should NOT count as installed)
+    // 2. Probe seoroom endpoints WITH auth headers
+    // If route exists: WP returns JSON (200, 401, 403 with rest error code)
+    // If route missing: WP returns 404 with {"code":"rest_no_route"}
     for (const ep of endpoints) {
       try {
         const resp = await fetch(ep, {
           signal: AbortSignal.timeout(6000),
           ...(authHeaders ? { headers: authHeaders } : {}),
         });
-        if (resp.status === 200) {
-          return res.json({ installed: true });
-        }
-        // Check if response is JSON with seoroom-specific data (not a firewall block page)
-        if (resp.status < 400) {
+        // 404 with rest_no_route = plugin not installed
+        if (resp.status === 404) {
           try {
             const body = await resp.json();
-            if (body && (body.success !== undefined || body.data !== undefined)) {
-              return res.json({ installed: true });
-            }
+            if (body.code === 'rest_no_route') continue; // route doesn't exist
           } catch {}
+          continue;
         }
+        // Any other response (200, 401, 403, 500) = route exists = plugin active
+        return res.json({ installed: true });
       } catch {}
     }
     return res.json({ installed: false, reason: 'not_found' });
