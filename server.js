@@ -18640,20 +18640,26 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             const vResp = await fetch(verifyUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } });
             if (vResp.ok) {
               const vHtml = await vResp.text();
-              liveVerified = /Service/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
+              // Check for exact "@type":"Service" or "@type": "Service" — not "ComputerRepairService" etc.
+              liveVerified = /"@type"\s*:\s*"Service"/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
             }
           } catch {}
 
-          const verified = metaVerified || liveVerified;
+          // Only trust live page verification — meta in WP doesn't mean it's rendering
+          const verified = liveVerified;
           if (verified) {
             await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
           }
 
           return res.json({
             success: true, fix_type: 'schema', schema_type: 'Service',
-            message: `Service schema written to ${fixedCount} service page(s).${metaVerified ? ' Confirmed in WordPress.' : ''}${liveVerified ? ' Verified on live page.' : ' CDN may still show cached version.'}`,
+            message: liveVerified
+              ? `Service schema verified on live page (${fixedCount} page(s)).`
+              : metaVerified
+                ? `Schema saved to WordPress but NOT showing on live page. Check that SEO Room Connector plugin is active.`
+                : `Schema write attempted on ${fixedCount} page(s) but could not confirm.`,
             verified,
-            verification: { post: liveVerified ? 'verified_on_live_page' : metaVerified ? 'verified_in_wordpress' : 'write_not_confirmed', pages_fixed: fixedCount }
+            verification: { post: liveVerified ? 'verified_on_live_page' : metaVerified ? 'saved_to_wp_not_rendering' : 'write_not_confirmed', pages_fixed: fixedCount }
           });
         } else {
           return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Make sure your site has published service/content pages (utility pages like About, Contact, Privacy are excluded).` });
