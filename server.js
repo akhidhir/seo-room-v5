@@ -4943,10 +4943,12 @@ app.post('/api/projects/:projectId/page-exclusions', async (req, res) => {
         return ePath !== normalizedPath;
       });
     } else {
-      // Store as object with path + label for classification
-      const existing = exclusions.find(e => (typeof e === 'string' ? e : e.path) === normalizedPath);
-      if (!existing) {
-        exclusions.push({ path: normalizedPath, label: label || 'Not a service', excludedAt: new Date().toISOString() });
+      // Store as object with path + label for classification (update if exists)
+      const existingIdx = exclusions.findIndex(e => (typeof e === 'string' ? e : e.path) === normalizedPath);
+      if (existingIdx >= 0) {
+        exclusions[existingIdx] = { path: normalizedPath, label: label || 'Other', excludedAt: new Date().toISOString() };
+      } else {
+        exclusions.push({ path: normalizedPath, label: label || 'Other', excludedAt: new Date().toISOString() });
       }
     }
 
@@ -17740,25 +17742,63 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for Service schema on service pages — individual finding per page
-    const pageExclusions = (project.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
+    // Check for Service schema on service pages — classification-aware
+    // page_exclusions stores { path, label } per page. Labels: Home, Service, Suburb, Blog, About, Contact, Other
+    // Service/Suburb = needs Service schema. Blog/About/Contact/Home/Other = skip. Unclassified = use isServicePage() guess.
+    const rawExclusions = project.page_exclusions || [];
+    const classificationMap = {}; // normalized path → label
+    const excludedPaths = []; // paths that should NOT get Service schema
+    for (const ex of rawExclusions) {
+      const p = (typeof ex === 'string' ? ex : (ex.path || '')).toLowerCase().replace(/\/$/, '').replace(/^\//, '');
+      const label = (typeof ex === 'object' ? ex.label : '') || 'Excluded';
+      if (p) {
+        classificationMap[p] = label;
+        if (!['Service', 'Suburb'].includes(label)) {
+          excludedPaths.push(p);
+        }
+      }
+    }
+
     if (project.is_local_business) {
-      const servicePages = successPages.filter(p => isServicePage(p.path, p.schemas, p.wordCount, pageExclusions));
       const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-      for (const svcPage of servicePages) {
-        const hasService = svcPage.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
-        if (!hasService) {
-          const svcNormSlug = (svcPage.path || '').replace(/^\/|\/$/g, '');
-          const pageUrl = svcPage.url || `https://${svcDomain}/${svcNormSlug}/`;
-          findings.push({
-            pillar: 'website', category: 'Schema & Data',
-            title: `Missing Service schema on ${svcNormSlug}`,
-            description: `${pageUrl} is a service page without Service structured data. Service schema helps Google understand your offerings and can enhance search listings.`,
-            recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
-            severity: 'Medium',
-            current_value: JSON.stringify([pageUrl]),
-            recommended_value: 'Service schema on this page'
-          });
+      for (const page of successPages) {
+        const normSlug = (page.path || '').replace(/^\/|\/$/g, '');
+        if (!normSlug || normSlug === '') continue; // skip homepage
+
+        const hasService = page.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
+        if (hasService) continue; // already has schema
+
+        const classification = classificationMap[normSlug];
+
+        if (classification) {
+          // Page is classified — only flag if Service or Suburb
+          if (['Service', 'Suburb'].includes(classification)) {
+            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
+            findings.push({
+              pillar: 'website', category: 'Schema & Data',
+              title: `Missing Service schema on ${normSlug}`,
+              description: `${pageUrl} is classified as "${classification}" but has no Service structured data.`,
+              recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
+              severity: 'Medium',
+              current_value: JSON.stringify([pageUrl]),
+              recommended_value: 'Service schema on this page'
+            });
+          }
+          // Blog/About/Contact/Home/Other — skip, no Service schema needed
+        } else {
+          // Unclassified — use isServicePage() as best guess, show Reclassify button
+          if (isServicePage(page.path, page.schemas, page.wordCount, excludedPaths)) {
+            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
+            findings.push({
+              pillar: 'website', category: 'Schema & Data',
+              title: `Missing Service schema on ${normSlug}`,
+              description: `${pageUrl} appears to be a service page without Service structured data. Use Reclassify if this is not a service page.`,
+              recommendation: 'Add Service JSON-LD schema, or click Reclassify to mark this page type.',
+              severity: 'Medium',
+              current_value: JSON.stringify([pageUrl]),
+              recommended_value: 'Service schema on this page'
+            });
+          }
         }
       }
     }
@@ -18453,11 +18493,20 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           console.log(`[technical-fix] Matched ${wpServicePages.length} WP pages from ${storedUrls.length} stored URLs`);
         }
 
-        // Load project exclusions for filtering (always needed for cleanup + fallback)
+        // Load project classifications for filtering
         let projExclusions = [];
+        const fixClassMap = {};
         try {
           const exRow = await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId]);
-          projExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
+          const rawEx = exRow.rows[0]?.page_exclusions || [];
+          for (const ex of rawEx) {
+            const p = (typeof ex === 'string' ? ex : (ex.path || '')).toLowerCase().replace(/^\/|\/$/g, '');
+            const lbl = (typeof ex === 'object' ? ex.label : '') || 'Excluded';
+            if (p) {
+              fixClassMap[p] = lbl;
+              if (!['Service', 'Suburb'].includes(lbl)) projExclusions.push(p);
+            }
+          }
         } catch {}
 
         // Fallback: try to extract slug from finding title (e.g. "Missing Service schema on computer-repair-perth")
@@ -18471,7 +18520,12 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         }
         // Final fallback: ALL service pages (only if no specific page found)
         if (wpServicePages.length === 0) {
-          wpServicePages = allWpPages.filter(p => isServicePage(p.slug, null, undefined, projExclusions));
+          wpServicePages = allWpPages.filter(p => {
+            const slug = (p.slug || '').toLowerCase();
+            const cls = fixClassMap[slug];
+            if (cls) return ['Service', 'Suburb'].includes(cls);
+            return isServicePage(p.slug, null, undefined, projExclusions);
+          });
           console.log(`[technical-fix] Full fallback: found ${wpServicePages.length} service pages`);
         }
         console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
@@ -18506,9 +18560,15 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         let fixedCount = 0;
         let firstPageId = null;
         for (const page of wpServicePages.slice(0, 20)) {
-          // Double-check: skip if page is not actually a service page
-          if (!isServicePage(page.slug, null, undefined, projExclusions)) {
-            console.log(`[technical-fix] SKIP non-service page: ${page.slug}`);
+          // Double-check: skip if classified as non-service
+          const pageSlug = (page.slug || '').toLowerCase();
+          const pageCls = fixClassMap[pageSlug];
+          if (pageCls && !['Service', 'Suburb'].includes(pageCls)) {
+            console.log(`[technical-fix] SKIP classified "${pageCls}" page: ${pageSlug}`);
+            continue;
+          }
+          if (!pageCls && !isServicePage(page.slug, null, undefined, projExclusions)) {
+            console.log(`[technical-fix] SKIP non-service page: ${pageSlug}`);
             continue;
           }
           const pageTitle = (page.title?.rendered || page.slug).replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-');
