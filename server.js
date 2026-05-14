@@ -18708,12 +18708,30 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         if (biz.categories?.primaryCategory?.displayName) cats.push(biz.categories.primaryCategory.displayName);
         (biz.categories?.additionalCategories || []).forEach(c => { if (c.displayName) cats.push(c.displayName); });
 
+        // Build areaServed from project service_areas (richer than just project.location)
+        const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas : [];
+        const areaServed = serviceAreas.length > 0
+          ? serviceAreas.map(a => ({
+              "@type": "City",
+              "name": typeof a === 'string' ? a : (a.name || a)
+            }))
+          : project.location ? [{ "@type": "City", "name": project.location }] : [];
+
+        // Phone: RC profile > project settings
+        const phone = biz.phoneNumbers?.primaryPhone || project.phone || null;
+
+        // sameAs: social profiles from RC profile
+        const sameAs = [];
+        if (biz.websiteUri) sameAs.push(biz.websiteUri);
+        const socialLinks = biz.socialMediaLinks || biz.socialProfiles || {};
+        for (const [, url] of Object.entries(socialLinks)) { if (url) sameAs.push(url); }
+
         schemaJson = {
           "@context": "https://schema.org",
           "@type": "LocalBusiness",
           "name": biz.title || project.business_name || project.name,
           "url": `https://${domain}`,
-          ...(biz.phoneNumbers?.primaryPhone ? { "telephone": biz.phoneNumbers.primaryPhone } : {}),
+          ...(phone ? { "telephone": phone } : {}),
           ...(addr.addressLines?.length ? {
             "address": {
               "@type": "PostalAddress",
@@ -18725,10 +18743,16 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             }
           } : {}),
           ...(biz.latlng ? { "geo": { "@type": "GeoCoordinates", "latitude": biz.latlng.latitude, "longitude": biz.latlng.longitude } } : {}),
-          ...(hours.length ? { "openingHours": hours } : {}),
-          ...(cats.length ? { "additionalType": cats.join(', ') } : {}),
+          ...(hours.length ? { "openingHoursSpecification": hours.map(h => {
+            const [day, time] = h.split(' ');
+            const [opens, closes] = (time || '').split('-');
+            return { "@type": "OpeningHoursSpecification", "dayOfWeek": day, "opens": opens, "closes": closes };
+          }) } : {}),
+          ...(cats.length ? { "additionalType": cats.map(c => `https://www.google.com/maps/search/${encodeURIComponent(c)}`) } : {}),
           "image": biz.profilePhotoUrl || `https://${domain}/logo.png`,
-          ...(project.location ? { "areaServed": project.location } : {}),
+          ...(areaServed.length ? { "areaServed": areaServed.length === 1 ? areaServed[0] : areaServed } : {}),
+          ...(sameAs.length ? { "sameAs": sameAs } : {}),
+          "priceRange": "$$",
         };
 
         // Find homepage — try multiple methods
@@ -19502,8 +19526,10 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
       if (schemaType) {
         const allFoundSchemas = [...new Set(results.flatMap(r => r.schemas || []))];
         console.log(`[verify-fix] Looking for "${schemaType}" in schemas: [${allFoundSchemas.join(', ')}]`);
-        // For Service: require exact "Service" type, not subtypes like "ComputerRepairService"
-        const found = results.some(r => r.schemas && r.schemas.includes(schemaType));
+        // For Service: require exact "Service" type. For LocalBusiness: accept any subtype.
+        const found = schemaType === 'LocalBusiness'
+          ? results.some(r => r.schemas && r.schemas.some(s => isLocalBusinessType(s)))
+          : results.some(r => r.schemas && r.schemas.includes(schemaType));
         verified = found;
         reason = found
           ? `${schemaType} schema found on live page`
