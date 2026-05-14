@@ -6735,7 +6735,23 @@
                         onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
                         <td style={{ padding: '14px 10px' }}><input type="checkbox" checked={selected.has(f.id)} onChange={() => { const s = new Set(selected); s.has(f.id) ? s.delete(f.id) : s.add(f.id); setSelected(s); }} /></td>
                         <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{num}</td>
-                        <td style={{ padding: '14px', fontWeight: 600, fontSize: 15 }}><span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}</td>
+                        <td style={{ padding: '14px', fontWeight: 600, fontSize: 15 }}>
+                          <span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}
+                          {(() => {
+                            // Extract page URL from description or current_value
+                            const desc = (f.description || '') + ' ' + (f.current_value || '');
+                            const paths = desc.match(/\/[a-z0-9-]+(?=[\s,.])/gi) || [];
+                            const domain = project?.domain?.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                            const pageUrl = f.category?.includes('Schema') && domain ? `https://${domain}${paths[0] || '/'}` : null;
+                            if (!pageUrl) return null;
+                            return <div style={{ fontSize: 11, marginTop: 3, display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <span style={{ color: 'var(--text3)' }}>{pageUrl}</span>
+                              <a href={`https://search.google.com/test/rich-results?url=${encodeURIComponent(pageUrl)}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: '#3b82f6', textDecoration: 'none', fontSize: 11 }}>
+                                <i className="fas fa-external-link-alt" style={{ marginRight: 3 }} />Test Schema
+                              </a>
+                            </div>;
+                          })()}
+                        </td>
                         <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{f.category}</span></td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
