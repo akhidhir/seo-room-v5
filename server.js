@@ -17155,14 +17155,28 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
             else if (href.startsWith('http')) externalLinks.push(href);
           }
 
-          // Schema markup
+          // Schema markup — extract all types including inside @graph, detect source plugin
           const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
           const schemas = [];
+          const schemaSources = []; // track which plugin outputs each schema
           for (const sm of schemaMatches) {
             try {
               const jsonStr = sm.replace(/<\/?script[^>]*>/gi, '');
               const parsed = JSON.parse(jsonStr);
-              schemas.push(parsed['@type'] || (Array.isArray(parsed['@graph']) ? parsed['@graph'].map(g => g['@type']).join(', ') : 'Unknown'));
+              const source = sm.includes('SEO Room') ? 'seoroom' : sm.includes('rank-math') ? 'rankmath' : sm.includes('yoast') ? 'yoast' : 'other';
+              if (parsed['@type']) {
+                const types = Array.isArray(parsed['@type']) ? parsed['@type'] : [parsed['@type']];
+                types.forEach(t => { schemas.push(t); schemaSources.push({ type: t, source }); });
+              }
+              if (Array.isArray(parsed['@graph'])) {
+                for (const g of parsed['@graph']) {
+                  if (g['@type']) {
+                    const types = Array.isArray(g['@type']) ? g['@type'] : [g['@type']];
+                    types.forEach(t => { schemas.push(t); schemaSources.push({ type: t, source }); });
+                  }
+                }
+              }
+              if (!parsed['@type'] && !parsed['@graph']) schemas.push('Unknown');
             } catch { schemas.push('Invalid JSON-LD'); }
           }
 
@@ -17203,7 +17217,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
             h1s, h2s, wordCount,
             images: images.length, imagesWithoutAlt: imagesWithoutAlt.length,
             internalLinks: internalLinks.length, externalLinks: externalLinks.length,
-            schemas, canonical, hasViewport, robotsMeta, isNoindex, isHttps,
+            schemas, schemaSources, canonical, hasViewport, robotsMeta, isNoindex, isHttps,
             hasHreflang, hasOG
           };
         } catch (e) {
@@ -17502,16 +17516,22 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for LocalBusiness schema
+    // Check for LocalBusiness schema (including inside @graph from Rank Math/Yoast)
     const hasLocalBusiness = successPages.some(p => p.schemas.some(s => typeof s === 'string' && s.includes('LocalBusiness')));
     if (!hasLocalBusiness && project.is_local_business) {
+      // Double-check: log what schemas WERE found so we can debug false positives
+      const allSchemaTypes = [...new Set(successPages.flatMap(p => p.schemas))];
+      const allSchemaSources = successPages.flatMap(p => p.schemaSources || []);
+      console.log(`[website-audit] LocalBusiness not found. All schemas found: [${allSchemaTypes.join(', ')}]. Sources: ${JSON.stringify(allSchemaSources.slice(0, 10))}`);
       findings.push({
         pillar: 'website', category: 'Schema & Data',
         title: 'Missing LocalBusiness schema markup',
-        description: 'No LocalBusiness structured data found on any page. This is critical for local SEO and Google Maps.',
+        description: `No LocalBusiness structured data found on any of ${successPages.length} crawled pages. Checked both standalone JSON-LD and @graph blocks. This is critical for local SEO and Google Maps.`,
         recommendation: 'Add LocalBusiness JSON-LD to your homepage with name, address, phone, hours, geo coordinates, and service area.',
         severity: 'Critical',
-        current_value: 'No LocalBusiness schema', recommended_value: 'LocalBusiness on homepage'
+        current_value: `No LocalBusiness schema (found: ${allSchemaTypes.filter(s => s !== 'Invalid JSON-LD').join(', ') || 'none'})`,
+        recommended_value: 'LocalBusiness on homepage',
+        verification: { verified_at: new Date().toISOString(), method: 'crawl', pages_checked: successPages.length, schemas_found: allSchemaTypes, sources: allSchemaSources.slice(0, 20) }
       });
     }
 
@@ -17545,12 +17565,13 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       thinPages: thinPages.length,
     };
 
-    // Save findings
+    // Save findings (with verification data if present)
     for (const f of findings) {
       const r = await pool.query(
-        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value,
+         f.verification ? JSON.stringify({ audit: f.verification }) : null]
       );
       f.id = r.rows[0].id;
       f.status = 'new';
