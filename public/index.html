@@ -6657,6 +6657,26 @@
 
       return (
         <div>
+          {/* Fix progress toast */}
+          {fixing && fixResult && (
+            <div style={{ position: 'sticky', top: 0, zIndex: 100, marginBottom: 12, padding: '12px 20px', borderRadius: 8,
+              background: fixResult.ok ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+              border: `1px solid ${fixResult.ok ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}`,
+              color: fixResult.ok ? '#22c55e' : '#ef4444', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <i className={`fas ${fixing ? 'fa-spinner fa-spin' : fixResult.ok ? 'fa-check-circle' : 'fa-exclamation-circle'}`} />
+              {fixResult.msg}
+            </div>
+          )}
+          {/* Fix completed toast (stays 5s after done) */}
+          {!fixing && fixResult && (
+            <div style={{ position: 'sticky', top: 0, zIndex: 100, marginBottom: 12, padding: '12px 20px', borderRadius: 8,
+              background: fixResult.ok ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+              border: `1px solid ${fixResult.ok ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}`,
+              color: fixResult.ok ? '#22c55e' : '#ef4444', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span><i className={`fas ${fixResult.ok ? 'fa-check-circle' : 'fa-exclamation-circle'}`} style={{ marginRight: 8 }} />{fixResult.msg}</span>
+              <button onClick={() => setFixResult(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 16 }}><i className="fas fa-times" /></button>
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
               <i className="fas fa-spider" style={{ marginRight: 10, color: '#8b5cf6' }} />Website Audit
