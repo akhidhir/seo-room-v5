@@ -18130,25 +18130,87 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           ...(project.location ? { "areaServed": project.location } : {}),
         };
 
-        // Find homepage
+        // Find homepage — try multiple methods
         try {
-          for (const type of ['pages', 'posts']) {
-            const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=5&orderby=menu_order&order=asc&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
-            if (resp.ok) {
-              const items = await resp.json();
-              const home = items.find(i => i.slug === 'home' || i.slug === '' || (i.link && new URL(i.link).pathname === '/'));
-              if (home) { targetPageId = home.id; targetPageType = type; break; }
-            }
+          // Method 1: Search by common homepage slugs
+          const homeSlugs = ['home', 'homepage', 'front-page', 'frontpage'];
+          for (const slug of homeSlugs) {
+            if (targetPageId) break;
+            try {
+              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?slug=${slug}&_fields=id,slug,link`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+              if (resp.ok) {
+                const items = await resp.json();
+                if (items.length > 0) { targetPageId = items[0].id; targetPageType = 'pages'; break; }
+              }
+            } catch {}
           }
-          // Fallback: get the page with the front-page setting
+
+          // Method 2: Check WP settings for static front page
           if (!targetPageId) {
-            const frontResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
-            if (frontResp.ok) {
-              const settings = await frontResp.json();
-              if (settings.page_on_front) { targetPageId = settings.page_on_front; targetPageType = 'pages'; }
-            }
+            try {
+              const frontResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+              if (frontResp.ok) {
+                const settings = await frontResp.json();
+                if (settings.page_on_front) { targetPageId = settings.page_on_front; targetPageType = 'pages'; }
+              }
+            } catch {}
           }
-        } catch {}
+
+          // Method 3: Get all pages and find the one whose link matches the homepage URL
+          if (!targetPageId) {
+            try {
+              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,link,status&status=publish`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+              if (resp.ok) {
+                const items = await resp.json();
+                const homeUrl = `https://${domain}/`;
+                const home = items.find(i => {
+                  if (!i.link) return false;
+                  const link = i.link.replace(/\/$/, '') + '/';
+                  return link === homeUrl || link === `https://www.${domain}/`;
+                });
+                if (home) { targetPageId = home.id; targetPageType = 'pages'; }
+                // Also try: page with lowest ID or menu_order (often the homepage)
+                if (!home && items.length > 0) {
+                  // Find page with slug containing 'home' loosely
+                  const looseHome = items.find(i => (i.slug || '').includes('home'));
+                  if (looseHome) { targetPageId = looseHome.id; targetPageType = 'pages'; }
+                }
+              }
+            } catch {}
+          }
+
+          // Method 4: Use WP REST root to get home URL, then match against all pages
+          if (!targetPageId) {
+            try {
+              const optResp = await fetch(`${wpUrl}/wp-json`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+              if (optResp.ok) {
+                const siteInfo = await optResp.json();
+                const wpHomeUrl = (siteInfo.home || siteInfo.url || '').replace(/\/$/, '') + '/';
+                console.log(`[technical-fix] WP home URL from REST root: ${wpHomeUrl}`);
+                // Fetch all pages and match link to home URL
+                const pResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,link,status&status=publish`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+                if (pResp.ok) {
+                  const pages = await pResp.json();
+                  const match = pages.find(p => {
+                    const pLink = (p.link || '').replace(/\/$/, '') + '/';
+                    return pLink === wpHomeUrl;
+                  });
+                  if (match) { targetPageId = match.id; targetPageType = 'pages'; }
+                  // Absolute last resort: use the first published page
+                  if (!match && pages.length > 0) {
+                    console.log(`[technical-fix] Last resort: using first published page (id=${pages[0].id}, slug=${pages[0].slug})`);
+                    targetPageId = pages[0].id;
+                    targetPageType = 'pages';
+                  }
+                }
+              }
+            } catch {}
+          }
+
+          console.log(`[technical-fix] Homepage search result: pageId=${targetPageId}, type=${targetPageType}`);
+        } catch (homeErr) {
+          console.error(`[technical-fix] Homepage search error:`, homeErr.message);
+        }
       }
 
       // FAQ schema → inject on specific page mentioned in finding
