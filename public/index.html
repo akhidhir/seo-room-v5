@@ -6443,23 +6443,38 @@
       const fixFinding = async (f) => {
         setFixing(f.id); setFixResult(null);
         try {
+          // Step 1: Apply fix via WordPress
+          setFixResult({ id: f.id, ok: true, msg: 'Step 1/3: Applying fix to WordPress...' });
           const r = await api(`/projects/${project.id}/technical-fix`, { method: 'POST', body: { finding_id: f.id } });
-          if (r.success) {
-            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
-            if (r.fix_type === 'already_present') {
-              setFixResult({ id: f.id, ok: true, msg: r.message });
-            } else if (r.verification?.post === 'rolled_back_duplicate') {
-              setFixResult({ id: f.id, ok: true, msg: r.message });
-            } else if (r.verification?.post === 'verified_on_live_page') {
-              setFixResult({ id: f.id, ok: true, msg: `Fixed & verified on live page: ${r.schema_type} is rendering correctly` });
-            } else if (r.verified) {
-              setFixResult({ id: f.id, ok: true, msg: `Fixed & confirmed in WordPress: ${r.schema_type}. Will appear on live page after cache clears.` });
-            } else {
-              setFixResult({ id: f.id, ok: true, msg: `Fix applied: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''} — check live page after cache clears` });
+          if (!r.success) {
+            setFixResult({ id: f.id, ok: false, msg: r.error || r.message || 'Fix failed' });
+            setFixing(null);
+            return;
+          }
+
+          // Step 2: Purge cache so live page reflects the change
+          setFixResult({ id: f.id, ok: true, msg: 'Step 2/3: Purging site cache...' });
+          try {
+            const purge = await api(`/projects/${project.id}/purge-cache`, { method: 'POST', body: {} });
+            if (purge.purged?.length > 0) {
+              console.log('[fix] Cache purged:', purge.purged.join(', '));
             }
+          } catch (purgeErr) {
+            console.warn('[fix] Cache purge failed (non-fatal):', purgeErr.message);
+          }
+
+          // Step 3: Wait briefly for cache to clear, then verify on live page
+          setFixResult({ id: f.id, ok: true, msg: 'Step 3/3: Verifying fix on live page...' });
+          await new Promise(ok => setTimeout(ok, 3000)); // 3s for cache to propagate
+
+          const v = await api(`/projects/${project.id}/verify-fix`, { method: 'POST', body: { finding_id: f.id } });
+          if (v.verified) {
+            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+            setFixResult({ id: f.id, ok: true, msg: `Fixed & verified on live page: ${v.reason}` });
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
-            setFixResult({ id: f.id, ok: false, msg: r.error || r.message || 'Fix failed' });
+            // Fix was applied to WP but not showing on live page yet (CDN still caching)
+            setFixResult({ id: f.id, ok: true, msg: `Fix applied to WordPress. Live verification pending — ${v.reason}. CDN cache may take a few minutes. Click Verify again shortly.` });
           }
         } catch (e) { setFixResult({ id: f.id, ok: false, msg: e.message }); }
         setFixing(null);

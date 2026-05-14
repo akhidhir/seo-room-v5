@@ -18405,6 +18405,47 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
   }
 });
 
+// ==================== PURGE CACHE via SEO Room Connector plugin ====================
+app.post('/api/projects/:projectId/purge-cache', async (req, res) => {
+  const { projectId } = req.params;
+  const { url } = req.body; // optional: purge specific URL
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
+
+    console.log(`[purge-cache] Purging cache for project ${projectId} (${wpUrl})`);
+
+    const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ url: url || '' }),
+      signal: AbortSignal.timeout(20000),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      console.error(`[purge-cache] Plugin returned ${resp.status}: ${errText}`);
+      // If 404, plugin not updated yet
+      if (resp.status === 404) {
+        return res.json({ success: false, error: 'SEO Room Connector plugin v3.0+ required. Update the plugin on WordPress.' });
+      }
+      return res.json({ success: false, error: `WordPress returned ${resp.status}` });
+    }
+
+    const result = await resp.json();
+    console.log(`[purge-cache] Result:`, result);
+    return res.json({ success: true, ...result });
+
+  } catch (e) {
+    console.error('[purge-cache] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== RESET UNVERIFIED FIXED FINDINGS ====================
 // One-time cleanup: reset all 'fixed' website findings that weren't verified via live_page_crawl
 app.post('/api/projects/:projectId/reset-unverified-fixes', async (req, res) => {
