@@ -18303,14 +18303,32 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         return res.json({ success: false, error: 'Could not find target page in WordPress' });
       }
 
-      // Write schema to _seoroom_schema meta field (rendered in <head> by SEO Room Schema plugin)
+      // Inject schema directly into page content as <script type="application/ld+json">
+      // This works without any plugin — the schema renders wherever WP outputs the_content()
       const schemaString = JSON.stringify(schemaJson, null, 2);
-      console.log(`[technical-fix] Writing schema to ${targetPageType}/${targetPageId} via _seoroom_schema meta`);
+      const schemaBlock = `\n<!-- SEO Room Schema -->\n<script type="application/ld+json">\n${schemaString}\n</script>\n<!-- /SEO Room Schema -->`;
+      console.log(`[technical-fix] Injecting schema into ${targetPageType}/${targetPageId} content`);
+
+      // First, get current page content
+      const getResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=content`, {
+        headers: authHeaders, signal: AbortSignal.timeout(10000)
+      });
+      if (!getResp.ok) {
+        return res.status(500).json({ error: `Failed to read page content: ${getResp.status}` });
+      }
+      const pageData = await getResp.json();
+      let currentContent = pageData.content?.raw || pageData.content?.rendered || '';
+
+      // Remove any existing SEO Room Schema block to avoid duplicates
+      currentContent = currentContent.replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+
+      // Append schema block to content
+      const newContent = currentContent + schemaBlock;
 
       const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meta: { _seoroom_schema: schemaString } }),
+        body: JSON.stringify({ content: newContent }),
         signal: AbortSignal.timeout(15000)
       });
 
@@ -18325,14 +18343,14 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
 
       // POST-FIX VERIFICATION: 3-step check
-      // Step 1: Confirm meta field was written to WordPress
+      // Step 1: Confirm schema was written to page content in WordPress
       let wpWriteConfirmed = false;
       try {
-        const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=id,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+        const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
         if (checkResp.ok) {
           const checkData = await checkResp.json();
-          const savedSchema = checkData.meta?._seoroom_schema || '';
-          wpWriteConfirmed = savedSchema && savedSchema.includes(schemaJson['@type']);
+          const savedContent = checkData.content?.raw || checkData.content?.rendered || '';
+          wpWriteConfirmed = savedContent.includes('SEO Room Schema') && savedContent.includes(schemaJson['@type']);
         }
       } catch {}
 
@@ -18354,12 +18372,17 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           // Check who else is outputting it
           const otherSources = (postCheck.schemaDetails || []).filter(d => d.source !== 'seoroom' && d.types.some(t => t.toLowerCase() === schemaType.toLowerCase()));
           if (otherSources.length > 0) {
-            // Another plugin (Rank Math, Yoast, etc.) is already outputting this schema — remove ours
-            await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
-              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
-              signal: AbortSignal.timeout(15000)
-            });
+            // Another plugin (Rank Math, Yoast, etc.) is already outputting this schema — remove ours from content
+            const rollGetResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+            if (rollGetResp.ok) {
+              const rollData = await rollGetResp.json();
+              const rollContent = (rollData.content?.raw || rollData.content?.rendered || '').replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+              await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: rollContent }),
+                signal: AbortSignal.timeout(15000)
+              });
+            }
             rolledBack = true;
             await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
             console.log(`[technical-fix] Rolled back: ${schemaType} already output by ${otherSources.map(s => s.source).join(', ')}`);
