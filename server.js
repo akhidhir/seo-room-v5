@@ -17610,9 +17610,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         if (nonServiceSlugs.includes(path) || nonServiceSlugs.includes(path.split('/').pop())) return false;
         // Skip blog posts (usually have /blog/ or /news/ prefix, or date patterns)
         if (/^(blog|news|category|tag|author|20\d{2})\//.test(path)) return false;
-        // Skip blog-style articles: slugs with 6+ hyphenated words are likely articles, not service pages
+        // Skip blog-style articles: slugs with 5+ hyphenated words are likely articles, not service pages
         const slug = path.split('/').pop() || path;
-        if (slug.split('-').length >= 6) return false;
+        if (slug.split('-').length >= 5) return false;
         // Skip pages with no real content
         if ((p.wordCount || 0) < 100) return false;
         return true;
@@ -17709,18 +17709,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let updated = 0;
     let added = 0;
 
-    // Build set of ALL covered topics: fixed, existing (any status), and within-batch
-    // This prevents: (a) re-creating fixed findings, (b) AI duplicating rule-based findings,
-    // (c) multiple AI findings about the same topic in one batch
+    // fixedTopics: prevent re-creating findings that were already fixed
+    // batchTopics: within-batch dedup only (prevents duplicate findings in same audit run)
     const fixedTopics = new Set();
-    const coveredTopics = new Set();
     for (const ef of existingFindings.rows) {
       if (ef.status === 'fixed') {
         getTopics(ef.title).forEach(t => fixedTopics.add(t));
       }
-      // Track ALL existing topics regardless of status
-      getTopics(ef.title).forEach(t => coveredTopics.add(t));
     }
+    const batchTopics = new Set();
 
     for (const f of findings) {
       const existing = existingByTitle.get(f.title);
@@ -17731,10 +17728,18 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         continue;
       }
 
-      // Topic-based check: skip if topic already covered (fixed, existing in DB, or already inserted this batch)
       const newFindingTopics = getTopics(f.title);
-      if (newFindingTopics.length > 0 && !existing && newFindingTopics.some(t => coveredTopics.has(t))) {
-        console.log(`[website-audit] Skipping "${f.title}" — topic already covered (${newFindingTopics.join(',')})`);
+
+      // Skip if topic already fixed
+      if (newFindingTopics.length > 0 && newFindingTopics.some(t => fixedTopics.has(t))) {
+        console.log(`[website-audit] Skipping "${f.title}" — topic already fixed`);
+        skippedFixed++;
+        continue;
+      }
+
+      // Within-batch dedup: skip if same topic already inserted THIS run
+      if (!existing && newFindingTopics.length > 0 && newFindingTopics.some(t => batchTopics.has(t))) {
+        console.log(`[website-audit] Skipping "${f.title}" — duplicate topic in batch (${newFindingTopics.join(',')})`);
         skippedFixed++;
         continue;
       }
@@ -17765,29 +17770,31 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         savedFindings.push(f);
         added++;
         // Track this finding's topics so subsequent findings in the same batch are deduped
-        newFindingTopics.forEach(t => coveredTopics.add(t));
+        newFindingTopics.forEach(t => batchTopics.add(t));
       }
     }
 
-    // Existing findings NOT reproduced by this audit: keep UNLESS they overlap with a rule-based finding
+    // Existing findings NOT reproduced by this audit: keep UNLESS they're Schema & Data findings
+    // from a previous AI audit (code-based audit is now the source of truth for all schema findings)
     const newTopics = new Set(findings.flatMap(f => getTopics(f.title)));
 
     const keptFromPrevious = [];
     let removedDuplicates = 0;
     for (const ef of existingFindings.rows) {
       if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
-      // Check if this old finding overlaps with a new rule-based finding by topic
-      const oldTopics = getTopics(ef.title);
-      // Remove if topic overlaps with ANY rule-based schema check (even if rule produced no finding this run)
-      const allRuleBasedTopics = new Set(['localbusiness', 'faqpage', 'service', 'breadcrumb']);
-      if (oldTopics.some(t => newTopics.has(t) || allRuleBasedTopics.has(t))) {
-        // Old finding is a duplicate of a rule-based finding — remove it
+
+      // Remove ALL old Schema & Data findings not reproduced by this audit
+      // (code-based audit is the source of truth — old AI schema findings are stale)
+      const efCat = (ef.category || '').toLowerCase();
+      if (efCat.includes('schema')) {
         await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
-        console.log(`[website-audit] Removed duplicate old finding: "${ef.title}" (overlaps with rule-based finding)`);
+        console.log(`[website-audit] Removed stale schema finding: "${ef.title}" (not reproduced by code-based audit)`);
         removedDuplicates++;
-      } else {
-        keptFromPrevious.push(ef);
+        continue;
       }
+
+      // For non-schema findings, keep them (they may come from AI agent audit and still be relevant)
+      keptFromPrevious.push(ef);
     }
 
     // Final cleanup: delete ANY status='new' Schema & Data finding whose topic overlaps with a 'fixed' one
