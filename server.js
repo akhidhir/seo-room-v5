@@ -17961,6 +17961,35 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       const existing = existingByTitle.get(f.title);
       const perPage = isPerPageTitle(f.title);
 
+      // _forceStatus findings (e.g. schema-present records) skip dedup — they must persist
+      if (f._forceStatus) {
+        if (existing) {
+          // Update existing record but keep/set the forced status
+          await pool.query(
+            `UPDATE audit_findings SET audit_id=$1, description=$2, recommendation=$3, severity=$4,
+             current_value=$5, recommended_value=$6, category=$7, status=$8, updated_at=NOW()
+             WHERE id=$9`,
+            [auditId, f.description, f.recommendation, f.severity,
+             f.current_value, f.recommended_value, f.category, f._forceStatus, existing.id]
+          );
+          f.id = existing.id;
+          f.status = f._forceStatus;
+          savedFindings.push(f);
+          updated++;
+        } else {
+          const r = await pool.query(
+            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+            [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f._forceStatus]
+          );
+          f.id = r.rows[0].id;
+          f.status = f._forceStatus;
+          savedFindings.push(f);
+          added++;
+        }
+        continue;
+      }
+
       if (existing && existing.status === 'fixed') {
         console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
         skippedFixed++;
