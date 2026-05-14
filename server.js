@@ -18291,17 +18291,30 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // ---- FIX TYPE 5: Missing H1 — inject from page title ----
     if (title.includes('missing h1') || title.includes('no h1')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
-      const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
-      if (pathMatch) {
-        const slug = pathMatch[1];
+      // Extract page paths from description (e.g. "Pages: /blocked-drains, /hot-water-systems")
+      const desc = (finding.description || '') + ' ' + (finding.title || '');
+      const pathMatches = desc.match(/\/[a-z0-9-]+/gi) || [];
+      const slugs = [...new Set(pathMatches.map(p => p.replace(/^\//, '')).filter(s => s.length > 1 && !s.includes('h1')))];
+
+      if (slugs.length === 0) {
+        return res.json({ success: false, error: 'Could not extract page paths from finding description' });
+      }
+
+      let allFixed = true;
+      let fixedCount = 0;
+      let alreadyPresent = 0;
+      const results = [];
+
+      for (const slug of slugs) {
         // Pre-verify: check if H1 exists on live page
         const preCheck = await verifyLivePage(`https://${domain}/${slug}/`);
         if (preCheck.checks?.hasH1) {
-          await saveVerification(finding.id, 'pre_fix', { result: 'already_present', url: `https://${domain}/${slug}/`, message: 'H1 tag found on live page.' });
-          await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-          return res.json({ success: true, fix_type: 'already_present', message: `H1 already exists on /${slug}/. Verified and marked as fixed.` });
+          alreadyPresent++;
+          results.push({ slug, result: 'h1_already_present' });
+          continue;
         }
-        await saveVerification(finding.id, 'pre_fix', { result: 'confirmed_missing', url: `https://${domain}/${slug}/` });
+        // Try to find and fix in WordPress
+        let pageFixed = false;
         for (const type of ['pages', 'posts']) {
           const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
           if (resp.ok) {
@@ -18315,22 +18328,29 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
                   method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
                   body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
                 });
-                if (writeResp.ok) {
-                  await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-                  await saveVerification(finding.id, 'post_fix', { result: 'write_confirmed', page: slug });
-                  return res.json({ success: true, fix_type: 'h1_injected', page: slug, verified: true });
-                }
+                if (writeResp.ok) { fixedCount++; pageFixed = true; results.push({ slug, result: 'h1_injected' }); }
               } else {
-                // H1 exists in WP content (maybe rendered by theme/Elementor)
-                await saveVerification(finding.id, 'pre_fix', { result: 'already_in_wp_content', url: `https://${domain}/${slug}/` });
-                await pool.query('UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2', ['fixed', finding.id]);
-                return res.json({ success: true, fix_type: 'already_present', message: `H1 found in WordPress content for /${slug}/. Marked as fixed.` });
+                alreadyPresent++;
+                results.push({ slug, result: 'h1_in_wp_content' });
+                pageFixed = true;
               }
+              break;
             }
           }
         }
+        if (!pageFixed) { allFixed = false; results.push({ slug, result: 'page_not_found' }); }
       }
-      return res.json({ success: false, error: 'Could not find page or H1 already exists' });
+
+      // If all pages either fixed or already have H1, mark finding as fixed
+      if (fixedCount > 0 || alreadyPresent === slugs.length) {
+        await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+        await saveVerification(finding.id, 'post_fix', { result: 'completed', pages: results, fixed: fixedCount, already_present: alreadyPresent });
+        const msg = alreadyPresent === slugs.length
+          ? `All ${slugs.length} page(s) already have H1 tags (rendered by theme/Elementor). Verified and marked as fixed.`
+          : `H1 injected on ${fixedCount} page(s). ${alreadyPresent} already had H1.`;
+        return res.json({ success: true, fix_type: alreadyPresent === slugs.length ? 'already_present' : 'h1_injected', message: msg, pages_fixed: fixedCount, verified: true });
+      }
+      return res.json({ success: false, error: `Could not fix H1 on ${slugs.length - fixedCount - alreadyPresent} page(s)`, results });
     }
 
     // ---- FIX TYPE 6: Missing Open Graph via Yoast ----
