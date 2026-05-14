@@ -17683,16 +17683,43 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
-    // Existing findings NOT reproduced by this audit stay as-is (not deleted)
-    // They may still be valid issues the AI just didn't flag this time
-    const keptFromPrevious = existingFindings.rows.filter(ef =>
-      !newTitles.has(ef.title) && ef.status !== 'fixed' && ef.status !== 'rejected'
-    );
+    // Existing findings NOT reproduced by this audit: keep UNLESS they overlap with a rule-based finding
+    // This prevents old AI-generated schema findings from duplicating new rule-based ones
+    const schemaTopicKeywords = [
+      { keyword: 'localbusiness', topic: 'localbusiness' },
+      { keyword: 'local business', topic: 'localbusiness' },
+      { keyword: 'faqpage', topic: 'faqpage' },
+      { keyword: 'faq schema', topic: 'faqpage' },
+      { keyword: 'q&a', topic: 'faqpage' },
+      { keyword: 'service schema', topic: 'service' },
+      { keyword: 'breadcrumb', topic: 'breadcrumb' },
+    ];
+    const getTopics = (title) => {
+      const t = (title || '').toLowerCase();
+      return schemaTopicKeywords.filter(k => t.includes(k.keyword)).map(k => k.topic);
+    };
+    const newTopics = new Set(findings.flatMap(f => getTopics(f.title)));
+
+    const keptFromPrevious = [];
+    let removedDuplicates = 0;
+    for (const ef of existingFindings.rows) {
+      if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
+      // Check if this old finding overlaps with a new rule-based finding by topic
+      const oldTopics = getTopics(ef.title);
+      if (oldTopics.some(t => newTopics.has(t))) {
+        // Old finding is a duplicate of a rule-based finding — remove it
+        await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
+        console.log(`[website-audit] Removed duplicate old finding: "${ef.title}" (overlaps with rule-based finding)`);
+        removedDuplicates++;
+      } else {
+        keptFromPrevious.push(ef);
+      }
+    }
 
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
       ['completed', JSON.stringify(summary), auditId]);
 
-    console.log(`[website-audit] Project ${projectId}: ${added} new, ${updated} updated, ${skippedFixed} skipped (fixed), ${keptFromPrevious.length} kept from previous audit — ${successPages.length} pages crawled`);
+    console.log(`[website-audit] Project ${projectId}: ${added} new, ${updated} updated, ${skippedFixed} skipped (fixed), ${keptFromPrevious.length} kept, ${removedDuplicates} old duplicates removed — ${successPages.length} pages crawled`);
 
     // Return all current findings (new + updated + kept + fixed)
     const allCurrentFindings = await pool.query(
