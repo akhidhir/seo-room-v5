@@ -6786,19 +6786,26 @@
                         <td style={{ padding: '14px', fontWeight: 600, fontSize: 15 }}>
                           <span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}
                           {(() => {
-                            // Extract page URL from description or current_value
-                            const desc = (f.description || '') + ' ' + (f.current_value || '');
+                            // Extract page URL from description
+                            const desc = (f.description || '');
                             const domain = project?.domain?.replace(/^https?:\/\//, '').replace(/\/$/, '');
                             let pageUrl = null;
                             if (f.category?.includes('Schema') && domain) {
-                              // Try slash-prefixed paths first
-                              const slashPaths = desc.match(/\/[a-z0-9-]+(?=[\s,.])/gi) || [];
-                              if (slashPaths.length > 0) {
-                                pageUrl = `https://${domain}${slashPaths[0]}`;
+                              const tl = (f.title || '').toLowerCase();
+                              // For Service schema: extract full URLs or /slug/ paths from description
+                              const fullUrlMatch = desc.match(new RegExp(`https?://${domain.replace('.', '\\.')}/[a-z0-9-]+/?`, 'i'));
+                              const slashPaths = desc.match(/\/[a-z][a-z0-9-]{2,}(?:\/[a-z0-9-]+)*\/?(?=[\s,.])/gi) || [];
+                              // Filter out schema type names that look like paths
+                              const schemaNames = ['webpage', 'imageobject', 'breadcrumblist', 'website', 'organization', 'localbusiness', 'faqpage', 'service', 'article'];
+                              const realPaths = slashPaths.filter(p => !schemaNames.includes(p.replace(/\//g, '').toLowerCase()));
+                              if (fullUrlMatch) {
+                                pageUrl = fullUrlMatch[0].replace(/\/?$/, '/');
+                              } else if (realPaths.length > 0) {
+                                pageUrl = `https://${domain}${realPaths[0].replace(/\/?$/, '/')}`;
+                              } else if (tl.includes('localbusiness') || tl.includes('local business')) {
+                                pageUrl = `https://${domain}/`;
                               } else {
-                                // Extract bare slugs after colon (e.g. "schema: hot-water-systems, blocked-drains")
-                                const colonMatch = desc.match(/:\s*([a-z][a-z0-9-]{2,})(?=[,.\s])/i);
-                                pageUrl = colonMatch ? `https://${domain}/${colonMatch[1]}/` : `https://${domain}/`;
+                                pageUrl = `https://${domain}/`;
                               }
                             }
                             if (!pageUrl) return null;

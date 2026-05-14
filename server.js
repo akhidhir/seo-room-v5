@@ -17602,14 +17602,17 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
                path.includes('residential') || path.includes('maintenance') || path.includes('cleaning');
       });
       if (servicePages.length > 0) {
+        const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const firstSvcUrl = servicePages[0].url || `https://${svcDomain}/${servicePages[0].path}/`;
         findings.push({
           pillar: 'website', category: 'Schema & Data',
           title: 'Missing Service schema on service pages',
-          description: `${servicePages.length} service page(s) found without Service schema: ${servicePages.slice(0, 5).map(p => p.path).join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
+          description: `${servicePages.length} service page(s) found without Service schema: ${servicePages.slice(0, 5).map(p => p.url || '/' + p.path + '/').join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
           recommendation: 'Add Service JSON-LD schema to each service page with name, description, provider (your business), and areaServed.',
           severity: 'Medium',
           current_value: `${servicePages.length} service pages without Service schema`,
-          recommended_value: 'Service schema on all service pages'
+          recommended_value: 'Service schema on all service pages',
+          page_url: firstSvcUrl
         });
       }
     }
