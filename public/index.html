@@ -6489,7 +6489,7 @@
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
-          const res = await api(`/projects/${project.id}/audits/website/run`, { method: 'POST' });
+          const res = await api(`/projects/${project.id}/audits/website/run`, { method: 'POST', body: { force: true } });
           if (res.findings) { setFindings(res.findings); setSummary(res.summary); }
           else { await loadFindings(); }
         } catch (err) { setError(err.message); }
@@ -6515,10 +6515,13 @@
         let list = [...findings];
         if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
         if (filterCat !== 'all') list = list.filter(f => f.category === filterCat);
-        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
+        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected');
         else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
         if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
+        // Sort: unfixed first, fixed at bottom
         list.sort((a, b) => {
+          if (a.status === 'fixed' && b.status !== 'fixed') return 1;
+          if (a.status !== 'fixed' && b.status === 'fixed') return -1;
           let av, bv;
           if (sortCol === 'severity') { av = sevOrder[a.severity] ?? 5; bv = sevOrder[b.severity] ?? 5; }
           else if (sortCol === 'title') return (a.title || '').localeCompare(b.title || '') * (sortDir === 'asc' ? 1 : -1);
@@ -6737,12 +6740,19 @@
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{f.category}</span></td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                          {f.status === 'fixed' ? (
-                            <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
-                              <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
-                              {f.verification?.post_fix?.result === 'verified_in_wordpress' ? 'Verified Fixed' :
-                               f.verification?.pre_fix?.result === 'already_present' ? 'Verified Present' : 'Fixed'}
-                            </span>
+                          {f.status === 'fixed' ? (() => {
+                            const v = typeof f.verification === 'string' ? JSON.parse(f.verification || '{}') : (f.verification || {});
+                            const postResult = v.post_fix?.result;
+                            const preResult = v.pre_fix?.result;
+                            const label = postResult === 'verified_on_live_page' ? 'Verified Fixed' :
+                              postResult === 'verified_in_wordpress' ? 'Verified Fixed' :
+                              postResult === 'rolled_back_duplicate' ? 'Duplicate Removed' :
+                              preResult === 'already_present' || preResult === 'not_found' ? 'Verified — Already OK' :
+                              postResult === 'completed' ? 'Verified Fixed' : 'Fixed';
+                            return <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
+                              <i className="fas fa-check-circle" style={{ marginRight: 4 }} />{label}
+                            </span>;
+                          })()
                           ) : isAutoFixable(f) ? (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixFinding(f); }} disabled={fixing === f.id}
                               style={{ fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40' }}>
