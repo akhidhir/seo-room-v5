@@ -17308,16 +17308,20 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     } catch (e) { /* no sitemap */ }
 
-    // 4. Crawl pages in parallel batches of 5
+    // 4. Crawl pages in parallel batches of 3 (gentle to avoid Cloudflare/WP rate limits)
     const crawlResults = [];
-    for (let i = 0; i < pagesToCrawl.length; i += 5) {
-      const batch = pagesToCrawl.slice(i, i + 5);
+    const CRAWL_BATCH = 3;
+    const CRAWL_TIMEOUT = 20000;
+    const CRAWL_DELAY = 600; // ms between batches
+    for (let i = 0; i < pagesToCrawl.length; i += CRAWL_BATCH) {
+      if (i > 0) await new Promise(r => setTimeout(r, CRAWL_DELAY));
+      const batch = pagesToCrawl.slice(i, i + CRAWL_BATCH);
       const results = await Promise.allSettled(batch.map(async (page) => {
         const startTime = Date.now();
         try {
           const resp = await fetch(page.url, {
-            headers: { 'User-Agent': 'SEORoomBot/1.0 (compatible; Googlebot)' },
-            signal: AbortSignal.timeout(15000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            signal: AbortSignal.timeout(CRAWL_TIMEOUT),
             redirect: 'follow'
           });
           const elapsed = Date.now() - startTime;
@@ -17477,17 +17481,17 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Slow pages
-    const slowPages = successPages.filter(p => p.elapsed > 3000);
+    // Slow pages (5s threshold — accounts for crawl overhead, avoids false positives from rate limiting)
+    const slowPages = successPages.filter(p => p.elapsed > 5000);
     if (slowPages.length > 0) {
       findings.push({
         pillar: 'website', category: 'Site Health',
-        title: `${slowPages.length} page(s) with slow server response (>3s)`,
+        title: `${slowPages.length} page(s) with slow server response (>5s)`,
         description: `Slow pages: ${slowPages.slice(0, 5).map(p => `${p.path} (${(p.elapsed / 1000).toFixed(1)}s)`).join(', ')}. Slow TTFB hurts rankings and user experience.`,
         recommendation: 'Optimize server response time. Consider caching, CDN, database query optimization, or upgrading hosting.',
-        severity: slowPages.some(p => p.elapsed > 5000) ? 'Critical' : 'Medium',
+        severity: slowPages.some(p => p.elapsed > 8000) ? 'Critical' : 'Medium',
         current_value: `Avg ${(slowPages.reduce((s, p) => s + p.elapsed, 0) / slowPages.length / 1000).toFixed(1)}s TTFB`,
-        recommended_value: 'Under 1s TTFB'
+        recommended_value: 'Under 2s TTFB'
       });
     }
 
