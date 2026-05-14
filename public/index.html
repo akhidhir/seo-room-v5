@@ -24173,7 +24173,7 @@
       useEffect(() => {
         if (!project?.id) { setPluginWarning(null); return; }
         if (!project.wordpress_url) { setPluginWarning({ installed: false, reason: 'no_wordpress_url' }); return; }
-        api(`/projects/${project.id}/plugin-status`).then(d => setPluginWarning(d)).catch(() => setPluginWarning(null));
+        api(`/projects/${project.id}/plugin-status`).then(d => setPluginWarning(d)).catch(() => setPluginWarning({ installed: false, reason: 'unreachable' }));
       }, [project?.id]);
 
       // On mount: check for existing token, load user + project
