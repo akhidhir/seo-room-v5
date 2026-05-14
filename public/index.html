@@ -6429,6 +6429,7 @@
       const [fixing, setFixing] = useState(null);
       const [fixResult, setFixResult] = useState(null);
       const [excludeForm, setExcludeForm] = useState(null); // { findingId, url } — shows classify form
+      const [pageClassifications, setPageClassifications] = useState({}); // { normalizedPath: label }
 
       const isAutoFixable = (f) => {
         const t = (f.title || '').toLowerCase();
@@ -6508,6 +6509,15 @@
           const data = await api(`/projects/${project.id}/audit-findings?pillar=website`);
           const list = Array.isArray(data) ? data : (data?.findings || []);
           setFindings(list.filter(f => f.pillar === 'website'));
+          try {
+            const exData = await api(`/projects/${project.id}/page-exclusions`);
+            const classMap = {};
+            for (const ex of (exData?.exclusions || [])) {
+              const p = (typeof ex === 'string' ? ex : (ex.path || '')).replace(/^\/|\/$/g, '').toLowerCase();
+              if (p) classMap[p] = ex.label || 'Excluded';
+            }
+            setPageClassifications(classMap);
+          } catch {}
           try {
             const auditsList = await api(`/projects/${project.id}/audits`);
             const all = auditsList?.audits || [];
@@ -6819,15 +6829,24 @@
                               {isPerPageFinding && (
                                 excludeForm?.findingId === f.id && excludeForm?.url === pageUrl ? (
                                   <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                                    {['Blog/Article', 'Landing Page', 'Portfolio', 'Other'].map(label => (
+                                    {['Home', 'Service', 'Suburb', 'Blog', 'About', 'Contact'].map(label => (
                                       <button key={label} onClick={async () => {
                                         try {
-                                          await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
-                                          await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'dismissed' } });
-                                          setFindings(prev => prev.filter(x => x.id !== f.id));
+                                          const schemaEligible = ['Service', 'Suburb'].includes(label);
+                                          if (!schemaEligible) {
+                                            // Non-schema pages: save classification + dismiss finding
+                                            await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
+                                            await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'dismissed' } });
+                                            setFindings(prev => prev.filter(x => x.id !== f.id));
+                                          } else {
+                                            // Service/Suburb: save classification, keep finding visible (schema IS needed)
+                                            await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
+                                          }
+                                          const normP = pageUrl.replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/$/, '').toLowerCase();
+                                          setPageClassifications(prev => ({ ...prev, [normP]: label }));
                                           setExcludeForm(null);
                                         } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
-                                      }} style={{ background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                      }} style={{ background: ['Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', color: ['Service', 'Suburb'].includes(label) ? '#22c55e' : '#6366f1', border: `1px solid ${['Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                         {label}
                                       </button>
                                     ))}
@@ -6836,10 +6855,13 @@
                                     </button>
                                   </div>
                                 ) : (
-                                  <button onClick={(e) => { e.stopPropagation(); setExcludeForm({ findingId: f.id, url: pageUrl }); }}
-                                    style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, padding: '1px 6px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <i className="fas fa-tag" style={{ marginRight: 3 }} />Reclassify
-                                  </button>
+                                  <React.Fragment>
+                                    {(() => { const normP = pageUrl.replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/$/, '').toLowerCase(); const cls = pageClassifications[normP]; return cls ? <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.2)', whiteSpace: 'nowrap' }}><i className="fas fa-tag" style={{ marginRight: 3, fontSize: 9 }} />{cls}</span> : null; })()}
+                                    <button onClick={(e) => { e.stopPropagation(); setExcludeForm({ findingId: f.id, url: pageUrl }); }}
+                                      style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, padding: '1px 6px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                      <i className="fas fa-tag" style={{ marginRight: 3 }} />Reclassify
+                                    </button>
+                                  </React.Fragment>
                                 )
                               )}
                             </div>;

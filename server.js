@@ -17728,9 +17728,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     });
     for (const qPage of pagesWithQA) {
       const pageUrl = qPage.url || `https://${domain}${qPage.path}`;
+      const normSlug = (qPage.path || '').replace(/^\/|\/$/g, '');
       findings.push({
         pillar: 'website', category: 'Schema & Data',
-        title: `Missing FAQPage schema on ${qPage.path}`,
+        title: `Missing FAQPage schema on ${normSlug}`,
         description: `${pageUrl} has FAQ-style Q&A content (${qPage.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
         recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
         severity: 'Medium',
@@ -17747,10 +17748,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       for (const svcPage of servicePages) {
         const hasService = svcPage.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
         if (!hasService) {
-          const pageUrl = svcPage.url || `https://${svcDomain}/${(svcPage.path || '').replace(/^\/|\/$/g, '')}/`;
+          const svcNormSlug = (svcPage.path || '').replace(/^\/|\/$/g, '');
+          const pageUrl = svcPage.url || `https://${svcDomain}/${svcNormSlug}/`;
           findings.push({
             pillar: 'website', category: 'Schema & Data',
-            title: `Missing Service schema on ${svcPage.path}`,
+            title: `Missing Service schema on ${svcNormSlug}`,
             description: `${pageUrl} is a service page without Service structured data. Service schema helps Google understand your offerings and can enhance search listings.`,
             recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
             severity: 'Medium',
@@ -17828,6 +17830,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       const t = (title || '').toLowerCase();
       return schemaTopicKeywords.filter(k => t.includes(k.keyword)).map(k => k.topic);
     };
+    // Per-page findings have slugs in the title — detect them
+    const isPerPageTitle = (title) => /schema on [a-z0-9]/.test((title || '').toLowerCase());
 
     // MERGE findings: update existing, add new, keep unmatched existing (don't delete them)
     const newTitles = new Set(findings.map(f => f.title));
@@ -17836,18 +17840,27 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let updated = 0;
     let added = 0;
 
-    // fixedTopics: prevent re-creating findings that were already fixed
-    // batchTopics: within-batch dedup only (prevents duplicate findings in same audit run)
+    // fixedTopics: prevent re-creating GROUPED findings that were already fixed
+    // fixedTitles: prevent re-creating per-page findings that were already fixed (exact title match)
+    // batchTopics: within-batch dedup for GROUPED findings only
+    // batchTitles: within-batch dedup for per-page findings (exact title)
     const fixedTopics = new Set();
+    const fixedTitles = new Set();
     for (const ef of existingFindings.rows) {
       if (ef.status === 'fixed') {
-        getTopics(ef.title).forEach(t => fixedTopics.add(t));
+        if (isPerPageTitle(ef.title)) {
+          fixedTitles.add(ef.title);
+        } else {
+          getTopics(ef.title).forEach(t => fixedTopics.add(t));
+        }
       }
     }
     const batchTopics = new Set();
+    const batchTitles = new Set();
 
     for (const f of findings) {
       const existing = existingByTitle.get(f.title);
+      const perPage = isPerPageTitle(f.title);
 
       if (existing && existing.status === 'fixed') {
         console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
@@ -17855,20 +17868,31 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         continue;
       }
 
-      const newFindingTopics = getTopics(f.title);
-
-      // Skip if topic already fixed
-      if (newFindingTopics.length > 0 && newFindingTopics.some(t => fixedTopics.has(t))) {
-        console.log(`[website-audit] Skipping "${f.title}" — topic already fixed`);
-        skippedFixed++;
-        continue;
-      }
-
-      // Within-batch dedup: skip if same topic already inserted THIS run
-      if (!existing && newFindingTopics.length > 0 && newFindingTopics.some(t => batchTopics.has(t))) {
-        console.log(`[website-audit] Skipping "${f.title}" — duplicate topic in batch (${newFindingTopics.join(',')})`);
-        skippedFixed++;
-        continue;
+      if (perPage) {
+        // Per-page finding: dedup by exact title only (not by topic)
+        if (fixedTitles.has(f.title)) {
+          console.log(`[website-audit] Skipping "${f.title}" — per-page finding already fixed`);
+          skippedFixed++;
+          continue;
+        }
+        if (!existing && batchTitles.has(f.title)) {
+          console.log(`[website-audit] Skipping "${f.title}" — duplicate per-page title in batch`);
+          skippedFixed++;
+          continue;
+        }
+      } else {
+        // Grouped finding: dedup by topic
+        const newFindingTopics = getTopics(f.title);
+        if (newFindingTopics.length > 0 && newFindingTopics.some(t => fixedTopics.has(t))) {
+          console.log(`[website-audit] Skipping "${f.title}" — topic already fixed`);
+          skippedFixed++;
+          continue;
+        }
+        if (!existing && newFindingTopics.length > 0 && newFindingTopics.some(t => batchTopics.has(t))) {
+          console.log(`[website-audit] Skipping "${f.title}" — duplicate topic in batch (${newFindingTopics.join(',')})`);
+          skippedFixed++;
+          continue;
+        }
       }
 
       if (existing) {
@@ -17896,8 +17920,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         f.status = 'new';
         savedFindings.push(f);
         added++;
-        // Track this finding's topics so subsequent findings in the same batch are deduped
-        newFindingTopics.forEach(t => batchTopics.add(t));
+        // Track for within-batch dedup
+        if (isPerPageTitle(f.title)) {
+          batchTitles.add(f.title);
+        } else {
+          getTopics(f.title).forEach(t => batchTopics.add(t));
+        }
       }
     }
 
@@ -17930,17 +17958,28 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
     // Final cleanup: delete ANY status='new' Schema & Data finding whose topic overlaps with a 'fixed' one
     // This catches zombie AI findings from old audits that survived previous merges
-    if (fixedTopics.size > 0) {
+    // For per-page findings: only delete if exact title matches a fixed one (not by topic)
+    if (fixedTopics.size > 0 || fixedTitles.size > 0) {
       const allSchemaFindings = await pool.query(
         `SELECT id, title, status FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Schema & Data' AND status='new'`,
         [projectId]
       );
       for (const sf of allSchemaFindings.rows) {
-        const sfTopics = getTopics(sf.title);
-        if (sfTopics.some(t => fixedTopics.has(t))) {
-          await pool.query('DELETE FROM audit_findings WHERE id=$1', [sf.id]);
-          console.log(`[website-audit] Cleanup: deleted zombie finding "${sf.title}" (topic overlaps with fixed)`);
-          removedDuplicates++;
+        if (isPerPageTitle(sf.title)) {
+          // Per-page: only delete if this exact title was fixed
+          if (fixedTitles.has(sf.title)) {
+            await pool.query('DELETE FROM audit_findings WHERE id=$1', [sf.id]);
+            console.log(`[website-audit] Cleanup: deleted zombie per-page finding "${sf.title}" (exact title fixed)`);
+            removedDuplicates++;
+          }
+        } else {
+          // Grouped: delete by topic overlap
+          const sfTopics = getTopics(sf.title);
+          if (sfTopics.some(t => fixedTopics.has(t))) {
+            await pool.query('DELETE FROM audit_findings WHERE id=$1', [sf.id]);
+            console.log(`[website-audit] Cleanup: deleted zombie finding "${sf.title}" (topic overlaps with fixed)`);
+            removedDuplicates++;
+          }
         }
       }
     }
