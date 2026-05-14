@@ -17067,6 +17067,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Fixed findings are kept as historical record of what was resolved
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'fixed'`, [projectId]);
 
+    // Deduplicate fixed findings — keep only the most recent per unique title
+    await pool.query(`
+      DELETE FROM audit_findings WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY title ORDER BY updated_at DESC NULLS LAST, id DESC) as rn
+          FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='fixed'
+        ) dupes WHERE rn > 1
+      )`, [projectId]);
+
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
       [projectId]
@@ -17565,8 +17574,20 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       thinPages: thinPages.length,
     };
 
-    // Save findings (with verification data if present)
+    // Get existing fixed finding titles so we don't re-create them
+    const fixedTitles = new Set();
+    const fixedRows = await pool.query(
+      `SELECT title FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='fixed'`, [projectId]
+    );
+    fixedRows.rows.forEach(r => fixedTitles.add(r.title));
+
+    // Save findings (skip if already fixed — issue was already resolved)
+    const savedFindings = [];
     for (const f of findings) {
+      if (fixedTitles.has(f.title)) {
+        console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
+        continue;
+      }
       const r = await pool.query(
         `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
@@ -17575,13 +17596,19 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       );
       f.id = r.rows[0].id;
       f.status = 'new';
+      savedFindings.push(f);
     }
 
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
       ['completed', JSON.stringify(summary), auditId]);
 
-    console.log(`[website-audit] Project ${projectId}: ${findings.length} findings from ${successPages.length} pages`);
-    res.json({ findings, summary });
+    console.log(`[website-audit] Project ${projectId}: ${savedFindings.length} new findings (${findings.length - savedFindings.length} skipped as already fixed) from ${successPages.length} pages`);
+
+    // Return saved + existing fixed findings so UI shows both
+    const allFixedFindings = await pool.query(
+      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='fixed' ORDER BY updated_at DESC`, [projectId]
+    );
+    res.json({ findings: [...savedFindings, ...allFixedFindings.rows], summary });
   } catch (e) {
     console.error('[website-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
