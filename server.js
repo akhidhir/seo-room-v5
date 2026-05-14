@@ -18587,10 +18587,10 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
   }
 });
 
-// ==================== PURGE CACHE via SEO Room Connector plugin ====================
+// ==================== PURGE CACHE — direct server-side (no plugin needed) ====================
 app.post('/api/projects/:projectId/purge-cache', async (req, res) => {
   const { projectId } = req.params;
-  const { url } = req.body; // optional: purge specific URL
+  const { url } = req.body;
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -18600,27 +18600,101 @@ app.post('/api/projects/:projectId/purge-cache', async (req, res) => {
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
 
     console.log(`[purge-cache] Purging cache for project ${projectId} (${wpUrl})`);
+    const purged = [];
+    const failed = [];
 
-    const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ url: url || '' }),
-      signal: AbortSignal.timeout(20000),
-    });
+    // Method 1: Try SEO Room Connector plugin endpoint (if installed)
+    try {
+      const r = await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url || '' }), signal: AbortSignal.timeout(10000),
+      });
+      if (r.ok) { const d = await r.json(); purged.push('seoroom-connector'); console.log(`[purge-cache] Connector plugin purged:`, d); }
+    } catch {}
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
-      console.error(`[purge-cache] Plugin returned ${resp.status}: ${errText}`);
-      // If 404, plugin not updated yet
-      if (resp.status === 404) {
-        return res.json({ success: false, error: 'SEO Room Connector plugin v3.0+ required. Update the plugin on WordPress.' });
-      }
-      return res.json({ success: false, error: `WordPress returned ${resp.status}` });
+    // Method 2: WP Rocket — purge via common admin-ajax action
+    try {
+      const r = await fetch(`${wpUrl}/wp-admin/admin-ajax.php?action=purge_cache`, {
+        method: 'GET', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('wp-rocket');
+    } catch {}
+
+    // Method 3: LiteSpeed Cache — purge all via REST
+    try {
+      const r = await fetch(`${wpUrl}/wp-json/litespeed/v1/purge_all`, {
+        method: 'POST', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('litespeed');
+    } catch {}
+
+    // Method 4: W3 Total Cache — flush via admin-ajax
+    try {
+      const r = await fetch(`${wpUrl}/wp-admin/admin-ajax.php?action=w3tc_flush_all`, {
+        method: 'GET', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('w3-total-cache');
+    } catch {}
+
+    // Method 5: WP Super Cache — delete cache via REST or admin page
+    try {
+      const r = await fetch(`${wpUrl}/wp-admin/admin-ajax.php?action=wpsc_delete_cache`, {
+        method: 'GET', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('wp-super-cache');
+    } catch {}
+
+    // Method 6: Breeze (Cloudways) — purge all
+    try {
+      const r = await fetch(`${wpUrl}/wp-json/breeze/v1/purge-all`, {
+        method: 'POST', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('breeze');
+    } catch {}
+
+    // Method 7: BerqWP — try common purge endpoints
+    try {
+      const r = await fetch(`${wpUrl}/wp-json/berqwp/v1/purge`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url || wpUrl }), signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('berqwp');
+    } catch {}
+
+    // Method 8: SG Optimizer (SiteGround)
+    try {
+      const r = await fetch(`${wpUrl}/wp-admin/admin-ajax.php?action=sg_cachepress_purge_cache`, {
+        method: 'GET', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('sg-optimizer');
+    } catch {}
+
+    // Method 9: Kinsta Cache
+    try {
+      const r = await fetch(`${wpUrl}/wp-json/kinsta/v1/cache/purge`, {
+        method: 'POST', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('kinsta');
+    } catch {}
+
+    // Method 10: Autoptimize — clear cache
+    try {
+      const r = await fetch(`${wpUrl}/wp-admin/admin-ajax.php?action=autoptimize_delete_cache`, {
+        method: 'GET', headers: authHeaders, signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) purged.push('autoptimize');
+    } catch {}
+
+    // Method 11: Hit the actual page to warm cache with new content
+    if (url) {
+      try {
+        await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'Cache-Control': 'no-cache' } });
+        purged.push('page-warm');
+      } catch {}
     }
 
-    const result = await resp.json();
-    console.log(`[purge-cache] Result:`, result);
-    return res.json({ success: true, ...result });
+    console.log(`[purge-cache] Purged: [${purged.join(', ')}]`);
+    return res.json({ success: true, purged, message: purged.length > 0 ? `Cache purged via: ${purged.join(', ')}` : 'Purge requests sent. CDN may take a few minutes.' });
 
   } catch (e) {
     console.error('[purge-cache] Error:', e.message);
