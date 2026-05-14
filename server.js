@@ -18370,22 +18370,71 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           console.log(`[technical-fix] Matched ${wpServicePages.length} WP pages from ${storedUrls.length} stored URLs`);
         }
 
+        // Load project exclusions for filtering (always needed for cleanup + fallback)
+        let projExclusions = [];
+        try {
+          const exRow = await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId]);
+          projExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
+        } catch {}
+
         // Fallback: use shared isServicePage() if no stored URLs or no matches
         if (wpServicePages.length === 0) {
-          // Load project exclusions for filtering
-          let projExclusions = [];
-          try {
-            const exRow = await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId]);
-            projExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
-          } catch {}
           wpServicePages = allWpPages.filter(p => isServicePage(p.slug, null, undefined, projExclusions));
           console.log(`[technical-fix] Fallback: found ${wpServicePages.length} service pages`);
         }
         console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
 
+        // Safety: remove _seoroom_schema from any non-service pages AND posts (cleanup from past mis-writes)
+        const nonServicePages = allWpPages.filter(p => !isServicePage(p.slug, null, undefined, projExclusions));
+        for (const nsp of nonServicePages) {
+          try {
+            const nspMeta = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}?_fields=meta&context=edit`, {
+              headers: authHeaders, signal: AbortSignal.timeout(8000)
+            });
+            if (nspMeta.ok) {
+              const nspData = await nspMeta.json();
+              const existingSchema = nspData.meta?._seoroom_schema || '';
+              if (existingSchema && existingSchema.includes('"Service"')) {
+                await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}`, {
+                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
+                  signal: AbortSignal.timeout(8000)
+                });
+                console.log(`[technical-fix] CLEANUP: removed Service schema from non-service page ${nsp.slug}`);
+              }
+            }
+          } catch (e) { console.log(`[technical-fix] Cleanup check failed for ${nsp.slug}: ${e.message}`); }
+        }
+
+        // Also cleanup posts (blog articles should NEVER have Service schema)
+        try {
+          const postsResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts?per_page=50&_fields=id,slug,meta&status=publish&context=edit`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (postsResp.ok) {
+            const allPosts = await postsResp.json();
+            for (const post of allPosts) {
+              const existingSchema = post.meta?._seoroom_schema || '';
+              if (existingSchema && existingSchema.includes('"Service"')) {
+                await fetch(`${wpUrl}/wp-json/wp/v2/posts/${post.id}`, {
+                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
+                  signal: AbortSignal.timeout(8000)
+                });
+                console.log(`[technical-fix] CLEANUP: removed Service schema from blog post ${post.slug}`);
+              }
+            }
+          }
+        } catch (e) { console.log(`[technical-fix] Posts cleanup error: ${e.message}`); }
+
         let fixedCount = 0;
         let firstPageId = null;
         for (const page of wpServicePages.slice(0, 20)) {
+          // Double-check: skip if page is not actually a service page
+          if (!isServicePage(page.slug, null, undefined, projExclusions)) {
+            console.log(`[technical-fix] SKIP non-service page: ${page.slug}`);
+            continue;
+          }
           const pageTitle = (page.title?.rendered || page.slug).replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-');
           if (!firstPageId) { firstPageId = page.id; targetPageType = 'pages'; }
           const serviceSchema = {
@@ -19152,6 +19201,28 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
               const svcPages = allPages.filter(p => isServicePage(p.slug, null, undefined, vExclusions));
               targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
               console.log(`[verify-fix] Service schema fallback: checking ${targetUrls.length} service pages`);
+
+              // Cleanup: remove _seoroom_schema from non-service pages that have it
+              const nonSvcPages = allPages.filter(p => !isServicePage(p.slug, null, undefined, vExclusions));
+              for (const nsp of nonSvcPages.slice(0, 30)) {
+                try {
+                  const nspMeta = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}?_fields=meta&context=edit`, {
+                    headers: wpAuth2, signal: AbortSignal.timeout(8000)
+                  });
+                  if (nspMeta.ok) {
+                    const nspData = await nspMeta.json();
+                    const existingSchema = nspData.meta?._seoroom_schema || '';
+                    if (existingSchema && existingSchema.includes('"Service"')) {
+                      await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}`, {
+                        method: 'POST', headers: { ...wpAuth2, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
+                        signal: AbortSignal.timeout(8000)
+                      });
+                      console.log(`[verify-fix] CLEANUP: removed Service schema from non-service page ${nsp.slug}`);
+                    }
+                  }
+                } catch {}
+              }
             }
           } catch {}
         }
