@@ -18330,12 +18330,24 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       }
     };
 
-    // Extract the target page URL(s) from finding description/title
+    // Extract the target page URL(s) from finding description/title/current_value
     const getTargetUrls = (finding, domain) => {
+      const urls = [];
+      // 1. Parse stored URLs from current_value (most reliable — set by audit)
+      try {
+        const cv = finding.current_value || '';
+        if (cv.startsWith('[')) {
+          const parsed = JSON.parse(cv);
+          urls.push(...parsed.filter(u => typeof u === 'string' && u.startsWith('http')));
+        }
+      } catch {}
+      // 2. Extract full URLs from description
       const desc = (finding.description || '') + ' ' + (finding.title || '');
-      // Extract paths like /blocked-drains/, /hot-water-systems/
+      const fullUrlMatches = desc.match(/https?:\/\/[^\s,)]+/gi) || [];
+      urls.push(...fullUrlMatches.map(u => u.replace(/\/?$/, '/')));
+      // 3. Extract paths like /blocked-drains/, /hot-water-systems/
       const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
-      const urls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
+      urls.push(...pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`));
       // Always include homepage for LocalBusiness findings
       if ((finding.title || '').toLowerCase().includes('localbusiness') || (finding.title || '').toLowerCase().includes('local business')) {
         urls.unshift(`https://${domain}/`);
@@ -18448,10 +18460,19 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           projExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
         } catch {}
 
-        // Fallback: use shared isServicePage() if no stored URLs or no matches
+        // Fallback: try to extract slug from finding title (e.g. "Missing Service schema on computer-repair-perth")
+        if (wpServicePages.length === 0) {
+          const slugMatch = (finding.title || '').match(/on\s+([a-z0-9][a-z0-9-]+[a-z0-9])\s*$/i);
+          if (slugMatch) {
+            const titleSlug = slugMatch[1].toLowerCase();
+            wpServicePages = allWpPages.filter(p => (p.slug || '').toLowerCase() === titleSlug);
+            console.log(`[technical-fix] Slug-from-title fallback: "${titleSlug}" → ${wpServicePages.length} matches`);
+          }
+        }
+        // Final fallback: ALL service pages (only if no specific page found)
         if (wpServicePages.length === 0) {
           wpServicePages = allWpPages.filter(p => isServicePage(p.slug, null, undefined, projExclusions));
-          console.log(`[technical-fix] Fallback: found ${wpServicePages.length} service pages`);
+          console.log(`[technical-fix] Full fallback: found ${wpServicePages.length} service pages`);
         }
         console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
 
