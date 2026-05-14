@@ -18125,8 +18125,93 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       let targetPageType = 'pages'; // default to homepage
       let targetPageId = null;
 
+      // Service schema → inject on each service page
+      if (title.includes('service schema') || (title.includes('service') && title.includes('schema') && !title.includes('localbusiness'))) {
+        const biz = rcProfile || {};
+        // Extract service page paths from finding description
+        const desc2 = (finding.description || '') + ' ' + (finding.current_value || '');
+        const servicePaths = (desc2.match(/\/[a-z0-9-]+(?:\/[a-z0-9-]+)*\/?/gi) || []).filter(p => p !== '/');
+        console.log(`[technical-fix] Service schema — found ${servicePaths.length} service paths: ${servicePaths.join(', ')}`);
+
+        let fixedCount = 0;
+        let firstPageId = null;
+        for (const sPath of servicePaths.slice(0, 10)) {
+          const slug = sPath.replace(/^\/|\/$/g, '').split('/').pop();
+          if (!slug) continue;
+          try {
+            for (const type of ['pages', 'posts']) {
+              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,link`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+              if (resp.ok) {
+                const items = await resp.json();
+                if (items.length > 0) {
+                  const pageId = items[0].id;
+                  const pageTitle = items[0].title?.rendered || slug;
+                  if (!firstPageId) { firstPageId = pageId; targetPageType = type; }
+                  const serviceSchema = {
+                    "@context": "https://schema.org",
+                    "@type": "Service",
+                    "name": pageTitle.replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-'),
+                    "provider": {
+                      "@type": "LocalBusiness",
+                      "name": biz.title || project.business_name || project.name,
+                      "url": `https://${domain}`
+                    },
+                    "url": items[0].link || `https://${domain}${sPath}`,
+                    ...(project.location ? { "areaServed": { "@type": "Place", "name": project.location } } : {}),
+                    "description": `Professional ${pageTitle.replace(/<[^>]+>/g, '')} services by ${biz.title || project.business_name || project.name}`
+                  };
+                  const metaResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${pageId}`, {
+                    method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ meta: { _seoroom_schema: JSON.stringify(serviceSchema) } }),
+                    signal: AbortSignal.timeout(10000)
+                  });
+                  if (metaResp.ok) { fixedCount++; console.log(`[technical-fix] Service schema written to ${type}/${pageId} (${slug})`); }
+                  break; // found in this post type, skip other
+                }
+              }
+            }
+          } catch (e) { console.log(`[technical-fix] Service schema error for ${slug}: ${e.message}`); }
+        }
+
+        if (fixedCount > 0) {
+          targetPageId = firstPageId;
+          schemaJson = { "@context": "https://schema.org", "@type": "Service" }; // for logging
+          // Mark as injected — skip the single-page injection below
+          await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+
+          // Purge cache
+          try {
+            await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(10000)
+            });
+          } catch {}
+          await new Promise(r => setTimeout(r, 3000));
+
+          // Verify first service page
+          const firstPath = servicePaths[0] || '/';
+          const verifyUrl = `https://${domain}${firstPath.replace(/\/?$/, '/')}`;
+          const bustUrl2 = verifyUrl + (verifyUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
+          let serviceVerified = false;
+          try {
+            const vResp = await fetch(bustUrl2, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache' } });
+            if (vResp.ok) {
+              const vHtml = await vResp.text();
+              serviceVerified = /Service/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
+            }
+          } catch {}
+
+          return res.json({
+            success: true, fix_type: 'schema', schema_type: 'Service',
+            message: `Service schema written to ${fixedCount} service page(s).`,
+            verified: serviceVerified,
+            verification: { post: serviceVerified ? 'verified_on_live_page' : 'verified_in_wordpress', pages_fixed: fixedCount }
+          });
+        }
+      }
+
       // LocalBusiness schema → inject on homepage
-      if (title.includes('localbusiness') || title.includes('local business') || (title.includes('schema') && !title.includes('faq'))) {
+      if (!schemaJson && (title.includes('localbusiness') || title.includes('local business'))) {
         const biz = rcProfile || {};
         const addr = biz.storefrontAddress || {};
         const hours = (biz.regularHours?.periods || []).map(p => {
