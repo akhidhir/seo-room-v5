@@ -17984,6 +17984,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
+    // Deduplicate: if multiple findings share the same title, keep only the newest
+    const dupCheck = await pool.query(
+      `SELECT title, array_agg(id ORDER BY updated_at DESC NULLS LAST, id DESC) AS ids
+       FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Schema & Data'
+       GROUP BY title HAVING count(*) > 1`, [projectId]
+    );
+    for (const dup of dupCheck.rows) {
+      const idsToDelete = dup.ids.slice(1); // keep first (newest), delete rest
+      for (const did of idsToDelete) {
+        await pool.query('DELETE FROM audit_findings WHERE id=$1', [did]);
+        console.log(`[website-audit] Dedup: deleted duplicate finding id=${did} title="${dup.title}"`);
+        removedDuplicates++;
+      }
+    }
+
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
       ['completed', JSON.stringify(summary), auditId]);
 
