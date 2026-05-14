@@ -66,6 +66,38 @@ const pool = new Pool({
 // Anthropic client
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
+// Universal utility page slugs — pages that are NEVER service pages on any website
+const UTILITY_SLUGS = new Set([
+  'home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
+  'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
+  'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
+  'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'testimonial', 'reviews', 'gallery',
+  'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
+  'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs', 'shop', 'sample-page',
+  'cookie-policy', 'refund-policy', 'shipping-policy', 'warranty', 'support', 'help',
+]);
+
+// Check if a page is a service/content page (not utility, not blog, not excluded)
+function isServicePage(path, schemas, wordCount, pageExclusions) {
+  const clean = (path || '').toLowerCase().replace(/^\/|\/$/g, '');
+  if (!clean || clean === '/') return false;
+  const slug = clean.split('/').pop() || clean;
+  // Skip utility pages
+  if (UTILITY_SLUGS.has(clean) || UTILITY_SLUGS.has(slug)) return false;
+  // Skip blog/news/category paths
+  if (/^(blog|news|category|tag|author|20\d{2})\//.test(clean)) return false;
+  // Skip pages with Article/BlogPosting schema (auto-detected from crawl)
+  if (schemas && schemas.some(s => typeof s === 'string' && (s.includes('Article') || s.includes('BlogPosting') || s.includes('NewsArticle')))) return false;
+  // Skip user-excluded pages
+  if (pageExclusions && pageExclusions.length > 0) {
+    const normalizedPath = '/' + clean;
+    if (pageExclusions.some(ex => normalizedPath === ex || clean === ex.replace(/^\//, ''))) return false;
+  }
+  // Skip thin content
+  if (wordCount !== undefined && wordCount < 100) return false;
+  return true;
+}
+
 // Express config
 app.use(cors());
 app.use(express.json({ limit: '30mb' }));
@@ -17645,29 +17677,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
     if (!hasServiceSchema && project.is_local_business) {
       // Detect service pages: any page that isn't a utility page (about, contact, blog, privacy, etc.)
-      const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
-        'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
-        'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
-        'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
-        'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
-        'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs'];
-      const servicePages = successPages.filter(p => {
-        const path = (p.path || '').toLowerCase().replace(/^\/|\/$/g, '');
-        // Skip homepage
-        if (!path || path === '/' || path === 'home' || path === 'homepage') return false;
-        // Skip utility pages
-        if (nonServiceSlugs.includes(path) || nonServiceSlugs.includes(path.split('/').pop())) return false;
-        // Skip blog posts (usually have /blog/ or /news/ prefix, or date patterns)
-        if (/^(blog|news|category|tag|author|20\d{2})\//.test(path)) return false;
-        // Skip pages with Article/BlogPosting schema — these are blog content, not service pages
-        if (p.schemas && p.schemas.some(s => typeof s === 'string' && (s.includes('Article') || s.includes('BlogPosting') || s.includes('NewsArticle')))) return false;
-        // Skip user-excluded pages
-        const normalizedPath = '/' + path;
-        if (pageExclusions.some(ex => normalizedPath === ex || path === ex.replace(/^\//, ''))) return false;
-        // Skip pages with no real content
-        if ((p.wordCount || 0) < 100) return false;
-        return true;
-      });
+      const servicePages = successPages.filter(p => isServicePage(p.path, p.schemas, p.wordCount, pageExclusions));
       if (servicePages.length > 0) {
         const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
         // Store full URLs in description for Fix endpoint to use
@@ -18307,24 +18317,16 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           console.log(`[technical-fix] Matched ${wpServicePages.length} WP pages from ${storedUrls.length} stored URLs`);
         }
 
-        // Fallback: exclusion-based detection (same as audit) if no stored URLs or no matches
+        // Fallback: use shared isServicePage() if no stored URLs or no matches
         if (wpServicePages.length === 0) {
-          const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
-            'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
-            'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
-            'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
-            'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
-            'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs', 'shop', 'sample-page'];
-          wpServicePages = allWpPages.filter(p => {
-            const slug = (p.slug || '').toLowerCase();
-            if (!slug || slug === 'home' || slug === 'homepage') return false;
-            if (nonServiceSlugs.includes(slug)) return false;
-            if (/^(blog|news|category|tag|author)/.test(slug)) return false;
-            // Skip blog-style articles (slugs with 6+ hyphenated words)
-            if (slug.split('-').length >= 6) return false;
-            return true;
-          });
-          console.log(`[technical-fix] Fallback exclusion-based: found ${wpServicePages.length} service pages`);
+          // Load project exclusions for filtering
+          let projExclusions = [];
+          try {
+            const exRow = await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId]);
+            projExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
+          } catch {}
+          wpServicePages = allWpPages.filter(p => isServicePage(p.slug, null, undefined, projExclusions));
+          console.log(`[technical-fix] Fallback: found ${wpServicePages.length} service pages`);
         }
         console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
 
@@ -19088,20 +19090,13 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
             });
             if (pResp.ok) {
               const allPages = await pResp.json();
-              const nonServiceSlugs = ['home', 'homepage', 'front-page', 'about', 'about-us', 'contact', 'contact-us',
-                'privacy', 'privacy-policy', 'terms', 'terms-and-conditions', 'terms-of-service', 'disclaimer',
-                'blog', 'news', 'faq', 'faqs', 'sitemap', 'cart', 'checkout', 'account', 'my-account', 'login',
-                'register', 'search', 'thank-you', 'thanks', '404', 'testimonials', 'reviews', 'gallery',
-                'portfolio', 'team', 'careers', 'jobs', 'quote', 'get-a-quote', 'free-quote', 'booking',
-                'appointment', 'locations', 'areas-we-serve', 'service-areas', 'suburbs', 'shop', 'sample-page'];
-              const svcPages = allPages.filter(p => {
-                const slug = (p.slug || '').toLowerCase();
-                if (!slug || slug === 'home' || slug === 'homepage') return false;
-                if (nonServiceSlugs.includes(slug)) return false;
-                if (/^(blog|news|category|tag|author)/.test(slug)) return false;
-                if (slug.split('-').length >= 6) return false;
-                return true;
-              });
+              // Load project exclusions
+              let vExclusions = [];
+              try {
+                const exRow = await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId]);
+                vExclusions = (exRow.rows[0]?.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
+              } catch {}
+              const svcPages = allPages.filter(p => isServicePage(p.slug, null, undefined, vExclusions));
               targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
               console.log(`[verify-fix] Service schema fallback: checking ${targetUrls.length} service pages`);
             }
