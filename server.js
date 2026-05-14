@@ -17768,8 +17768,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // Check for Service schema on service pages — classification-aware
-    // page_exclusions stores { path, label } per page. Labels: Home, Service, Suburb, Blog, About, Contact, Other
-    // Service/Suburb = needs Service schema. Blog/About/Contact/Home/Other = skip. Unclassified = use isServicePage() guess.
+    // page_exclusions stores { path, label } per page. Labels: Home, Service, Suburb, Blog, About, Contact, Review, Other
+    // Service/Suburb = needs Service schema. Home = needs LocalBusiness (separate finding). Blog/About/Contact/Review/Other = skip. Unclassified = use isServicePage() guess.
     const rawExclusions = project.page_exclusions || [];
     const classificationMap = {}; // normalized path → label
     const excludedPaths = []; // paths that should NOT get Service schema
@@ -18598,6 +18598,34 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           }
           const pageTitle = (page.title?.rendered || page.slug).replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-');
           if (!firstPageId) { firstPageId = page.id; targetPageType = 'pages'; }
+          // Determine areaServed based on classification
+          let areaServedObj = project.location ? { "@type": "City", "name": project.location } : null;
+          if (pageCls === 'Suburb') {
+            // Extract suburb name from slug: "computer-repairs-willetton" → "Willetton"
+            // Try matching against project service_areas first
+            const svcAreas = Array.isArray(project.service_areas) ? project.service_areas.map(a => typeof a === 'string' ? a : (a.name || '')) : [];
+            const slugLower = pageSlug.toLowerCase().replace(/-/g, ' ');
+            const matchedSuburb = svcAreas.find(s => slugLower.includes(s.toLowerCase().replace(/-/g, ' ')));
+            if (matchedSuburb) {
+              areaServedObj = { "@type": "City", "name": `${matchedSuburb}, ${project.location || 'Australia'}` };
+            } else {
+              // Fallback: take last word(s) of slug that look like a suburb (after common service terms)
+              const slugParts = pageSlug.split('-');
+              const serviceTerms = ['computer', 'repair', 'repairs', 'service', 'services', 'plumber', 'plumbing', 'electrician', 'electrical', 'locksmith', 'cleaning', 'maintenance', 'installation', 'removal', 'replacement', 'emergency', 'commercial', 'residential', 'hot', 'water', 'gas', 'drain', 'blocked', 'burst', 'pipe', 'tap', 'toilet', 'roof', 'solar', 'air', 'conditioning', 'hvac', 'pest', 'control', 'painting', 'fencing', 'landscaping', 'tree', 'mac', 'pc', 'laptop', 'screen', 'data', 'recovery', 'virus', 'network', 'it', 'support', 'cctv', 'security', 'alarm'];
+              // Find where suburb starts: last contiguous non-service words
+              let suburbStart = slugParts.length;
+              for (let i = slugParts.length - 1; i >= 0; i--) {
+                if (serviceTerms.includes(slugParts[i])) break;
+                suburbStart = i;
+              }
+              if (suburbStart < slugParts.length) {
+                const suburbName = slugParts.slice(suburbStart).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                areaServedObj = { "@type": "City", "name": `${suburbName}, ${project.location || 'Australia'}` };
+              }
+            }
+            console.log(`[technical-fix] Suburb page "${pageSlug}" → areaServed: ${JSON.stringify(areaServedObj)}`);
+          }
+
           const serviceSchema = {
             "@context": "https://schema.org",
             "@type": "Service",
@@ -18608,7 +18636,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
               "url": `https://${domain}`
             },
             "url": page.link || `https://${domain}/${page.slug}/`,
-            ...(project.location ? { "areaServed": { "@type": "Place", "name": project.location } } : {}),
+            ...(areaServedObj ? { "areaServed": areaServedObj } : {}),
             "description": `Professional ${pageTitle.replace(/<[^>]+>/g, '')} services by ${biz.title || project.business_name || project.name}`
           };
           try {

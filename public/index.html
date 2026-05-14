@@ -6851,24 +6851,22 @@
                               {isPerPageFinding && (
                                 excludeForm?.findingId === f.id && excludeForm?.url === pageUrl ? (
                                   <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                                    {['Home', 'Service', 'Suburb', 'Blog', 'About', 'Contact', 'Other'].map(label => (
+                                    {['Home', 'Service', 'Suburb', 'Blog', 'About', 'Contact', 'Review', 'Other'].map(label => (
                                       <button key={label} onClick={async () => {
                                         try {
-                                          const schemaEligible = ['Service', 'Suburb'].includes(label);
+                                          const schemaEligible = ['Home', 'Service', 'Suburb'].includes(label);
+                                          // Save classification for all types
+                                          await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
                                           if (!schemaEligible) {
-                                            // Non-schema pages: save classification + dismiss finding
-                                            await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
+                                            // Non-schema pages: dismiss finding
                                             await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'dismissed' } });
                                             setFindings(prev => prev.filter(x => x.id !== f.id));
-                                          } else {
-                                            // Service/Suburb: save classification, keep finding visible (schema IS needed)
-                                            await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
                                           }
                                           const normP = pageUrl.replace(/^https?:\/\/[^/]+\/?/, '').replace(/\/$/, '').toLowerCase();
                                           setPageClassifications(prev => ({ ...prev, [normP]: label }));
                                           setExcludeForm(null);
                                         } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
-                                      }} style={{ background: ['Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', color: ['Service', 'Suburb'].includes(label) ? '#22c55e' : '#6366f1', border: `1px solid ${['Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                      }} style={{ background: ['Home', 'Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', color: ['Home', 'Service', 'Suburb'].includes(label) ? '#22c55e' : '#6366f1', border: `1px solid ${['Home', 'Service', 'Suburb'].includes(label) ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                         {label}
                                       </button>
                                     ))}
