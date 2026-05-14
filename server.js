@@ -4984,28 +4984,44 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       `${wpUrl}/wp-json/seoroom/v1/purge-cache`,
       `${wpUrl}/wp-json/seoroom/v1/cwv-fixes`,
     ];
+    // Primary check: look for seoroom namespace in WP REST index (most reliable)
+    let namespaceFound = false;
+    try {
+      const indexResp = await fetch(`${wpUrl}/wp-json`, { signal: AbortSignal.timeout(6000) });
+      if (indexResp.ok) {
+        const indexData = await indexResp.json();
+        if (indexData.namespaces && indexData.namespaces.includes('seoroom/v1')) {
+          namespaceFound = true;
+        }
+      }
+    } catch {}
+
+    if (namespaceFound) {
+      return res.json({ installed: true });
+    }
+
+    // Secondary check: probe seoroom endpoints — only 200 means plugin is active
+    // (403/401 from firewalls like BerqWP should NOT count as installed)
     for (const ep of endpoints) {
       try {
         const resp = await fetch(ep, {
           signal: AbortSignal.timeout(6000),
           ...(authHeaders ? { headers: authHeaders } : {}),
         });
-        // Any response except 404 means the route exists = plugin is active
-        if (resp.status !== 404) {
+        if (resp.status === 200) {
           return res.json({ installed: true });
+        }
+        // Check if response is JSON with seoroom-specific data (not a firewall block page)
+        if (resp.status < 400) {
+          try {
+            const body = await resp.json();
+            if (body && (body.success !== undefined || body.data !== undefined)) {
+              return res.json({ installed: true });
+            }
+          } catch {}
         }
       } catch {}
     }
-    // Also check if seoroom namespace exists in WP REST index
-    try {
-      const indexResp = await fetch(`${wpUrl}/wp-json`, { signal: AbortSignal.timeout(6000) });
-      if (indexResp.ok) {
-        const indexData = await indexResp.json();
-        if (indexData.namespaces && indexData.namespaces.includes('seoroom/v1')) {
-          return res.json({ installed: true });
-        }
-      }
-    } catch {}
     return res.json({ installed: false, reason: 'not_found' });
   } catch (err) {
     console.error('[plugin-status]', err);
@@ -18646,10 +18662,22 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 
       // FAQ schema → inject on specific page mentioned in finding
       if (title.includes('faq') || title.includes('q&a')) {
-        // Extract page path from title like "30 Q&As on /blocked-drains/"
-        const pathMatch = (finding.title || '').match(/\/([a-z0-9-]+)\//i);
-        if (pathMatch) {
-          const slug = pathMatch[1];
+        // Extract slug from title (e.g. "Missing FAQPage schema on /car-locksmith-vs-traditional-locksmith/")
+        let slug = null;
+        const pathMatch = (finding.title || '').match(/on\s+\/?([a-z0-9][a-z0-9-]+[a-z0-9])\/?$/i)
+          || (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
+        if (pathMatch) slug = pathMatch[1];
+        // Fallback: extract slug from current_value URL
+        if (!slug) {
+          try {
+            const cv = finding.current_value || '';
+            if (cv.startsWith('[')) {
+              const urls = JSON.parse(cv);
+              if (urls.length > 0) slug = new URL(urls[0]).pathname.replace(/^\/|\/$/g, '').split('/').pop();
+            }
+          } catch {}
+        }
+        if (slug) {
           try {
             for (const type of ['pages', 'posts']) {
               const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
