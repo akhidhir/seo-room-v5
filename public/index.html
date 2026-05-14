@@ -6823,7 +6823,9 @@
                                       <button key={label} onClick={async () => {
                                         try {
                                           await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
-                                          setFixResult({ id: f.id, ok: true, msg: `Marked as "${label}" — re-run audit to update.` });
+                                          // Dismiss the finding immediately
+                                          await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'dismissed' } });
+                                          setFindings(prev => prev.filter(x => x.id !== f.id));
                                           setExcludeForm(null);
                                         } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
                                       }} style={{ background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
