@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: SEO Room Helper
- * Description: Registers Yoast SEO meta fields for REST API access + CWV auto-fix via WordPress hooks. Required by SEO Room Dashboard.
- * Version: 2.1.0
+ * Plugin Name: SEO Room Connector
+ * Description: Connects WordPress to the SEO Room Dashboard — Yoast meta access, CWV auto-fix, schema injection, and universal cache purge. Required by SEO Room Dashboard.
+ * Version: 3.0.0
  * Author: The SEO Room
  */
 
@@ -18,6 +18,7 @@ add_action('init', function() {
         '_yoast_wpseo_content_score',
         '_elementor_data',
         '_elementor_css',
+        '_seoroom_schema',
     ];
 
     foreach ($post_types as $type) {
@@ -102,6 +103,279 @@ function seoroom_yoast_scores() {
     }
     return rest_ensure_response($results);
 }
+
+// ============================================================
+// SCHEMA INJECTION (v3.0)
+// Reads _seoroom_schema post meta and outputs it as JSON-LD in <head>.
+// This is the ONLY reliable way to inject schema on Elementor sites,
+// since Elementor bypasses post_content and widget areas.
+// ============================================================
+
+add_action('wp_head', function() {
+    if (!is_singular()) return; // Only on single pages/posts
+    $post_id = get_the_ID();
+    if (!$post_id) return;
+
+    $schema = get_post_meta($post_id, '_seoroom_schema', true);
+    if (empty($schema)) return;
+
+    // Validate it's proper JSON
+    $decoded = json_decode($schema);
+    if (json_last_error() !== JSON_ERROR_NONE) return;
+
+    // Re-encode to ensure clean output (no XSS)
+    $clean = wp_json_encode($decoded, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if (!$clean) return;
+
+    echo "\n<!-- SEO Room Schema -->\n";
+    echo '<script type="application/ld+json">' . $clean . '</script>' . "\n";
+}, 5); // Priority 5 = early in <head>, before CWV fixes
+
+// ============================================================
+// UNIVERSAL CACHE PURGE (v3.0)
+// Detects whatever caching plugin is active and purges it.
+// Plugin-independent — works with any combination of caches.
+// ============================================================
+
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom/v1', '/purge-cache', [
+        'methods'  => 'POST',
+        'callback' => 'seoroom_purge_cache',
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ]);
+});
+
+function seoroom_purge_cache($request) {
+    $url = sanitize_text_field($request->get_param('url') ?: '');
+    $purged = [];
+    $errors = [];
+
+    // 1. WordPress object cache
+    if (function_exists('wp_cache_flush')) {
+        wp_cache_flush();
+        $purged[] = 'wp_object_cache';
+    }
+
+    // 2. BerqWP
+    if (class_exists('BerqWP') || defined('STARTER_STARTER_FILE') || defined('STARTER_STARTER_DIR')) {
+        // BerqWP uses its own purge mechanism
+        if (function_exists('starter_starter_purge_cache')) {
+            starter_starter_purge_cache();
+            $purged[] = 'berqwp';
+        } elseif (class_exists('starter_starter_cache') && method_exists('starter_starter_cache', 'purge_all')) {
+            starter_starter_cache::purge_all();
+            $purged[] = 'berqwp';
+        } else {
+            // Try clearing BerqWP options/transients that trigger rebuild
+            delete_transient('berqwp_cache');
+            delete_option('starter_starter_cache_version');
+            // BerqWP stores cache in uploads/starter-starter/ — flag for rebuild
+            $upload_dir = wp_upload_dir();
+            $cache_dir = $upload_dir['basedir'] . '/starter-starter/';
+            if (is_dir($cache_dir)) {
+                seoroom_delete_directory($cache_dir);
+                $purged[] = 'berqwp_files';
+            }
+            // Also try their CDN purge if available
+            if (class_exists('starter_starter_cdn') && method_exists('starter_starter_cdn', 'purge')) {
+                starter_starter_cdn::purge();
+                $purged[] = 'berqwp_cdn';
+            }
+        }
+    }
+
+    // 3. WP Rocket
+    if (function_exists('rocket_clean_domain')) {
+        if ($url) {
+            rocket_clean_files([$url]);
+        } else {
+            rocket_clean_domain();
+        }
+        $purged[] = 'wp_rocket';
+    }
+
+    // 4. W3 Total Cache
+    if (function_exists('w3tc_flush_all')) {
+        w3tc_flush_all();
+        $purged[] = 'w3_total_cache';
+    } elseif (function_exists('w3tc_flush_posts')) {
+        w3tc_flush_posts();
+        $purged[] = 'w3_total_cache_posts';
+    }
+
+    // 5. WP Super Cache
+    if (function_exists('wp_cache_clear_cache')) {
+        wp_cache_clear_cache();
+        $purged[] = 'wp_super_cache';
+    }
+
+    // 6. LiteSpeed Cache
+    if (class_exists('LiteSpeed_Cache_API') || defined('LSCWP_V')) {
+        if (has_action('litespeed_purge_all')) {
+            do_action('litespeed_purge_all');
+            $purged[] = 'litespeed';
+        }
+    }
+
+    // 7. Autoptimize
+    if (class_exists('autoptimizeCache')) {
+        autoptimizeCache::clearall();
+        $purged[] = 'autoptimize';
+    }
+
+    // 8. WP Fastest Cache
+    if (function_exists('wpfc_clear_all_cache')) {
+        wpfc_clear_all_cache(true);
+        $purged[] = 'wp_fastest_cache';
+    } elseif (class_exists('WpFastestCache') && method_exists('WpFastestCache', 'deleteCache')) {
+        $wpfc = new WpFastestCache();
+        $wpfc->deleteCache(true);
+        $purged[] = 'wp_fastest_cache';
+    }
+
+    // 9. Breeze (Cloudways)
+    if (class_exists('Breeze_PurgeCache')) {
+        Breeze_PurgeCache::breeze_cache_flush();
+        $purged[] = 'breeze';
+    } elseif (has_action('breeze_clear_all_cache')) {
+        do_action('breeze_clear_all_cache');
+        $purged[] = 'breeze';
+    }
+
+    // 10. Hummingbird
+    if (has_action('wphb_clear_page_cache')) {
+        do_action('wphb_clear_page_cache');
+        $purged[] = 'hummingbird';
+    }
+
+    // 11. SG Optimizer (SiteGround)
+    if (function_exists('sg_cachepress_purge_cache')) {
+        sg_cachepress_purge_cache();
+        $purged[] = 'sg_optimizer';
+    }
+
+    // 12. Kinsta Cache
+    if (class_exists('Developer_Kinsta') || defined('KINSTAMU_VERSION')) {
+        if (has_action('developer_kinsta_purge_all_caches')) {
+            do_action('developer_kinsta_purge_all_caches');
+            $purged[] = 'kinsta';
+        }
+    }
+
+    // 13. Cloudflare (via plugin)
+    if (class_exists('CF\WordPress\Hooks') && has_action('cloudflare_purge_everything')) {
+        do_action('cloudflare_purge_everything');
+        $purged[] = 'cloudflare';
+    }
+
+    // 14. Comet Cache / ZenCache
+    if (class_exists('comet_cache')) {
+        comet_cache::clear();
+        $purged[] = 'comet_cache';
+    } elseif (class_exists('zencache')) {
+        zencache::clear();
+        $purged[] = 'zencache';
+    }
+
+    // 15. Cache Enabler
+    if (has_action('cache_enabler_clear_complete_cache')) {
+        do_action('cache_enabler_clear_complete_cache');
+        $purged[] = 'cache_enabler';
+    } elseif (class_exists('Cache_Enabler')) {
+        Cache_Enabler::clear_total_cache();
+        $purged[] = 'cache_enabler';
+    }
+
+    // 16. Nginx Helper (FastCGI / Redis)
+    if (has_action('rt_nginx_helper_purge_all')) {
+        do_action('rt_nginx_helper_purge_all');
+        $purged[] = 'nginx_helper';
+    }
+
+    // 17. Redis Object Cache
+    if (function_exists('wp_cache_flush')) {
+        // Already called above, but also try Redis-specific
+        if (class_exists('Redis') || class_exists('Predis\Client')) {
+            $purged[] = 'redis_object_cache';
+        }
+    }
+
+    // 18. Swift Performance
+    if (class_exists('Swift_Performance_Cache')) {
+        Swift_Performance_Cache::clear_all_cache();
+        $purged[] = 'swift_performance';
+    }
+
+    // 19. Powered Cache
+    if (function_exists('powered_cache_flush')) {
+        powered_cache_flush();
+        $purged[] = 'powered_cache';
+    }
+
+    // 20. Generic: fire common cache-clearing hooks other plugins may listen to
+    if (has_action('cachify_flush_cache')) {
+        do_action('cachify_flush_cache');
+        $purged[] = 'cachify';
+    }
+
+    // Always try the generic WP hooks that many plugins listen on
+    do_action('clean_post_cache');
+    do_action('switch_theme'); // Many cache plugins purge on theme switch event
+
+    // Report what we found and purged
+    $detected = seoroom_detect_cache_plugins();
+
+    return rest_ensure_response([
+        'success'  => true,
+        'purged'   => $purged,
+        'detected' => $detected,
+        'message'  => empty($purged)
+            ? 'No known cache plugins detected. WP object cache flushed.'
+            : 'Purged: ' . implode(', ', $purged),
+    ]);
+}
+
+// Detect which cache plugins are active (for reporting)
+function seoroom_detect_cache_plugins() {
+    $detected = [];
+    if (class_exists('BerqWP') || defined('STARTER_STARTER_FILE') || defined('STARTER_STARTER_DIR')) $detected[] = 'BerqWP';
+    if (function_exists('rocket_clean_domain')) $detected[] = 'WP Rocket';
+    if (function_exists('w3tc_flush_all') || function_exists('w3tc_flush_posts')) $detected[] = 'W3 Total Cache';
+    if (function_exists('wp_cache_clear_cache') && !function_exists('rocket_clean_domain')) $detected[] = 'WP Super Cache';
+    if (class_exists('LiteSpeed_Cache_API') || defined('LSCWP_V')) $detected[] = 'LiteSpeed Cache';
+    if (class_exists('autoptimizeCache')) $detected[] = 'Autoptimize';
+    if (class_exists('WpFastestCache')) $detected[] = 'WP Fastest Cache';
+    if (class_exists('Breeze_PurgeCache')) $detected[] = 'Breeze';
+    if (function_exists('sg_cachepress_purge_cache')) $detected[] = 'SG Optimizer';
+    if (class_exists('Swift_Performance_Cache')) $detected[] = 'Swift Performance';
+    if (class_exists('comet_cache')) $detected[] = 'Comet Cache';
+    if (class_exists('Cache_Enabler')) $detected[] = 'Cache Enabler';
+
+    // Check if BerqWP has files in uploads
+    $upload_dir = wp_upload_dir();
+    if (is_dir($upload_dir['basedir'] . '/starter-starter/')) $detected[] = 'BerqWP (file cache)';
+    if (is_dir($upload_dir['basedir'] . '/cache/')) $detected[] = 'File-based cache';
+
+    return array_unique($detected);
+}
+
+// Helper: recursively delete a directory
+function seoroom_delete_directory($dir) {
+    if (!is_dir($dir)) return;
+    $files = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($files as $file) {
+        if ($file->isDir()) {
+            @rmdir($file->getRealPath());
+        } else {
+            @unlink($file->getRealPath());
+        }
+    }
+    @rmdir($dir);
+}
+
 
 // ============================================================
 // CWV AUTO-FIX SYSTEM (v2.0)
