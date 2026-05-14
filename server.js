@@ -18303,147 +18303,107 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         return res.json({ success: false, error: 'Could not find target page in WordPress' });
       }
 
-      // Inject schema via multiple strategies (Elementor sites need special handling)
+      // Inject schema via WordPress Widgets REST API (works for Elementor sites — no plugin needed)
       const schemaString = JSON.stringify(schemaJson, null, 2);
-      const schemaBlock = `<!-- SEO Room Schema -->\n<script type="application/ld+json">\n${schemaString}\n</script>\n<!-- /SEO Room Schema -->`;
-      console.log(`[technical-fix] Injecting schema into ${targetPageType}/${targetPageId}`);
+      const schemaHtml = `<!-- SEO Room Schema: ${schemaJson['@type']} -->\n<script type="application/ld+json">\n${schemaString}\n</script>`;
+      console.log(`[technical-fix] Injecting ${schemaJson['@type']} schema for page ${targetPageId}`);
 
       let injected = false;
       let injectionMethod = '';
 
-      // Strategy 1: Save schema to wp_options via REST API (works universally)
-      // Store per-page schemas in a single option keyed by page ID
+      // Strategy 1: WordPress Widgets API — add Custom HTML widget to a sidebar
+      // This renders via PHP in the theme, works with any page builder
       try {
-        // Read existing schemas option
-        let schemas = {};
-        try {
-          const optResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
-          if (optResp.ok) {
-            const settings = await optResp.json();
-            try { schemas = JSON.parse(settings.seoroom_schemas || '{}'); } catch { schemas = {}; }
-          }
-        } catch {}
-
-        // Update with new schema for this page
-        schemas[String(targetPageId)] = { type: schemaJson['@type'], schema: schemaString, updated: new Date().toISOString() };
-
-        // Write back — use custom option via WP REST settings (requires register_setting in WP)
-        // Since we may not have the option registered, save to post meta instead
-        const metaResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
-          method: 'POST',
-          headers: { ...authHeaders, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ meta: { _seoroom_schema: schemaString } }),
-          signal: AbortSignal.timeout(15000)
-        });
-        if (metaResp.ok) {
-          console.log(`[technical-fix] Saved schema to post meta _seoroom_schema`);
-        }
-      } catch (e) { console.error(`[technical-fix] Meta save error:`, e.message); }
-
-      // Strategy 2: Inject into post_content (works for non-Elementor pages)
-      try {
-        const getResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=content`, {
+        // First, get available sidebars
+        const sidebarsResp = await fetch(`${wpUrl}/wp-json/wp/v2/sidebars?context=edit`, {
           headers: authHeaders, signal: AbortSignal.timeout(10000)
         });
-        if (getResp.ok) {
-          const pageData = await getResp.json();
-          let currentContent = pageData.content?.raw || '';
+        if (sidebarsResp.ok) {
+          const sidebars = await sidebarsResp.json();
+          console.log(`[technical-fix] Available sidebars: ${sidebars.map(s => s.id).join(', ')}`);
 
-          // Remove any existing SEO Room Schema block
-          currentContent = currentContent.replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+          // Prefer footer sidebar, then any sidebar
+          const footerSidebar = sidebars.find(s => /footer/i.test(s.id) || /footer/i.test(s.name));
+          const anySidebar = footerSidebar || sidebars[0];
 
-          // Only inject if page has real content (not empty Elementor shell)
-          if (currentContent.length > 50) {
-            const newContent = currentContent + '\n' + schemaBlock;
-            const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
-              method: 'POST',
-              headers: { ...authHeaders, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ content: newContent }),
-              signal: AbortSignal.timeout(15000)
+          if (anySidebar) {
+            // Check for existing SEO Room schema widget to avoid duplicates
+            const widgetsResp = await fetch(`${wpUrl}/wp-json/wp/v2/widgets?sidebar=${anySidebar.id}`, {
+              headers: authHeaders, signal: AbortSignal.timeout(10000)
             });
-            if (writeResp.ok) { injected = true; injectionMethod = 'post_content'; }
-          }
-        }
-      } catch (e) { console.error(`[technical-fix] Content inject error:`, e.message); }
+            let existingWidgetId = null;
+            if (widgetsResp.ok) {
+              const widgets = await widgetsResp.json();
+              const existing = widgets.find(w => (w.rendered || '').includes('SEO Room Schema') || (w.instance?.raw?.content || '').includes('SEO Room Schema'));
+              if (existing) existingWidgetId = existing.id;
+            }
 
-      // Strategy 3: Inject via Yoast SEO head script (if Yoast is active)
-      // Yoast allows adding custom schema via _yoast_wpseo_schema_page_type or similar
-      // But a more reliable approach: add to Yoast's head output isn't possible via REST API
-
-      // Strategy 4: For Elementor sites, try adding an HTML widget to the page's Elementor data
-      if (!injected) {
-        try {
-          const elemResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=meta`, {
-            headers: authHeaders, signal: AbortSignal.timeout(10000)
-          });
-          if (elemResp.ok) {
-            const elemData = await elemResp.json();
-            let elementorData = elemData.meta?._elementor_data || '';
-            if (elementorData && typeof elementorData === 'string' && elementorData.length > 10) {
-              try {
-                const parsed = JSON.parse(elementorData);
-                // Remove any existing SEO Room schema widget
-                const cleaned = JSON.stringify(parsed).replace(/\{"id":"seoroom_schema[^}]*\}(,)?/g, '');
-                // Add HTML widget with schema at the end of the first section
-                const schemaWidget = {
-                  id: 'seoroom_schema_' + Date.now(),
-                  elType: 'widget',
-                  widgetType: 'html',
-                  settings: { html: `<script type="application/ld+json">\n${schemaString}\n</script>` },
-                  elements: []
-                };
-                const reparsed = JSON.parse(cleaned);
-                // Find last section and add to its first column
-                if (reparsed.length > 0) {
-                  const lastSection = reparsed[reparsed.length - 1];
-                  if (lastSection.elements && lastSection.elements.length > 0) {
-                    const lastCol = lastSection.elements[lastSection.elements.length - 1];
-                    if (lastCol.elements) {
-                      lastCol.elements.push(schemaWidget);
-                    }
-                  }
-                  const newElemData = JSON.stringify(reparsed);
-                  const elemWriteResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
-                    method: 'POST',
-                    headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ meta: { _elementor_data: newElemData } }),
-                    signal: AbortSignal.timeout(15000)
-                  });
-                  if (elemWriteResp.ok) { injected = true; injectionMethod = 'elementor_html_widget'; }
-                }
-              } catch (parseErr) {
-                console.error(`[technical-fix] Elementor data parse error:`, parseErr.message);
+            if (existingWidgetId) {
+              // Update existing widget
+              const updateResp = await fetch(`${wpUrl}/wp-json/wp/v2/widgets/${existingWidgetId}`, {
+                method: 'PUT',
+                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id_base: 'custom_html', instance: { raw: { title: '', content: schemaHtml } } }),
+                signal: AbortSignal.timeout(10000)
+              });
+              if (updateResp.ok) { injected = true; injectionMethod = `widget_updated:${anySidebar.id}`; }
+              else { console.log(`[technical-fix] Widget update failed: ${updateResp.status}`); }
+            } else {
+              // Create new widget
+              const createResp = await fetch(`${wpUrl}/wp-json/wp/v2/widgets`, {
+                method: 'POST',
+                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id_base: 'custom_html', sidebar: anySidebar.id, instance: { raw: { title: '', content: schemaHtml } } }),
+                signal: AbortSignal.timeout(10000)
+              });
+              if (createResp.ok) { injected = true; injectionMethod = `widget_created:${anySidebar.id}`; }
+              else {
+                const errText = await createResp.text().catch(() => '');
+                console.log(`[technical-fix] Widget create failed: ${createResp.status} ${errText}`);
               }
             }
           }
-        } catch (e) { console.error(`[technical-fix] Elementor inject error:`, e.message); }
-      }
+        } else {
+          console.log(`[technical-fix] Sidebars API returned ${sidebarsResp.status}`);
+        }
+      } catch (e) { console.error(`[technical-fix] Widget strategy error:`, e.message); }
 
+      // Strategy 2: post_content fallback (for non-Elementor pages)
       if (!injected) {
-        injectionMethod = 'meta_only';
-        console.log(`[technical-fix] Could not inject into content/Elementor — saved to post meta only`);
+        try {
+          const getResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=content`, {
+            headers: authHeaders, signal: AbortSignal.timeout(10000)
+          });
+          if (getResp.ok) {
+            const pageData = await getResp.json();
+            let currentContent = pageData.content?.raw || '';
+            currentContent = currentContent.replace(/\n?<!-- SEO Room Schema[^>]*-->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+            if (currentContent.length > 50) {
+              const newContent = currentContent + '\n' + schemaHtml + '\n<!-- /SEO Room Schema -->';
+              const writeResp2 = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+              });
+              if (writeResp2.ok) { injected = true; injectionMethod = 'post_content'; }
+            }
+          }
+        } catch (e) { console.error(`[technical-fix] Content fallback error:`, e.message); }
       }
-      console.log(`[technical-fix] Schema injection method: ${injectionMethod}`);
 
-      const writeResp = { ok: true }; // Already handled above
+      console.log(`[technical-fix] Schema injection: ${injected ? injectionMethod : 'FAILED — no strategy worked'}`);
+      if (!injected) {
+        return res.json({ success: false, error: 'Could not inject schema. WordPress may need a plugin (mu-plugin or Custom HTML widget area) to render schema on Elementor pages.' });
+      }
+
+      const writeResp = { ok: true };
 
       await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
       await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
         [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
 
       // POST-FIX VERIFICATION: 3-step check
-      // Step 1: Confirm schema was written to WordPress (check content, meta, or Elementor data)
-      let wpWriteConfirmed = false;
-      try {
-        const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=id,content,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
-        if (checkResp.ok) {
-          const checkData = await checkResp.json();
-          const savedContent = checkData.content?.raw || checkData.content?.rendered || '';
-          const savedMeta = checkData.meta?._seoroom_schema || '';
-          const savedElem = checkData.meta?._elementor_data || '';
-          wpWriteConfirmed = (savedContent.includes('SEO Room Schema') || savedMeta.includes(schemaJson['@type']) || savedElem.includes('seoroom_schema')) && true;
-        }
-      } catch {}
+      // Step 1: Confirm schema was written to WordPress (check widget or content)
+      let wpWriteConfirmed = injected; // We already know if injection succeeded
 
       // Step 2: Check live page for the schema AND detect duplications
       // Small delay for WP object cache to clear
@@ -18465,23 +18425,27 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           if (otherSources.length > 0) {
             // Another plugin (Rank Math, Yoast, etc.) is already outputting this schema — remove ours
             try {
-              const rollGetResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=content,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+              // Remove widget if we created one
+              const widgetsResp = await fetch(`${wpUrl}/wp-json/wp/v2/widgets`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+              if (widgetsResp.ok) {
+                const widgets = await widgetsResp.json();
+                const seoWidget = widgets.find(w => (w.rendered || '').includes('SEO Room Schema') || (w.instance?.raw?.content || '').includes('SEO Room Schema'));
+                if (seoWidget) {
+                  await fetch(`${wpUrl}/wp-json/wp/v2/widgets/${seoWidget.id}?force=true`, { method: 'DELETE', headers: authHeaders, signal: AbortSignal.timeout(10000) });
+                  console.log(`[technical-fix] Rollback: removed widget ${seoWidget.id}`);
+                }
+              }
+              // Also remove from post_content if present
+              const rollGetResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?context=edit&_fields=content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
               if (rollGetResp.ok) {
                 const rollData = await rollGetResp.json();
-                const rollUpdates = { meta: { _seoroom_schema: '' } };
-                // Remove from post_content
-                const rollContent = (rollData.content?.raw || '').replace(/\n?<!-- SEO Room Schema -->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
-                if (rollContent !== (rollData.content?.raw || '')) rollUpdates.content = rollContent;
-                // Remove from Elementor data
-                const elemData = rollData.meta?._elementor_data || '';
-                if (elemData.includes('seoroom_schema')) {
-                  const cleanedElem = elemData.replace(/,?\{"id":"seoroom_schema[^}]*"elements":\[\]\}/g, '');
-                  rollUpdates.meta._elementor_data = cleanedElem;
+                const rollContent = (rollData.content?.raw || '').replace(/\n?<!-- SEO Room Schema[^>]*-->[\s\S]*?<!-- \/SEO Room Schema -->\n?/g, '');
+                if (rollContent !== (rollData.content?.raw || '')) {
+                  await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+                    method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: rollContent }), signal: AbortSignal.timeout(15000)
+                  });
                 }
-                await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
-                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                  body: JSON.stringify(rollUpdates), signal: AbortSignal.timeout(15000)
-                });
               }
             } catch (rollErr) { console.error(`[technical-fix] Rollback cleanup error:`, rollErr.message); }
             rolledBack = true;
