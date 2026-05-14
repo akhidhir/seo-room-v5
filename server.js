@@ -17225,6 +17225,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           // Open Graph
           const hasOG = /<meta[^>]*property=["']og:/i.test(html);
 
+          // FAQ/Q&A detection for schema recommendations
+          const questionHeadings = (html.match(/<h[2-4][^>]*>[^<]*\?[^<]*<\/h[2-4]>/gi) || []).length;
+          const hasFAQSection = /faq|frequently asked|common questions/i.test(html);
+
           return {
             url: page.url, path: page.slug || page.url.replace(baseUrl, '') || '/', title: page.title,
             statusCode, elapsed, finalUrl, wasRedirected,
@@ -17234,7 +17238,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
             images: images.length, imagesWithoutAlt: imagesWithoutAlt.length,
             internalLinks: internalLinks.length, externalLinks: externalLinks.length,
             schemas, schemaSources, canonical, hasViewport, robotsMeta, isNoindex, isHttps,
-            hasHreflang, hasOG
+            hasHreflang, hasOG, questionHeadings, hasFAQSection
           };
         } catch (e) {
           return { url: page.url, path: page.slug || '', error: e.message, statusCode: 0, elapsed: Date.now() - startTime };
@@ -17548,6 +17552,59 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         current_value: `No LocalBusiness schema (found: ${allSchemaTypes.filter(s => s !== 'Invalid JSON-LD').join(', ') || 'none'})`,
         recommended_value: 'LocalBusiness on homepage',
         verification: { verified_at: new Date().toISOString(), method: 'crawl', pages_checked: successPages.length, schemas_found: allSchemaTypes, sources: allSchemaSources.slice(0, 20) }
+      });
+    }
+
+    // Check for FAQPage schema — look for pages with Q&A content but no FAQ schema
+    const hasFAQSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage')));
+    if (!hasFAQSchema) {
+      // Check if any pages have FAQ-like content (detected during crawl)
+      const pagesWithQA = successPages.filter(p => (p.questionHeadings || 0) >= 3 || p.hasFAQSection);
+      if (pagesWithQA.length > 0) {
+        findings.push({
+          pillar: 'website', category: 'Schema & Data',
+          title: `${pagesWithQA.length} page(s) with Q&A content but no FAQPage schema`,
+          description: `Pages with FAQ-style content: ${pagesWithQA.slice(0, 5).map(p => p.path).join(', ')}. Adding FAQPage schema enables rich FAQ snippets in Google search results, increasing visibility and click-through rates.`,
+          recommendation: 'Add FAQPage JSON-LD schema to pages with Q&A content. Include the question as "name" and answer as "acceptedAnswer" for each FAQ item.',
+          severity: 'Critical',
+          current_value: `${pagesWithQA.length} page(s) with Q&As, no FAQPage schema`,
+          recommended_value: 'FAQPage schema on all FAQ pages'
+        });
+      }
+    }
+
+    // Check for Service schema on service pages
+    const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
+    if (!hasServiceSchema && project.is_local_business) {
+      const servicePages = successPages.filter(p => {
+        const path = (p.path || '').toLowerCase();
+        return path.includes('service') || path.includes('plumb') || path.includes('drain') || path.includes('hot-water') ||
+               path.includes('repair') || path.includes('install') || path.includes('renovation') || path.includes('commercial') ||
+               path.includes('residential') || path.includes('maintenance') || path.includes('cleaning');
+      });
+      if (servicePages.length > 0) {
+        findings.push({
+          pillar: 'website', category: 'Schema & Data',
+          title: 'Missing Service schema on service pages',
+          description: `${servicePages.length} service page(s) found without Service schema: ${servicePages.slice(0, 5).map(p => p.path).join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
+          recommendation: 'Add Service JSON-LD schema to each service page with name, description, provider (your business), and areaServed.',
+          severity: 'Medium',
+          current_value: `${servicePages.length} service pages without Service schema`,
+          recommended_value: 'Service schema on all service pages'
+        });
+      }
+    }
+
+    // Check for BreadcrumbList schema
+    const hasBreadcrumb = successPages.some(p => p.schemas.some(s => typeof s === 'string' && s.includes('BreadcrumbList')));
+    if (!hasBreadcrumb && successPages.length > 5) {
+      findings.push({
+        pillar: 'website', category: 'Schema & Data',
+        title: 'Missing BreadcrumbList schema',
+        description: 'No BreadcrumbList structured data found. Breadcrumb schema helps Google display navigation paths in search results, improving click-through rates.',
+        recommendation: 'Add BreadcrumbList JSON-LD or ensure your SEO plugin (Yoast/Rank Math) is configured to output breadcrumb schema.',
+        severity: 'Low',
+        current_value: 'No BreadcrumbList schema', recommended_value: 'BreadcrumbList on all pages'
       });
     }
 
