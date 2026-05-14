@@ -18162,56 +18162,81 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 
       // Service schema → inject on each service page
       if (title.includes('service schema') || (title.includes('service') && title.includes('schema') && !title.includes('localbusiness'))) {
+        if (!wpUrl || !authHeaders) {
+          return res.json({ success: false, error: 'WordPress connection required for Service schema fix. Set WordPress URL and App Password in Project Settings.' });
+        }
         const biz = rcProfile || {};
         // Extract service page paths from finding description
         const desc2 = (finding.description || '') + ' ' + (finding.current_value || '');
         const servicePaths = (desc2.match(/\/[a-z0-9-]+(?:\/[a-z0-9-]+)*\/?/gi) || []).filter(p => p !== '/');
+        console.log(`[technical-fix] Service schema — desc: "${desc2.substring(0, 200)}"`);
         console.log(`[technical-fix] Service schema — found ${servicePaths.length} service paths: ${servicePaths.join(', ')}`);
+
+        // Pre-fetch all pages from WP to match by link (more reliable than slug search)
+        let allWpPages = [];
+        try {
+          const allPagesResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,title,link&status=publish`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (allPagesResp.ok) allWpPages = await allPagesResp.json();
+          console.log(`[technical-fix] Fetched ${allWpPages.length} WP pages for matching`);
+        } catch (e) { console.log(`[technical-fix] Failed to fetch WP pages: ${e.message}`); }
 
         let fixedCount = 0;
         let firstPageId = null;
         for (const sPath of servicePaths.slice(0, 10)) {
           const slug = sPath.replace(/^\/|\/$/g, '').split('/').pop();
           if (!slug) continue;
-          try {
-            for (const type of ['pages', 'posts']) {
-              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,link`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
-              if (resp.ok) {
-                const items = await resp.json();
-                if (items.length > 0) {
-                  const pageId = items[0].id;
-                  const pageTitle = items[0].title?.rendered || slug;
-                  if (!firstPageId) { firstPageId = pageId; targetPageType = type; }
-                  const serviceSchema = {
-                    "@context": "https://schema.org",
-                    "@type": "Service",
-                    "name": pageTitle.replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-'),
-                    "provider": {
-                      "@type": "LocalBusiness",
-                      "name": biz.title || project.business_name || project.name,
-                      "url": `https://${domain}`
-                    },
-                    "url": items[0].link || `https://${domain}${sPath}`,
-                    ...(project.location ? { "areaServed": { "@type": "Place", "name": project.location } } : {}),
-                    "description": `Professional ${pageTitle.replace(/<[^>]+>/g, '')} services by ${biz.title || project.business_name || project.name}`
-                  };
-                  const metaResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${pageId}`, {
-                    method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ meta: { _seoroom_schema: JSON.stringify(serviceSchema) } }),
-                    signal: AbortSignal.timeout(10000)
-                  });
-                  if (metaResp.ok) { fixedCount++; console.log(`[technical-fix] Service schema written to ${type}/${pageId} (${slug})`); }
-                  break; // found in this post type, skip other
-                }
+
+          // Match by link URL first (most reliable), then by slug
+          let matchedPage = allWpPages.find(p => {
+            const pPath = (p.link || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
+            return pPath === sPath.replace(/\/$/, '');
+          });
+          if (!matchedPage) {
+            matchedPage = allWpPages.find(p => p.slug === slug);
+          }
+
+          if (matchedPage) {
+            const pageId = matchedPage.id;
+            const pageTitle = matchedPage.title?.rendered || slug;
+            if (!firstPageId) { firstPageId = pageId; targetPageType = 'pages'; }
+            const serviceSchema = {
+              "@context": "https://schema.org",
+              "@type": "Service",
+              "name": pageTitle.replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-'),
+              "provider": {
+                "@type": "LocalBusiness",
+                "name": biz.title || project.business_name || project.name,
+                "url": `https://${domain}`
+              },
+              "url": matchedPage.link || `https://${domain}${sPath}`,
+              ...(project.location ? { "areaServed": { "@type": "Place", "name": project.location } } : {}),
+              "description": `Professional ${pageTitle.replace(/<[^>]+>/g, '')} services by ${biz.title || project.business_name || project.name}`
+            };
+            try {
+              const metaResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meta: { _seoroom_schema: JSON.stringify(serviceSchema) } }),
+                signal: AbortSignal.timeout(10000)
+              });
+              if (metaResp.ok) {
+                fixedCount++;
+                console.log(`[technical-fix] Service schema written to pages/${pageId} (${slug})`);
+              } else {
+                console.log(`[technical-fix] Service meta write failed for ${slug}: ${metaResp.status}`);
               }
-            }
-          } catch (e) { console.log(`[technical-fix] Service schema error for ${slug}: ${e.message}`); }
+            } catch (e) { console.log(`[technical-fix] Service meta write error for ${slug}: ${e.message}`); }
+          } else {
+            console.log(`[technical-fix] No WP page found for path ${sPath} (slug: ${slug})`);
+          }
         }
+
+        console.log(`[technical-fix] Service schema: ${fixedCount}/${servicePaths.length} pages fixed`);
 
         if (fixedCount > 0) {
           targetPageId = firstPageId;
-          schemaJson = { "@context": "https://schema.org", "@type": "Service" }; // for logging
-          // Mark as injected — skip the single-page injection below
+          schemaJson = { "@context": "https://schema.org", "@type": "Service" };
           await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
 
           // Purge cache
@@ -18242,6 +18267,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             verified: serviceVerified,
             verification: { post: serviceVerified ? 'verified_on_live_page' : 'verified_in_wordpress', pages_fixed: fixedCount }
           });
+        } else {
+          return res.json({ success: false, error: `Service schema: found ${servicePaths.length} paths in finding but could not match any to WordPress pages. Paths: ${servicePaths.slice(0, 5).join(', ')}. WP has ${allWpPages.length} pages.` });
         }
       }
 
