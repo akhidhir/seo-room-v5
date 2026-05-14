@@ -17747,24 +17747,36 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for FAQPage schema — individual finding per page with Q&A content but no FAQ schema
-    const pagesWithQA = successPages.filter(p => {
+    // Check for FAQPage schema — individual finding per page with Q&A content
+    for (const p of successPages) {
       const hasQA = (p.questionHeadings || 0) >= 3 || p.hasFAQSection;
+      if (!hasQA) continue;
       const alreadyHasFAQ = p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage'));
-      return hasQA && !alreadyHasFAQ;
-    });
-    for (const qPage of pagesWithQA) {
-      const pageUrl = qPage.url || `https://${domain}${qPage.path}`;
-      const normSlug = (qPage.path || '').replace(/^\/|\/$/g, '');
-      findings.push({
-        pillar: 'website', category: 'FAQ Enhancement',
-        title: `Missing FAQPage schema on ${normSlug}`,
-        description: `${pageUrl} has FAQ-style Q&A content (${qPage.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
-        recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
-        severity: 'Low',
-        current_value: JSON.stringify([pageUrl]),
-        recommended_value: 'FAQPage schema on this page'
-      });
+      const pageUrl = p.url || `https://${domain}${p.path}`;
+      const normSlug = (p.path || '').replace(/^\/|\/$/g, '');
+      if (alreadyHasFAQ) {
+        // Schema present — keep as fixed record
+        findings.push({
+          pillar: 'website', category: 'FAQ Enhancement',
+          title: `Missing FAQPage schema on ${normSlug}`,
+          description: `${pageUrl} — FAQPage schema is present.`,
+          recommendation: 'Schema is correctly configured on this page.',
+          severity: 'Low',
+          current_value: JSON.stringify([pageUrl]),
+          recommended_value: 'FAQPage schema on this page',
+          _forceStatus: 'fixed'
+        });
+      } else {
+        findings.push({
+          pillar: 'website', category: 'FAQ Enhancement',
+          title: `Missing FAQPage schema on ${normSlug}`,
+          description: `${pageUrl} has FAQ-style Q&A content (${p.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
+          recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
+          severity: 'Low',
+          current_value: JSON.stringify([pageUrl]),
+          recommended_value: 'FAQPage schema on this page'
+        });
+      }
     }
 
     // Check for Service schema on service pages — classification-aware
@@ -17791,9 +17803,25 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         if (!normSlug || normSlug === '') continue; // skip homepage
 
         const hasService = page.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
-        if (hasService) continue; // already has schema
-
         const classification = classificationMap[normSlug];
+
+        if (hasService) {
+          // Schema present — create a "fixed" record for classified Service/Suburb pages so they stay visible
+          if (classification && ['Service', 'Suburb'].includes(classification)) {
+            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
+            findings.push({
+              pillar: 'website', category: 'Schema & Data',
+              title: `Missing Service schema on ${normSlug}`,
+              description: `${pageUrl} — Service schema is present. Classified as "${classification}".`,
+              recommendation: 'Schema is correctly configured on this page.',
+              severity: 'Medium',
+              current_value: JSON.stringify([pageUrl]),
+              recommended_value: 'Service schema on this page',
+              _forceStatus: 'fixed'
+            });
+          }
+          continue;
+        }
 
         if (classification) {
           // Page is classified — only flag if Service or Suburb
@@ -17975,14 +18003,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         updated++;
       } else {
         // New finding — insert
+        const insertStatus = f._forceStatus || 'new';
         const r = await pool.query(
-          `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+          `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
           [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value,
-           f.verification ? JSON.stringify({ audit: f.verification }) : null]
+           f.verification ? JSON.stringify({ audit: f.verification }) : null, insertStatus]
         );
         f.id = r.rows[0].id;
-        f.status = 'new';
+        f.status = insertStatus;
         savedFindings.push(f);
         added++;
         // Track for within-batch dedup
