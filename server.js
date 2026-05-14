@@ -17063,8 +17063,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const baseUrl = `https://${domain}`;
     const wpUrl = project.wordpress_url || null;
 
-    // Clean up old findings
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='new'`, [projectId]);
+    // Clean up old findings — remove all non-fixed website findings (new + approved + rejected)
+    // Fixed findings are kept as historical record of what was resolved
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'fixed'`, [projectId]);
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
