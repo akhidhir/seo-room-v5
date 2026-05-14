@@ -17067,9 +17067,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const baseUrl = `https://${domain}`;
     const wpUrl = project.wordpress_url || null;
 
-    // Clean up old findings — remove all non-fixed website findings (new + approved + rejected)
-    // Fixed findings are kept as historical record of what was resolved
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'fixed'`, [projectId]);
+    // Load existing findings for merge (don't delete — we'll merge after crawl)
+    const existingFindings = await pool.query(
+      `SELECT id, title, status, category, severity FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]
+    );
+    const existingByTitle = new Map();
+    existingFindings.rows.forEach(f => existingByTitle.set(f.title, f));
 
     // Deduplicate fixed findings — keep only the most recent per unique title
     await pool.query(`
@@ -17578,41 +17581,70 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       thinPages: thinPages.length,
     };
 
-    // Get existing fixed finding titles so we don't re-create them
-    const fixedTitles = new Set();
-    const fixedRows = await pool.query(
-      `SELECT title FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='fixed'`, [projectId]
-    );
-    fixedRows.rows.forEach(r => fixedTitles.add(r.title));
-
-    // Save findings (skip if already fixed — issue was already resolved)
+    // MERGE findings: update existing, add new, keep unmatched existing (don't delete them)
+    const newTitles = new Set(findings.map(f => f.title));
     const savedFindings = [];
+    let skippedFixed = 0;
+    let updated = 0;
+    let added = 0;
+
     for (const f of findings) {
-      if (fixedTitles.has(f.title)) {
+      const existing = existingByTitle.get(f.title);
+
+      if (existing && existing.status === 'fixed') {
+        // Already fixed — don't re-create
         console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
+        skippedFixed++;
         continue;
       }
-      const r = await pool.query(
-        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-        [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value,
-         f.verification ? JSON.stringify({ audit: f.verification }) : null]
-      );
-      f.id = r.rows[0].id;
-      f.status = 'new';
-      savedFindings.push(f);
+
+      if (existing) {
+        // Existing finding with same title — update description/severity but keep status
+        await pool.query(
+          `UPDATE audit_findings SET audit_id=$1, description=$2, recommendation=$3, severity=$4,
+           current_value=$5, recommended_value=$6, category=$7, updated_at=NOW()
+           WHERE id=$8`,
+          [auditId, f.description, f.recommendation, f.severity,
+           f.current_value, f.recommended_value, f.category, existing.id]
+        );
+        f.id = existing.id;
+        f.status = existing.status;
+        savedFindings.push(f);
+        updated++;
+      } else {
+        // New finding — insert
+        const r = await pool.query(
+          `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, verification)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+          [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value,
+           f.verification ? JSON.stringify({ audit: f.verification }) : null]
+        );
+        f.id = r.rows[0].id;
+        f.status = 'new';
+        savedFindings.push(f);
+        added++;
+      }
     }
+
+    // Existing findings NOT reproduced by this audit stay as-is (not deleted)
+    // They may still be valid issues the AI just didn't flag this time
+    const keptFromPrevious = existingFindings.rows.filter(ef =>
+      !newTitles.has(ef.title) && ef.status !== 'fixed' && ef.status !== 'rejected'
+    );
 
     await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
       ['completed', JSON.stringify(summary), auditId]);
 
-    console.log(`[website-audit] Project ${projectId}: ${savedFindings.length} new findings (${findings.length - savedFindings.length} skipped as already fixed) from ${successPages.length} pages`);
+    console.log(`[website-audit] Project ${projectId}: ${added} new, ${updated} updated, ${skippedFixed} skipped (fixed), ${keptFromPrevious.length} kept from previous audit — ${successPages.length} pages crawled`);
 
-    // Return saved + existing fixed findings so UI shows both
-    const allFixedFindings = await pool.query(
-      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status='fixed' ORDER BY updated_at DESC`, [projectId]
+    // Return all current findings (new + updated + kept + fixed)
+    const allCurrentFindings = await pool.query(
+      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'rejected' ORDER BY
+       CASE WHEN status='fixed' THEN 1 ELSE 0 END,
+       CASE severity WHEN 'Critical' THEN 0 WHEN 'critical' THEN 0 WHEN 'High' THEN 1 WHEN 'high' THEN 1 WHEN 'Medium' THEN 2 WHEN 'medium' THEN 2 ELSE 3 END`,
+      [projectId]
     );
-    res.json({ findings: [...savedFindings, ...allFixedFindings.rows], summary });
+    res.json({ findings: allCurrentFindings.rows, summary });
   } catch (e) {
     console.error('[website-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
