@@ -18090,28 +18090,75 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, '', $3, 'schema_fix', 'json_ld', 'none', $4)`,
         [projectId, targetPageId, finding.title, JSON.stringify(schemaJson).substring(0, 1000)]);
 
-      // POST-FIX VERIFICATION: Wait a moment then re-check the live page
-      // WordPress + caching means we check the meta field was written, not the live page (cache may be stale)
-      let postVerifyResult = 'write_confirmed';
+      // POST-FIX VERIFICATION: 3-step check
+      // Step 1: Confirm meta field was written to WordPress
+      let wpWriteConfirmed = false;
       try {
         const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}?_fields=id,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
         if (checkResp.ok) {
           const checkData = await checkResp.json();
           const savedSchema = checkData.meta?._seoroom_schema || '';
-          if (savedSchema && savedSchema.includes(schemaJson['@type'])) {
-            postVerifyResult = 'verified_in_wordpress';
-          } else {
-            postVerifyResult = 'write_not_confirmed';
-          }
+          wpWriteConfirmed = savedSchema && savedSchema.includes(schemaJson['@type']);
         }
       } catch {}
-      await saveVerification(finding.id, 'post_fix', { result: postVerifyResult, schema_type: schemaJson['@type'], page_id: targetPageId, page_type: targetPageType });
-      console.log(`[technical-fix] Post-verify: ${postVerifyResult} for ${schemaJson['@type']} on ${targetPageType}/${targetPageId}`);
+
+      // Step 2: Check live page for the schema AND detect duplications
+      // Small delay for WP object cache to clear
+      await new Promise(r => setTimeout(r, 2000));
+      const targetPageUrl = targetUrls[0] || `https://${domain}/`;
+      const postCheck = await verifyLivePage(targetPageUrl);
+      const schemaType = schemaJson['@type'];
+      const typeCount = (postCheck.schemas || []).filter(s => (s || '').toLowerCase() === schemaType.toLowerCase()).length;
+      const hasDuplicate = typeCount > 1;
+      const pluginRendered = (postCheck.schemaDetails || []).some(d => d.source === 'seoroom' && d.types.some(t => t.toLowerCase() === schemaType.toLowerCase()));
+
+      // Step 3: If duplicate detected, ROLLBACK — remove our schema to avoid penalty
+      let rolledBack = false;
+      if (hasDuplicate) {
+        console.warn(`[technical-fix] DUPLICATE DETECTED: ${typeCount}x ${schemaType} on ${targetPageUrl}. Rolling back.`);
+        try {
+          // Check who else is outputting it
+          const otherSources = (postCheck.schemaDetails || []).filter(d => d.source !== 'seoroom' && d.types.some(t => t.toLowerCase() === schemaType.toLowerCase()));
+          if (otherSources.length > 0) {
+            // Another plugin (Rank Math, Yoast, etc.) is already outputting this schema — remove ours
+            await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
+              signal: AbortSignal.timeout(15000)
+            });
+            rolledBack = true;
+            await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+            console.log(`[technical-fix] Rolled back: ${schemaType} already output by ${otherSources.map(s => s.source).join(', ')}`);
+          }
+        } catch (rollbackErr) {
+          console.error(`[technical-fix] Rollback failed:`, rollbackErr.message);
+        }
+      }
+
+      const postVerifyResult = rolledBack ? 'rolled_back_duplicate' :
+        hasDuplicate ? 'duplicate_warning' :
+        pluginRendered ? 'verified_on_live_page' :
+        wpWriteConfirmed ? 'verified_in_wordpress' : 'write_not_confirmed';
+
+      await saveVerification(finding.id, 'post_fix', {
+        result: postVerifyResult, schema_type: schemaType, page_id: targetPageId,
+        live_schemas: postCheck.schemas, schema_sources: postCheck.schemaDetails,
+        duplicate_count: typeCount, rolled_back: rolledBack
+      });
+      console.log(`[technical-fix] Post-verify: ${postVerifyResult} for ${schemaType} — ${typeCount} instance(s) on page`);
+
+      if (rolledBack) {
+        return res.json({
+          success: true, fix_type: 'already_present',
+          message: `${schemaType} is already output by another plugin (${(postCheck.schemaDetails || []).filter(d => d.source !== 'seoroom').map(d => d.source).join(', ')}). Removed our duplicate to avoid Google penalty.`,
+          verification: { post: postVerifyResult, duplicate_count: typeCount }
+        });
+      }
 
       return res.json({
-        success: true, fix_type: 'schema', schema_type: schemaJson['@type'], page_id: targetPageId,
-        verified: postVerifyResult === 'verified_in_wordpress',
-        verification: { post: postVerifyResult }
+        success: true, fix_type: 'schema', schema_type: schemaType, page_id: targetPageId,
+        verified: postVerifyResult === 'verified_on_live_page' || postVerifyResult === 'verified_in_wordpress',
+        verification: { post: postVerifyResult, live_schemas: postCheck.schemas }
       });
     }
 

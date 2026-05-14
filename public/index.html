@@ -6447,11 +6447,15 @@
           if (r.success) {
             setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
             if (r.fix_type === 'already_present') {
-              setFixResult({ id: f.id, ok: true, msg: `Verified on live page: already present. ${r.message}` });
+              setFixResult({ id: f.id, ok: true, msg: r.message });
+            } else if (r.verification?.post === 'rolled_back_duplicate') {
+              setFixResult({ id: f.id, ok: true, msg: r.message });
+            } else if (r.verification?.post === 'verified_on_live_page') {
+              setFixResult({ id: f.id, ok: true, msg: `Fixed & verified on live page: ${r.schema_type} is rendering correctly` });
             } else if (r.verified) {
-              setFixResult({ id: f.id, ok: true, msg: `Fixed & verified: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''} — confirmed in WordPress` });
+              setFixResult({ id: f.id, ok: true, msg: `Fixed & confirmed in WordPress: ${r.schema_type}. Will appear on live page after cache clears.` });
             } else {
-              setFixResult({ id: f.id, ok: true, msg: `Fixed: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''}${r.pages_fixed ? ' — ' + r.pages_fixed + ' pages updated' : ''} — verify on live site after cache clears` });
+              setFixResult({ id: f.id, ok: true, msg: `Fix applied: ${r.fix_type}${r.schema_type ? ' (' + r.schema_type + ')' : ''} — check live page after cache clears` });
             }
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
