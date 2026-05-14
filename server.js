@@ -4841,7 +4841,7 @@ app.post('/api/projects/:projectId/reviews/sync', async (req, res) => {
 app.post('/api/projects/:projectId/page-exclusions', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { url, action } = req.body; // action: 'add' or 'remove'
+    const { url, action, label } = req.body; // action: 'add' or 'remove', label: page type classification
     if (!url) return res.status(400).json({ error: 'url required' });
 
     const project = (await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId])).rows[0];
@@ -4854,9 +4854,16 @@ app.post('/api/projects/:projectId/page-exclusions', async (req, res) => {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '').toLowerCase();
 
     if (action === 'remove') {
-      exclusions = exclusions.filter(e => e !== normalizedPath);
+      exclusions = exclusions.filter(e => {
+        const ePath = typeof e === 'string' ? e : e.path;
+        return ePath !== normalizedPath;
+      });
     } else {
-      if (!exclusions.includes(normalizedPath)) exclusions.push(normalizedPath);
+      // Store as object with path + label for classification
+      const existing = exclusions.find(e => (typeof e === 'string' ? e : e.path) === normalizedPath);
+      if (!existing) {
+        exclusions.push({ path: normalizedPath, label: label || 'Not a service', excludedAt: new Date().toISOString() });
+      }
     }
 
     await pool.query('UPDATE projects SET page_exclusions=$1 WHERE id=$2', [JSON.stringify(exclusions), projectId]);
@@ -17634,7 +17641,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // Check for Service schema on service pages
-    const pageExclusions = (project.page_exclusions || []).map(e => (typeof e === 'string' ? e : '').toLowerCase().replace(/\/$/, ''));
+    const pageExclusions = (project.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
     const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
     if (!hasServiceSchema && project.is_local_business) {
       // Detect service pages: any page that isn't a utility page (about, contact, blog, privacy, etc.)

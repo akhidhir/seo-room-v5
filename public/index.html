@@ -6428,6 +6428,7 @@
       const [summary, setSummary] = useState(null);
       const [fixing, setFixing] = useState(null);
       const [fixResult, setFixResult] = useState(null);
+      const [excludeForm, setExcludeForm] = useState(null); // { findingId, url } — shows classify form
 
       const isAutoFixable = (f) => {
         const t = (f.title || '').toLowerCase();
@@ -6816,15 +6817,29 @@
                                 <i className="fas fa-external-link-alt" style={{ marginRight: 3 }} />Test Schema
                               </a>
                               {isServiceFinding && pageUrl !== `https://${domain}/` && (
-                                <button onClick={async (e) => {
-                                  e.stopPropagation();
-                                  try {
-                                    await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add' } });
-                                    setFixResult({ id: f.id, ok: true, msg: `Excluded "${pageUrl}" — re-run audit to update.` });
-                                  } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
-                                }} style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, padding: '1px 6px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                  <i className="fas fa-times" style={{ marginRight: 3 }} />Not a service
-                                </button>
+                                excludeForm?.findingId === f.id && excludeForm?.url === pageUrl ? (
+                                  <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    {['Blog/Article', 'Landing Page', 'Portfolio', 'Other'].map(label => (
+                                      <button key={label} onClick={async () => {
+                                        try {
+                                          await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
+                                          setFixResult({ id: f.id, ok: true, msg: `Marked as "${label}" — re-run audit to update.` });
+                                          setExcludeForm(null);
+                                        } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
+                                      }} style={{ background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 4, padding: '1px 8px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                        {label}
+                                      </button>
+                                    ))}
+                                    <button onClick={() => setExcludeForm(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 10, padding: '1px 4px' }}>
+                                      <i className="fas fa-times" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button onClick={(e) => { e.stopPropagation(); setExcludeForm({ findingId: f.id, url: pageUrl }); }}
+                                    style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, padding: '1px 6px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <i className="fas fa-times" style={{ marginRight: 3 }} />Not a service
+                                  </button>
+                                )
                               )}
                             </div>;
                           })()}
