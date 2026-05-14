@@ -17610,6 +17610,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         if (nonServiceSlugs.includes(path) || nonServiceSlugs.includes(path.split('/').pop())) return false;
         // Skip blog posts (usually have /blog/ or /news/ prefix, or date patterns)
         if (/^(blog|news|category|tag|author|20\d{2})\//.test(path)) return false;
+        // Skip blog-style articles: slugs with 6+ hyphenated words are likely articles, not service pages
+        const slug = path.split('/').pop() || path;
+        if (slug.split('-').length >= 6) return false;
         // Skip pages with no real content
         if ((p.wordCount || 0) < 100) return false;
         return true;
@@ -17683,6 +17686,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       { keyword: 'q&a', topic: 'faqpage' },
       { keyword: 'service schema', topic: 'service' },
       { keyword: 'service markup', topic: 'service' },
+      { keyword: 'service categorisation', topic: 'service' },
+      { keyword: 'no service schema', topic: 'service' },
+      { keyword: 'aggregaterating', topic: 'aggregaterating' },
+      { keyword: 'aggregate rating', topic: 'aggregaterating' },
+      { keyword: 'review schema', topic: 'aggregaterating' },
+      { keyword: 'openinghours', topic: 'openinghours' },
+      { keyword: 'opening hours', topic: 'openinghours' },
+      { keyword: 'sitelinkssearchbox', topic: 'sitelinkssearchbox' },
+      { keyword: 'sitelinks', topic: 'sitelinkssearchbox' },
       { keyword: 'breadcrumb', topic: 'breadcrumb' },
     ];
     const getTopics = (title) => {
@@ -17697,28 +17709,32 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let updated = 0;
     let added = 0;
 
-    // Build set of topics that are already fixed (to prevent AI re-generating them with different titles)
+    // Build set of ALL covered topics: fixed, existing (any status), and within-batch
+    // This prevents: (a) re-creating fixed findings, (b) AI duplicating rule-based findings,
+    // (c) multiple AI findings about the same topic in one batch
     const fixedTopics = new Set();
+    const coveredTopics = new Set();
     for (const ef of existingFindings.rows) {
       if (ef.status === 'fixed') {
         getTopics(ef.title).forEach(t => fixedTopics.add(t));
       }
+      // Track ALL existing topics regardless of status
+      getTopics(ef.title).forEach(t => coveredTopics.add(t));
     }
 
     for (const f of findings) {
       const existing = existingByTitle.get(f.title);
 
       if (existing && existing.status === 'fixed') {
-        // Already fixed — don't re-create
         console.log(`[website-audit] Skipping "${f.title}" — already fixed`);
         skippedFixed++;
         continue;
       }
 
-      // Topic-based fixed check: if this new finding's topic is already fixed, skip it
+      // Topic-based check: skip if topic already covered (fixed, existing in DB, or already inserted this batch)
       const newFindingTopics = getTopics(f.title);
-      if (newFindingTopics.length > 0 && newFindingTopics.some(t => fixedTopics.has(t))) {
-        console.log(`[website-audit] Skipping "${f.title}" — topic already fixed (${newFindingTopics.join(',')})`);
+      if (newFindingTopics.length > 0 && !existing && newFindingTopics.some(t => coveredTopics.has(t))) {
+        console.log(`[website-audit] Skipping "${f.title}" — topic already covered (${newFindingTopics.join(',')})`);
         skippedFixed++;
         continue;
       }
@@ -17748,6 +17764,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         f.status = 'new';
         savedFindings.push(f);
         added++;
+        // Track this finding's topics so subsequent findings in the same batch are deduped
+        newFindingTopics.forEach(t => coveredTopics.add(t));
       }
     }
 
@@ -18244,6 +18262,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             if (!slug || slug === 'home' || slug === 'homepage') return false;
             if (nonServiceSlugs.includes(slug)) return false;
             if (/^(blog|news|category|tag|author)/.test(slug)) return false;
+            // Skip blog-style articles (slugs with 6+ hyphenated words)
+            if (slug.split('-').length >= 6) return false;
             return true;
           });
           console.log(`[technical-fix] Fallback exclusion-based: found ${wpServicePages.length} service pages`);
@@ -19021,6 +19041,7 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
                 if (!slug || slug === 'home' || slug === 'homepage') return false;
                 if (nonServiceSlugs.includes(slug)) return false;
                 if (/^(blog|news|category|tag|author)/.test(slug)) return false;
+                if (slug.split('-').length >= 6) return false;
                 return true;
               });
               targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
