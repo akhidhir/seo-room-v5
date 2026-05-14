@@ -6600,7 +6600,7 @@
         let list = [...findings];
         if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
         if (filterCat !== 'all') list = list.filter(f => f.category === filterCat);
-        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
+        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected');
         else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
         if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
         // Sort: unfixed first, fixed at bottom
