@@ -17707,44 +17707,44 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for FAQPage schema — look for pages with Q&A content but no FAQ schema
-    const hasFAQSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage')));
-    if (!hasFAQSchema) {
-      // Check if any pages have FAQ-like content (detected during crawl)
-      const pagesWithQA = successPages.filter(p => (p.questionHeadings || 0) >= 3 || p.hasFAQSection);
-      if (pagesWithQA.length > 0) {
-        findings.push({
-          pillar: 'website', category: 'Schema & Data',
-          title: `${pagesWithQA.length} page(s) with Q&A content but no FAQPage schema`,
-          description: `Pages with FAQ-style content: ${pagesWithQA.slice(0, 5).map(p => p.path).join(', ')}. Adding FAQPage schema enables rich FAQ snippets in Google search results, increasing visibility and click-through rates.`,
-          recommendation: 'Add FAQPage JSON-LD schema to pages with Q&A content. Include the question as "name" and answer as "acceptedAnswer" for each FAQ item.',
-          severity: 'Critical',
-          current_value: `${pagesWithQA.length} page(s) with Q&As, no FAQPage schema`,
-          recommended_value: 'FAQPage schema on all FAQ pages'
-        });
-      }
+    // Check for FAQPage schema — individual finding per page with Q&A content but no FAQ schema
+    const pagesWithQA = successPages.filter(p => {
+      const hasQA = (p.questionHeadings || 0) >= 3 || p.hasFAQSection;
+      const alreadyHasFAQ = p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage'));
+      return hasQA && !alreadyHasFAQ;
+    });
+    for (const qPage of pagesWithQA) {
+      const pageUrl = qPage.url || `https://${domain}${qPage.path}`;
+      findings.push({
+        pillar: 'website', category: 'Schema & Data',
+        title: `Missing FAQPage schema on ${qPage.path}`,
+        description: `${pageUrl} has FAQ-style Q&A content (${qPage.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
+        recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
+        severity: 'Medium',
+        current_value: JSON.stringify([pageUrl]),
+        recommended_value: 'FAQPage schema on this page'
+      });
     }
 
-    // Check for Service schema on service pages
+    // Check for Service schema on service pages — individual finding per page
     const pageExclusions = (project.page_exclusions || []).map(e => (typeof e === 'string' ? e : (e.path || '')).toLowerCase().replace(/\/$/, ''));
-    const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
-    if (!hasServiceSchema && project.is_local_business) {
-      // Detect service pages: any page that isn't a utility page (about, contact, blog, privacy, etc.)
+    if (project.is_local_business) {
       const servicePages = successPages.filter(p => isServicePage(p.path, p.schemas, p.wordCount, pageExclusions));
-      if (servicePages.length > 0) {
-        const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-        // Store full URLs in description for Fix endpoint to use
-        const svcUrls = servicePages.slice(0, 20).map(p => p.url || `https://${svcDomain}/${(p.path || '').replace(/^\/|\/$/g, '')}/`);
-        const firstSvcUrl = svcUrls[0];
-        findings.push({
-          pillar: 'website', category: 'Schema & Data',
-          title: 'Missing Service schema on service pages',
-          description: `${servicePages.length} service page(s) found without Service schema: ${svcUrls.slice(0, 5).join(', ')}. Service schema helps Google understand your offerings and can enhance search listings.`,
-          recommendation: 'Add Service JSON-LD schema to each service page with name, description, provider (your business), and areaServed.',
-          severity: 'Medium',
-          current_value: JSON.stringify(svcUrls),
-          recommended_value: 'Service schema on all service pages'
-        });
+      const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      for (const svcPage of servicePages) {
+        const hasService = svcPage.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
+        if (!hasService) {
+          const pageUrl = svcPage.url || `https://${svcDomain}/${(svcPage.path || '').replace(/^\/|\/$/g, '')}/`;
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${svcPage.path}`,
+            description: `${pageUrl} is a service page without Service structured data. Service schema helps Google understand your offerings and can enhance search listings.`,
+            recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
+            severity: 'Medium',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: 'Service schema on this page'
+          });
+        }
       }
     }
 
