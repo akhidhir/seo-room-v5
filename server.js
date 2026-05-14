@@ -17806,13 +17806,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         const classification = classificationMap[normSlug];
 
         if (hasService) {
-          // Schema present — create a "fixed" record for classified Service/Suburb pages so they stay visible
-          if (classification && ['Service', 'Suburb'].includes(classification)) {
+          // Schema present — create a "fixed" record so it stays visible
+          const isRelevant = (classification && ['Service', 'Suburb'].includes(classification))
+            || (!classification && isServicePage(page.path, page.schemas, page.wordCount, excludedPaths));
+          if (isRelevant) {
             const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
             findings.push({
               pillar: 'website', category: 'Schema & Data',
               title: `Missing Service schema on ${normSlug}`,
-              description: `${pageUrl} — Service schema is present. Classified as "${classification}".`,
+              description: `${pageUrl} — Service schema is present.${classification ? ` Classified as "${classification}".` : ''}`,
               recommendation: 'Schema is correctly configured on this page.',
               severity: 'Medium',
               current_value: JSON.stringify([pageUrl]),
