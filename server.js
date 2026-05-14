@@ -17708,7 +17708,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
       // Check if this old finding overlaps with a new rule-based finding by topic
       const oldTopics = getTopics(ef.title);
-      if (oldTopics.some(t => newTopics.has(t))) {
+      // Remove if topic overlaps with ANY rule-based schema check (even if rule produced no finding this run)
+      const allRuleBasedTopics = new Set(['localbusiness', 'faqpage', 'service', 'breadcrumb']);
+      if (oldTopics.some(t => newTopics.has(t) || allRuleBasedTopics.has(t))) {
         // Old finding is a duplicate of a rule-based finding — remove it
         await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
         console.log(`[website-audit] Removed duplicate old finding: "${ef.title}" (overlaps with rule-based finding)`);
