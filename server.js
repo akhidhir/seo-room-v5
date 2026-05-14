@@ -4846,18 +4846,35 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     if (!wpUrl) return res.json({ installed: false, reason: 'no_wordpress_url' });
     const authHeaders = getWpAuthHeaders(project);
-    try {
-      const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1/yoast-scores`, {
-        signal: AbortSignal.timeout(8000),
-        ...(authHeaders ? { headers: authHeaders } : {}),
-      });
-      if (resp.ok || resp.status === 401) {
-        return res.json({ installed: true });
-      }
-      return res.json({ installed: false, reason: 'not_found' });
-    } catch (e) {
-      return res.json({ installed: false, reason: 'unreachable', message: e.message });
+    // Check multiple endpoints — BerqWP firewall may block some
+    const endpoints = [
+      `${wpUrl}/wp-json/seoroom/v1/yoast-scores`,
+      `${wpUrl}/wp-json/seoroom/v1/purge-cache`,
+      `${wpUrl}/wp-json/seoroom/v1/cwv-fixes`,
+    ];
+    for (const ep of endpoints) {
+      try {
+        const resp = await fetch(ep, {
+          signal: AbortSignal.timeout(6000),
+          ...(authHeaders ? { headers: authHeaders } : {}),
+        });
+        // Any response except 404 means the route exists = plugin is active
+        if (resp.status !== 404) {
+          return res.json({ installed: true });
+        }
+      } catch {}
     }
+    // Also check if seoroom namespace exists in WP REST index
+    try {
+      const indexResp = await fetch(`${wpUrl}/wp-json`, { signal: AbortSignal.timeout(6000) });
+      if (indexResp.ok) {
+        const indexData = await indexResp.json();
+        if (indexData.namespaces && indexData.namespaces.includes('seoroom/v1')) {
+          return res.json({ installed: true });
+        }
+      }
+    } catch {}
+    return res.json({ installed: false, reason: 'not_found' });
   } catch (err) {
     console.error('[plugin-status]', err);
     res.status(500).json({ error: err.message });
