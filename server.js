@@ -18073,8 +18073,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // Fetch a live page and extract all schema types + check specific HTML elements
     const verifyLivePage = async (pageUrl) => {
       try {
-        const bustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
-        const resp = await fetch(bustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache' } });
+        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
         if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [], checks: {} };
         const html = await resp.text();
         const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
@@ -18255,21 +18254,40 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           // Verify first service page
           const firstServicePage = wpServicePages[0];
           const verifyUrl = firstServicePage?.link || `https://${domain}/`;
-          const bustUrl2 = verifyUrl + (verifyUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
-          let serviceVerified = false;
+          // Verify via WP REST API that meta was actually written
+          let metaVerified = false;
           try {
-            const vResp = await fetch(bustUrl2, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache' } });
-            if (vResp.ok) {
-              const vHtml = await vResp.text();
-              serviceVerified = /Service/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
+            const checkResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${firstPageId}?_fields=meta&context=edit`, {
+              headers: authHeaders, signal: AbortSignal.timeout(10000)
+            });
+            if (checkResp.ok) {
+              const checkData = await checkResp.json();
+              const storedSchema = checkData.meta?._seoroom_schema || '';
+              metaVerified = storedSchema.includes('"Service"');
+              console.log(`[technical-fix] Service meta verify: ${metaVerified ? 'CONFIRMED' : 'NOT FOUND'} on page ${firstPageId}`);
             }
           } catch {}
 
+          // Also check live page (may still show cached version)
+          let liveVerified = false;
+          try {
+            const vResp = await fetch(verifyUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } });
+            if (vResp.ok) {
+              const vHtml = await vResp.text();
+              liveVerified = /Service/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
+            }
+          } catch {}
+
+          const verified = metaVerified || liveVerified;
+          if (verified) {
+            await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+          }
+
           return res.json({
             success: true, fix_type: 'schema', schema_type: 'Service',
-            message: `Service schema written to ${fixedCount} service page(s).`,
-            verified: serviceVerified,
-            verification: { post: serviceVerified ? 'verified_on_live_page' : 'verified_in_wordpress', pages_fixed: fixedCount }
+            message: `Service schema written to ${fixedCount} service page(s).${metaVerified ? ' Confirmed in WordPress.' : ''}${liveVerified ? ' Verified on live page.' : ' CDN may still show cached version.'}`,
+            verified,
+            verification: { post: liveVerified ? 'verified_on_live_page' : metaVerified ? 'verified_in_wordpress' : 'write_not_confirmed', pages_fixed: fixedCount }
           });
         } else {
           return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Check that service pages exist and contain keywords like: service, plumb, drain, hot-water, repair, etc.` });
@@ -18947,8 +18965,7 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
     // Fetch and analyze each target page
     const verifyPage = async (pageUrl) => {
       try {
-        const bustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + `_seoroom_nocache=${Date.now()}`;
-        const resp = await fetch(bustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache' } });
+        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
         if (!resp.ok) return { url: pageUrl, error: `HTTP ${resp.status}` };
         const html = await resp.text();
 
