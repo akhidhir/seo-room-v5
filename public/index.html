@@ -6516,6 +6516,8 @@
         try { await api(`/projects/${project.id}/purge-cache`, { method: 'POST', body: {} }); } catch {}
         const okCount = results.filter(r => r.ok).length;
         setFixAllProgress({ current: total, total, results, running: false, done: true, okCount });
+        // Switch filter to show fixed findings so user can verify them
+        setFilterStatus('all');
       };
 
       // Verify a finding is actually fixed by crawling the live page
@@ -6598,7 +6600,7 @@
         let list = [...findings];
         if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
         if (filterCat !== 'all') list = list.filter(f => f.category === filterCat);
-        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected');
+        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected' && f.status !== 'fixed');
         else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
         if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
         // Sort: unfixed first, fixed at bottom
@@ -6854,7 +6856,7 @@
               <option value="all">All Severities</option><option value="critical">Critical</option><option value="medium">Medium</option><option value="low">Low</option>
             </select>
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
-              <option value="active">Active</option><option value="all">All</option><option value="approved">Approved</option><option value="rejected">Ignored</option>
+              <option value="active">Active</option><option value="all">All</option><option value="fixed">Fixed</option><option value="approved">Approved</option><option value="rejected">Ignored</option>
             </select>
             <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.length}</span>
           </div>
