@@ -17227,7 +17227,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
           // FAQ/Q&A detection for schema recommendations
           const questionHeadings = (html.match(/<h[2-4][^>]*>[^<]*\?[^<]*<\/h[2-4]>/gi) || []).length;
-          const hasFAQSection = /faq|frequently asked|common questions/i.test(html);
+          // Only detect FAQ section if it appears in a heading or dedicated section ID/class — not nav/footer mentions
+          const hasFAQSection = /<h[1-4][^>]*>[^<]*(faq|frequently asked|common questions)[^<]*<\/h[1-4]>/i.test(html)
+            || /<(section|div)[^>]*(id|class)="[^"]*faq[^"]*"[^>]*>/i.test(html);
 
           return {
             url: page.url, path: page.slug || page.url.replace(baseUrl, '') || '/', title: page.title,
