@@ -7403,10 +7403,15 @@
       const handleAutoFix = async (pageKey, page) => {
         setFixingPage(pageKey);
         try {
-          const result = await api(`/projects/${project.id}/cwv-fix`, {
+          const result = await api(`/projects/${project.id}/speed-fix`, {
             method: 'POST',
-            body: { page_url: page.url, opportunities: page.opportunities || [] }
+            body: { page_url: page.url, page_id: page.page_id, opportunities: page.opportunities || [] }
           });
+          // Normalize response for UI: map applied array length to fixes_applied
+          if (result.success && result.applied) {
+            result.fixes_applied = result.applied.length;
+            result.applied = result.applied.map(a => ({ fix_type: a }));
+          }
           setFixResults(prev => ({ ...prev, [pageKey]: result }));
         } catch (e) {
           setFixResults(prev => ({ ...prev, [pageKey]: { error: e.message } }));
@@ -7620,7 +7625,7 @@
                                       ))}
                                     </div>
                                   ) : fixResults[pageKey]?.fixes_applied === 0 ? (
-                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].message || 'No additional fixes needed — BerqWP handles the rest'}</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].message || 'No safe auto-fixes available — remaining issues need manual optimization'}</div>
                                   ) : (
                                     <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); handleAutoFix(pageKey, page); }} disabled={fixingPage === pageKey} style={{ fontSize: 12, padding: '6px 16px' }}>
                                       {fixingPage === pageKey ? <><span className="spinner"></span>Analyzing & Fixing...</> : <><i className="fas fa-magic" style={{ marginRight: 6 }} />Auto-Fix via Plugin</>}
