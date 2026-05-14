@@ -435,6 +435,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_ai_budget NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_hours NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -4832,6 +4833,46 @@ app.post('/api/projects/:projectId/reviews/sync', async (req, res) => {
     res.json({ cached: minimal.length });
   } catch (e) {
     console.error('[reviews-sync] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== PAGE EXCLUSIONS (mark pages as "not a service page") ====================
+app.post('/api/projects/:projectId/page-exclusions', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { url, action } = req.body; // action: 'add' or 'remove'
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    const project = (await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    let exclusions = project.page_exclusions || [];
+    if (typeof exclusions === 'string') exclusions = JSON.parse(exclusions);
+
+    // Normalize URL to path for matching
+    const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '').toLowerCase();
+
+    if (action === 'remove') {
+      exclusions = exclusions.filter(e => e !== normalizedPath);
+    } else {
+      if (!exclusions.includes(normalizedPath)) exclusions.push(normalizedPath);
+    }
+
+    await pool.query('UPDATE projects SET page_exclusions=$1 WHERE id=$2', [JSON.stringify(exclusions), projectId]);
+    console.log(`[page-exclusions] ${action || 'add'} "${normalizedPath}" for project ${projectId}. Total: ${exclusions.length}`);
+    res.json({ success: true, exclusions });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/projects/:projectId/page-exclusions', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT page_exclusions FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    res.json({ exclusions: project.page_exclusions || [] });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -17593,6 +17634,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // Check for Service schema on service pages
+    const pageExclusions = (project.page_exclusions || []).map(e => (typeof e === 'string' ? e : '').toLowerCase().replace(/\/$/, ''));
     const hasServiceSchema = successPages.some(p => p.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer'))));
     if (!hasServiceSchema && project.is_local_business) {
       // Detect service pages: any page that isn't a utility page (about, contact, blog, privacy, etc.)
@@ -17610,9 +17652,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         if (nonServiceSlugs.includes(path) || nonServiceSlugs.includes(path.split('/').pop())) return false;
         // Skip blog posts (usually have /blog/ or /news/ prefix, or date patterns)
         if (/^(blog|news|category|tag|author|20\d{2})\//.test(path)) return false;
-        // Skip blog-style articles: slugs with 5+ hyphenated words are likely articles, not service pages
-        const slug = path.split('/').pop() || path;
-        if (slug.split('-').length >= 5) return false;
+        // Skip pages with Article/BlogPosting schema — these are blog content, not service pages
+        if (p.schemas && p.schemas.some(s => typeof s === 'string' && (s.includes('Article') || s.includes('BlogPosting') || s.includes('NewsArticle')))) return false;
+        // Skip user-excluded pages
+        const normalizedPath = '/' + path;
+        if (pageExclusions.some(ex => normalizedPath === ex || path === ex.replace(/^\//, ''))) return false;
         // Skip pages with no real content
         if ((p.wordCount || 0) < 100) return false;
         return true;
