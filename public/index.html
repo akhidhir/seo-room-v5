@@ -6465,6 +6465,27 @@
         setFixing(null);
       };
 
+      // Verify a finding is actually fixed by crawling the live page
+      const verifyFix = async (f) => {
+        setFixing(f.id); setFixResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/verify-fix`, { method: 'POST', body: { finding_id: f.id } });
+          if (r.verified) {
+            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+            setFixResult({ id: f.id, ok: true, msg: `Verified on live page: ${r.reason}` });
+            if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
+          } else {
+            // Verification failed — reset to new if it was falsely fixed
+            if (f.status === 'fixed') {
+              setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'new' } : x));
+              if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'new' });
+            }
+            setFixResult({ id: f.id, ok: false, msg: `Not fixed: ${r.reason}` });
+          }
+        } catch (e) { setFixResult({ id: f.id, ok: false, msg: e.message }); }
+        setFixing(null);
+      };
+
       const loadFindings = async () => {
         setLoading(true); setError('');
         try {
@@ -6577,13 +6598,25 @@
                   <i className={`fas ${fixResult.ok ? 'fa-check-circle' : 'fa-exclamation-circle'}`} style={{ marginRight: 8 }} />{fixResult.msg}
                 </div>
               )}
-              <div style={{ display: 'flex', gap: 14, marginTop: 24 }}>
+              <div style={{ display: 'flex', gap: 14, marginTop: 24, flexWrap: 'wrap', alignItems: 'center' }}>
                 {f.status === 'fixed' ? (
-                  <span style={{ fontSize: 18, fontWeight: 700, color: '#22c55e', padding: '12px 28px' }}><i className="fas fa-check-circle" style={{ marginRight: 8 }} />Fixed</span>
+                  <>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: '#22c55e', padding: '12px 0' }}><i className="fas fa-check-circle" style={{ marginRight: 8 }} />Fixed</span>
+                    <button className="btn" onClick={() => verifyFix(f)} disabled={fixing === f.id}
+                      style={{ fontSize: 14, padding: '10px 20px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
+                      {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Verifying...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Re-verify on Live Page</>}
+                    </button>
+                  </>
                 ) : isAutoFixable(f) ? (
-                  <button className="btn btn-success" onClick={() => fixFinding(f)} disabled={fixing === f.id} style={{ fontSize: 16, padding: '12px 28px' }}>
-                    {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 8 }} />Fix Now</>}
-                  </button>
+                  <>
+                    <button className="btn btn-success" onClick={() => fixFinding(f)} disabled={fixing === f.id} style={{ fontSize: 16, padding: '12px 28px' }}>
+                      {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 8 }} />Fix Now</>}
+                    </button>
+                    <button className="btn" onClick={() => verifyFix(f)} disabled={fixing === f.id}
+                      style={{ fontSize: 14, padding: '12px 20px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
+                      {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Verifying...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Verify Fixed</>}
+                    </button>
+                  </>
                 ) : (
                   <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
                     <i className="fas fa-check" style={{ marginRight: 8 }} /> Acknowledge</button>
@@ -6757,15 +6790,27 @@
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                           {f.status === 'fixed' ? (
-                            <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
-                              <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
-                              {(() => { const v = typeof f.verification === 'string' ? JSON.parse(f.verification || '{}') : (f.verification || {}); const pr = v.post_fix?.result; const pre = v.pre_fix?.result; return pr === 'verified_on_live_page' || pr === 'verified_in_wordpress' || pr === 'completed' ? 'Verified Fixed' : pr === 'rolled_back_duplicate' ? 'Duplicate Removed' : pre === 'already_present' || pre === 'not_found' ? 'Verified OK' : 'Fixed'; })()}
-                            </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
+                                <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
+                                {(() => { const v = typeof f.verification === 'string' ? JSON.parse(f.verification || '{}') : (f.verification || {}); const pr = v.post_fix?.result; const pre = v.pre_fix?.result; return v.method === 'live_page_crawl' ? 'Verified Live' : pr === 'verified_on_live_page' || pr === 'verified_in_wordpress' || pr === 'completed' ? 'Verified Fixed' : pr === 'rolled_back_duplicate' ? 'Duplicate Removed' : pre === 'already_present' || pre === 'not_found' ? 'Verified OK' : 'Unverified'; })()}
+                              </span>
+                              <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); verifyFix(f); }} disabled={fixing === f.id}
+                                style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                                {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 3 }} />Checking...</> : <><i className="fas fa-redo" style={{ marginRight: 3 }} />Re-verify</>}
+                              </button>
+                            </div>
                           ) : isAutoFixable(f) ? (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixFinding(f); }} disabled={fixing === f.id}
-                              style={{ fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40' }}>
-                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Verifying & Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
-                            </button>
+                            <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                              <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixFinding(f); }} disabled={fixing === f.id}
+                                style={{ fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40' }}>
+                                {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
+                              </button>
+                              <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); verifyFix(f); }} disabled={fixing === f.id}
+                                style={{ fontSize: 14, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                                <i className="fas fa-search" style={{ marginRight: 4 }} />Verify
+                              </button>
+                            </div>
                           ) : (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
                               <i className="fas fa-search" style={{ marginRight: 4 }} /> Review

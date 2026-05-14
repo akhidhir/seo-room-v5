@@ -1996,6 +1996,10 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
 // Update finding status (approve/reject) — auto-creates action item on approve
 app.put('/api/audit-findings/:id', async (req, res) => {
   const { status } = req.body;
+  // Prevent manually marking as 'fixed' — must go through /verify-fix or /technical-fix
+  if (status === 'fixed') {
+    return res.status(400).json({ error: 'Cannot manually mark as fixed. Use the Verify Fix button to confirm the fix on the live page.' });
+  }
   try {
     const result = await pool.query(
       'UPDATE audit_findings SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
@@ -18397,6 +18401,210 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 
   } catch (e) {
     console.error('[technical-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== VERIFY FIX: Check if a finding's issue is actually resolved on live page ====================
+app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
+  const { projectId } = req.params;
+  const { finding_id } = req.body;
+  if (!finding_id) return res.status(400).json({ error: 'finding_id required' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const finding = (await pool.query('SELECT * FROM audit_findings WHERE id=$1 AND project_id=$2', [finding_id, projectId])).rows[0];
+    if (!finding) return res.status(404).json({ error: 'Finding not found' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (!domain) return res.status(400).json({ error: 'Project domain not set' });
+
+    const title = (finding.title || '').toLowerCase();
+    const cat = (finding.category || '').toLowerCase();
+    const desc = (finding.description || '') + ' ' + (finding.current_value || '');
+
+    // Determine which page(s) to check
+    let targetUrls = [];
+    const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
+    targetUrls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
+    // Always include homepage for LocalBusiness / site-wide issues
+    const homeUrl = `https://${domain}/`;
+    if (!targetUrls.includes(homeUrl)) targetUrls.unshift(homeUrl);
+    // Limit to 5 pages max
+    targetUrls = targetUrls.slice(0, 5);
+
+    console.log(`[verify-fix] Finding #${finding_id}: "${finding.title}" — checking ${targetUrls.length} page(s)`);
+
+    // Fetch and analyze each target page
+    const verifyPage = async (pageUrl) => {
+      try {
+        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+        if (!resp.ok) return { url: pageUrl, error: `HTTP ${resp.status}` };
+        const html = await resp.text();
+
+        // Extract all schema types
+        const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+        const schemas = [];
+        for (const sm of schemaMatches) {
+          try {
+            const jsonStr = sm.replace(/<\/?script[^>]*>/gi, '');
+            const parsed = JSON.parse(jsonStr);
+            const types = parsed['@type'] || (Array.isArray(parsed['@graph']) ? parsed['@graph'].map(g => g['@type']).filter(Boolean) : []);
+            schemas.push(...(Array.isArray(types) ? types : [types]));
+          } catch {}
+        }
+
+        return {
+          url: pageUrl,
+          schemas,
+          hasCanonical: /<link[^>]*rel=["']canonical["']/i.test(html),
+          canonical: (html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i) || [])[1] || null,
+          hasH1: /<h1[\s>]/i.test(html),
+          h1Count: (html.match(/<h1[\s>]/gi) || []).length,
+          isNoindex: /<meta[^>]*name=["']robots["'][^>]*content=["'][^"']*noindex/i.test(html),
+          hasViewport: /<meta[^>]*name=["']viewport["']/i.test(html),
+          hasHttps: !html.includes(`http://${domain}`),
+          hasOgTags: /<meta[^>]*property=["']og:/i.test(html),
+          hasSitemap: /<loc>/i.test(html), // only relevant if checking sitemap URL
+          ok: true
+        };
+      } catch (e) {
+        return { url: pageUrl, error: e.message };
+      }
+    };
+
+    const results = await Promise.all(targetUrls.map(u => verifyPage(u)));
+    const homeResult = results.find(r => r.url === homeUrl) || results[0];
+
+    // ---- VERIFICATION LOGIC PER FINDING TYPE ----
+    let verified = false;
+    let reason = '';
+    let details = {};
+
+    // Schema findings
+    if (cat.includes('schema') || title.includes('schema') || title.includes('json-ld') || title.includes('structured data')) {
+      const schemaType = title.includes('localbusiness') || title.includes('local business') ? 'LocalBusiness'
+        : title.includes('faqpage') || title.includes('faq') ? 'FAQPage'
+        : title.includes('service') ? 'Service'
+        : title.includes('breadcrumb') ? 'BreadcrumbList'
+        : title.includes('organization') ? 'Organization'
+        : title.includes('article') ? 'Article'
+        : null;
+
+      if (schemaType) {
+        const found = results.some(r => r.schemas && r.schemas.includes(schemaType));
+        verified = found;
+        reason = found
+          ? `${schemaType} schema found on live page`
+          : `${schemaType} schema NOT found on any checked page. Found types: ${[...new Set(results.flatMap(r => r.schemas || []))].join(', ') || 'none'}`;
+        details = { schemaType, pagesChecked: targetUrls.length, schemasFound: [...new Set(results.flatMap(r => r.schemas || []))] };
+      } else {
+        // Generic schema check — see if any new schemas appeared
+        const allSchemas = [...new Set(results.flatMap(r => r.schemas || []))];
+        verified = allSchemas.length > 0;
+        reason = verified ? `Found schemas: ${allSchemas.join(', ')}` : 'No structured data found on any page';
+        details = { schemasFound: allSchemas };
+      }
+    }
+    // Canonical findings
+    else if (title.includes('canonical')) {
+      const hasCanonical = results.some(r => r.hasCanonical);
+      // Check for self-referencing canonical
+      const selfRef = results.every(r => !r.hasCanonical || r.canonical === r.url || r.canonical === r.url.replace(/\/$/, ''));
+      verified = hasCanonical && selfRef;
+      reason = !hasCanonical ? 'Canonical tag still missing' : !selfRef ? 'Canonical tag exists but not self-referencing' : 'Canonical tag present and self-referencing';
+      details = { pagesChecked: targetUrls.length, canonicals: results.map(r => ({ url: r.url, canonical: r.canonical })) };
+    }
+    // Noindex findings
+    else if (title.includes('noindex')) {
+      const stillNoindex = results.some(r => r.isNoindex);
+      verified = !stillNoindex;
+      reason = stillNoindex ? 'Page is still noindexed' : 'Noindex removed — page is now indexable';
+      details = { pages: results.map(r => ({ url: r.url, noindex: r.isNoindex })) };
+    }
+    // H1 findings
+    else if (title.includes('h1')) {
+      if (title.includes('missing') || title.includes('no h1')) {
+        const hasH1 = results.some(r => r.hasH1);
+        verified = hasH1;
+        reason = hasH1 ? 'H1 tag now present' : 'H1 tag still missing';
+      } else if (title.includes('multiple') || title.includes('duplicate')) {
+        const multipleH1 = results.some(r => r.h1Count > 1);
+        verified = !multipleH1;
+        reason = multipleH1 ? `Still has multiple H1 tags (${results.find(r => r.h1Count > 1)?.h1Count})` : 'Only one H1 tag found';
+      } else {
+        verified = results.some(r => r.hasH1);
+        reason = verified ? 'H1 tag present' : 'H1 issue still exists';
+      }
+      details = { pages: results.map(r => ({ url: r.url, h1Count: r.h1Count })) };
+    }
+    // HTTPS / mixed content
+    else if (title.includes('https') || title.includes('mixed content') || title.includes('non-https')) {
+      const hasHttp = results.some(r => !r.hasHttps);
+      verified = !hasHttp;
+      reason = hasHttp ? 'Mixed content (HTTP links) still detected' : 'All links are HTTPS';
+      details = { pages: results.map(r => ({ url: r.url, allHttps: r.hasHttps })) };
+    }
+    // Viewport
+    else if (title.includes('viewport')) {
+      verified = results.some(r => r.hasViewport);
+      reason = verified ? 'Viewport meta tag present' : 'Viewport meta tag still missing';
+    }
+    // OG tags
+    else if (title.includes('og:') || title.includes('open graph') || title.includes('social')) {
+      verified = results.some(r => r.hasOgTags);
+      reason = verified ? 'Open Graph tags present' : 'Open Graph tags still missing';
+    }
+    // Generic / unrecognized finding type — cannot auto-verify
+    else {
+      // For findings we can't verify programmatically, do a basic crawl anyway
+      // and report what we found, but don't auto-mark as fixed
+      const allSchemas = [...new Set(results.flatMap(r => r.schemas || []))];
+      verified = false;
+      reason = `Cannot auto-verify "${finding.title}". Manual check required. Page returned: schemas=[${allSchemas.join(',')}], H1=${homeResult?.hasH1}, canonical=${homeResult?.hasCanonical}`;
+      details = { canAutoVerify: false, pageData: results[0] };
+    }
+
+    console.log(`[verify-fix] Finding #${finding_id}: verified=${verified}, reason: ${reason}`);
+
+    if (verified) {
+      // Mark as fixed with verification proof
+      const verification = JSON.stringify({
+        verified_at: new Date().toISOString(),
+        method: 'live_page_crawl',
+        pages_checked: targetUrls,
+        result: reason,
+        details
+      });
+      await pool.query(
+        `UPDATE audit_findings SET status='fixed', verification=$1, updated_at=NOW() WHERE id=$2`,
+        [verification, finding_id]
+      );
+      return res.json({ success: true, verified: true, status: 'fixed', reason, details });
+    } else {
+      // If it was previously marked fixed incorrectly, reset to 'new'
+      if (finding.status === 'fixed') {
+        const verification = JSON.stringify({
+          reverified_at: new Date().toISOString(),
+          method: 'live_page_crawl',
+          pages_checked: targetUrls,
+          result: 'verification_failed',
+          reason,
+          details
+        });
+        await pool.query(
+          `UPDATE audit_findings SET status='new', verification=$1, updated_at=NOW() WHERE id=$2`,
+          [verification, finding_id]
+        );
+        console.log(`[verify-fix] Finding #${finding_id} was marked fixed but verification FAILED — reset to 'new'`);
+      }
+      return res.json({ success: true, verified: false, status: finding.status === 'fixed' ? 'new' : finding.status, reason, details });
+    }
+
+  } catch (e) {
+    console.error('[verify-fix] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
