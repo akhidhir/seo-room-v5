@@ -18935,13 +18935,40 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
 
     // Determine which page(s) to check
     let targetUrls = [];
-    const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
-    targetUrls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
-    // Always include homepage for LocalBusiness / site-wide issues
     const homeUrl = `https://${domain}/`;
-    if (!targetUrls.includes(homeUrl)) targetUrls.unshift(homeUrl);
+
+    // For Service schema: fetch service pages from WP directly (same as fix logic)
+    if (title.includes('service') && title.includes('schema')) {
+      const wpUrl2 = (project.wordpress_url || '').replace(/\/$/, '');
+      const wpAuth2 = getWpAuthHeaders(project);
+      if (wpUrl2 && wpAuth2) {
+        try {
+          const pResp = await fetch(`${wpUrl2}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,link&status=publish`, {
+            headers: wpAuth2, signal: AbortSignal.timeout(15000)
+          });
+          if (pResp.ok) {
+            const allPages = await pResp.json();
+            const serviceKeywords = ['service', 'plumb', 'drain', 'hot-water', 'repair', 'install', 'renovation', 'commercial', 'residential', 'maintenance', 'cleaning', 'gas-fit', 'bathroom', 'kitchen', 'leak'];
+            const svcPages = allPages.filter(p => serviceKeywords.some(kw => (p.slug || '').includes(kw) || (p.link || '').toLowerCase().includes(kw)));
+            targetUrls = svcPages.slice(0, 5).map(p => p.link || `https://${domain}/${p.slug}/`);
+            console.log(`[verify-fix] Service schema: checking ${targetUrls.length} service pages`);
+          }
+        } catch {}
+      }
+    }
+
+    if (targetUrls.length === 0) {
+      // Fallback: extract paths from description
+      const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
+      targetUrls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
+    }
+    // Always include homepage for LocalBusiness / site-wide issues
+    if (!title.includes('service')) {
+      if (!targetUrls.includes(homeUrl)) targetUrls.unshift(homeUrl);
+    }
     // Limit to 5 pages max
     targetUrls = targetUrls.slice(0, 5);
+    if (targetUrls.length === 0) targetUrls = [homeUrl];
 
     console.log(`[verify-fix] Finding #${finding_id}: "${finding.title}" — checking ${targetUrls.length} page(s)`);
 
