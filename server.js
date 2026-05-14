@@ -18476,48 +18476,32 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         }
         console.log(`[technical-fix] Final service pages: ${wpServicePages.map(p => p.slug).join(', ')}`);
 
-        // Safety: remove _seoroom_schema from any non-service pages AND posts (cleanup from past mis-writes)
-        const nonServicePages = allWpPages.filter(p => !isServicePage(p.slug, null, undefined, projExclusions));
-        for (const nsp of nonServicePages) {
-          try {
-            const nspMeta = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}?_fields=meta&context=edit`, {
-              headers: authHeaders, signal: AbortSignal.timeout(8000)
-            });
-            if (nspMeta.ok) {
-              const nspData = await nspMeta.json();
-              const existingSchema = nspData.meta?._seoroom_schema || '';
-              if (existingSchema && existingSchema.includes('"Service"')) {
-                await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}`, {
-                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
-                  signal: AbortSignal.timeout(8000)
-                });
-                console.log(`[technical-fix] CLEANUP: removed Service schema from non-service page ${nsp.slug}`);
+        // Safety cleanup: only run when fixing ALL service pages (not per-page fixes — too slow)
+        const isPerPageFix = storedUrls.length === 1;
+        if (!isPerPageFix) {
+          const nonServicePages = allWpPages.filter(p => !isServicePage(p.slug, null, undefined, projExclusions));
+          for (const nsp of nonServicePages.slice(0, 10)) { // limit to 10 to avoid timeout
+            try {
+              const nspMeta = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}?_fields=meta&context=edit`, {
+                headers: authHeaders, signal: AbortSignal.timeout(5000)
+              });
+              if (nspMeta.ok) {
+                const nspData = await nspMeta.json();
+                const existingSchema = nspData.meta?._seoroom_schema || '';
+                if (existingSchema && existingSchema.includes('"Service"')) {
+                  await fetch(`${wpUrl}/wp-json/wp/v2/pages/${nsp.id}`, {
+                    method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
+                    signal: AbortSignal.timeout(5000)
+                  });
+                  console.log(`[technical-fix] CLEANUP: removed Service schema from non-service page ${nsp.slug}`);
+                }
               }
-            }
-          } catch (e) { console.log(`[technical-fix] Cleanup check failed for ${nsp.slug}: ${e.message}`); }
-        }
-
-        // Also cleanup posts (blog articles should NEVER have Service schema)
-        try {
-          const postsResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts?per_page=50&_fields=id,slug,meta&status=publish&context=edit`, {
-            headers: authHeaders, signal: AbortSignal.timeout(15000)
-          });
-          if (postsResp.ok) {
-            const allPosts = await postsResp.json();
-            for (const post of allPosts) {
-              const existingSchema = post.meta?._seoroom_schema || '';
-              if (existingSchema && existingSchema.includes('"Service"')) {
-                await fetch(`${wpUrl}/wp-json/wp/v2/posts/${post.id}`, {
-                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ meta: { _seoroom_schema: '' } }),
-                  signal: AbortSignal.timeout(8000)
-                });
-                console.log(`[technical-fix] CLEANUP: removed Service schema from blog post ${post.slug}`);
-              }
-            }
+            } catch (e) { console.log(`[technical-fix] Cleanup check failed for ${nsp.slug}: ${e.message}`); }
           }
-        } catch (e) { console.log(`[technical-fix] Posts cleanup error: ${e.message}`); }
+        } else {
+          console.log(`[technical-fix] Per-page fix — skipping full cleanup`);
+        }
 
         let fixedCount = 0;
         let firstPageId = null;
