@@ -18405,6 +18405,25 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
   }
 });
 
+// ==================== RESET UNVERIFIED FIXED FINDINGS ====================
+// One-time cleanup: reset all 'fixed' website findings that weren't verified via live_page_crawl
+app.post('/api/projects/:projectId/reset-unverified-fixes', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const result = await pool.query(
+      `UPDATE audit_findings SET status='new', verification=NULL, updated_at=NOW()
+       WHERE project_id=$1 AND pillar='website' AND status='fixed'
+       AND (verification IS NULL OR verification::text NOT LIKE '%live_page_crawl%')
+       RETURNING id, title`,
+      [projectId]
+    );
+    console.log(`[reset-fixes] Reset ${result.rows.length} unverified fixed findings for project ${projectId}`);
+    res.json({ success: true, reset: result.rows.length, findings: result.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== VERIFY FIX: Check if a finding's issue is actually resolved on live page ====================
 app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
   const { projectId } = req.params;
