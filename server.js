@@ -18096,7 +18096,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
       return res.status(429).json({ error: `Website audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
     }
 
-    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]);
+    await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'fixed'`, [projectId]);
     await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Superseded by new audit run"}' WHERE project_id=$1 AND pillar='website' AND status='running'`, [projectId]);
 
     const auditRes = await pool.query(
