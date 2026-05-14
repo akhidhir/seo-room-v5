@@ -17908,17 +17908,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const keptFromPrevious = [];
     let removedDuplicates = 0;
     for (const ef of existingFindings.rows) {
-      if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
-
-      // Remove ALL old Schema & Data findings not reproduced by this audit
-      // (code-based audit is the source of truth — old AI schema findings are stale)
       const efCat = (ef.category || '').toLowerCase();
+
+      // Schema & Data findings: ALWAYS remove if not reproduced by this audit
+      // (code-based audit is the source of truth — even 'fixed' findings should go if the issue no longer exists)
       if (efCat.includes('schema')) {
-        await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
-        console.log(`[website-audit] Removed stale schema finding: "${ef.title}" (not reproduced by code-based audit)`);
-        removedDuplicates++;
+        if (!newTitles.has(ef.title)) {
+          await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
+          console.log(`[website-audit] Removed stale schema finding: "${ef.title}" (status=${ef.status}, not reproduced)`);
+          removedDuplicates++;
+        }
         continue;
       }
+
+      // Non-schema findings: keep fixed/rejected ones, remove unreproduced new/approved ones
+      if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
 
       // For non-schema findings, keep them (they may come from AI agent audit and still be relevant)
       keptFromPrevious.push(ef);
