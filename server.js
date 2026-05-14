@@ -77,6 +77,58 @@ const UTILITY_SLUGS = new Set([
   'cookie-policy', 'refund-policy', 'shipping-policy', 'warranty', 'support', 'help',
 ]);
 
+// All schema.org LocalBusiness subtypes — so we never flag "Missing LocalBusiness" when a subtype exists
+const LOCAL_BUSINESS_TYPES = new Set([
+  'LocalBusiness', 'AnimalShelter', 'ArchiveOrganization', 'AutomotiveBusiness',
+  'AutoBodyShop', 'AutoDealer', 'AutoPartsStore', 'AutoRental', 'AutoRepair', 'AutoWash',
+  'ChildCare', 'Dentist', 'DryCleaningOrLaundry', 'EmergencyService',
+  'FireStation', 'Hospital', 'PoliceStation', 'EmploymentAgency',
+  'EntertainmentBusiness', 'AdultEntertainment', 'AmusementPark', 'ArtGallery', 'Casino',
+  'ComedyClub', 'MovieTheater', 'NightClub',
+  'FinancialService', 'AccountingService', 'AutomatedTeller', 'BankOrCreditUnion', 'InsuranceAgency',
+  'FoodEstablishment', 'Bakery', 'BarOrPub', 'Brewery', 'CafeOrCoffeeShop', 'Distillery',
+  'FastFoodRestaurant', 'IceCreamShop', 'Restaurant', 'Winery',
+  'GovernmentOffice', 'PostOffice',
+  'HealthAndBeautyBusiness', 'BeautySalon', 'DaySpa', 'HairSalon', 'HealthClub',
+  'NailSalon', 'TattooParlor',
+  'HomeAndConstructionBusiness', 'Electrician', 'GeneralContractor', 'HVACBusiness',
+  'HousePainter', 'Locksmith', 'MovingCompany', 'Plumber', 'RoofingContractor',
+  'InternetCafe', 'LegalService', 'Attorney', 'Notary',
+  'Library', 'LodgingBusiness', 'BedAndBreakfast', 'Campground', 'Hostel', 'Hotel', 'Motel', 'Resort',
+  'MedicalBusiness', 'CommunityHealth', 'Dentist', 'Dermatology', 'DietNutrition',
+  'Emergency', 'Geriatric', 'Gynecologic', 'MedicalClinic', 'Midwifery', 'Nursing',
+  'Obstetric', 'Oncologic', 'Optician', 'Optometric', 'Otolaryngologic', 'Pediatric',
+  'Pharmacy', 'Physician', 'Physiotherapy', 'PlasticSurgery', 'Podiatric',
+  'PrimaryCare', 'Psychiatric', 'PublicHealth',
+  'ProfessionalService', 'RadioStation', 'RealEstateAgent', 'RecyclingCenter',
+  'SelfStorage', 'ShoppingCenter', 'SportsActivityLocation',
+  'BowlingAlley', 'ExerciseGym', 'GolfCourse', 'HealthClub', 'PublicSwimmingPool',
+  'SkiResort', 'SportsClub', 'StadiumOrArena', 'TennisComplex',
+  'Store', 'AutoPartsStore', 'BikeStore', 'BookStore', 'ClothingStore',
+  'ComputerStore', 'ConvenienceStore', 'DepartmentStore', 'ElectronicsStore',
+  'Florist', 'FurnitureStore', 'GardenStore', 'GroceryStore', 'HardwareStore',
+  'HobbyShop', 'HomeGoodsStore', 'JewelryStore', 'LiquorStore', 'MensClothingStore',
+  'MobilePhoneStore', 'MovieRentalStore', 'MusicStore', 'OfficeEquipmentStore',
+  'OutletStore', 'PawnShop', 'PetStore', 'ShoeStore', 'SportingGoodsStore',
+  'TireShop', 'ToyStore', 'WholesaleStore',
+  'TelevisionStation', 'TouristInformationCenter', 'TravelAgency',
+  // Common custom subtypes used by SEO plugins
+  'ComputerRepairService', 'ElectricalContractor', 'PestControlService',
+  'CleaningService', 'LandscapingService', 'TowingService', 'VeterinaryCare',
+]);
+
+// Check if a schema type string matches LocalBusiness or any of its subtypes
+function isLocalBusinessType(typeStr) {
+  if (!typeStr || typeof typeStr !== 'string') return false;
+  // Direct match
+  if (LOCAL_BUSINESS_TYPES.has(typeStr)) return true;
+  // Check if the string contains any known LocalBusiness type (for crawled schema strings like "LocalBusiness, ComputerRepairService")
+  for (const t of LOCAL_BUSINESS_TYPES) {
+    if (typeStr.includes(t)) return true;
+  }
+  return false;
+}
+
 // Check if a page is a service/content page (not utility, not blog, not excluded)
 function isServicePage(path, schemas, wordCount, pageExclusions) {
   const clean = (path || '').toLowerCase().replace(/^\/|\/$/g, '');
@@ -15612,9 +15664,10 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
             gbpData.websiteCheck.schemas = schemaMatch.map(s => {
               try { return JSON.parse(s.replace(/<\/?script[^>]*>/gi, '')); } catch { return null; }
             }).filter(Boolean);
-            gbpData.websiteCheck.hasLocalBusinessSchema = gbpData.websiteCheck.schemas.some(s => 
-              s['@type'] === 'LocalBusiness' || s['@type'] === 'Plumber' || s['@type'] === 'HomeAndConstructionBusiness' ||
-              (Array.isArray(s['@graph']) && s['@graph'].some(g => ['LocalBusiness', 'Plumber', 'HomeAndConstructionBusiness'].includes(g['@type'])))
+            gbpData.websiteCheck.hasLocalBusinessSchema = gbpData.websiteCheck.schemas.some(s =>
+              isLocalBusinessType(s['@type']) ||
+              (Array.isArray(s['@type']) && s['@type'].some(t => isLocalBusinessType(t))) ||
+              (Array.isArray(s['@graph']) && s['@graph'].some(g => isLocalBusinessType(g['@type']) || (Array.isArray(g['@type']) && g['@type'].some(t => isLocalBusinessType(t)))))
             );
           }
           console.log(`[gbp-audit] Website check: phone=${gbpData.websiteCheck.hasPhone}, address=${gbpData.websiteCheck.hasAddress}, schema=${gbpData.websiteCheck.hasLocalBusinessSchema || false}`);
@@ -17635,8 +17688,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for LocalBusiness schema (including inside @graph from Rank Math/Yoast)
-    const hasLocalBusiness = successPages.some(p => p.schemas.some(s => typeof s === 'string' && s.includes('LocalBusiness')));
+    // Check for LocalBusiness schema (including subtypes like ComputerRepairService, Plumber, etc.)
+    const hasLocalBusiness = successPages.some(p => p.schemas.some(s => typeof s === 'string' && isLocalBusinessType(s)));
     if (!hasLocalBusiness && project.is_local_business) {
       // Double-check: log what schemas WERE found so we can debug false positives
       const allSchemaTypes = [...new Set(successPages.flatMap(p => p.schemas))];
@@ -21604,8 +21657,8 @@ async function validateSerpGaps(gaps, userPage, keyword, projectId, contentRec) 
           gap.status = 'done';
           gap.status_reason = 'FAQPage schema detected on page';
         }
-      } else if (issue.includes('localbusiness') || fix.includes('localbusiness')) {
-        if (schemaTypes.includes('localbusiness')) {
+      } else if (issue.includes('localbusiness') || issue.includes('local business') || fix.includes('localbusiness')) {
+        if (schemaTypes.some(t => isLocalBusinessType(t.charAt(0).toUpperCase() + t.slice(1)) || isLocalBusinessType(t))) {
           gap.status = 'done';
           gap.status_reason = 'LocalBusiness schema detected on page';
         }
