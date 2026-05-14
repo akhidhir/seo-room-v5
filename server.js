@@ -520,6 +520,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_hours NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -1613,6 +1614,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const rc_location_id = b.rc_location_id ?? b.rcLocationId;
   const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
+  const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
   const phone = b.phone;
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
@@ -1656,7 +1658,8 @@ app.put('/api/projects/:id', async (req, res) => {
            defined_products=COALESCE($36::jsonb, defined_products),
            monthly_ai_budget=COALESCE($37, monthly_ai_budget),
            monthly_hours=COALESCE($38, monthly_hours),
-           monthly_fee=COALESCE($39, monthly_fee)
+           monthly_fee=COALESCE($39, monthly_fee),
+           cloudflare_zone_id=COALESCE($40, cloudflare_zone_id)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1679,7 +1682,8 @@ app.put('/api/projects/:id', async (req, res) => {
        defined_products ? JSON.stringify(defined_products) : null,
        monthly_ai_budget !== undefined ? parseFloat(monthly_ai_budget) || null : null,
        monthly_hours !== undefined ? parseFloat(monthly_hours) || null : null,
-       monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null]
+       monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null,
+       cloudflare_zone_id || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -6428,6 +6432,27 @@ function getWpAuthHeaders(project) {
   if (!project.wp_username || !project.wp_app_password) return null;
   const token = Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64');
   return { 'Authorization': `Basic ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0 (WordPress Integration)' };
+}
+
+// Helper: purge Cloudflare cache for specific URLs
+async function purgeCloudflareCache(project, urls) {
+  const zoneId = project.cloudflare_zone_id;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!zoneId || !apiToken || !urls.length) return { purged: false, reason: 'no_cloudflare_config' };
+  try {
+    const resp = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: urls.slice(0, 30) }),
+      signal: AbortSignal.timeout(10000)
+    });
+    const data = await resp.json();
+    console.log(`[cloudflare] Purge ${urls.length} URLs: ${data.success ? 'OK' : 'FAIL'} — ${JSON.stringify(data.errors || [])}`);
+    return { purged: data.success, data };
+  } catch (e) {
+    console.log(`[cloudflare] Purge error: ${e.message}`);
+    return { purged: false, reason: e.message };
+  }
 }
 
 // Helper: clean action item title into WP search terms
@@ -18608,13 +18633,16 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           schemaJson = { "@context": "https://schema.org", "@type": "Service" };
           await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
 
-          // Purge cache
+          // Purge cache: WordPress plugin + Cloudflare CDN
           try {
             await fetch(`${wpUrl}/wp-json/seoroom/v1/purge-cache`, {
               method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(10000)
             });
           } catch {}
+          // Purge Cloudflare cache for the specific page URLs
+          const cfUrls = wpServicePages.map(p => p.link || `https://${domain}/${p.slug}/`);
+          await purgeCloudflareCache(project, cfUrls);
           await new Promise(r => setTimeout(r, 3000));
 
           // Verify first service page
@@ -19398,7 +19426,7 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
 
     console.log(`[verify-fix] Finding #${finding_id}: "${finding.title}" — checking ${targetUrls.length} page(s)`);
 
-    // Auto-purge cache before verification (via SEO Room Connector plugin)
+    // Auto-purge cache before verification (WordPress plugin + Cloudflare)
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const wpAuth = getWpAuthHeaders(project);
     if (wpUrl && wpAuth) {
@@ -19408,12 +19436,12 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
           body: JSON.stringify({ url: targetUrls[0] || '' }),
           signal: AbortSignal.timeout(10000)
         });
-        if (purgeResp.ok) {
-          console.log(`[verify-fix] Cache purged before verification`);
-          await new Promise(r => setTimeout(r, 2000));
-        }
-      } catch (e) { console.log(`[verify-fix] Cache purge skipped: ${e.message}`); }
+        if (purgeResp.ok) console.log(`[verify-fix] WP cache purged`);
+      } catch (e) { console.log(`[verify-fix] WP cache purge skipped: ${e.message}`); }
     }
+    // Purge Cloudflare CDN cache for target URLs
+    await purgeCloudflareCache(project, targetUrls);
+    await new Promise(r => setTimeout(r, 2000));
 
     // Fetch and analyze each target page
     const verifyPage = async (pageUrl) => {
@@ -19472,12 +19500,15 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
         : null;
 
       if (schemaType) {
+        const allFoundSchemas = [...new Set(results.flatMap(r => r.schemas || []))];
+        console.log(`[verify-fix] Looking for "${schemaType}" in schemas: [${allFoundSchemas.join(', ')}]`);
+        // For Service: require exact "Service" type, not subtypes like "ComputerRepairService"
         const found = results.some(r => r.schemas && r.schemas.includes(schemaType));
         verified = found;
         reason = found
           ? `${schemaType} schema found on live page`
-          : `${schemaType} schema NOT found on any checked page. Found types: ${[...new Set(results.flatMap(r => r.schemas || []))].join(', ') || 'none'}`;
-        details = { schemaType, pagesChecked: targetUrls.length, schemasFound: [...new Set(results.flatMap(r => r.schemas || []))] };
+          : `${schemaType} schema NOT found. Found types: ${allFoundSchemas.join(', ') || 'none'}`;
+        details = { schemaType, pagesChecked: targetUrls.length, schemasFound: allFoundSchemas };
       } else {
         // Generic schema check — see if any new schemas appeared
         const allSchemas = [...new Set(results.flatMap(r => r.schemas || []))];

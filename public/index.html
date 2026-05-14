@@ -22667,6 +22667,7 @@
         customerPersona: '',
         clarityProjectId: '',
         clarityApiToken: '',
+        cloudflareZoneId: '',
         phone: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
@@ -22719,6 +22720,7 @@
               customerPersona: data.project.customer_persona || '',
               clarityProjectId: data.project.clarity_project_id || '',
               clarityApiToken: data.project.clarity_api_token || '',
+              cloudflareZoneId: data.project.cloudflare_zone_id || '',
               phone: data.project.phone || '',
             });
           }
@@ -23107,6 +23109,23 @@
             </div>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
               To get the API token: Clarity → Settings → Data Export → Generate New API Token
+            </div>
+          </div>
+
+          {/* Cloudflare */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fas fa-shield-alt" style={{ marginRight: 8, color: '#f38020' }} />Cloudflare CDN
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+              Auto-purge Cloudflare cache after schema fixes. Find your Zone ID in Cloudflare dashboard → your domain → Overview → right sidebar.
+              Set <code>CLOUDFLARE_API_TOKEN</code> as a Railway env var (API Tokens → Create Token → Zone:Cache Purge:Purge).
+            </div>
+            <div>
+              <label className="form-label" style={{ fontSize: 11 }}>Cloudflare Zone ID</label>
+              <input type="text" className="form-input" value={formData.cloudflareZoneId}
+                onChange={(e) => setFormData(prev => ({ ...prev, cloudflareZoneId: e.target.value }))}
+                placeholder="32-char hex string from Cloudflare Overview" style={{ fontSize: 12 }} />
             </div>
           </div>
 
