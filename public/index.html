@@ -6476,7 +6476,9 @@
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
             // Fix was applied to WP but not showing on live page yet (CDN still caching)
-            setFixResult({ id: f.id, ok: true, msg: `Fix applied to WordPress. Live verification pending — ${v.reason}. CDN cache may take a few minutes. Click Verify again shortly.` });
+            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed', verification: JSON.stringify({ post_fix: { result: 'pending_cdn' } }) } : x));
+            setFixResult({ id: f.id, ok: true, msg: `Fix applied to WordPress. Live verification pending — ${v.reason}. CDN cache may take a few minutes. Click Re-verify shortly.` });
+            if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           }
         } catch (e) { setFixResult({ id: f.id, ok: false, msg: e.message }); }
         setFixing(null);
@@ -6895,7 +6897,7 @@
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                               <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>
                                 <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
-                                {(() => { const v = typeof f.verification === 'string' ? JSON.parse(f.verification || '{}') : (f.verification || {}); const pr = v.post_fix?.result; const pre = v.pre_fix?.result; return v.method === 'live_page_crawl' ? 'Verified Live' : pr === 'verified_on_live_page' || pr === 'verified_in_wordpress' || pr === 'completed' ? 'Verified Fixed' : pr === 'rolled_back_duplicate' ? 'Duplicate Removed' : pre === 'already_present' || pre === 'not_found' ? 'Verified OK' : 'Unverified'; })()}
+                                {(() => { const v = typeof f.verification === 'string' ? JSON.parse(f.verification || '{}') : (f.verification || {}); const pr = v.post_fix?.result; const pre = v.pre_fix?.result; return v.method === 'live_page_crawl' ? 'Verified Live' : pr === 'verified_on_live_page' || pr === 'verified_in_wordpress' || pr === 'completed' ? 'Verified Fixed' : pr === 'rolled_back_duplicate' ? 'Duplicate Removed' : pr === 'pending_cdn' ? 'Fixed — Pending CDN' : pre === 'already_present' || pre === 'not_found' ? 'Verified OK' : 'Unverified'; })()}
                               </span>
                               <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); verifyFix(f); }} disabled={fixing === f.id}
                                 style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
