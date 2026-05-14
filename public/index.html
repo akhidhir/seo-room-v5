@@ -6810,20 +6810,19 @@
                               }
                             }
                             if (!pageUrl) return null;
-                            const isServiceFinding = (f.title || '').toLowerCase().includes('service') && (f.title || '').toLowerCase().includes('schema');
+                            const isPerPageFinding = pageUrl !== `https://${domain}/`;
                             return <div style={{ fontSize: 11, marginTop: 3, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                               <span style={{ color: 'var(--text3)' }}>{pageUrl}</span>
                               <a href={`https://search.google.com/test/rich-results?url=${encodeURIComponent(pageUrl)}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: '#3b82f6', textDecoration: 'none', fontSize: 11 }}>
                                 <i className="fas fa-external-link-alt" style={{ marginRight: 3 }} />Test Schema
                               </a>
-                              {isServiceFinding && pageUrl !== `https://${domain}/` && (
+                              {isPerPageFinding && (
                                 excludeForm?.findingId === f.id && excludeForm?.url === pageUrl ? (
                                   <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                                     {['Blog/Article', 'Landing Page', 'Portfolio', 'Other'].map(label => (
                                       <button key={label} onClick={async () => {
                                         try {
                                           await api(`/projects/${project.id}/page-exclusions`, { method: 'POST', body: { url: pageUrl, action: 'add', label } });
-                                          // Dismiss the finding immediately
                                           await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'dismissed' } });
                                           setFindings(prev => prev.filter(x => x.id !== f.id));
                                           setExcludeForm(null);
@@ -6839,7 +6838,7 @@
                                 ) : (
                                   <button onClick={(e) => { e.stopPropagation(); setExcludeForm({ findingId: f.id, url: pageUrl }); }}
                                     style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, padding: '1px 6px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <i className="fas fa-times" style={{ marginRight: 3 }} />Not a service
+                                    <i className="fas fa-times" style={{ marginRight: 3 }} />Exclude page
                                   </button>
                                 )
                               )}
