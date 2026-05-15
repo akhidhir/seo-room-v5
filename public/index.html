@@ -6431,7 +6431,12 @@
       const [excludeForm, setExcludeForm] = useState(null); // { findingId, url } — shows classify form
       const [pageClassifications, setPageClassifications] = useState({}); // { normalizedPath: label }
 
+      const isCopywriterFinding = (f) => {
+        const c = (f.category || '').toLowerCase();
+        return c.includes('content quality') || c.includes('faq enhancement');
+      };
       const isAutoFixable = (f) => {
+        if (isCopywriterFinding(f)) return false; // copywriter findings use Send to Copywriter instead
         const t = (f.title || '').toLowerCase();
         const c = (f.category || '').toLowerCase();
         if (c.includes('schema') || t.includes('schema') || t.includes('json-ld') || t.includes('localbusiness') || t.includes('faqpage') || t.includes('structured data')) return true;
@@ -6974,6 +6979,20 @@
                                 {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 3 }} />Checking...</> : <><i className="fas fa-redo" style={{ marginRight: 3 }} />Re-verify</>}
                               </button>
                             </div>
+                          ) : isCopywriterFinding(f) ? (
+                            <button className="btn btn-small" onClick={async (e) => {
+                              e.stopPropagation();
+                              setFixing(f.id);
+                              try {
+                                await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter' } });
+                                setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter queue' });
+                                setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'approved' } : x));
+                              } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
+                              setFixing(null);
+                            }} disabled={fixing === f.id}
+                              style={{ fontSize: 13, background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)', whiteSpace: 'nowrap' }}>
+                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen-nib" style={{ marginRight: 4 }} />Send to Copywriter</>}
+                            </button>
                           ) : isAutoFixable(f) ? (
                             <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                               <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixFinding(f); }} disabled={fixing === f.id}
