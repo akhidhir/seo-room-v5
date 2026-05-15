@@ -6476,7 +6476,8 @@
 
           const v = await api(`/projects/${project.id}/verify-fix`, { method: 'POST', body: { finding_id: f.id } });
           if (v.verified) {
-            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+            const vJson = JSON.stringify({ method: 'live_page_crawl', verified_at: new Date().toISOString(), post_fix: { result: 'verified_on_live_page' }, reason: v.reason });
+            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed', verification: vJson } : x));
             setFixResult({ id: f.id, ok: true, msg: `Fixed & verified on live page: ${v.reason}` });
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
@@ -6508,7 +6509,8 @@
             const r = await api(`/projects/${project.id}/technical-fix`, { method: 'POST', body: { finding_id: f.id } });
             if (r.success) {
               results.push({ id: f.id, ok: true });
-              setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+              const vData = r.verification ? JSON.stringify(r.verification) : (r.verified ? JSON.stringify({ method: 'live_page_crawl', post_fix: { result: 'verified_on_live_page' } }) : null);
+              setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed', ...(vData ? { verification: vData } : {}) } : x));
             } else {
               results.push({ id: f.id, ok: false, msg: r.error || 'Failed' });
             }
@@ -6531,7 +6533,8 @@
         try {
           const r = await api(`/projects/${project.id}/verify-fix`, { method: 'POST', body: { finding_id: f.id } });
           if (r.verified) {
-            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+            const vJson = JSON.stringify({ method: 'live_page_crawl', verified_at: new Date().toISOString(), post_fix: { result: 'verified_on_live_page' }, reason: r.reason });
+            setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed', verification: vJson } : x));
             setFixResult({ id: f.id, ok: true, msg: `Verified on live page: ${r.reason}` });
             if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
           } else {
