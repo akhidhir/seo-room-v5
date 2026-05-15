@@ -3135,16 +3135,19 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   console.log(`[discoverPages] After sitemap phase: ${pages.length} pages found`);
 
   // Try WP REST API — always run if available (supplements sitemap with wpType data)
+  console.log(`[discoverPages] WP REST API: wpUrl=${wpUrl}, hasAuth=${!!authHeaders}`);
   if (wpUrl) {
     try {
       const wpBase = wpUrl.replace(/\/$/, '');
-      const fetchOpts = { signal: AbortSignal.timeout(30000), ...(authHeaders ? { headers: authHeaders } : {}) };
+      const fetchOpts = { signal: AbortSignal.timeout(30000), headers: { ...fetchHeaders, ...(authHeaders || {}) } };
       // Paginate to get ALL published pages and posts
       for (const postType of ['pages', 'posts']) {
         let page = 1;
         while (true) {
-          const resp = await fetch(`${wpBase}/wp-json/wp/v2/${postType}?per_page=100&page=${page}&status=publish&_fields=id,title,slug,link`, fetchOpts);
-          if (!resp.ok) break;
+          const apiUrl = `${wpBase}/wp-json/wp/v2/${postType}?per_page=100&page=${page}&status=publish&_fields=id,title,slug,link`;
+          console.log(`[discoverPages] WP REST: fetching ${apiUrl}`);
+          const resp = await fetch(apiUrl, fetchOpts);
+          if (!resp.ok) { console.log(`[discoverPages] WP REST ${postType} page ${page}: HTTP ${resp.status}`); break; }
           const wpItems = await resp.json();
           if (!Array.isArray(wpItems) || wpItems.length === 0) break;
           for (const p of wpItems) {
@@ -3163,6 +3166,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
         }
       }
     } catch (e) { console.log('[discoverPages] WP REST API failed:', e.message); }
+    console.log(`[discoverPages] After WP REST API: ${pages.length} pages found`);
   }
 
   // Fallback: just test the homepage
