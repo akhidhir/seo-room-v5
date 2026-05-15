@@ -17853,7 +17853,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           // Blog post with Article schema — show as fixed info record
           findings.push({
             pillar: 'website', category: 'Schema & Data',
-            title: `Missing Service schema on ${normSlug}`,
+            title: `Article schema on ${normSlug}`,
             description: `${pageUrl} — Blog post with Article schema (Yoast). Service schema not required.${classification ? ` Classified as "${classification}".` : ''}`,
             recommendation: 'Article schema from Yoast is correct for blog posts. No Service schema needed.',
             severity: 'Low',
