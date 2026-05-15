@@ -17865,8 +17865,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
             severity: 'Medium',
             current_value: JSON.stringify([pageUrl]),
             recommended_value: 'Service schema on this page',
-            _forceStatus: 'fixed',
-            _verification: JSON.stringify({ method: 'live_page_crawl', verified_at: new Date().toISOString(), post_fix: { result: 'verified_on_live_page' } })
+            _forceStatus: 'fixed'
           });
         } else if (isBlog) {
           svcDebug.blogArticle++;
@@ -18025,7 +18024,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
       // _forceStatus findings (e.g. schema-present records) skip dedup — they must persist
       if (f._forceStatus) {
-        const verificationJson = f._verification || null;
+        // All _forceStatus='fixed' findings are verified by the audit crawl itself
+        const verificationJson = f._verification || (f._forceStatus === 'fixed'
+          ? JSON.stringify({ method: 'live_page_crawl', verified_at: new Date().toISOString(), post_fix: { result: 'verified_on_live_page' } })
+          : null);
         if (existing) {
           // Update existing record but keep/set the forced status
           await pool.query(
