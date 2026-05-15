@@ -18838,8 +18838,10 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 
           // Trust WordPress meta verification — live page may be behind static cache (BerqWP etc.)
           const verified = liveVerified || metaVerified;
+          const verResult = liveVerified ? 'verified_on_live_page' : metaVerified ? 'verified_in_wordpress' : 'write_not_confirmed';
+          const verificationData = JSON.stringify({ post_fix: { result: verResult }, pages_fixed: fixedCount, verified_at: new Date().toISOString() });
           if (verified) {
-            await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+            await pool.query(`UPDATE audit_findings SET status='fixed', verification=$2 WHERE id=$1`, [finding_id, verificationData]);
           }
 
           return res.json({
@@ -18850,7 +18852,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
                 ? `Service schema verified in WordPress (${fixedCount} page(s)). Live page will update when cache refreshes.`
                 : `Schema write attempted on ${fixedCount} page(s) but could not confirm.`,
             verified,
-            verification: { post: liveVerified ? 'verified_on_live_page' : metaVerified ? 'verified_in_wordpress' : 'write_not_confirmed', pages_fixed: fixedCount }
+            verification: { post_fix: { result: verResult }, pages_fixed: fixedCount }
           });
         } else {
           return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Make sure your site has published service/content pages (utility pages like About, Contact, Privacy are excluded).` });
