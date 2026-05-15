@@ -138,8 +138,8 @@ function isServicePage(path, schemas, wordCount, pageExclusions) {
   if (UTILITY_SLUGS.has(clean) || UTILITY_SLUGS.has(slug)) return false;
   // Skip blog/news/category paths
   if (/^(blog|news|category|tag|author|20\d{2})\//.test(clean)) return false;
-  // Skip pages with Article/BlogPosting schema (auto-detected from crawl)
-  if (schemas && schemas.some(s => typeof s === 'string' && (s.includes('Article') || s.includes('BlogPosting') || s.includes('NewsArticle')))) return false;
+  // Skip pages with BlogPosting/NewsArticle schema (but NOT generic Article — Yoast adds Article to all pages)
+  if (schemas && schemas.some(s => typeof s === 'string' && (s.includes('BlogPosting') || s.includes('NewsArticle')))) return false;
   // Skip user-excluded pages
   if (pageExclusions && pageExclusions.length > 0) {
     const normalizedPath = '/' + clean;
