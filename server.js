@@ -17285,8 +17285,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const authHeaders = project.wp_username && project.wp_app_password
       ? { Authorization: 'Basic ' + Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64') } : null;
     const allPages = await discoverPages(baseUrl, wpUrl, authHeaders);
+    // Prioritize service pages over blog posts — WordPress sitemaps list posts first,
+    // so without sorting, first 50 are all blog posts and service pages never get crawled.
+    // Score: non-blog paths first, then blog paths. Homepage always first.
+    const scorePage = (p) => {
+      const slug = (p.slug || p.url || '').toLowerCase();
+      if (slug === 'home' || slug === '' || p.url === baseUrl || p.url === baseUrl + '/') return 0;
+      // Blog indicators: /blog/, /category/, /tag/, /author/, /2024/, /2025/, /2026/ etc
+      if (/\/(blog|news|category|tag|author|20\d{2})(\/|$)/.test(slug) || /^(blog|news|category|tag|author|20\d{2})\//.test(slug)) return 2;
+      // Short single-segment slugs are likely service pages
+      if (!slug.includes('/') || slug.split('/').length <= 2) return 1;
+      return 1;
+    };
+    allPages.sort((a, b) => scorePage(a) - scorePage(b));
     const pagesToCrawl = allPages.slice(0, 50);
-    console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length}`);
+    console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length} (service-first sort)`);
 
     // 2. Fetch robots.txt
     let robotsTxt = '';
@@ -17803,73 +17816,89 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     console.log(`[website-audit] is_local_business=${project.is_local_business}, successPages=${successPages.length}`);
     if (project.is_local_business) {
       const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-      let svcDebug = { total: 0, skippedHomepage: 0, hasSchema: 0, classified: 0, detected: 0, noMatch: 0 };
+      let svcDebug = { total: 0, skippedHomepage: 0, hasServiceSchema: 0, blogArticle: 0, needsSchema: 0, noSchemaNeeded: 0 };
       for (const page of successPages) {
         const normSlug = (page.path || '').replace(/^\/|\/$/g, '');
         if (!normSlug || normSlug === '') { svcDebug.skippedHomepage++; continue; }
         svcDebug.total++;
 
+        const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
         const hasService = page.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
+        const hasArticle = page.schemas.some(s => typeof s === 'string' && (s === 'Article' || s.includes('BlogPosting') || s.includes('NewsArticle')));
         const classification = classificationMap[normSlug];
+        const isBlogPath = /^(blog|news|category|tag|author|20\d{2})\//.test(normSlug);
+        const isUtility = UTILITY_SLUGS.has(normSlug) || UTILITY_SLUGS.has(normSlug.split('/').pop());
+
+        // Determine page type for display
+        const isBlog = hasArticle || isBlogPath || classification === 'Blog';
+        const isClassifiedService = classification && ['Service', 'Suburb'].includes(classification);
+        const isDetectedService = !classification && !isBlog && !isUtility && isServicePage(page.path, null, page.wordCount, excludedPaths);
+        // Note: pass null for schemas to isServicePage so Article filter doesn't hide — we handle Article above
 
         if (hasService) {
-          svcDebug.hasSchema++;
-          // Schema present — create a "fixed" record so it stays visible
-          const isRelevant = (classification && ['Service', 'Suburb'].includes(classification))
-            || (!classification && isServicePage(page.path, page.schemas, page.wordCount, excludedPaths));
-          if (isRelevant) {
-            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
-            findings.push({
-              pillar: 'website', category: 'Schema & Data',
-              title: `Missing Service schema on ${normSlug}`,
-              description: `${pageUrl} — Service schema is present.${classification ? ` Classified as "${classification}".` : ''}`,
-              recommendation: 'Schema is correctly configured on this page.',
-              severity: 'Medium',
-              current_value: JSON.stringify([pageUrl]),
-              recommended_value: 'Service schema on this page',
-              _forceStatus: 'fixed'
-            });
-          } else {
-            console.log(`[website-audit] Schema present but NOT relevant: ${normSlug} cls=${classification} isServicePage=${isServicePage(page.path, page.schemas, page.wordCount, excludedPaths)} schemas=${page.schemas.join(',')}`);
-          }
-          continue;
-        }
-
-        if (classification) {
-          svcDebug.classified++;
-          // Page is classified — only flag if Service or Suburb
-          if (['Service', 'Suburb'].includes(classification)) {
-            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
-            findings.push({
-              pillar: 'website', category: 'Schema & Data',
-              title: `Missing Service schema on ${normSlug}`,
-              description: `${pageUrl} is classified as "${classification}" but has no Service structured data.`,
-              recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
-              severity: 'Medium',
-              current_value: JSON.stringify([pageUrl]),
-              recommended_value: 'Service schema on this page'
-            });
-          }
-          // Blog/About/Contact/Home/Other — skip, no Service schema needed
+          svcDebug.hasServiceSchema++;
+          // Has Service schema — show as fixed regardless of page type
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${normSlug}`,
+            description: `${pageUrl} — Service schema is present.${classification ? ` Classified as "${classification}".` : ''}`,
+            recommendation: 'Schema is correctly configured on this page.',
+            severity: 'Medium',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: 'Service schema on this page',
+            _forceStatus: 'fixed'
+          });
+        } else if (isBlog) {
+          svcDebug.blogArticle++;
+          // Blog post with Article schema — show as fixed info record
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${normSlug}`,
+            description: `${pageUrl} — Blog post with Article schema (Yoast). Service schema not required.${classification ? ` Classified as "${classification}".` : ''}`,
+            recommendation: 'Article schema from Yoast is correct for blog posts. No Service schema needed.',
+            severity: 'Low',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: 'Article schema (blog post)',
+            _forceStatus: 'fixed'
+          });
+        } else if (isClassifiedService) {
+          svcDebug.needsSchema++;
+          // Classified as Service/Suburb but missing Service schema
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${normSlug}`,
+            description: `${pageUrl} is classified as "${classification}" but has no Service structured data.`,
+            recommendation: 'Add Service JSON-LD schema to this page with name, description, provider (your business), and areaServed.',
+            severity: 'Medium',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: 'Service schema on this page'
+          });
+        } else if (isDetectedService) {
+          svcDebug.needsSchema++;
+          // Detected as service page but missing schema
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${normSlug}`,
+            description: `${pageUrl} appears to be a service page without Service structured data. Use Reclassify if this is not a service page.`,
+            recommendation: 'Add Service JSON-LD schema, or click Reclassify to mark this page type.',
+            severity: 'Medium',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: 'Service schema on this page'
+          });
         } else {
-          // Unclassified — use isServicePage() as best guess, show Reclassify button
-          const isSvc = isServicePage(page.path, page.schemas, page.wordCount, excludedPaths);
-          if (isSvc) {
-            svcDebug.detected++;
-            const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
-            findings.push({
-              pillar: 'website', category: 'Schema & Data',
-              title: `Missing Service schema on ${normSlug}`,
-              description: `${pageUrl} appears to be a service page without Service structured data. Use Reclassify if this is not a service page.`,
-              recommendation: 'Add Service JSON-LD schema, or click Reclassify to mark this page type.',
-              severity: 'Medium',
-              current_value: JSON.stringify([pageUrl]),
-              recommended_value: 'Service schema on this page'
-            });
-          } else {
-            svcDebug.noMatch++;
-            if (svcDebug.noMatch <= 3) console.log(`[website-audit] Not service page: ${normSlug} wordCount=${page.wordCount} schemas=${page.schemas.join(',')}`);
-          }
+          svcDebug.noSchemaNeeded++;
+          // Utility/other page — show as info
+          const pageType = isUtility ? 'Utility page' : (classification || 'Other page');
+          findings.push({
+            pillar: 'website', category: 'Schema & Data',
+            title: `Missing Service schema on ${normSlug}`,
+            description: `${pageUrl} — ${pageType}. Service schema not required.${page.schemas.length > 0 ? ` Has: ${page.schemas.join(', ')}.` : ''}`,
+            recommendation: `This is a ${pageType.toLowerCase()} — no Service schema needed.`,
+            severity: 'Low',
+            current_value: JSON.stringify([pageUrl]),
+            recommended_value: `${pageType} — no action needed`,
+            _forceStatus: 'fixed'
+          });
         }
       }
       console.log(`[website-audit] Service schema check: ${JSON.stringify(svcDebug)}`);
