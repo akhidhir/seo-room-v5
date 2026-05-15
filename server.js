@@ -5040,19 +5040,24 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       `${wpUrl}/wp-json/seoroom/v1/purge-cache`,
       `${wpUrl}/wp-json/seoroom/v1/cwv-fixes`,
     ];
+    const pluginCheckUA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+    console.log(`[plugin-status] Checking ${wpUrl}, hasAuth: ${!!authHeaders}`);
     // 1. Check if seoroom namespace exists in WP REST index (most reliable)
     try {
       const indexResp = await fetch(`${wpUrl}/wp-json`, {
         signal: AbortSignal.timeout(6000),
-        ...(authHeaders ? { headers: authHeaders } : {}),
+        headers: { ...pluginCheckUA, ...(authHeaders || {}) },
       });
+      console.log(`[plugin-status] /wp-json index: ${indexResp.status}`);
       if (indexResp.ok) {
         const indexData = await indexResp.json();
-        if (indexData.namespaces && indexData.namespaces.includes('seoroom/v1')) {
+        const hasNs = indexData.namespaces && indexData.namespaces.includes('seoroom/v1');
+        console.log(`[plugin-status] namespaces include seoroom/v1: ${hasNs}, all: ${(indexData.namespaces || []).filter(n => n.includes('seo')).join(', ')}`);
+        if (hasNs) {
           return res.json({ installed: true });
         }
       }
-    } catch {}
+    } catch (e) { console.log(`[plugin-status] /wp-json index error: ${e.message}`); }
 
     // 2. Probe seoroom endpoints WITH auth headers
     // If route exists: WP returns JSON (200, 401, 403 with rest error code)
@@ -5061,7 +5066,7 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       try {
         const resp = await fetch(ep, {
           signal: AbortSignal.timeout(6000),
-          ...(authHeaders ? { headers: authHeaders } : {}),
+          headers: { ...pluginCheckUA, ...(authHeaders || {}) },
         });
         // 404 with rest_no_route = plugin not installed
         if (resp.status === 404) {
