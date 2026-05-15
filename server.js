@@ -3067,7 +3067,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
 
   // Try sitemap.xml first
   try {
-    const sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+    const sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
     if (sitemapResp.ok) {
       const xml = await sitemapResp.text();
 
@@ -3084,12 +3084,15 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
         });
         for (const subUrl of subUrls) {
           try {
-            const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
+            const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
             if (subResp.ok) {
               const subXml = await subResp.text();
               extractPagesFromSitemap(subXml, subUrl);
+              console.log(`[discoverPages] Sub-sitemap ${subUrl}: found ${pages.length} pages total`);
+            } else {
+              console.log(`[discoverPages] Sub-sitemap ${subUrl}: HTTP ${subResp.status}`);
             }
-          } catch (e) { /* skip failed sub-sitemap */ }
+          } catch (e) { console.log(`[discoverPages] Sub-sitemap ${subUrl} failed: ${e.message}`); }
         }
       } else {
         // It's a regular sitemap — extract pages directly
