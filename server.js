@@ -18499,7 +18499,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // Fetch a live page and extract all schema types + check specific HTML elements
     const verifyLivePage = async (pageUrl) => {
       try {
-        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
+        const cacheBustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
+        const resp = await fetch(cacheBustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
         if (!resp.ok) return { error: `Page returned ${resp.status}`, schemas: [], checks: {} };
         const html = await resp.text();
         const schemaMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
@@ -18824,10 +18825,10 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             }
           } catch {}
 
-          // Also check live page (may still show cached version)
+          // Also check live page — use ?nocache= to bypass BerqWP/static HTML cache
           let liveVerified = false;
           try {
-            const vResp = await fetch(verifyUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } });
+            const vResp = await fetch(verifyUrl + (verifyUrl.includes('?') ? '&' : '?') + 'nocache=' + Date.now(), { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } });
             if (vResp.ok) {
               const vHtml = await vResp.text();
               // Check for exact "@type":"Service" or "@type": "Service" — not "ComputerRepairService" etc.
@@ -19632,7 +19633,8 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
     // Fetch and analyze each target page
     const verifyPage = async (pageUrl) => {
       try {
-        const resp = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': `SEORoomBot/1.0 CacheBust/${Date.now()}`, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
+        const cacheBustUrl = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
+        const resp = await fetch(cacheBustUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' } });
         if (!resp.ok) return { url: pageUrl, error: `HTTP ${resp.status}` };
         const html = await resp.text();
 
