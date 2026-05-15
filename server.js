@@ -17830,10 +17830,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     console.log(`[website-audit] is_local_business=${project.is_local_business}, successPages=${successPages.length}`);
     if (project.is_local_business) {
       const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      // Extract business-name slug from domain to skip homepage-like pages (e.g. houseworksplumbing.com.au/houseworksplumbing/)
+      const domainSlug = svcDomain.split('.')[0].toLowerCase();
+      const businessSlug = (project.business_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
       let svcDebug = { total: 0, skippedHomepage: 0, hasServiceSchema: 0, blogArticle: 0, needsSchema: 0, noSchemaNeeded: 0 };
       for (const page of successPages) {
         const normSlug = (page.path || '').replace(/^\/|\/$/g, '');
         if (!normSlug || normSlug === '') { svcDebug.skippedHomepage++; continue; }
+        // Skip homepage-like slugs that match domain/business name
+        if (normSlug === domainSlug || normSlug === businessSlug || normSlug === 'home' || normSlug === 'homepage') { svcDebug.skippedHomepage++; continue; }
         svcDebug.total++;
 
         const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
