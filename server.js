@@ -17842,7 +17842,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         svcDebug.total++;
 
         const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
-        const hasService = page.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
+        // Recognize Service, Offer, and all LocalBusiness subtypes as valid service schema
+        const serviceSchemaTypes = ['Service', 'Offer', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'MovingCompany', 'HousePainter',
+          'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor', 'AutoRepair', 'LegalService', 'FinancialService',
+          'Dentist', 'Physician', 'MedicalBusiness', 'HealthAndBeautyBusiness', 'DayCare', 'RealEstateAgent', 'TravelAgency', 'InsuranceAgency',
+          'AccountingService', 'EmploymentAgency', 'CleaningBusiness'];
+        const hasService = page.schemas.some(s => typeof s === 'string' && serviceSchemaTypes.some(t => s.includes(t)));
         const hasArticle = page.schemas.some(s => typeof s === 'string' && (s === 'Article' || s.includes('BlogPosting') || s.includes('NewsArticle')));
         const classification = classificationMap[normSlug];
         const isBlogPath = /^(blog|news|category|tag|author|20\d{2})\//.test(normSlug);
@@ -18761,6 +18766,43 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             console.log(`[technical-fix] Suburb page "${pageSlug}" → areaServed: ${JSON.stringify(areaServedObj)}`);
           }
 
+          // Check if page already has a valid service-type schema (Plumber, LocalBusiness, etc. from Yoast)
+          const serviceSchemaTypes = ['Service', 'Offer', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'MovingCompany',
+            'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor', 'AutoRepair', 'LegalService',
+            'Dentist', 'Physician', 'MedicalBusiness', 'HealthAndBeautyBusiness', 'RealEstateAgent', 'CleaningBusiness'];
+          let alreadyHasServiceSchema = false;
+          try {
+            const checkExisting = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page.id}?_fields=meta&context=edit`, {
+              headers: authHeaders, signal: AbortSignal.timeout(5000)
+            });
+            if (checkExisting.ok) {
+              const existingData = await checkExisting.json();
+              const existingMeta = existingData.meta?._seoroom_schema || '';
+              if (existingMeta && serviceSchemaTypes.some(t => existingMeta.includes(`"${t}"`))) {
+                alreadyHasServiceSchema = true;
+              }
+            }
+          } catch {}
+          // Also check live page for existing Yoast/plugin schema
+          if (!alreadyHasServiceSchema) {
+            try {
+              const liveCheck = await fetch((page.link || `https://${domain}/${page.slug}/`) + '?nocache=' + Date.now(), {
+                signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              });
+              if (liveCheck.ok) {
+                const liveHtml = await liveCheck.text();
+                if (/application\/ld\+json/i.test(liveHtml) && serviceSchemaTypes.some(t => new RegExp(`"@type"\\s*:\\s*"${t}"`, 'i').test(liveHtml))) {
+                  alreadyHasServiceSchema = true;
+                }
+              }
+            } catch {}
+          }
+          if (alreadyHasServiceSchema) {
+            fixedCount++;
+            console.log(`[technical-fix] SKIP ${page.slug} — already has valid service-type schema`);
+            continue;
+          }
+
           const serviceSchema = {
             "@context": "https://schema.org",
             "@type": "Service",
@@ -18820,7 +18862,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             if (checkResp.ok) {
               const checkData = await checkResp.json();
               const storedSchema = checkData.meta?._seoroom_schema || '';
-              metaVerified = storedSchema.includes('"Service"');
+              const svcTypes = ['Service', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor'];
+              metaVerified = svcTypes.some(t => storedSchema.includes(`"${t}"`));
               console.log(`[technical-fix] Service meta verify: ${metaVerified ? 'CONFIRMED' : 'NOT FOUND'} on page ${firstPageId}`);
             }
           } catch {}
@@ -18831,8 +18874,9 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             const vResp = await fetch(verifyUrl + (verifyUrl.includes('?') ? '&' : '?') + 'nocache=' + Date.now(), { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' } });
             if (vResp.ok) {
               const vHtml = await vResp.text();
-              // Check for exact "@type":"Service" or "@type": "Service" — not "ComputerRepairService" etc.
-              liveVerified = /"@type"\s*:\s*"Service"/i.test(vHtml) && /application\/ld\+json/i.test(vHtml);
+              // Check for Service or any valid service-type schema (Plumber, LocalBusiness, etc.)
+              const svcLiveTypes = ['Service', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor'];
+              liveVerified = /application\/ld\+json/i.test(vHtml) && svcLiveTypes.some(t => new RegExp(`"@type"\\s*:\\s*"${t}"`, 'i').test(vHtml));
             }
           } catch {}
 
@@ -19692,10 +19736,13 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
       if (schemaType) {
         const allFoundSchemas = [...new Set(results.flatMap(r => r.schemas || []))];
         console.log(`[verify-fix] Looking for "${schemaType}" in schemas: [${allFoundSchemas.join(', ')}]`);
-        // For Service: require exact "Service" type. For LocalBusiness: accept any subtype.
+        // For Service: accept Service OR any business-type schema (Plumber, LocalBusiness, etc.)
+        const serviceEquivTypes = ['Service', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor', 'AutoRepair', 'LegalService', 'Dentist', 'MedicalBusiness', 'CleaningBusiness'];
         const foundOnLive = schemaType === 'LocalBusiness'
           ? results.some(r => r.schemas && r.schemas.some(s => isLocalBusinessType(s)))
-          : results.some(r => r.schemas && r.schemas.includes(schemaType));
+          : schemaType === 'Service'
+            ? results.some(r => r.schemas && r.schemas.some(s => serviceEquivTypes.includes(s)))
+            : results.some(r => r.schemas && r.schemas.includes(schemaType));
 
         // Fallback: check WordPress meta directly (live page may be behind BerqWP static cache)
         let foundInWP = false;
@@ -19712,8 +19759,9 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
                 const wpPages = await wpResp.json();
                 if (wpPages[0]?.meta?._seoroom_schema) {
                   const storedSchema = wpPages[0].meta._seoroom_schema;
-                  foundInWP = storedSchema.includes('"Service"');
-                  if (foundInWP) console.log(`[verify-fix] Service schema found in WP meta for ${findingSlug}`);
+                  const svcEquiv = ['Service', 'Plumber', 'Electrician', 'HVACBusiness', 'Locksmith', 'RoofingContractor', 'HomeAndConstructionBusiness', 'LocalBusiness', 'ProfessionalService', 'GeneralContractor'];
+                  foundInWP = svcEquiv.some(t => storedSchema.includes(`"${t}"`));
+                  if (foundInWP) console.log(`[verify-fix] Service-type schema found in WP meta for ${findingSlug}`);
                 }
               }
             }
