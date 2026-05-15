@@ -17800,16 +17800,20 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
+    console.log(`[website-audit] is_local_business=${project.is_local_business}, successPages=${successPages.length}`);
     if (project.is_local_business) {
       const svcDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      let svcDebug = { total: 0, skippedHomepage: 0, hasSchema: 0, classified: 0, detected: 0, noMatch: 0 };
       for (const page of successPages) {
         const normSlug = (page.path || '').replace(/^\/|\/$/g, '');
-        if (!normSlug || normSlug === '') continue; // skip homepage
+        if (!normSlug || normSlug === '') { svcDebug.skippedHomepage++; continue; }
+        svcDebug.total++;
 
         const hasService = page.schemas.some(s => typeof s === 'string' && (s.includes('Service') || s.includes('Offer')));
         const classification = classificationMap[normSlug];
 
         if (hasService) {
+          svcDebug.hasSchema++;
           // Schema present — create a "fixed" record so it stays visible
           const isRelevant = (classification && ['Service', 'Suburb'].includes(classification))
             || (!classification && isServicePage(page.path, page.schemas, page.wordCount, excludedPaths));
@@ -17825,11 +17829,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
               recommended_value: 'Service schema on this page',
               _forceStatus: 'fixed'
             });
+          } else {
+            console.log(`[website-audit] Schema present but NOT relevant: ${normSlug} cls=${classification} isServicePage=${isServicePage(page.path, page.schemas, page.wordCount, excludedPaths)} schemas=${page.schemas.join(',')}`);
           }
           continue;
         }
 
         if (classification) {
+          svcDebug.classified++;
           // Page is classified — only flag if Service or Suburb
           if (['Service', 'Suburb'].includes(classification)) {
             const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
@@ -17846,7 +17853,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           // Blog/About/Contact/Home/Other — skip, no Service schema needed
         } else {
           // Unclassified — use isServicePage() as best guess, show Reclassify button
-          if (isServicePage(page.path, page.schemas, page.wordCount, excludedPaths)) {
+          const isSvc = isServicePage(page.path, page.schemas, page.wordCount, excludedPaths);
+          if (isSvc) {
+            svcDebug.detected++;
             const pageUrl = page.url || `https://${svcDomain}/${normSlug}/`;
             findings.push({
               pillar: 'website', category: 'Schema & Data',
@@ -17857,9 +17866,13 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
               current_value: JSON.stringify([pageUrl]),
               recommended_value: 'Service schema on this page'
             });
+          } else {
+            svcDebug.noMatch++;
+            if (svcDebug.noMatch <= 3) console.log(`[website-audit] Not service page: ${normSlug} wordCount=${page.wordCount} schemas=${page.schemas.join(',')}`);
           }
         }
       }
+      console.log(`[website-audit] Service schema check: ${JSON.stringify(svcDebug)}`);
     }
 
     // Check for BreadcrumbList schema
