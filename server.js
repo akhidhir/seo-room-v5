@@ -3048,7 +3048,11 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   const seenUrls = new Set();
 
   // Helper: extract page URLs from a single sitemap XML
-  function extractPagesFromSitemap(xml) {
+  // wpType: 'page' or 'post' inferred from sub-sitemap URL (e.g. wp-sitemap-posts-page-1.xml vs wp-sitemap-posts-post-1.xml)
+  function extractPagesFromSitemap(xml, sitemapUrl) {
+    // Detect type from sub-sitemap URL: "page" sitemaps = WP pages, "post" sitemaps = WP posts
+    const wpType = sitemapUrl && /[\-\/]page[\-\d]*\.xml/i.test(sitemapUrl) ? 'page'
+      : sitemapUrl && /[\-\/]post[\-\d]*\.xml/i.test(sitemapUrl) ? 'post' : 'unknown';
     const urlMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
     for (const match of urlMatches) {
       const url = match.replace(/<\/?loc>/g, '');
@@ -3057,7 +3061,7 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
       if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       const slug = url.replace(baseUrl, '').replace(/^\/|\/$/g, '') || 'home';
-      pages.push({ page_id: slug, title: slug === 'home' ? 'Homepage' : slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), slug, url });
+      pages.push({ page_id: slug, title: slug === 'home' ? 'Homepage' : slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), slug, url, wpType });
     }
   }
 
@@ -3071,19 +3075,25 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
       const subSitemapMatches = xml.match(/<loc>([^<]+\.xml)<\/loc>/g) || [];
       if (subSitemapMatches.length > 0) {
         // It's a sitemap index — fetch each sub-sitemap
-        for (const subMatch of subSitemapMatches) {
-          const subUrl = subMatch.replace(/<\/?loc>/g, '');
+        // Sort so page-sitemaps come before post-sitemaps
+        const subUrls = subSitemapMatches.map(m => m.replace(/<\/?loc>/g, ''));
+        subUrls.sort((a, b) => {
+          const aIsPage = /[\-\/]page[\-\d]*\.xml/i.test(a) ? 0 : 1;
+          const bIsPage = /[\-\/]page[\-\d]*\.xml/i.test(b) ? 0 : 1;
+          return aIsPage - bIsPage;
+        });
+        for (const subUrl of subUrls) {
           try {
             const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'SEORoomBot/1.0' } });
             if (subResp.ok) {
               const subXml = await subResp.text();
-              extractPagesFromSitemap(subXml);
+              extractPagesFromSitemap(subXml, subUrl);
             }
           } catch (e) { /* skip failed sub-sitemap */ }
         }
       } else {
         // It's a regular sitemap — extract pages directly
-        extractPagesFromSitemap(xml);
+        extractPagesFromSitemap(xml, null);
       }
     }
   } catch (e) { /* sitemap not available */ }
@@ -3103,10 +3113,14 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
           if (!Array.isArray(wpItems) || wpItems.length === 0) break;
           for (const p of wpItems) {
             const url = p.link || '';
-            if (!seenUrls.has(url)) {
-              seenUrls.add(url);
-              pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url });
+            if (seenUrls.has(url)) {
+              // Already from sitemap — update wpType if unknown
+              const existing = pages.find(pg => pg.url === url);
+              if (existing && existing.wpType === 'unknown') existing.wpType = postType === 'pages' ? 'page' : 'post';
+              continue;
             }
+            seenUrls.add(url);
+            pages.push({ page_id: String(p.id), title: p.title?.rendered || p.slug, slug: p.slug, url, wpType: postType === 'pages' ? 'page' : 'post' });
           }
           if (wpItems.length < 100) break;
           page++;
@@ -17285,17 +17299,17 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const authHeaders = project.wp_username && project.wp_app_password
       ? { Authorization: 'Basic ' + Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64') } : null;
     const allPages = await discoverPages(baseUrl, wpUrl, authHeaders);
-    // Prioritize service pages over blog posts — WordPress sitemaps list posts first,
+    // Prioritize WP pages (services) over WP posts (blogs) — WordPress sitemaps list posts first,
     // so without sorting, first 50 are all blog posts and service pages never get crawled.
-    // Score: non-blog paths first, then blog paths. Homepage always first.
+    // Uses wpType tag from discoverPages: 'page' = WP page (service), 'post' = WP post (blog)
     const scorePage = (p) => {
       const slug = (p.slug || p.url || '').toLowerCase();
       if (slug === 'home' || slug === '' || p.url === baseUrl || p.url === baseUrl + '/') return 0;
-      // Blog indicators: /blog/, /category/, /tag/, /author/, /2024/, /2025/, /2026/ etc
-      if (/\/(blog|news|category|tag|author|20\d{2})(\/|$)/.test(slug) || /^(blog|news|category|tag|author|20\d{2})\//.test(slug)) return 2;
-      // Short single-segment slugs are likely service pages
-      if (!slug.includes('/') || slug.split('/').length <= 2) return 1;
-      return 1;
+      if (p.wpType === 'page') return 1;  // WP pages (services) first
+      if (p.wpType === 'post') return 3;  // WP posts (blogs) last
+      // Unknown type — use path heuristics
+      if (/\/(blog|news|category|tag|author|20\d{2})(\/|$)/.test(slug) || /^(blog|news|category|tag|author|20\d{2})\//.test(slug)) return 3;
+      return 2; // unknown — middle priority
     };
     allPages.sort((a, b) => scorePage(a) - scorePage(b));
     const pagesToCrawl = allPages.slice(0, 50);
