@@ -5630,8 +5630,15 @@
       };
 
       const statusBadge = (status) => {
-        const cfg = { new: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', label: 'new' }, approved: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'approved' }, rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'ignored' }, fixed: { bg: 'rgba(34,197,94,0.25)', color: '#22c55e', label: 'Fixed' } };
+        const cfg = {
+          new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
+          fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
+          dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
+        };
         const c = cfg[status] || cfg.new;
+        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
 
@@ -6190,8 +6197,15 @@
         return <span style={{ padding: '4px 14px', borderRadius: 4, fontSize: 14, fontWeight: 700, background: c + '20', color: c }}>{sev}</span>;
       };
       const statusBadge = (status) => {
-        const cfg = { new: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', label: 'new' }, approved: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'approved' }, rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'ignored' }, fixed: { bg: 'rgba(34,197,94,0.25)', color: '#22c55e', label: 'Fixed' } };
+        const cfg = {
+          new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
+          fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
+          dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
+        };
         const c = cfg[status] || cfg.new;
+        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
       const catColors = { 'Quick Win': '#22c55e', 'Low CTR': '#f97316', 'Zero Clicks': '#ef4444', 'Cannibalization': '#8b5cf6', 'Underperforming Page': '#f59e0b', 'Brand Dependency': '#ec4899', 'Indexing Issues': '#ef4444', 'Mobile Usability': '#3b82f6', 'Mobile Gap': '#06b6d4', 'Declining Keyword': '#ef4444', 'Growing Keyword': '#10b981', 'Sitemap Coverage': '#a855f7', 'Search Appearance': '#6366f1' };
@@ -6373,8 +6387,8 @@
 
           {selected.size > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 15, color: 'var(--text2)' }}>{selected.size} selected:</span>
-            <button className="btn btn-small" onClick={() => bulkAction('approved')} style={{ fontSize: 14 }}>Move to Action Plan</button>
-            <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14 }}>Ignore</button>
+            <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14, background: 'rgba(100,116,139,0.1)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)' }}>
+              <i className="fas fa-eye-slash" style={{ marginRight: 4 }} />Ignore Selected</button>
             <button className="btn btn-small" onClick={() => setSelected(new Set())} style={{ fontSize: 14, color: 'var(--text3)' }}>Clear</button>
           </div>)}
 
@@ -6715,8 +6729,15 @@
         return <span style={{ padding: '4px 14px', borderRadius: 4, fontSize: 14, fontWeight: 700, background: c + '20', color: c }}>{sev}</span>;
       };
       const statusBadge = (status) => {
-        const cfg = { new: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', label: 'new' }, approved: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'approved' }, rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'ignored' }, fixed: { bg: 'rgba(34,197,94,0.25)', color: '#22c55e', label: 'Fixed' } };
+        const cfg = {
+          new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
+          fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
+          dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
+        };
         const c = cfg[status] || cfg.new;
+        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
 
@@ -6817,12 +6838,9 @@
                     style={{ fontSize: 16, padding: '12px 28px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}>
                     {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Sending...</> : <><i className="fas fa-pen-nib" style={{ marginRight: 8 }} />Send to Copywriter</>}
                   </button>
-                ) : (
-                  <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
-                    <i className="fas fa-check" style={{ marginRight: 8 }} /> Acknowledge</button>
-                )}
-                <button className="btn btn-secondary" onClick={() => { updateStatus(f.id, 'rejected'); setReviewFinding(null); }} style={{ fontSize: 16, padding: '12px 28px' }}>
-                  <i className="fas fa-eye-slash" style={{ marginRight: 8 }} /> Ignore</button>
+                ) : null}
+                <button className="btn btn-secondary" onClick={() => { updateStatus(f.id, 'rejected'); setReviewFinding(null); }} style={{ fontSize: 14, padding: '10px 20px' }}>
+                  <i className="fas fa-eye-slash" style={{ marginRight: 6 }} /> Ignore this finding</button>
               </div>
             </div>
           </div>
@@ -6944,8 +6962,8 @@
 
           {selected.size > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 15, color: 'var(--text2)' }}>{selected.size} selected:</span>
-            <button className="btn btn-small" onClick={() => bulkAction('approved')} style={{ fontSize: 14 }}>Move to Action Plan</button>
-            <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14 }}>Ignore</button>
+            <button className="btn btn-small" onClick={() => bulkAction('rejected')} style={{ fontSize: 14, background: 'rgba(100,116,139,0.1)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)' }}>
+              <i className="fas fa-eye-slash" style={{ marginRight: 4 }} />Ignore Selected</button>
             <button className="btn btn-small" onClick={() => setSelected(new Set())} style={{ fontSize: 14, color: 'var(--text3)' }}>Clear</button>
           </div>)}
 
@@ -6992,7 +7010,7 @@
               <option value="all">All Severities</option><option value="critical">Critical</option><option value="medium">Medium</option><option value="low">Low</option>
             </select>
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
-              <option value="active">Active</option><option value="all">All</option><option value="fixed">Fixed</option><option value="approved">Approved</option><option value="rejected">Ignored</option>
+              <option value="active">Active</option><option value="all">All</option><option value="fixed">Fixed</option><option value="rejected">Ignored</option>
             </select>
             <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.length}</span>
           </div>
@@ -7142,9 +7160,15 @@
                                 <i className="fas fa-search" style={{ marginRight: 4 }} />Verify
                               </button>
                             </div>
+                          ) : f.category === 'Site Health' ? (
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
+                              style={{ fontSize: 13, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-list-ol" style={{ marginRight: 4 }} />View Steps
+                            </button>
                           ) : (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}>
-                              <i className="fas fa-search" style={{ marginRight: 4 }} /> Review
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
+                              style={{ fontSize: 13, background: 'rgba(100,116,139,0.1)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-eye" style={{ marginRight: 4 }} />Details
                             </button>
                           )}
                           {fixResult?.id === f.id && (
