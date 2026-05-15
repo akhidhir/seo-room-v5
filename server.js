@@ -19527,8 +19527,6 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
 
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     if (!domain) return res.status(400).json({ error: 'Project domain not set' });
-    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
-    const authHeaders = getWpAuthHeaders(project);
 
     const title = (finding.title || '').toLowerCase();
     const cat = (finding.category || '').toLowerCase();
@@ -19699,14 +19697,14 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
 
         // Fallback: check WordPress meta directly (live page may be behind BerqWP static cache)
         let foundInWP = false;
-        if (!foundOnLive && schemaType === 'Service' && wpUrl && authHeaders) {
+        if (!foundOnLive && schemaType === 'Service' && wpUrl && wpAuth) {
           try {
             // Extract page slug from finding title
             const slugMatch = (finding.title || '').match(/on\s+(.+)$/i);
             const findingSlug = slugMatch ? slugMatch[1].trim() : '';
             if (findingSlug) {
               const wpResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?slug=${encodeURIComponent(findingSlug)}&_fields=id,meta&context=edit`, {
-                headers: authHeaders, signal: AbortSignal.timeout(10000)
+                headers: wpAuth, signal: AbortSignal.timeout(10000)
               });
               if (wpResp.ok) {
                 const wpPages = await wpResp.json();
