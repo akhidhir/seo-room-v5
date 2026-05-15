@@ -17833,6 +17833,23 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       // Extract business-name slug from domain to skip homepage-like pages (e.g. houseworksplumbing.com.au/houseworksplumbing/)
       const domainSlug = svcDomain.split('.')[0].toLowerCase();
       const businessSlug = (project.business_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      // Show homepage as a fixed finding with its LocalBusiness schema
+      const homePage = successPages.find(p => !p.path || p.path === '/' || p.path === '');
+      if (homePage) {
+        const homeSchemas = (homePage.schemas || []).filter(s => typeof s === 'string');
+        const homeHasLB = homeSchemas.some(s => isLocalBusinessType(s));
+        findings.push({
+          pillar: 'website', category: 'Schema & Data',
+          title: `Missing LocalBusiness schema on homepage`,
+          description: `https://${svcDomain}/ — ${homeHasLB ? 'LocalBusiness schema is present' : 'No LocalBusiness schema found'}. Has: ${homeSchemas.join(', ') || 'none'}.`,
+          recommendation: homeHasLB ? 'LocalBusiness schema from Yoast is correct for the homepage.' : 'Add LocalBusiness JSON-LD to your homepage.',
+          severity: homeHasLB ? 'Low' : 'Critical',
+          current_value: homeSchemas.join(', ') || 'none',
+          recommended_value: 'LocalBusiness on homepage',
+          _forceStatus: homeHasLB ? 'fixed' : null
+        });
+      }
+
       let svcDebug = { total: 0, skippedHomepage: 0, hasServiceSchema: 0, blogArticle: 0, needsSchema: 0, noSchemaNeeded: 0 };
       for (const page of successPages) {
         const normSlug = (page.path || '').replace(/^\/|\/$/g, '');
