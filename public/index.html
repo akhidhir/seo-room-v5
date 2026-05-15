@@ -6930,7 +6930,7 @@
                             const isPerPageFinding = pageUrl !== `https://${domain}/` && (f.category || '').toLowerCase().includes('schema');
                             return <div style={{ fontSize: 11, marginTop: 3, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                               <span style={{ color: 'var(--text3)' }}>{pageUrl}</span>
-                              <a href={`https://validator.schema.org/#url=${encodeURIComponent(pageUrl)}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: '#3b82f6', textDecoration: 'none', fontSize: 11 }}>
+                              <a href="#" onClick={e => { e.stopPropagation(); e.preventDefault(); const vUrl = 'https://validator.schema.org/#url=' + encodeURIComponent(pageUrl); console.log('[test-schema] Opening:', vUrl, 'pageUrl:', pageUrl); window.open(vUrl, '_blank'); }} style={{ color: '#3b82f6', textDecoration: 'none', fontSize: 11, cursor: 'pointer' }}>
                                 <i className="fas fa-external-link-alt" style={{ marginRight: 3 }} />Test Schema
                               </a>
                               {isPerPageFinding && (
