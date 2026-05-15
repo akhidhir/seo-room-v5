@@ -3065,43 +3065,76 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
     }
   }
 
-  // Try sitemap.xml first
-  try {
-    const sitemapResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
-    if (sitemapResp.ok) {
-      const xml = await sitemapResp.text();
+  // Try multiple sitemap URL patterns (sites use different paths)
+  const sitemapUrls = [
+    `${baseUrl}/sitemap.xml`,
+    `${baseUrl}/sitemap_index.xml`,
+    `${baseUrl}/wp-sitemap.xml`,
+  ];
+  const fetchHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
 
-      // Check if this is a sitemap index (contains sub-sitemaps like post-sitemap.xml)
+  for (const sitemapUrl of sitemapUrls) {
+    if (pages.length > 1) break; // already found pages from a previous sitemap URL
+    try {
+      const sitemapResp = await fetch(sitemapUrl, { headers: fetchHeaders, signal: AbortSignal.timeout(15000), redirect: 'follow' });
+      if (!sitemapResp.ok) { console.log(`[discoverPages] ${sitemapUrl}: HTTP ${sitemapResp.status}`); continue; }
+      const xml = await sitemapResp.text();
+      console.log(`[discoverPages] ${sitemapUrl}: fetched ${xml.length} bytes`);
+
+      // Check if this is a sitemap index (contains sub-sitemaps)
       const subSitemapMatches = xml.match(/<loc>([^<]+\.xml)<\/loc>/g) || [];
       if (subSitemapMatches.length > 0) {
-        // It's a sitemap index — fetch each sub-sitemap
-        // Sort so page-sitemaps come before post-sitemaps
-        const subUrls = subSitemapMatches.map(m => m.replace(/<\/?loc>/g, ''));
+        // Sort so page-sitemaps come before post-sitemaps, skip category/author sitemaps
+        const subUrls = subSitemapMatches.map(m => m.replace(/<\/?loc>/g, ''))
+          .filter(u => !/(category|tag|author)[\-_]/.test(u));
         subUrls.sort((a, b) => {
           const aIsPage = /[\-\/]page[\-\d]*\.xml/i.test(a) ? 0 : 1;
           const bIsPage = /[\-\/]page[\-\d]*\.xml/i.test(b) ? 0 : 1;
           return aIsPage - bIsPage;
         });
+        console.log(`[discoverPages] Sitemap index with ${subUrls.length} sub-sitemaps: ${subUrls.join(', ')}`);
         for (const subUrl of subUrls) {
           try {
-            const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
+            const subResp = await fetch(subUrl, { headers: fetchHeaders, signal: AbortSignal.timeout(15000), redirect: 'follow' });
             if (subResp.ok) {
               const subXml = await subResp.text();
               extractPagesFromSitemap(subXml, subUrl);
-              console.log(`[discoverPages] Sub-sitemap ${subUrl}: found ${pages.length} pages total`);
+              console.log(`[discoverPages] Sub-sitemap ${subUrl}: ${pages.length} pages total`);
             } else {
               console.log(`[discoverPages] Sub-sitemap ${subUrl}: HTTP ${subResp.status}`);
             }
           } catch (e) { console.log(`[discoverPages] Sub-sitemap ${subUrl} failed: ${e.message}`); }
         }
       } else {
-        // It's a regular sitemap — extract pages directly
         extractPagesFromSitemap(xml, null);
+        console.log(`[discoverPages] Direct sitemap: ${pages.length} pages`);
       }
-    }
-  } catch (e) { /* sitemap not available */ }
+    } catch (e) { console.log(`[discoverPages] ${sitemapUrl} failed: ${e.message}`); }
+  }
 
-  // Try WP REST API if available and no sitemap pages (or to supplement sitemap)
+  // Also try direct sub-sitemap URLs if we still have few pages (some hosts block index but not individual sitemaps)
+  if (pages.length <= 1) {
+    const directSitemaps = [
+      `${baseUrl}/page-sitemap.xml`,
+      `${baseUrl}/post-sitemap.xml`,
+      `${baseUrl}/wp-sitemap-posts-page-1.xml`,
+      `${baseUrl}/wp-sitemap-posts-post-1.xml`,
+    ];
+    for (const dsUrl of directSitemaps) {
+      try {
+        const dsResp = await fetch(dsUrl, { headers: fetchHeaders, signal: AbortSignal.timeout(10000), redirect: 'follow' });
+        if (dsResp.ok) {
+          const dsXml = await dsResp.text();
+          extractPagesFromSitemap(dsXml, dsUrl);
+          console.log(`[discoverPages] Direct sub-sitemap ${dsUrl}: ${pages.length} pages total`);
+        }
+      } catch (e) { /* skip */ }
+    }
+  }
+
+  console.log(`[discoverPages] After sitemap phase: ${pages.length} pages found`);
+
+  // Try WP REST API — always run if available (supplements sitemap with wpType data)
   if (wpUrl) {
     try {
       const wpBase = wpUrl.replace(/\/$/, '');
@@ -17322,7 +17355,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let robotsTxt = '';
     let robotsBlocked = [];
     try {
-      const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+      const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000) });
       if (robotsResp.ok) robotsTxt = await robotsResp.text();
     } catch (e) { /* no robots.txt */ }
 
@@ -17330,7 +17363,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let sitemapOk = false;
     let sitemapUrls = 0;
     try {
-      const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+      const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
       if (smResp.ok) {
         const smXml = await smResp.text();
         sitemapOk = true;
