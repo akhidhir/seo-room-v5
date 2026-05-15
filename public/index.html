@@ -37,9 +37,19 @@
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
+
+    /* Long-session comfort: smooth scrolling, custom scrollbars, better selection */
+    html { scroll-behavior: smooth; }
+    ::selection { background: rgba(99,102,241,0.35); color: #fff; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
     /* Quill editor — bigger, more readable text */
     .ql-editor {
@@ -186,12 +196,12 @@
     }
 
     .sidebar-section-title {
-      padding: 16px 20px 8px;
-      font-size: 12px;
+      padding: 18px 20px 8px;
+      font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       color: var(--text3);
-      letter-spacing: 0.5px;
+      letter-spacing: 0.8px;
     }
 
     .sidebar-item {
@@ -286,7 +296,7 @@
     .page-content {
       flex: 1;
       overflow-y: auto;
-      padding: 24px;
+      padding: 28px 32px;
     }
 
     .page-header {
@@ -305,16 +315,17 @@
     }
 
     .btn {
-      padding: 8px 16px;
+      padding: 9px 18px;
       border-radius: 8px;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid;
-      transition: all 0.2s;
+      transition: all 0.15s ease;
       display: inline-flex;
       align-items: center;
       gap: 8px;
+      letter-spacing: 0.01em;
     }
 
     .btn:disabled {
@@ -366,7 +377,18 @@
 
     .btn-small {
       padding: 6px 12px;
-      font-size: 12px;
+      font-size: 13px;
+    }
+
+    /* Focus ring for keyboard navigation */
+    .btn:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Reduce motion for users who prefer it */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
 
     .btn-group {
@@ -6194,8 +6216,9 @@
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
                 <div><div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
                   <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2></div>
-                <div style={{ display: 'flex', gap: 8 }}>{sevBadge(f.severity)}
-                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: cc + '15', color: cc }}>{f.category}</span></div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{sevBadge(f.severity)}
+                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: cc + '15', color: cc }}>{f.category}</span>
+                  {typeof FixPageLink !== 'undefined' && <FixPageLink category={f.category} />}</div>
               </div>
               {f.description && (<div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>What's the issue</div>
@@ -6390,6 +6413,7 @@
                       showHeader && (<tr style={{ background: cc + '10' }}>
                         <td colSpan={8} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
                           {f.category} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
+                          {typeof catFixPages !== 'undefined' && catFixPages[f.category] && setActiveTab && <button onClick={(e) => { e.stopPropagation(); setActiveTab(catFixPages[f.category].page); }} style={{ marginLeft: 12, background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer', verticalAlign: 'middle' }}><i className={`fas ${catFixPages[f.category].icon}`} style={{ marginRight: 4, fontSize: 10 }} />{catFixPages[f.category].label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
                         </td></tr>),
                       <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
                         onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
@@ -6413,7 +6437,7 @@
     }
 
     // ============ CODE-BASED WEBSITE AUDIT PAGE ============
-    function CodeWebsiteAuditPage({ project }) {
+    function CodeWebsiteAuditPage({ project, setActiveTab }) {
       const [findings, setFindings] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -6433,13 +6457,58 @@
 
       const isCopywriterFinding = (f) => {
         const c = (f.category || '').toLowerCase();
-        return c.includes('content quality') || c.includes('faq enhancement');
+        return c.includes('content quality');
+      };
+
+      // Generate clear, non-technical copywriter instructions from a finding
+      const buildCopywriterNotes = (f) => {
+        const title = f.title || '';
+        const desc = f.description || '';
+        const rec = f.recommendation || '';
+        // Extract page URL from current_value or description
+        let pageUrl = '';
+        try { const cv = f.current_value || ''; if (cv.startsWith('[')) { const urls = JSON.parse(cv); if (urls[0]) pageUrl = urls[0]; } } catch {}
+        if (!pageUrl) { const m = desc.match(/https?:\/\/[^\s,)]+/); if (m) pageUrl = m[0]; }
+        if (!pageUrl) { const m = title.match(/https?:\/\/[^\s,)]+/); if (m) pageUrl = m[0]; }
+        // Extract word count info
+        const wcMatch = desc.match(/(\d+)\s*words?/i);
+        const currentWords = wcMatch ? parseInt(wcMatch[1]) : null;
+        const targetMatch = (f.recommended_value || '').match(/(\d+)/);
+        const targetWords = targetMatch ? parseInt(targetMatch[1]) : 500;
+        // Build plain-language brief
+        let notes = `PAGE: ${pageUrl || title}\n\n`;
+        notes += `WHAT NEEDS DOING:\n`;
+        if (title.toLowerCase().includes('thin content') || (currentWords && currentWords < 300)) {
+          notes += `This page has very little content (${currentWords ? currentWords + ' words' : 'too short'}). It needs to be expanded to at least ${targetWords} words with useful, relevant information.\n\n`;
+          notes += `INSTRUCTIONS FOR THE WRITER:\n`;
+          notes += `1. Read the existing page content carefully\n`;
+          notes += `2. Expand it to ${targetWords}+ words — keep the same tone and message\n`;
+          notes += `3. Add more detail about the services, process, and benefits\n`;
+          notes += `4. Include a FAQ section with 3-5 common questions and answers\n`;
+          notes += `5. Use short paragraphs (2-3 sentences each) and clear subheadings\n`;
+        } else if (title.toLowerCase().includes('duplicate') || desc.toLowerCase().includes('duplicate')) {
+          notes += `This page has content that is too similar to other pages on the site. It needs to be rewritten to be unique.\n\n`;
+          notes += `INSTRUCTIONS FOR THE WRITER:\n`;
+          notes += `1. Read the current content and identify what is duplicated\n`;
+          notes += `2. Rewrite the content to be unique to this specific page/service/area\n`;
+          notes += `3. Focus on what makes this page different from similar pages\n`;
+          notes += `4. Keep the same topic but use completely different wording and examples\n`;
+        } else {
+          notes += `${desc}\n\n`;
+          notes += `INSTRUCTIONS FOR THE WRITER:\n`;
+          notes += `1. Review the current page content\n`;
+          notes += `2. ${rec || 'Improve the content quality based on the issue described above'}\n`;
+          notes += `3. Aim for ${targetWords}+ words of useful, well-structured content\n`;
+          notes += `4. Use short paragraphs and clear subheadings\n`;
+        }
+        notes += `\nIMPORTANT: Do not change the page title or URL. Only update the body content.`;
+        return notes;
       };
       const isAutoFixable = (f) => {
         if (isCopywriterFinding(f)) return false; // copywriter findings use Send to Copywriter instead
         const t = (f.title || '').toLowerCase();
         const c = (f.category || '').toLowerCase();
-        if (c.includes('schema') || t.includes('schema') || t.includes('json-ld') || t.includes('localbusiness') || t.includes('faqpage') || t.includes('structured data')) return true;
+        if (c.includes('schema') || c.includes('faq enhancement') || t.includes('schema') || t.includes('json-ld') || t.includes('localbusiness') || t.includes('faqpage') || t.includes('structured data')) return true;
         if (t.includes('canonical')) return true;
         if (t.includes('noindex')) return true;
         if (t.includes('https') || t.includes('mixed content') || t.includes('non-https')) return true;
@@ -6626,6 +6695,20 @@
 
       const catColors = { 'Site Health': '#ef4444', 'Crawlability': '#f97316', 'On-Page Issues': '#f59e0b', 'Content Quality': '#8b5cf6', 'Core Web Vitals': '#3b82f6', 'Schema & Data': '#06b6d4' };
 
+      // Link audit categories to their fix sub-pages (PDCA: audit detects → fix page resolves → re-audit verifies)
+      const catFixPages = {
+        'On-Page Issues': { page: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fa-file-alt' },
+        'Core Web Vitals': { page: 'web-sec-pagespeed-scores', label: 'PageSpeed Scores', icon: 'fa-tachometer-alt' },
+        'Content Quality': { page: 'ow-issues', label: 'Optimise Website Copy', icon: 'fa-wand-magic-sparkles' },
+      };
+      const FixPageLink = ({ category, style: s }) => {
+        const link = catFixPages[category];
+        if (!link || !setActiveTab) return null;
+        return <button onClick={() => setActiveTab(link.page)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 12px', fontSize: 12, color: '#6366f1', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, ...s }}>
+          <i className={`fas ${link.icon}`} style={{ fontSize: 11 }} />{link.label}<i className="fas fa-arrow-right" style={{ fontSize: 9, marginLeft: 2 }} />
+        </button>;
+      };
+
       const sevBadge = (sev) => {
         const colors = { Critical: '#ef4444', critical: '#ef4444', High: '#f97316', high: '#f97316', Medium: '#f59e0b', medium: '#f59e0b', Low: '#3b82f6', low: '#3b82f6' };
         const c = colors[sev] || '#64748b';
@@ -6649,8 +6732,9 @@
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
                 <div><div style={{ fontSize: 13, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Issue Brief</div>
                   <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{f.title}</h2></div>
-                <div style={{ display: 'flex', gap: 8 }}>{sevBadge(f.severity)}
-                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: cc + '15', color: cc }}>{f.category}</span></div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{sevBadge(f.severity)}
+                  <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: cc + '15', color: cc }}>{f.category}</span>
+                  {typeof FixPageLink !== 'undefined' && <FixPageLink category={f.category} />}</div>
               </div>
               {f.description && (<div style={{ marginBottom: 20, padding: 20, background: 'var(--bg)', borderRadius: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 10 }}>What's the issue</div>
@@ -6665,6 +6749,35 @@
                 <div style={{ padding: '16px 20px', background: 'rgba(34,197,94,0.06)', borderRadius: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Target</div>
                   <div style={{ fontSize: 17, fontWeight: 600, color: '#22c55e' }}>{f.recommended_value || '—'}</div></div></div>)}
+              {/* Site Health step-by-step manual fix instructions */}
+              {f.category === 'Site Health' && (() => {
+                const t = (f.title || '').toLowerCase();
+                let steps = null;
+                let fixLocation = null;
+                if (t.includes('404') || t.includes('error') || t.includes('broken')) {
+                  steps = ['Log in to WordPress admin panel', 'Check if the page exists under Pages or Posts', 'If deleted: restore from Trash, or create a 301 redirect to the closest relevant page', 'If the URL was never a real page: find and remove all internal links pointing to it', 'Use a plugin like Redirection or add a redirect in your hosting panel (.htaccess)'];
+                  fixLocation = { page: 'redirects', label: 'Redirects Page', icon: 'fa-directions' };
+                } else if (t.includes('https') || t.includes('ssl')) {
+                  steps = ['Contact your hosting provider to enable SSL/TLS certificate', 'In WordPress: Settings → General → change both URLs to https://', 'Install "Really Simple SSL" plugin to auto-fix mixed content', 'Update any hardcoded http:// URLs in your theme or content', 'Set up a 301 redirect from http:// to https:// (usually done by the SSL plugin)'];
+                } else if (t.includes('slow') || t.includes('response')) {
+                  steps = ['Run a speed test on the slow pages using GTmetrix or PageSpeed Insights', 'Enable server-side caching (WP Super Cache, W3 Total Cache, or your host\'s built-in cache)', 'Consider upgrading to a faster hosting plan or adding a CDN like Cloudflare', 'Optimize database queries — install WP-Optimize to clean up the database', 'Check for heavy plugins causing slow server response'];
+                  fixLocation = { page: 'web-sec-pagespeed-scores', label: 'PageSpeed Scores', icon: 'fa-tachometer-alt' };
+                } else if (t.includes('redirect')) {
+                  steps = ['Identify the final destination URL of the redirect', 'Update all internal links to point directly to the final URL (skip the redirect)', 'If the redirect is no longer needed, remove it from your redirects configuration', 'Check for redirect chains (A→B→C) and simplify them to a single redirect (A→C)'];
+                  fixLocation = { page: 'redirects', label: 'Redirects Page', icon: 'fa-directions' };
+                }
+                if (!steps) return null;
+                return <div style={{ marginBottom: 20, padding: 20, background: 'rgba(99,102,241,0.06)', borderRadius: 10, border: '1px solid rgba(99,102,241,0.15)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span><i className="fas fa-list-ol" style={{ marginRight: 6 }} />Step-by-Step Fix</span>
+                    {fixLocation && setActiveTab && <button onClick={() => setActiveTab(fixLocation.page)} style={{ background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer' }}><i className={`fas ${fixLocation.icon}`} style={{ marginRight: 4, fontSize: 10 }} />{fixLocation.label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
+                  </div>
+                  {steps.map((step, i) => <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 10, alignItems: 'flex-start' }}>
+                    <span style={{ minWidth: 24, height: 24, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ fontSize: 15, lineHeight: 1.6, color: 'var(--text1)' }}>{step}</span>
+                  </div>)}
+                </div>;
+              })()}
               {fixResult?.id === f.id && (
                 <div style={{ marginTop: 16, padding: 14, borderRadius: 8, background: fixResult.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${fixResult.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, color: fixResult.ok ? '#22c55e' : '#ef4444', fontSize: 15 }}>
                   <i className={`fas ${fixResult.ok ? 'fa-check-circle' : 'fa-exclamation-circle'}`} style={{ marginRight: 8 }} />{fixResult.msg}
@@ -6689,6 +6802,21 @@
                       {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Verifying...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Verify Fixed</>}
                     </button>
                   </>
+                ) : isCopywriterFinding(f) ? (
+                  <button className="btn" onClick={async () => {
+                    setFixing(f.id);
+                    try {
+                      const notes = buildCopywriterNotes(f);
+                      await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter', copywriter_notes: notes } });
+                      setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter with writing brief' });
+                      setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'approved' } : x));
+                      setReviewFinding({ ...f, status: 'approved' });
+                    } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
+                    setFixing(null);
+                  }} disabled={fixing === f.id}
+                    style={{ fontSize: 16, padding: '12px 28px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}>
+                    {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Sending...</> : <><i className="fas fa-pen-nib" style={{ marginRight: 8 }} />Send to Copywriter</>}
+                  </button>
                 ) : (
                   <button className="btn btn-success" onClick={() => { updateStatus(f.id, 'approved'); setReviewFinding({ ...f, status: 'approved' }); }} style={{ fontSize: 16, padding: '12px 28px' }}>
                     <i className="fas fa-check" style={{ marginRight: 8 }} /> Acknowledge</button>
@@ -6891,6 +7019,7 @@
                       showHeader && (<tr style={{ background: cc + '10' }}>
                         <td colSpan={7} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
                           {f.category} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
+                          {typeof catFixPages !== 'undefined' && catFixPages[f.category] && setActiveTab && <button onClick={(e) => { e.stopPropagation(); setActiveTab(catFixPages[f.category].page); }} style={{ marginLeft: 12, background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer', verticalAlign: 'middle' }}><i className={`fas ${catFixPages[f.category].icon}`} style={{ marginRight: 4, fontSize: 10 }} />{catFixPages[f.category].label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
                         </td></tr>),
                       <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
                         onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
@@ -6992,8 +7121,9 @@
                               e.stopPropagation();
                               setFixing(f.id);
                               try {
-                                await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter' } });
-                                setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter queue' });
+                                const notes = buildCopywriterNotes(f);
+                                await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter', copywriter_notes: notes } });
+                                setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter with writing brief' });
                                 setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'approved' } : x));
                               } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
                               setFixing(null);
@@ -8925,6 +9055,22 @@
     }
 
     // ============ USER BEHAVIOUR PAGE (Microsoft Clarity) ============
+    function RedirectsPage({ project }) {
+      return React.createElement('div', { style: { padding: 32 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 } },
+          React.createElement('i', { className: 'fas fa-directions', style: { fontSize: 24, color: '#6366f1' } }),
+          React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, 'Redirects')
+        ),
+        React.createElement('div', { style: { background: '#f8fafc', border: '2px dashed #e2e8f0', borderRadius: 12, padding: 48, textAlign: 'center' } },
+          React.createElement('i', { className: 'fas fa-directions', style: { fontSize: 48, color: '#cbd5e1', marginBottom: 16 } }),
+          React.createElement('h3', { style: { color: '#64748b', fontWeight: 500, marginBottom: 8 } }, 'Coming Soon'),
+          React.createElement('p', { style: { color: '#94a3b8', maxWidth: 480, margin: '0 auto', lineHeight: 1.6 } },
+            'Manage 301/302 redirects, detect redirect chains, find broken links, and monitor redirect health across all your pages. Redirect rules will be pushed to WordPress via the SEO Room Connector plugin.'
+          )
+        )
+      );
+    }
+
     function UserBehaviourPage({ project }) {
       const [metrics, setMetrics] = useState([]);
       const [loading, setLoading] = useState(true);
@@ -24491,7 +24637,7 @@
           case 'gsc-audit':
             return <GSCAuditPage project={project} />;
           case 'website-audit':
-            return <CodeWebsiteAuditPage project={project} />;
+            return <CodeWebsiteAuditPage project={project} setActiveTab={setActiveTab} />;
           case 'web-sec-pagespeed-scores':
             return <SpeedAuditPage project={project} />;
           case 'onpage-audit':
@@ -24506,6 +24652,8 @@
             return <CitationsPage project={project} />;
           case 'user-behaviour':
             return <UserBehaviourPage project={project} />;
+          case 'redirects':
+            return <RedirectsPage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
           case 'nw-project':
@@ -24561,7 +24709,7 @@ case 'action-plan':
               return <ExternalGBPAuditPage project={project} section={sectionName} setActiveTab={setActiveTab} />;
             }
             if (activeTab.startsWith('web-sec-')) {
-              return <CodeWebsiteAuditPage project={project} />;
+              return <CodeWebsiteAuditPage project={project} setActiveTab={setActiveTab} />;
             }
             if (activeTab.startsWith('gsc-sec-')) {
               return <GSCAuditPage project={project} />;
@@ -24587,6 +24735,7 @@ case 'action-plan':
             { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
             { id: 'indexing', label: 'Indexing Status', icon: 'fas fa-file-import' },
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
+            { id: 'redirects', label: 'Redirects', icon: 'fas fa-directions' },
           ] },
         ]},
         { section: 'RANKINGS', items: [

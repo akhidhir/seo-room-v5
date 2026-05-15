@@ -2084,7 +2084,7 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
 
 // Update finding status (approve/reject) — auto-creates action item on approve
 app.put('/api/audit-findings/:id', async (req, res) => {
-  const { status } = req.body;
+  const { status, copywriter_notes } = req.body;
   // Prevent manually marking as 'fixed' — must go through /verify-fix or /technical-fix
   if (status === 'fixed') {
     return res.status(400).json({ error: 'Cannot manually mark as fixed. Use the Verify Fix button to confirm the fix on the live page.' });
@@ -2106,7 +2106,7 @@ app.put('/api/audit-findings/:id', async (req, res) => {
           `INSERT INTO action_items (project_id, finding_id, pillar, type, title, description, current_value, new_value, severity, status, execution_type)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10) RETURNING *`,
           [finding.project_id, finding.id, finding.pillar, finding.category || 'general',
-           finding.title, finding.recommendation || finding.description,
+           finding.title, copywriter_notes || finding.recommendation || finding.description,
            finding.current_value, finding.recommended_value, finding.severity,
            // Auto-detect execution type based on category
            ['Quick Win', 'Low CTR', 'Underperforming Page'].includes(finding.category) ? 'semi_auto' : 'manual']
