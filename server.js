@@ -18725,16 +18725,19 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         let fixedCount = 0;
         let firstPageId = null;
         for (const page of wpServicePages.slice(0, 20)) {
-          // Double-check: skip if classified as non-service
+          // Double-check: skip if classified as non-service (but trust per-page fixes from audit findings)
           const pageSlug = (page.slug || '').toLowerCase();
           const pageCls = fixClassMap[pageSlug];
-          if (pageCls && !['Service', 'Suburb'].includes(pageCls)) {
-            console.log(`[technical-fix] SKIP classified "${pageCls}" page: ${pageSlug}`);
-            continue;
-          }
-          if (!pageCls && !isServicePage(page.slug, null, undefined, projExclusions)) {
-            console.log(`[technical-fix] SKIP non-service page: ${pageSlug}`);
-            continue;
+          if (!isPerPageFix) {
+            // Only filter when doing bulk Fix All — per-page fixes trust the audit's classification
+            if (pageCls && !['Service', 'Suburb'].includes(pageCls)) {
+              console.log(`[technical-fix] SKIP classified "${pageCls}" page: ${pageSlug}`);
+              continue;
+            }
+            if (!pageCls && !isServicePage(page.slug, null, undefined, projExclusions)) {
+              console.log(`[technical-fix] SKIP non-service page: ${pageSlug}`);
+              continue;
+            }
           }
           const pageTitle = (page.title?.rendered || page.slug).replace(/&#8211;|&#8212;|&amp;/g, s => s === '&amp;' ? '&' : '-');
           if (!firstPageId) { firstPageId = page.id; targetPageType = 'pages'; }
