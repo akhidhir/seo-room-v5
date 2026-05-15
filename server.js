@@ -17926,6 +17926,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         const isDetectedService = !classification && !isBlog && !isUtility && isServicePage(page.path, null, page.wordCount, excludedPaths);
         // Note: pass null for schemas to isServicePage so Article filter doesn't hide — we handle Article above
 
+        // Skip utility pages entirely — they don't need Service schema (even if one was mistakenly added)
+        if (isUtility && !isClassifiedService) {
+          svcDebug.noSchemaNeeded++;
+          continue;
+        }
+
         if (hasService) {
           svcDebug.hasServiceSchema++;
           // Has Service schema — show as fixed regardless of page type
