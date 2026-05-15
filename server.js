@@ -17865,7 +17865,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
             severity: 'Medium',
             current_value: JSON.stringify([pageUrl]),
             recommended_value: 'Service schema on this page',
-            _forceStatus: 'fixed'
+            _forceStatus: 'fixed',
+            _verification: JSON.stringify({ method: 'live_page_crawl', verified_at: new Date().toISOString(), post_fix: { result: 'verified_on_live_page' } })
           });
         } else if (isBlog) {
           svcDebug.blogArticle++;
@@ -18024,27 +18025,33 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
       // _forceStatus findings (e.g. schema-present records) skip dedup — they must persist
       if (f._forceStatus) {
+        const verificationJson = f._verification || null;
         if (existing) {
           // Update existing record but keep/set the forced status
           await pool.query(
             `UPDATE audit_findings SET audit_id=$1, description=$2, recommendation=$3, severity=$4,
-             current_value=$5, recommended_value=$6, category=$7, status=$8, updated_at=NOW()
+             current_value=$5, recommended_value=$6, category=$7, status=$8${verificationJson ? ', verification=$10' : ''}, updated_at=NOW()
              WHERE id=$9`,
-            [auditId, f.description, f.recommendation, f.severity,
-             f.current_value, f.recommended_value, f.category, f._forceStatus, existing.id]
+            verificationJson
+              ? [auditId, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f.category, f._forceStatus, existing.id, verificationJson]
+              : [auditId, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f.category, f._forceStatus, existing.id]
           );
           f.id = existing.id;
           f.status = f._forceStatus;
+          if (verificationJson) f.verification = verificationJson;
           savedFindings.push(f);
           updated++;
         } else {
           const r = await pool.query(
-            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-            [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f._forceStatus]
+            `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status${verificationJson ? ', verification' : ''})
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11${verificationJson ? ', $12' : ''}) RETURNING id`,
+            verificationJson
+              ? [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f._forceStatus, verificationJson]
+              : [projectId, auditId, f.pillar, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value, f._forceStatus]
           );
           f.id = r.rows[0].id;
           f.status = f._forceStatus;
+          if (verificationJson) f.verification = verificationJson;
           savedFindings.push(f);
           added++;
         }
