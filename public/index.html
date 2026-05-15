@@ -6909,8 +6909,10 @@
                               const slashPaths = desc.match(/\/[a-z][a-z0-9-]{2,}(?:\/[a-z0-9-]+)*\/?(?=[\s,.])/gi) || [];
                               const schemaNames = ['webpage', 'imageobject', 'breadcrumblist', 'website', 'organization', 'localbusiness', 'faqpage', 'service', 'article'];
                               const realPaths = slashPaths.filter(p => !schemaNames.includes(p.replace(/\//g, '').toLowerCase()));
-                              if (titleSlugMatch) {
+                              if (titleSlugMatch && !['homepage', 'home'].includes(titleSlugMatch[1].toLowerCase())) {
                                 pageUrl = `https://${domain}/${titleSlugMatch[1]}/`;
+                              } else if (titleSlugMatch && ['homepage', 'home'].includes(titleSlugMatch[1].toLowerCase())) {
+                                pageUrl = `https://${domain}/`;
                               } else if (fullUrlMatch) {
                                 pageUrl = fullUrlMatch[0].replace(/\/?$/, '/');
                               } else if (realPaths.length > 0) {

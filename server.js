@@ -17840,7 +17840,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         return !normPath || normPath === '' || normPath === 'home' || normPath === 'homepage'
           || p.url === homeUrl || p.url === homeUrl.replace(/\/$/, '');
       });
-      console.log(`[website-audit] Homepage find: ${homePage ? 'FOUND path=' + homePage.path + ' url=' + homePage.url : 'NOT FOUND'}, successPages paths: [${successPages.slice(0, 5).map(p => p.path).join(', ')}...]`);
+      console.log(`[website-audit] Homepage find: ${homePage ? 'FOUND path=' + homePage.path + ' url=' + homePage.url + ' schemas=[' + (homePage.schemas||[]).join(', ') + ']' : 'NOT FOUND'}, successPages paths: [${successPages.slice(0, 5).map(p => p.path).join(', ')}...]`);
       // Always add homepage finding even if not in crawl results
       const homeSchemas = homePage ? (homePage.schemas || []).filter(s => typeof s === 'string') : [];
       const homeHasLB = homeSchemas.some(s => isLocalBusinessType(s));
