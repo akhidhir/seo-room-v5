@@ -17836,8 +17836,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       // Show homepage in schema findings — always visible for testing
       const homeUrl = `https://${svcDomain}/`;
       const homePage = successPages.find(p => {
-        const normPath = (p.path || '').replace(/^\/|\/$/g, '');
-        return !normPath || normPath === '' || p.url === homeUrl || p.url === homeUrl.replace(/\/$/, '');
+        const normPath = (p.path || '').replace(/^\/|\/$/g, '').toLowerCase();
+        return !normPath || normPath === '' || normPath === 'home' || normPath === 'homepage'
+          || p.url === homeUrl || p.url === homeUrl.replace(/\/$/, '');
       });
       console.log(`[website-audit] Homepage find: ${homePage ? 'FOUND path=' + homePage.path + ' url=' + homePage.url : 'NOT FOUND'}, successPages paths: [${successPages.slice(0, 5).map(p => p.path).join(', ')}...]`);
       // Always add homepage finding even if not in crawl results
