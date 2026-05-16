@@ -6461,7 +6461,7 @@
       const [reviewFinding, setReviewFinding] = useState(null);
       const [searchQ, setSearchQ] = useState('');
       const [filterSev, setFilterSev] = useState('all');
-      const [filterStatus, setFilterStatus] = useState('active');
+      const [filterStatus, setFilterStatus] = useState('all');
       const [filterCat, setFilterCat] = useState('all');
       const [sortCol, setSortCol] = useState('severity');
       const [sortDir, setSortDir] = useState('asc');
@@ -6693,8 +6693,11 @@
         let list = [...findings];
         if (filterSev !== 'all') list = list.filter(f => (f.severity || '').toLowerCase() === filterSev);
         if (filterCat !== 'all') list = list.filter(f => f.category === filterCat);
-        if (filterStatus === 'active') list = list.filter(f => f.status !== 'rejected');
+        if (filterStatus === 'pending') list = list.filter(f => f.status !== 'fixed' && f.status !== 'rejected');
+        else if (filterStatus === 'fixed') list = list.filter(f => f.status === 'fixed');
         else if (filterStatus !== 'all') list = list.filter(f => f.status === filterStatus);
+        // Hide rejected/ignored unless explicitly showing all
+        if (filterStatus === 'all') list = list.filter(f => f.status !== 'rejected');
         if (searchQ.trim()) { const q = searchQ.toLowerCase(); list = list.filter(f => (f.title || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)); }
         // Sort: unfixed first, fixed at bottom
         list.sort((a, b) => {
@@ -6975,17 +6978,6 @@
                   {tab.label} <span style={{ fontSize: 12, opacity: 0.7 }}>({count})</span></button>);
               })}
             </div>
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {['critical', 'medium', 'low'].map(s => {
-                const colors = { critical: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
-                const c = sorted.filter(f => (f.severity||'').toLowerCase() === s).length;
-                const active = filterSev === s;
-                return <button key={s} className="btn btn-small" style={{ background: active ? colors[s] + '25' : colors[s] + '15', borderColor: active ? colors[s] : colors[s] + '30', color: colors[s], fontSize: 14, fontWeight: active ? 700 : 500, boxShadow: active ? `0 0 0 1px ${colors[s]}` : 'none' }}
-                  onClick={() => setFilterSev(filterSev === s ? 'all' : s)}>
-                  {s.charAt(0).toUpperCase() + s.slice(1)} ({c})</button>;
-              })}
-              <button className="btn btn-small" onClick={() => setFilterSev('all')} style={{ fontSize: 14, fontWeight: filterSev === 'all' ? 700 : 500, background: filterSev === 'all' ? 'var(--text1)' : 'var(--card)', color: filterSev === 'all' ? 'var(--bg)' : 'var(--text2)' }}>All ({sorted.length})</button>
-            </div>
           </div>)}
 
           {selected.size > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -7034,13 +7026,18 @@
           <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             <input type="text" placeholder="Search findings..." value={searchQ} onChange={e => setSearchQ(e.target.value)}
               style={{ flex: 1, minWidth: 200, background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }} />
-            <select value={filterSev} onChange={e => setFilterSev(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
-              <option value="all">All Severities</option><option value="critical">Critical</option><option value="medium">Medium</option><option value="low">Low</option>
-            </select>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }}>
-              <option value="active">Active</option><option value="all">All</option><option value="fixed">Fixed</option><option value="rejected">Ignored</option>
-            </select>
-            <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.length}</span>
+            {['all', 'pending', 'fixed'].map(s => {
+              const labels = { all: 'All', pending: 'Pending', fixed: 'Fixed' };
+              const counts = { all: findings.filter(f => f.status !== 'rejected').length, pending: findings.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length, fixed: findings.filter(f => f.status === 'fixed').length };
+              const active = filterStatus === s;
+              const colors = { all: 'var(--text1)', pending: '#f59e0b', fixed: '#22c55e' };
+              return <button key={s} onClick={() => setFilterStatus(s)}
+                style={{ padding: '8px 16px', borderRadius: 6, fontSize: 14, fontWeight: active ? 700 : 500, cursor: 'pointer',
+                  background: active ? colors[s] + '20' : 'var(--card)', color: active ? colors[s] : 'var(--text3)',
+                  border: active ? `1px solid ${colors[s]}` : '1px solid var(--border)' }}>
+                {labels[s]} ({counts[s]})</button>;
+            })}
+            <span style={{ fontSize: 14, color: 'var(--text3)' }}>{sorted.length} of {findings.filter(f => f.status !== 'rejected').length}</span>
           </div>
 
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
