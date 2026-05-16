@@ -17332,6 +17332,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         ) dupes WHERE rn > 1
       )`, [projectId]);
 
+    // Delete ALL old On-Page Issues findings — code audit regenerates them per-page now
+    await pool.query(
+      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND LOWER(category)='on-page issues'`,
+      [projectId]
+    );
+
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
       [projectId]
