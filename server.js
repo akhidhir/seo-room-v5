@@ -2016,7 +2016,7 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
       GBP_Internal: ['Relevance > Description', 'Relevance > Categories', 'Relevance > Hours', 'Relevance > Services', 'Relevance > NAP', 'Relevance > Content', 'Relevance > Website', 'Proximity > Service Areas', 'Prominence > Reviews', 'Prominence > Posts', 'Prominence > Photos'],
       GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
-      Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+      Website: ['Site Health', 'On-Page Issues', 'Content Quality', 'Schema & Data'],
     };
     const ALIASES = {
       'quick win': 'Quick Win', 'quick wins': 'Quick Win',
@@ -2038,9 +2038,9 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'on_page': 'On-Page Issues', 'meta': 'On-Page Issues',
       'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
-      'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
-      'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health', 'security': 'Site Health', 'mobile': 'Site Health', 'structure': 'Site Health', 'links': 'Crawlability',
-      'indexing': 'Crawlability',
+      'crawl': 'Site Health', 'crawlability': 'Site Health', 'robots': 'Site Health', 'sitemap': 'Site Health',
+      'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health', 'security': 'Site Health', 'mobile': 'Site Health', 'structure': 'Site Health', 'links': 'Site Health',
+      'indexing': 'Site Health',
       'manual': null,
       // GBP internal "Pillar > Sub" mappings
       'proximity > maps ranking': 'Suburb Coverage', 'proximity > geo-targeting': 'Suburb Coverage', 'proximity > service areas': 'Suburb Coverage',
@@ -2622,7 +2622,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
     const DISPLAY_PILLAR_CATS = {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
       GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
-      Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+      Website: ['Site Health', 'On-Page Issues', 'Content Quality', 'Schema & Data'],
     };
     const CAT_ALIASES = {
       'quick win': 'Quick Win', 'quick wins': 'Quick Win',
@@ -2644,9 +2644,9 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'meta': 'On-Page Issues',
       'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
-      'crawl': 'Crawlability', 'crawlability': 'Crawlability', 'robots': 'Crawlability', 'sitemap': 'Crawlability',
+      'crawl': 'Site Health', 'crawlability': 'Site Health', 'robots': 'Site Health', 'sitemap': 'Site Health',
       'site health': 'Site Health', 'broken links': 'Site Health', '404': 'Site Health',
-      'indexing': 'Crawlability',
+      'indexing': 'Site Health',
     };
     function normalizeCategory(rawCat, displayPillar) {
       const cat = (rawCat || '').toLowerCase().trim();
@@ -16251,7 +16251,7 @@ Quality check before outputting: remove any finding where current_value or descr
 // Valid categories per pillar — findings MUST map to one of these
 const PILLAR_CATEGORIES = {
   gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
-  website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+  website: ['Site Health', 'On-Page Issues', 'Content Quality', 'Schema & Data'],
   gsc_agent: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
   gsc: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
 };
@@ -16271,7 +16271,7 @@ function serverNormalizeSection(name) {
     'underperforming pages': 'Underperforming Pages', 'underperforming': 'Underperforming Pages',
     'action plan': 'Summary', 'priority action plan': 'Summary', 'summary': 'Summary',
     'site health': 'Site Health', 'site health overview': 'Site Health',
-    'crawlability': 'Crawlability', 'crawlability & indexing': 'Crawlability', 'crawlability and indexing': 'Crawlability',
+    'crawlability': 'Site Health', 'crawlability & indexing': 'Site Health', 'crawlability and indexing': 'Site Health',
     'on-page issues': 'On-Page Issues', 'on-page seo issues': 'On-Page Issues', 'on page issues': 'On-Page Issues',
     'content quality': 'Content Quality',
     'core web vitals': 'Core Web Vitals', 'cwv': 'Core Web Vitals',
@@ -16293,7 +16293,7 @@ function serverNormalizeSection(name) {
   if (/underperform|stuck|should.?rank|declining/i.test(n)) return 'Underperforming Pages';
   if (/action.?plan|priority.?action|next.?action|implementation|summary/i.test(n)) return 'Summary';
   if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
-  if (/crawl|index|robot|sitemap/i.test(n)) return 'Crawlability';
+  if (/crawl|index|robot|sitemap/i.test(n)) return 'Site Health';
   if (/on.?page|title.?tag|meta.?desc|h1|heading/i.test(n)) return 'On-Page Issues';
   if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
   if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
@@ -17299,7 +17299,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Delete ALL old On-Page Issues findings — code audit regenerates them per-page now
     // Also delete CWV findings — speed data lives in PageSpeed Scores page only
     await pool.query(
-      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (LOWER(category)='on-page issues' OR LOWER(category)='core web vitals')`,
+      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement')`,
       [projectId]
     );
 
@@ -17586,11 +17586,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
-    // ===== CRAWLABILITY =====
+    // ===== CRAWLABILITY → Site Health =====
     // Missing robots.txt
     if (!robotsTxt) {
       findings.push({
-        pillar: 'website', category: 'Crawlability',
+        pillar: 'website', category: 'Site Health',
         title: 'No robots.txt file found',
         description: 'robots.txt tells search engines which pages to crawl. Without it, bots may crawl unnecessary pages.',
         recommendation: 'Create a robots.txt file at the root of your domain. Include sitemap URL and block irrelevant paths (wp-admin, etc).',
@@ -17602,7 +17602,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Missing sitemap
     if (!sitemapOk) {
       findings.push({
-        pillar: 'website', category: 'Crawlability',
+        pillar: 'website', category: 'Site Health',
         title: 'No XML sitemap found',
         description: 'An XML sitemap helps search engines discover and crawl all your pages efficiently.',
         recommendation: 'Generate an XML sitemap (use Yoast SEO, RankMath, or a sitemap generator). Submit it in Google Search Console.',
@@ -17611,7 +17611,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     } else if (sitemapUrls > 0 && allPages.length > sitemapUrls * 1.5) {
       findings.push({
-        pillar: 'website', category: 'Crawlability',
+        pillar: 'website', category: 'Site Health',
         title: `Sitemap has ${sitemapUrls} URLs but ${allPages.length} pages discovered`,
         description: 'Some pages may not be in your sitemap, making them harder for Google to find.',
         recommendation: 'Ensure all important pages are included in your sitemap. Exclude noindex and redirected pages.',
@@ -17626,7 +17626,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     if (noindexPages.length > 0) {
       for (const p of noindexPages) {
         findings.push({
-          pillar: 'website', category: 'Crawlability',
+          pillar: 'website', category: 'Site Health',
           title: `${p.path} has noindex tag`,
           description: `This page is blocked from Google's index. If this page should rank, the noindex tag must be removed.`,
           recommendation: 'Remove the noindex tag if this page should be indexed. Check Yoast/RankMath settings or theme header.',
@@ -17641,7 +17641,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const noCanonical = successPages.filter(p => !p.canonical);
     if (noCanonical.length > 3) {
       findings.push({
-        pillar: 'website', category: 'Crawlability',
+        pillar: 'website', category: 'Site Health',
         title: `${noCanonical.length} pages missing canonical tag`,
         description: `Pages: ${noCanonical.slice(0, 5).map(p => p.path).join(', ')}. Canonical tags prevent duplicate content issues.`,
         recommendation: 'Add self-referencing canonical tags to all pages. Most SEO plugins do this automatically.',
@@ -17786,37 +17786,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for FAQPage schema — individual finding per page with Q&A content
-    for (const p of successPages) {
-      const hasQA = (p.questionHeadings || 0) >= 3 || p.hasFAQSection;
-      if (!hasQA) continue;
-      const alreadyHasFAQ = p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage'));
-      const pageUrl = p.url || `https://${domain}${p.path}`;
-      const normSlug = (p.path || '').replace(/^\/|\/$/g, '');
-      if (alreadyHasFAQ) {
-        // Schema present — keep as fixed record
-        findings.push({
-          pillar: 'website', category: 'FAQ Enhancement',
-          title: `Missing FAQPage schema on ${normSlug}`,
-          description: `${pageUrl} — FAQPage schema is present.`,
-          recommendation: 'Schema is correctly configured on this page.',
-          severity: 'Low',
-          current_value: JSON.stringify([pageUrl]),
-          recommended_value: 'FAQPage schema on this page',
-          _forceStatus: 'fixed'
-        });
-      } else {
-        findings.push({
-          pillar: 'website', category: 'FAQ Enhancement',
-          title: `Missing FAQPage schema on ${normSlug}`,
-          description: `${pageUrl} has FAQ-style Q&A content (${p.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
-          recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
-          severity: 'Low',
-          current_value: JSON.stringify([pageUrl]),
-          recommended_value: 'FAQPage schema on this page'
-        });
-      }
-    }
+    // FAQPage schema findings removed — handled in Schema Audit sub-page only
 
     // Check for Service schema on service pages — classification-aware
     // page_exclusions stores { path, label } per page. Labels: Home, Service, Suburb, Blog, About, Contact, Review, Other
@@ -18307,7 +18277,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
 
     console.log(`[website-agent] Starting audit for "${domain}"`);
 
-    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze crawlability, renderability, indexability, content quality, Core Web Vitals, and competitive SERP standing. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.`;
+    const userPrompt = `Conduct a comprehensive website SEO audit for: ${domain}${businessName ? ` (${businessName})` : ''}${location ? `, located in ${location}` : ''}${industry ? `, industry: ${industry}` : ''}. Simulate Googlebot crawling the homepage and key service/location pages. Analyze site health, renderability, indexability, content quality, and competitive SERP standing. Do NOT generate Core Web Vitals or speed-related findings. Use pipe-delimited markdown tables (| Col | Col |) for all data tables.`;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const apiBase = 'https://api.anthropic.com/v1';
