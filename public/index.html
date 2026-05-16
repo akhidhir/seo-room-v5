@@ -5632,13 +5632,14 @@
       const statusBadge = (status) => {
         const cfg = {
           new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
-          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          approved: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          sent_to_writer: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
           rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
           fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
           dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
         };
         const c = cfg[status] || cfg.new;
-        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
+        if (status === 'new' || status === 'approved') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
 
@@ -6199,13 +6200,14 @@
       const statusBadge = (status) => {
         const cfg = {
           new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
-          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          approved: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          sent_to_writer: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
           rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
           fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
           dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
         };
         const c = cfg[status] || cfg.new;
-        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
+        if (status === 'new' || status === 'approved') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
       const catColors = { 'Quick Win': '#22c55e', 'Low CTR': '#f97316', 'Zero Clicks': '#ef4444', 'Cannibalization': '#8b5cf6', 'Underperforming Page': '#f59e0b', 'Brand Dependency': '#ec4899', 'Indexing Issues': '#ef4444', 'Mobile Usability': '#3b82f6', 'Mobile Gap': '#06b6d4', 'Declining Keyword': '#ef4444', 'Growing Keyword': '#10b981', 'Sitemap Coverage': '#a855f7', 'Search Appearance': '#6366f1' };
@@ -6731,13 +6733,14 @@
       const statusBadge = (status) => {
         const cfg = {
           new: { bg: 'transparent', color: 'var(--text3)', label: '—' },
-          approved: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
+          approved: { bg: 'transparent', color: 'var(--text3)', label: '—' },
+          sent_to_writer: { bg: 'rgba(168,85,247,0.15)', color: '#a855f7', label: 'Sent to Writer' },
           rejected: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Ignored' },
           fixed: { bg: 'rgba(34,197,94,0.2)', color: '#22c55e', label: 'Fixed' },
           dismissed: { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', label: 'Dismissed' }
         };
         const c = cfg[status] || cfg.new;
-        if (status === 'new') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
+        if (status === 'new' || status === 'approved') return <span style={{ color: 'var(--text3)', fontSize: 13 }}>—</span>;
         return <span style={{ padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600, background: c.bg, color: c.color }}>{c.label}</span>;
       };
 
@@ -6828,10 +6831,10 @@
                     setFixing(f.id);
                     try {
                       const notes = buildCopywriterNotes(f);
-                      await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter', copywriter_notes: notes } });
+                      await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'sent_to_writer', copywriter_notes: notes } });
                       setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter with writing brief' });
-                      setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'approved' } : x));
-                      setReviewFinding({ ...f, status: 'approved' });
+                      setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'sent_to_writer' } : x));
+                      setReviewFinding({ ...f, status: 'sent_to_writer' });
                     } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
                     setFixing(null);
                   }} disabled={fixing === f.id}
@@ -7140,9 +7143,9 @@
                               setFixing(f.id);
                               try {
                                 const notes = buildCopywriterNotes(f);
-                                await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'approved', assigned_to: 'copywriter', copywriter_notes: notes } });
+                                await api(`/audit-findings/${f.id}`, { method: 'PUT', body: { status: 'sent_to_writer', copywriter_notes: notes } });
                                 setFixResult({ id: f.id, ok: true, msg: 'Sent to Copywriter with writing brief' });
-                                setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'approved' } : x));
+                                setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'sent_to_writer' } : x));
                               } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
                               setFixing(null);
                             }} disabled={fixing === f.id}

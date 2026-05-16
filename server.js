@@ -2098,7 +2098,7 @@ app.put('/api/audit-findings/:id', async (req, res) => {
     const finding = result.rows[0];
 
     let actionItem = null;
-    if (status === 'approved') {
+    if (status === 'approved' || status === 'sent_to_writer') {
       // Auto-create action item from this finding
       const existing = await pool.query('SELECT id FROM action_items WHERE finding_id=$1', [finding.id]);
       if (existing.rows.length === 0) {
