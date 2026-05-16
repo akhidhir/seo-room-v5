@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SEO Room Connector
  * Description: Connects WordPress to the SEO Room Dashboard — Yoast meta access, CWV auto-fix, schema injection, and universal cache purge. Required by SEO Room Dashboard.
- * Version: 3.0.0
+ * Version: 3.1.0
  * Author: The SEO Room
  */
 
@@ -763,3 +763,249 @@ add_action('wp_footer', function() {
     })();
     </script>';
 }, 99);
+
+// ============================================================
+// PAGE AUDIT ENDPOINT (v3.1)
+// Returns full on-page SEO data for all published pages/posts.
+// Runs inside WordPress so Cloudflare never blocks it.
+// The dashboard calls this instead of crawling externally.
+// ============================================================
+
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom/v1', '/page-audit', [
+        'methods'  => 'GET',
+        'callback' => 'seoroom_page_audit',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+
+function seoroom_page_audit() {
+    // Increase limits for large sites
+    @set_time_limit(120);
+    @ini_set('memory_limit', '512M');
+
+    $results = [];
+    $post_types = ['page', 'post'];
+    $home_url = get_home_url();
+    $domain = wp_parse_url($home_url, PHP_URL_HOST);
+
+    foreach ($post_types as $type) {
+        $posts = get_posts([
+            'post_type'      => $type,
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+        ]);
+
+        foreach ($posts as $p) {
+            $permalink = get_permalink($p->ID);
+            $slug = trim(str_replace($home_url, '', $permalink), '/');
+            if (empty($slug)) $slug = '/';
+
+            // Render content through WP filters (Elementor, Gutenberg, shortcodes)
+            $content = apply_filters('the_content', $p->post_content);
+
+            // Build HTML with head meta for schema/og detection
+            $html = seoroom_build_page_html($p, $content);
+
+            // Meta title from Yoast
+            $meta_title = '';
+            $yoast_title = get_post_meta($p->ID, '_yoast_wpseo_title', true);
+            if (!empty($yoast_title) && function_exists('wpseo_replace_vars')) {
+                $meta_title = wpseo_replace_vars($yoast_title, $p);
+            }
+            if (empty($meta_title)) $meta_title = $p->post_title;
+
+            // Meta description from Yoast
+            $meta_desc = '';
+            $yoast_desc = get_post_meta($p->ID, '_yoast_wpseo_metadesc', true);
+            if (!empty($yoast_desc) && function_exists('wpseo_replace_vars')) {
+                $meta_desc = wpseo_replace_vars($yoast_desc, $p);
+            }
+
+            // H1s
+            $h1s = [];
+            if (preg_match_all('/<h1[^>]*>([\s\S]*?)<\/h1>/i', $html, $m)) {
+                foreach ($m[1] as $h) { $c = trim(strip_tags($h)); if ($c) $h1s[] = $c; }
+            }
+
+            // H2s
+            $h2s = [];
+            if (preg_match_all('/<h2[^>]*>([\s\S]*?)<\/h2>/i', $html, $m)) {
+                foreach ($m[1] as $h) { $c = trim(strip_tags($h)); if ($c) $h2s[] = $c; }
+            }
+
+            // Images
+            $images_total = 0;
+            $images_without_alt = 0;
+            $missing_alt_details = [];
+            if (preg_match_all('/<img[^>]*>/i', $html, $img_matches)) {
+                foreach ($img_matches[0] as $img) {
+                    $images_total++;
+                    $alt = '';
+                    if (preg_match('/alt=["\']([^"\']*?)["\']/i', $img, $am)) $alt = $am[1];
+                    if (empty(trim($alt))) {
+                        $images_without_alt++;
+                        $src = '';
+                        if (preg_match('/src=["\']([^"\']*?)["\']/i', $img, $sm)) $src = $sm[1];
+                        $missing_alt_details[] = $src;
+                    }
+                }
+            }
+
+            // Links
+            $internal = 0; $external = 0;
+            if (preg_match_all('/<a[^>]*href=["\']([^"\'#]*?)["\']/i', $html, $lm)) {
+                foreach ($lm[1] as $href) {
+                    if (preg_match('/^(mailto:|tel:|javascript:)/', $href)) continue;
+                    if (strpos($href, $domain) !== false || strpos($href, '/') === 0) $internal++;
+                    elseif (strpos($href, 'http') === 0) $external++;
+                }
+            }
+
+            // Schema
+            $schemas = [];
+            $schema_sources = [];
+            if (preg_match_all('/<script[^>]*type=["\']application\/ld\+json["\'][^>]*>([\s\S]*?)<\/script>/i', $html, $sm)) {
+                foreach ($sm[1] as $json_str) {
+                    $parsed = json_decode($json_str, true);
+                    if (!$parsed) continue;
+                    $source = (strpos($json_str, 'SEO Room') !== false) ? 'seoroom' : ((strpos($json_str, 'yoast') !== false) ? 'yoast' : 'other');
+                    if (isset($parsed['@type'])) {
+                        foreach ((array)$parsed['@type'] as $t) { $schemas[] = $t; $schema_sources[] = ['type' => $t, 'source' => $source]; }
+                    }
+                    if (isset($parsed['@graph']) && is_array($parsed['@graph'])) {
+                        foreach ($parsed['@graph'] as $g) {
+                            if (isset($g['@type'])) {
+                                foreach ((array)$g['@type'] as $t) { $schemas[] = $t; $schema_sources[] = ['type' => $t, 'source' => $source]; }
+                            }
+                        }
+                    }
+                }
+            }
+            // Also check _seoroom_schema meta
+            $sr_schema = get_post_meta($p->ID, '_seoroom_schema', true);
+            if (!empty($sr_schema)) {
+                $parsed = json_decode($sr_schema, true);
+                if ($parsed && isset($parsed['@type'])) {
+                    foreach ((array)$parsed['@type'] as $t) {
+                        if (!in_array($t, $schemas)) { $schemas[] = $t; $schema_sources[] = ['type' => $t, 'source' => 'seoroom']; }
+                    }
+                }
+            }
+
+            // Canonical
+            $canonical = null;
+            if (preg_match('/<link[^>]*rel=["\']canonical["\'][^>]*href=["\']([^"\']*?)["\']/i', $html, $cm)) $canonical = $cm[1];
+
+            // Robots meta
+            $robots_meta = '';
+            if (preg_match('/<meta[^>]*name=["\']robots["\'][^>]*content=["\']([^"\']*?)["\']/i', $html, $rm)) $robots_meta = $rm[1];
+
+            // Open Graph
+            $has_og = (bool)preg_match('/<meta[^>]*property=["\']og:/i', $html);
+
+            // Word count
+            $text = strip_tags(preg_replace('/<script[\s\S]*?<\/script>/i', '', preg_replace('/<style[\s\S]*?<\/style>/i', '', $html)));
+            $word_count = str_word_count(preg_replace('/\s+/', ' ', trim($text)));
+
+            // FAQ detection
+            $question_headings = preg_match_all('/<h[2-4][^>]*>[^<]*\?[^<]*<\/h[2-4]>/i', $html);
+            $has_faq_section = (bool)(
+                preg_match('/<h[1-4][^>]*>[^<]*(faq|frequently asked|common questions)[^<]*<\/h[1-4]>/i', $html) ||
+                preg_match('/<(section|div)[^>]*(id|class)="[^"]*faq[^"]*"[^>]*>/i', $html)
+            );
+
+            $results[] = [
+                'url'              => $permalink,
+                'path'             => '/' . ltrim($slug, '/'),
+                'title'            => $p->post_title,
+                'post_type'        => $type,
+                'post_id'          => $p->ID,
+                'statusCode'       => 200,
+                'elapsed'          => 0,
+                'finalUrl'         => $permalink,
+                'wasRedirected'    => false,
+                'metaTitle'        => $meta_title,
+                'metaTitleLength'  => mb_strlen($meta_title),
+                'metaDesc'         => $meta_desc,
+                'metaDescLength'   => mb_strlen($meta_desc),
+                'h1s'              => $h1s,
+                'h2s'              => $h2s,
+                'wordCount'        => $word_count,
+                'images'           => $images_total,
+                'imagesWithoutAlt' => $images_without_alt,
+                'imagesMissingAlt' => $missing_alt_details,
+                'internalLinks'    => $internal,
+                'externalLinks'    => $external,
+                'schemas'          => array_values(array_unique($schemas)),
+                'schemaSources'    => $schema_sources,
+                'canonical'        => $canonical,
+                'hasViewport'      => true,
+                'robotsMeta'       => $robots_meta,
+                'isNoindex'        => (strpos($robots_meta, 'noindex') !== false),
+                'isHttps'          => (strpos($permalink, 'https://') === 0),
+                'hasHreflang'      => false,
+                'hasOG'            => $has_og,
+                'questionHeadings' => $question_headings ?: 0,
+                'hasFAQSection'    => $has_faq_section,
+                'focusKeyword'     => get_post_meta($p->ID, '_yoast_wpseo_focuskw', true),
+                'seoScore'         => get_post_meta($p->ID, '_yoast_wpseo_linkdex', true),
+                'contentScore'     => get_post_meta($p->ID, '_yoast_wpseo_content_score', true),
+            ];
+        }
+    }
+
+    return rest_ensure_response([
+        'success'  => true,
+        'total'    => count($results),
+        'home_url' => $home_url,
+        'pages'    => $results,
+    ]);
+}
+
+function seoroom_build_page_html($post, $content) {
+    $meta_title = get_post_meta($post->ID, '_yoast_wpseo_title', true);
+    if (!empty($meta_title) && function_exists('wpseo_replace_vars')) {
+        $meta_title = wpseo_replace_vars($meta_title, $post);
+    }
+    if (empty($meta_title)) $meta_title = $post->post_title;
+
+    $meta_desc = get_post_meta($post->ID, '_yoast_wpseo_metadesc', true);
+    if (!empty($meta_desc) && function_exists('wpseo_replace_vars')) {
+        $meta_desc = wpseo_replace_vars($meta_desc, $post);
+    }
+
+    $html = '<html><head>';
+    $html .= '<title>' . esc_html($meta_title) . '</title>';
+    if (!empty($meta_desc)) $html .= '<meta name="description" content="' . esc_attr($meta_desc) . '">';
+    $html .= '<link rel="canonical" href="' . esc_url(get_permalink($post->ID)) . '">';
+    $html .= '<meta name="viewport" content="width=device-width, initial-scale=1">';
+
+    // SEO Room schema
+    $schema = get_post_meta($post->ID, '_seoroom_schema', true);
+    if (!empty($schema)) {
+        $decoded = json_decode($schema);
+        if ($decoded) {
+            $html .= '<script type="application/ld+json">' . wp_json_encode($decoded, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . '</script>';
+        }
+    }
+
+    // Yoast schema — try to capture via output buffer
+    if (function_exists('wpseo_head')) {
+        $old_post = $GLOBALS['post'] ?? null;
+        $GLOBALS['post'] = $post;
+        setup_postdata($post);
+        ob_start();
+        wpseo_head();
+        $yoast_head = ob_get_clean();
+        wp_reset_postdata();
+        if ($old_post) $GLOBALS['post'] = $old_post;
+        $html .= $yoast_head;
+    }
+
+    $html .= '</head><body>';
+    $html .= $content;
+    $html .= '</body></html>';
+
+    return $html;
+}

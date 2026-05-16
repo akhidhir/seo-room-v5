@@ -17340,37 +17340,67 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
     console.log(`[website-audit] Starting code-based audit for ${domain}`);
 
-    // 1. Discover all pages
     const authHeaders = project.wp_username && project.wp_app_password
       ? { Authorization: 'Basic ' + Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64') } : null;
-    const allPages = await discoverPages(baseUrl, wpUrl, authHeaders);
-    // Prioritize WP pages (services) over WP posts (blogs) — WordPress sitemaps list posts first,
-    // so without sorting, first 50 are all blog posts and service pages never get crawled.
-    // Uses wpType tag from discoverPages: 'page' = WP page (service), 'post' = WP post (blog)
-    const scorePage = (p) => {
-      const slug = (p.slug || p.url || '').toLowerCase();
-      if (slug === 'home' || slug === '' || p.url === baseUrl || p.url === baseUrl + '/') return 0;
-      if (p.wpType === 'page') return 1;  // WP pages (services) first
-      if (p.wpType === 'post') return 3;  // WP posts (blogs) last
-      // Unknown type — use path heuristics
-      if (/\/(blog|news|category|tag|author|20\d{2})(\/|$)/.test(slug) || /^(blog|news|category|tag|author|20\d{2})\//.test(slug)) return 3;
-      return 2; // unknown — middle priority
-    };
-    allPages.sort((a, b) => scorePage(a) - scorePage(b));
-    const pagesToCrawl = allPages.slice(0, 50);
-    console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length} (service-first sort)`);
 
-    // 2. Fetch robots.txt
+    // ===== TRY CONNECTOR FIRST (bypasses Cloudflare) =====
+    let crawlResults = [];
+    let usedConnector = false;
+    let allPages = [];
+    if (wpUrl && authHeaders) {
+      try {
+        console.log(`[website-audit] Trying connector at ${wpUrl}/wp-json/seoroom/v1/page-audit`);
+        const connResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/seoroom/v1/page-audit`, {
+          headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+          signal: AbortSignal.timeout(60000),
+        });
+        if (connResp.ok) {
+          const connData = await connResp.json();
+          if (connData.success && Array.isArray(connData.pages) && connData.pages.length > 0) {
+            crawlResults = connData.pages;
+            allPages = connData.pages.map(p => ({ url: p.url, slug: p.path, title: p.title }));
+            usedConnector = true;
+            console.log(`[website-audit] Connector returned ${connData.pages.length} pages — skipping external crawl`);
+          } else {
+            console.log(`[website-audit] Connector returned empty/invalid data, falling back to external crawl`);
+          }
+        } else {
+          console.log(`[website-audit] Connector HTTP ${connResp.status}, falling back to external crawl`);
+        }
+      } catch (connErr) {
+        console.log(`[website-audit] Connector failed: ${connErr.message}, falling back to external crawl`);
+      }
+    }
+
+    // These need to be accessible in both connector and fallback paths
     let robotsTxt = '';
     let robotsBlocked = [];
+    let sitemapOk = false;
+    let sitemapUrls = 0;
+
+    // ===== FALLBACK: EXTERNAL CRAWL (if connector unavailable) =====
+    if (!usedConnector) {
+      allPages = await discoverPages(baseUrl, wpUrl, authHeaders);
+      // Prioritize WP pages (services) over WP posts (blogs)
+      const scorePage = (p) => {
+        const slug = (p.slug || p.url || '').toLowerCase();
+        if (slug === 'home' || slug === '' || p.url === baseUrl || p.url === baseUrl + '/') return 0;
+        if (p.wpType === 'page') return 1;
+        if (p.wpType === 'post') return 3;
+        if (/\/(blog|news|category|tag|author|20\d{2})(\/|$)/.test(slug) || /^(blog|news|category|tag|author|20\d{2})\//.test(slug)) return 3;
+        return 2;
+      };
+      allPages.sort((a, b) => scorePage(a) - scorePage(b));
+      const pagesToCrawl = allPages.slice(0, 50);
+      console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length} (service-first sort)`);
+
+    // 2. Fetch robots.txt
     try {
       const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000) });
       if (robotsResp.ok) robotsTxt = await robotsResp.text();
     } catch (e) { /* no robots.txt */ }
 
     // 3. Fetch sitemap
-    let sitemapOk = false;
-    let sitemapUrls = 0;
     try {
       const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
       if (smResp.ok) {
@@ -17381,7 +17411,6 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     } catch (e) { /* no sitemap */ }
 
     // 4. Crawl pages in parallel batches of 3 (gentle to avoid Cloudflare/WP rate limits)
-    const crawlResults = [];
     const CRAWL_BATCH = 3;
     const CRAWL_TIMEOUT = 20000;
     const CRAWL_DELAY = 600; // ms between batches
@@ -17518,8 +17547,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         else crawlResults.push({ url: 'unknown', error: r.reason?.message || 'Failed', statusCode: 0 });
       }
     }
+    } // end if (!usedConnector)
 
-    console.log(`[website-audit] Crawled ${crawlResults.length} pages`);
+    console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
     const findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
     const errorPages = crawlResults.filter(p => p.error || p.statusCode >= 400);
