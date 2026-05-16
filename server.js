@@ -17979,6 +17979,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
     // Build summary
     const totalImages = successPages.reduce((s, p) => s + p.images, 0);
+    const totalMissingAlt = successPages.reduce((s, p) => s + (p.imagesWithoutAlt || 0), 0);
+    const dupTitles = Object.entries(titleMap).filter(([, pages]) => pages.length > 1);
     const avgWordCount = successPages.length > 0 ? Math.round(successPages.reduce((s, p) => s + p.wordCount, 0) / successPages.length) : 0;
     const avgResponseTime = successPages.length > 0 ? Math.round(successPages.reduce((s, p) => s + p.elapsed, 0) / successPages.length) : 0;
     const schemaTypes = [...new Set(successPages.flatMap(p => p.schemas))];
