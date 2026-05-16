@@ -7874,6 +7874,7 @@
       const handleIgnore = (pageKey) => setIgnoredActions(prev => ({ ...prev, [pageKey]: true }));
       const handleUndo = (pageKey) => { setAddedActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); setIgnoredActions(prev => { const n = {...prev}; delete n[pageKey]; return n; }); };
       const [bulkAdding, setBulkAdding] = useState(false);
+      const [bulkFixing, setBulkFixing] = useState(false);
       const [fixingPage, setFixingPage] = useState(null);
       const [fixResults, setFixResults] = useState({});
 
@@ -7903,8 +7904,8 @@
       };
 
       const failingPages = useMemo(() => {
-        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !isPageAdded(pageKey, page) && !ignoredActions[pageKey]);
-      }, [sortedResults, addedActions, ignoredActions, existingCwvTitles]);
+        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !fixResults[pageKey]?.success);
+      }, [sortedResults, fixResults]);
 
       const handleAddAll = async () => {
         setBulkAdding(true);
@@ -7913,6 +7914,15 @@
           await handleAddAction(pageKey, page);
         }
         setBulkAdding(false);
+      };
+
+      const handleFixAll = async () => {
+        setBulkFixing(true);
+        const toFix = sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !fixResults[pageKey]?.success);
+        for (const { pageKey, page } of toFix) {
+          await handleAutoFix(pageKey, page);
+        }
+        setBulkFixing(false);
       };
 
       return (
@@ -7969,8 +7979,8 @@
           {failingPages.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '10px 14px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8 }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{failingPages.length} pages need attention</span>
-              <button className="btn btn-primary" onClick={handleAddAll} disabled={bulkAdding} style={{ fontSize: 12, padding: '5px 14px' }}>
-                {bulkAdding ? <><span className="spinner"></span>Adding...</> : <><i className="fas fa-plus" style={{ marginRight: 4 }} />Add All to Action Plan</>}
+              <button className="btn btn-primary" onClick={handleFixAll} disabled={bulkFixing} style={{ fontSize: 12, padding: '5px 14px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
+                {bulkFixing ? <><span className="spinner"></span>Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix All</>}
               </button>
             </div>
           )}
@@ -7994,7 +8004,7 @@
                         {h.label}{sortIcon(h.col)}
                       </th>
                     ))}
-                    <th style={{ padding: '12px 10px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: '19%', background: 'var(--bg)' }}>ACTION PLAN</th>
+                    <th style={{ padding: '12px 10px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: '19%', background: 'var(--bg)' }}>ACTION</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -8027,23 +8037,17 @@
                           <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: siColor(cwv.si) }}>{cwv.si || 'N/A'}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'center', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                             {!needsAction ? <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Pass</span> :
-                             isPageAdded(pageKey, page) ? (
+                             fixResults[pageKey]?.success ? (
+                              <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700 }}><i className="fas fa-check" style={{ marginRight: 4 }} />Fixed ({fixResults[pageKey].fixes_applied || 0})</span>
+                            ) : fixResults[pageKey]?.error ? (
                               <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
-                                <span style={{ color: '#22c55e', fontSize: 12, fontWeight: 700 }}>Added</span>
-                                <button onClick={() => handleUndo(pageKey)} style={{ fontSize: 11, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-undo" /></button>
-                              </div>
-                            ) : ignoredActions[pageKey] ? (
-                              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
-                                <span style={{ color: 'var(--text3)', fontSize: 12, fontWeight: 700 }}>Skipped</span>
-                                <button onClick={() => handleUndo(pageKey)} style={{ fontSize: 11, padding: '3px 7px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-undo" /></button>
+                                <span style={{ color: '#ef4444', fontSize: 11 }}>Failed</span>
+                                <button className="btn btn-primary" onClick={() => handleAutoFix(pageKey, page)} style={{ fontSize: 11, padding: '4px 9px' }}>Retry</button>
                               </div>
                             ) : (
-                              <div style={{ display: 'flex', gap: 5, justifyContent: 'center', alignItems: 'center' }}>
-                                <button className="btn btn-primary" onClick={() => handleAddAction(pageKey, page)} disabled={addingAction === pageKey} style={{ fontSize: 11, padding: '4px 9px' }}>
-                                  {addingAction === pageKey ? <i className="fas fa-spinner fa-spin" /> : 'Add'}
-                                </button>
-                                <button onClick={() => handleIgnore(pageKey)} style={{ fontSize: 11, padding: '4px 9px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)', cursor: 'pointer' }}>Skip</button>
-                              </div>
+                              <button className="btn btn-primary" onClick={() => handleAutoFix(pageKey, page)} disabled={fixingPage === pageKey} style={{ fontSize: 11, padding: '4px 9px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
+                                {fixingPage === pageKey ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
+                              </button>
                             )}
                           </td>
                         </tr>
