@@ -18208,6 +18208,16 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         continue;
       }
 
+      // On-Page Issues: code-based audit generates per-page findings now — remove old aggregated ones
+      if (efCat.includes('on-page')) {
+        if (!newTitles.has(ef.title)) {
+          await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
+          console.log(`[website-audit] Removed stale on-page finding: "${ef.title}" (status=${ef.status}, not reproduced)`);
+          removedDuplicates++;
+        }
+        continue;
+      }
+
       // Non-schema findings: keep fixed/rejected ones, remove unreproduced new/approved ones
       if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
 
