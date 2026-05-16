@@ -3306,47 +3306,11 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         );
         console.log(`[speed-audit] Completed: ${results.length} pages for project ${req.params.projectId}`);
 
-        // Generate audit_findings + action_items for pages with issues
+        // CWV data stays in PageSpeed Scores page only — no duplicate findings in Website Audit
+        // Clean up any old CWV findings that were previously created
         try {
-          // Clear previous speed findings
           await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Core Web Vitals'`, [req.params.projectId]);
-
-          const cwvResults = results.filter(r => r.cwv && !r.error);
-          let findingsCount = 0;
-
-          for (const page of cwvResults) {
-            const score = page.cwv.score || 0;
-            if (score >= 90) continue; // Good — no action needed
-
-            const severity = score < 50 ? 'critical' : 'high';
-            const issues = [];
-            const lcp = parseFloat(page.cwv.lcp);
-            const cls = parseFloat(page.cwv.cls);
-            const tbt = parseFloat(page.cwv.tbt);
-            const fcp = parseFloat(page.cwv.fcp);
-            if (!isNaN(lcp) && lcp > 2.5) issues.push(`LCP ${page.cwv.lcp} (target: ≤2.5s)`);
-            if (!isNaN(cls) && cls > 0.1) issues.push(`CLS ${page.cwv.cls} (target: ≤0.1)`);
-            if (!isNaN(tbt) && tbt > 200) issues.push(`TBT ${page.cwv.tbt} (target: ≤200ms)`);
-            if (!isNaN(fcp) && fcp > 1.8) issues.push(`FCP ${page.cwv.fcp} (target: ≤1.8s)`);
-
-            const title = page.title || page.slug || page.url;
-            const description = `Performance score: ${score}/100. ${issues.length > 0 ? 'Issues: ' + issues.join(', ') : 'Below target performance.'}`;
-            const recommendation = score < 50
-              ? 'Optimize images (WebP, lazy loading), minimize render-blocking CSS/JS, reduce server response time, implement caching. Consider deferring non-critical scripts.'
-              : 'Review largest contentful paint element, optimize images, reduce unused CSS/JS. Minor optimizations can push this page into the green zone.';
-
-            const fRes = await pool.query(
-              `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-               VALUES ($1, $2, 'website', 'Core Web Vitals', $3, $4, $5, $6, $7, $8, 'approved') RETURNING id`,
-              [req.params.projectId, auditId, title, description, recommendation, severity, `Score: ${score}`, 'Score: 90+']
-            );
-            await pool.query(
-              `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, assignee_label)
-               VALUES ($1, $2, 'website', 'Core Web Vitals', 'Core Web Vitals', $3, $4, $5, $6, $7, 'pending', 'automated', 'Automated')`,
-              [req.params.projectId, fRes.rows[0].id, title, description, `Score: ${score}`, 'Score: 90+', severity]
-            );
-            findingsCount++;
-          }
+          const findingsCount = 0;
           console.log(`[speed-audit] Created ${findingsCount} CWV findings for project ${req.params.projectId}`);
         } catch (findErr) {
           console.error('[speed-audit] Error creating findings:', findErr.message);
@@ -17333,8 +17297,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       )`, [projectId]);
 
     // Delete ALL old On-Page Issues findings — code audit regenerates them per-page now
+    // Also delete CWV findings — speed data lives in PageSpeed Scores page only
     await pool.query(
-      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND LOWER(category)='on-page issues'`,
+      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (LOWER(category)='on-page issues' OR LOWER(category)='core web vitals')`,
       [projectId]
     );
 
