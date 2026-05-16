@@ -17722,9 +17722,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
 
       const topSeverity = issues.some(i => i.severity === 'Critical') ? 'Critical' : issues.some(i => i.severity === 'High') ? 'High' : 'Medium';
       const slug = p.path.replace(/^\/|\/$/g, '') || 'homepage';
+      // Short issue labels for the title
+      const shortLabels = issues.map(i => {
+        if (i.text.includes('missing alt')) return `${p.imagesWithoutAlt} missing alt`;
+        if (i.text.includes('Missing H1')) return 'no H1';
+        if (i.text.includes('H1 headings')) return 'multiple H1s';
+        if (i.text.includes('Missing or too short title')) return 'no title';
+        if (i.text.includes('Title too long')) return 'title too long';
+        if (i.text.includes('Duplicate title')) return 'duplicate title';
+        if (i.text.includes('Missing or too short meta')) return 'no meta desc';
+        if (i.text.includes('Meta description too long')) return 'meta desc too long';
+        return i.text.substring(0, 30);
+      });
       findings.push({
         pillar: 'website', category: 'On-Page Issues',
-        title: `${slug} — ${issues.length} on-page issue${issues.length > 1 ? 's' : ''}`,
+        title: `${slug} — ${shortLabels.join(', ')}`,
         description: issues.map(i => `• ${i.text}`).join('\n'),
         recommendation: issues.map(i => `${i.text}: ${i.fix}`).join('\n'),
         severity: topSeverity,
