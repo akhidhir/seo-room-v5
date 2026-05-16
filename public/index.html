@@ -6968,9 +6968,9 @@
           {findings.length > 0 && (<div style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 0, marginBottom: 12, flexWrap: 'wrap' }}>
               {[{ key: 'all', label: 'All Categories', color: '#8b5cf6' }, ...categories.map(c => ({ key: c, label: c, color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
-                const count = tab.key === 'all' ? findings.length : findings.filter(f => f.category === tab.key).length;
+                const count = tab.key === 'all' ? findings.filter(f => f.status !== 'rejected').length : findings.filter(f => f.category === tab.key && f.status !== 'rejected').length;
                 const active = filterCat === tab.key;
-                return (<button key={tab.key} onClick={() => setFilterCat(tab.key)}
+                return (<button key={tab.key} onClick={() => { setFilterCat(tab.key); setFilterStatus('all'); }}
                   style={{ flex: 1, minWidth: 120, padding: '12px 8px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)',
                     borderBottom: active ? `3px solid ${tab.color}` : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)',
                     fontWeight: active ? 700 : 500, fontSize: 14, transition: 'all 0.15s',
@@ -7028,7 +7028,8 @@
               style={{ flex: 1, minWidth: 200, background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }} />
             {['all', 'pending', 'fixed'].map(s => {
               const labels = { all: 'All', pending: 'Pending', fixed: 'Fixed' };
-              const counts = { all: findings.filter(f => f.status !== 'rejected').length, pending: findings.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length, fixed: findings.filter(f => f.status === 'fixed').length };
+              const catFiltered = filterCat !== 'all' ? findings.filter(f => f.category === filterCat) : findings;
+              const counts = { all: catFiltered.filter(f => f.status !== 'rejected').length, pending: catFiltered.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length, fixed: catFiltered.filter(f => f.status === 'fixed').length };
               const active = filterStatus === s;
               const colors = { all: 'var(--text1)', pending: '#f59e0b', fixed: '#22c55e' };
               return <button key={s} onClick={() => setFilterStatus(s)}
