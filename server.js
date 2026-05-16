@@ -17650,84 +17650,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // ===== ON-PAGE ISSUES =====
-    // Missing or bad meta titles
-    const badTitles = successPages.filter(p => !p.metaTitle || p.metaTitleLength < 10);
-    const longTitles = successPages.filter(p => p.metaTitleLength > 60);
-    if (badTitles.length > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${badTitles.length} page(s) with missing or short title tag`,
-        description: `Pages: ${badTitles.slice(0, 5).map(p => p.path).join(', ')}. Title tags are the most important on-page SEO element.`,
-        recommendation: 'Write unique, descriptive title tags (50-60 characters) including the target keyword for each page.',
-        severity: 'Critical',
-        current_value: `${badTitles.length} pages`, recommended_value: 'All pages with 50-60 char titles'
-      });
-    }
-    if (longTitles.length > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${longTitles.length} page(s) with title tag over 60 characters`,
-        description: `Pages: ${longTitles.slice(0, 5).map(p => `${p.path} (${p.metaTitleLength}ch)`).join(', ')}. Long titles get truncated in search results.`,
-        recommendation: 'Shorten titles to 50-60 characters. Put the most important keyword at the beginning.',
-        severity: 'Medium',
-        current_value: `${longTitles.length} pages`, recommended_value: 'All titles under 60 chars'
-      });
-    }
-
-    // Missing or bad meta descriptions
-    const noDesc = successPages.filter(p => !p.metaDesc || p.metaDescLength < 10);
-    const longDesc = successPages.filter(p => p.metaDescLength > 160);
-    if (noDesc.length > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${noDesc.length} page(s) with missing or short meta description`,
-        description: `Pages: ${noDesc.slice(0, 5).map(p => p.path).join(', ')}. Meta descriptions improve CTR in search results.`,
-        recommendation: 'Write unique meta descriptions (120-155 characters) with a call-to-action for each page.',
-        severity: 'Medium',
-        current_value: `${noDesc.length} pages`, recommended_value: 'All pages with descriptions'
-      });
-    }
-
-    // H1 issues
-    const noH1 = successPages.filter(p => p.h1s.length === 0);
-    const multiH1 = successPages.filter(p => p.h1s.length > 1);
-    if (noH1.length > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${noH1.length} page(s) missing H1 heading`,
-        description: `Pages: ${noH1.slice(0, 5).map(p => p.path).join(', ')}. H1 is a key on-page ranking signal.`,
-        recommendation: 'Add a single H1 tag to each page containing the primary keyword.',
-        severity: 'Critical',
-        current_value: `${noH1.length} pages without H1`, recommended_value: 'One H1 per page'
-      });
-    }
-    if (multiH1.length > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${multiH1.length} page(s) with multiple H1 headings`,
-        description: `Pages: ${multiH1.slice(0, 5).map(p => `${p.path} (${p.h1s.length} H1s)`).join(', ')}. Multiple H1s dilute keyword focus.`,
-        recommendation: 'Use only one H1 per page. Convert additional H1s to H2 or H3.',
-        severity: 'Medium',
-        current_value: `${multiH1.length} pages`, recommended_value: 'One H1 per page'
-      });
-    }
-
-    // Images without alt
-    const altIssues = successPages.filter(p => p.imagesWithoutAlt > 0);
-    const totalMissingAlt = altIssues.reduce((s, p) => s + p.imagesWithoutAlt, 0);
-    if (totalMissingAlt > 0) {
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${totalMissingAlt} images missing alt text across ${altIssues.length} pages`,
-        description: `Top offenders: ${altIssues.sort((a, b) => b.imagesWithoutAlt - a.imagesWithoutAlt).slice(0, 5).map(p => `${p.path} (${p.imagesWithoutAlt})`).join(', ')}. Alt text helps SEO and accessibility.`,
-        recommendation: 'Add descriptive alt text to all images. Include relevant keywords naturally.',
-        severity: totalMissingAlt > 20 ? 'Critical' : 'Medium',
-        current_value: `${totalMissingAlt} images without alt`, recommended_value: 'All images with alt text'
-      });
-    }
-
-    // Duplicate titles
+    // ===== ON-PAGE ISSUES (per-page — each page gets its own finding listing all its issues) =====
     const titleMap = {};
     for (const p of successPages) {
       if (p.metaTitle) {
@@ -17735,15 +17658,42 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         titleMap[p.metaTitle].push(p.path);
       }
     }
-    const dupTitles = Object.entries(titleMap).filter(([t, pages]) => pages.length > 1);
-    for (const [title, pages] of dupTitles.slice(0, 5)) {
+    const dupTitleSet = new Set();
+    for (const [title, pages] of Object.entries(titleMap)) {
+      if (pages.length > 1) pages.forEach(path => dupTitleSet.add(path));
+    }
+
+    for (const p of successPages) {
+      const issues = [];
+      // Title issues
+      if (!p.metaTitle || p.metaTitleLength < 10) issues.push({ text: 'Missing or too short title tag', fix: `Write a unique title (50-60 chars) with the target keyword for this page.`, severity: 'Critical' });
+      else if (p.metaTitleLength > 60) issues.push({ text: `Title too long (${p.metaTitleLength} chars)`, fix: `Shorten to 50-60 chars. Current: "${(p.metaTitle || '').substring(0, 65)}..."`, severity: 'Medium' });
+      // Duplicate title
+      if (dupTitleSet.has(p.path)) {
+        const dupes = titleMap[p.metaTitle]?.filter(x => x !== p.path) || [];
+        issues.push({ text: `Duplicate title — shared with ${dupes.slice(0, 3).join(', ')}`, fix: 'Write a unique title for this page targeting a different keyword.', severity: 'Medium' });
+      }
+      // Meta description
+      if (!p.metaDesc || p.metaDescLength < 10) issues.push({ text: 'Missing or too short meta description', fix: 'Write a unique meta description (120-155 chars) with a call-to-action.', severity: 'Medium' });
+      else if (p.metaDescLength > 160) issues.push({ text: `Meta description too long (${p.metaDescLength} chars)`, fix: 'Shorten to 120-155 chars to avoid truncation in search results.', severity: 'Low' });
+      // H1 issues
+      if (p.h1s.length === 0) issues.push({ text: 'Missing H1 heading', fix: 'Add one H1 tag containing the primary keyword for this page.', severity: 'Critical' });
+      else if (p.h1s.length > 1) issues.push({ text: `${p.h1s.length} H1 headings (should be 1)`, fix: 'Keep only one H1. Convert the others to H2 or H3.', severity: 'Medium' });
+      // Missing alt text
+      if (p.imagesWithoutAlt > 0) issues.push({ text: `${p.imagesWithoutAlt} image(s) missing alt text`, fix: 'Add descriptive alt text to each image. Include relevant keywords naturally.', severity: p.imagesWithoutAlt > 5 ? 'Critical' : 'Medium' });
+
+      if (issues.length === 0) continue;
+
+      const topSeverity = issues.some(i => i.severity === 'Critical') ? 'Critical' : issues.some(i => i.severity === 'High') ? 'High' : 'Medium';
+      const slug = p.path.replace(/^\/|\/$/g, '') || 'homepage';
       findings.push({
         pillar: 'website', category: 'On-Page Issues',
-        title: `Duplicate title: "${title.substring(0, 60)}..." on ${pages.length} pages`,
-        description: `Pages sharing this title: ${pages.join(', ')}. Duplicate titles confuse search engines.`,
-        recommendation: 'Write unique title tags for each page targeting different keywords.',
-        severity: 'Medium',
-        current_value: `${pages.length} pages`, recommended_value: 'Unique title per page'
+        title: `${slug} — ${issues.length} on-page issue${issues.length > 1 ? 's' : ''}`,
+        description: issues.map(i => `• ${i.text}`).join('\n'),
+        recommendation: issues.map(i => `${i.text}: ${i.fix}`).join('\n'),
+        severity: topSeverity,
+        current_value: JSON.stringify(issues.map(i => i.text)),
+        recommended_value: `Fix ${issues.length} issue${issues.length > 1 ? 's' : ''} on this page`
       });
     }
 

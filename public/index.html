@@ -7198,6 +7198,11 @@
                               style={{ fontSize: 13, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', whiteSpace: 'nowrap' }}>
                               <i className="fas fa-list-ol" style={{ marginRight: 4 }} />View Steps
                             </button>
+                          ) : f.category === 'On-Page Issues' ? (
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); if (setActiveTab) setActiveTab('onpage-audit'); else setReviewFinding(f); }}
+                              style={{ fontSize: 13, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-file-alt" style={{ marginRight: 4 }} />Fix On-Page
+                            </button>
                           ) : f.category === 'Crawlability' ? (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
                               style={{ fontSize: 13, background: 'rgba(249,115,22,0.1)', color: '#f97316', border: '1px solid rgba(249,115,22,0.3)', whiteSpace: 'nowrap' }}>
