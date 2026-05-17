@@ -17511,6 +17511,17 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           const finalUrl = resp.url;
           const statusCode = resp.status;
 
+          // Detect Cloudflare block — suppress these pages entirely
+          const isCloudflareBlocked = statusCode === 403 || statusCode === 503
+            || html.includes('Checking you\'re a human')
+            || html.includes('challenge-platform')
+            || (html.includes('Cloudflare') && html.includes('Ray ID'))
+            || html.includes('you have been blocked');
+          if (isCloudflareBlocked) {
+            console.log(`[website-audit] Cloudflare blocked ${page.url} (status ${statusCode}) — skipping`);
+            return { url: page.url, path: page.slug || '', statusCode: 403, error: 'cloudflare_blocked', cloudflareBlocked: true, elapsed };
+          }
+
           // Parse HTML
           const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
           const metaTitle = titleMatch ? titleMatch[1].trim() : '';
@@ -17661,9 +17672,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
     const findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
-    // Filter out Cloudflare 403 errors from error pages (false positives — site works fine for real users)
+    // Filter out Cloudflare blocks from error pages (false positives — site works fine for real users)
     const errorPages = crawlResults.filter(p => {
-      if (p.statusCode === 403) return false; // Suppress Cloudflare blocks
+      if (p.cloudflareBlocked) return false;
+      if (p.statusCode === 403) return false;
+      if (p.error === 'cloudflare_blocked') return false;
       return p.error || p.statusCode >= 400;
     });
 
