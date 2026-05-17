@@ -17349,10 +17349,17 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         ) dupes WHERE rn > 1
       )`, [projectId]);
 
-    // Delete ALL old On-Page Issues findings — code audit regenerates them per-page now
+    // Delete ALL old On-Page Issues findings — handled by dedicated On-Page Audit & Fix page
     // Also delete CWV, Crawlability, FAQ Enhancement findings — handled in dedicated sub-pages
+    // Also catch title/description/H1 findings that may have been re-categorized to Site Health
     await pool.query(
-      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement')`,
+      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (
+        LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement'
+        OR LOWER(title) LIKE '%— title too long%' OR LOWER(title) LIKE '%— title too short%'
+        OR LOWER(title) LIKE '%— description too long%' OR LOWER(title) LIKE '%— description too short%'
+        OR LOWER(title) LIKE '%— missing meta description%' OR LOWER(title) LIKE '%— missing h1%'
+        OR LOWER(title) LIKE '%— duplicate title%'
+      )`,
       [projectId]
     );
 
@@ -17726,6 +17733,16 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         current_value: `${noCanonical.length} pages without canonical`,
         recommended_value: 'All pages have canonical'
       });
+    }
+
+    // Build titleMap for summary stats (no findings generated — On-Page handled by dedicated page)
+    const titleMap = {};
+    for (const p of successPages) {
+      if (p.metaTitle) {
+        const t = p.metaTitle.trim();
+        if (!titleMap[t]) titleMap[t] = [];
+        titleMap[t].push(p.path);
+      }
     }
 
     // ===== ALT TEXT (per-page — On-Page Issues handled by dedicated On-Page Audit & Fix page) =====
