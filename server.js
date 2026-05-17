@@ -17349,9 +17349,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         ) dupes WHERE rn > 1
       )`, [projectId]);
 
-    // Delete ALL old On-Page Issues findings — handled by dedicated On-Page Audit & Fix page
-    // Also delete CWV, Crawlability, FAQ Enhancement findings — handled in dedicated sub-pages
-    // Also catch title/description/H1 findings that may have been re-categorized to Site Health
+    // Delete old findings handled by dedicated pages or that are purely informational agent summaries
+    // Informational titles are vague single-phrase findings from AI agent (rule-based engine generates specific ones like "3 pages not using HTTPS")
+    const INFO_TITLES = ['pages crawled', 'http status', 'mobile-friendly', 'cms', 'cwv estimate',
+      'indexed location pages', 'critical blocker', 'schema types detected', 'redirects', 'https / ssl'];
     await pool.query(
       `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (
         LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement'
@@ -17359,8 +17360,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         OR LOWER(title) LIKE '%— description too long%' OR LOWER(title) LIKE '%— description too short%'
         OR LOWER(title) LIKE '%— missing meta description%' OR LOWER(title) LIKE '%— missing h1%'
         OR LOWER(title) LIKE '%— duplicate title%'
+        OR LOWER(title) = ANY($2)
       )`,
-      [projectId]
+      [projectId, INFO_TITLES]
     );
 
     // Load existing findings for merge AFTER cleanup (so deleted findings don't block new ones)
@@ -18037,6 +18039,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const avgResponseTime = successPages.length > 0 ? Math.round(successPages.reduce((s, p) => s + p.elapsed, 0) / successPages.length) : 0;
     const schemaTypes = [...new Set(successPages.flatMap(p => p.schemas))];
 
+    const mobileReady = successPages.filter(p => p.hasViewport).length;
+    const redirectCount = successPages.filter(p => p.wasRedirected).length;
+
     const summary = {
       totalPages: allPages.length, crawled: crawlResults.length, successful: successPages.length, errors: errorPages.length,
       avgWordCount, avgResponseTime, totalImages,
@@ -18046,6 +18051,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       noindexPages: noindexPages.length,
       schemaTypes, dupTitles: dupTitles.length,
       thinPages: thinPages.length,
+      mobileReady, redirectCount,
     };
 
     // Topic-based dedup helpers (used in merge + old-finding cleanup)
