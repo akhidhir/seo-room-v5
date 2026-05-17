@@ -4556,7 +4556,7 @@
                 {[
                   { key: 'services', label: 'Services', value: services.length, color: '#3b82f6' },
                   { key: 'products', label: 'Products', value: products.length, color: '#8b5cf6' },
-                  { key: 'services', label: 'Suburb Pages', value: `${servicesWithSuburbPages}/${services.length}`, color: servicesWithSuburbPages === services.length ? '#22c55e' : '#ef4444' },
+                  { key: 'services', label: 'Suburb Pages', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : suburbsWithPages > 0 ? '#f59e0b' : '#ef4444' },
                   { key: 'products', label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' },
                 ].map((box, idx) => {
                   const isActive = activeSvcTab === box.key;

@@ -25407,7 +25407,6 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }).sort((a, b) => b.score - a.score);
 
     // ============ CROSS-REFERENCE: SERVICES & PRODUCTS ============
-    // SOURCE OF TRUTH: GBP services (auto-imported) + user curated additions
     // Auto-populate defined_services from GBP if empty
     let definedServices = Array.isArray(project.defined_services) ? project.defined_services : [];
     if (definedServices.length === 0 && gbpServices.length > 0) {
@@ -25499,11 +25498,28 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       // URLs made absolute using projectBase/absUrl defined above
       let mainPage = allMatches[0] ? { ...allMatches[0], url: absUrl(allMatches[0].url) } : null;
       const nonSuburbPages = allMatches.filter(m => !m.suburb).map(m => ({ url: absUrl(m.url), title: m.title }));
-      const suburbPages = allMatches.filter(m => m.suburb).map(m => ({
+      let suburbPages = allMatches.filter(m => m.suburb).map(m => ({
         suburb: m.suburb.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
         url: absUrl(m.url), title: m.title
       }));
       const hasPage = allMatches.length > 0;
+
+      // If this service has no service-specific suburb pages but the site has generic location pages
+      // (e.g. /service-areas/car-key-replacement-{suburb}/), count ALL location pages as suburb coverage.
+      // Rationale: location pages cover all services the business offers in that suburb.
+      if (suburbPages.length === 0 && hasLocationPages && type === 'service') {
+        const genericSuburbPages = [];
+        for (const [n, src] of Object.entries(suburbSources)) {
+          if (src.hasPage && src.pages.length > 0) {
+            genericSuburbPages.push({
+              suburb: src.original,
+              url: src.pages[0].url,
+              title: src.pages[0].title
+            });
+          }
+        }
+        suburbPages = genericSuburbPages;
+      }
 
       // Missing suburbs: locations with website pages but no service-specific page
       const coveredSuburbs = new Set(suburbPages.map(sp => normalize(sp.suburb)));
