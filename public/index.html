@@ -1804,7 +1804,7 @@
 
     // Allowed sections per audit type (whitelist)
     const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'];
-    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
+    const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
     const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'];
 
     // Detect execution type / assignee from action text + category context
@@ -1886,9 +1886,9 @@
         'crawlability': 'Crawlability',
         'crawlability & indexing': 'Crawlability',
         'crawlability and indexing': 'Crawlability',
-        'on-page issues': 'On-Page Issues',
-        'on-page seo issues': 'On-Page Issues',
-        'on page issues': 'On-Page Issues',
+        'on-page issues': 'Site Health',
+        'on-page seo issues': 'Site Health',
+        'on page issues': 'Site Health',
         'content quality': 'Content Quality',
         'core web vitals': 'Core Web Vitals',
         'cwv': 'Core Web Vitals',
@@ -1940,7 +1940,7 @@
       if (/action.?plan|priority.?action|next.?action|implementation|summary/i.test(n)) return 'Summary';
       if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
       if (/crawl|index|robot|sitemap/i.test(n)) return 'Crawlability';
-      if (/on.?page|title|meta|h1|heading/i.test(n)) return 'On-Page Issues';
+      if (/on.?page|title|meta|h1|heading/i.test(n)) return 'Site Health';
       if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
       if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
       if (/schema|structured.?data|rich.?result|json.?ld/i.test(n)) return 'Schema & Data';
@@ -3192,7 +3192,6 @@
             'Summary': { icon: 'fas fa-clipboard-list', color: '#818cf8', desc: 'Agent summary of key findings and priorities' },
             'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
             'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
-            'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
             'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
             'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
             'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
@@ -3413,7 +3412,6 @@
         'Summary': { icon: 'fas fa-clipboard-list', color: '#818cf8', desc: 'Agent summary of key findings and priorities' },
         'Site Health': { icon: 'fas fa-heartbeat', color: '#22c55e', desc: 'Overall site health verdict' },
         'Crawlability': { icon: 'fas fa-spider', color: '#3b82f6', desc: 'What Googlebot can and cannot access' },
-        'On-Page Issues': { icon: 'fas fa-file-alt', color: '#f59e0b', desc: 'Page-by-page title, meta, and H1 problems' },
         'Content Quality': { icon: 'fas fa-pen-fancy', color: '#8b5cf6', desc: 'Thin content and E-E-A-T signals' },
         'Core Web Vitals': { icon: 'fas fa-tachometer-alt', color: '#ef4444', desc: 'Speed, layout shift, interactivity' },
         'Schema & Data': { icon: 'fas fa-code', color: '#06b6d4', desc: 'Missing structured data for rich results' },
@@ -6712,11 +6710,10 @@
         return list;
       }, [findings, filterSev, filterCat, filterStatus, searchQ, sortCol, sortDir]);
 
-      const catColors = { 'Site Health': '#ef4444', 'On-Page Issues': '#f59e0b', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4' };
+      const catColors = { 'Site Health': '#ef4444', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4' };
 
       // Link audit categories to their fix sub-pages (PDCA: audit detects → fix page resolves → re-audit verifies)
       const catFixPages = {
-        'On-Page Issues': { page: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fa-file-alt' },
         'Core Web Vitals': { page: 'web-sec-pagespeed-scores', label: 'PageSpeed Scores', icon: 'fa-tachometer-alt' },
         'Content Quality': { page: 'ow-issues', label: 'Optimise Website Copy', icon: 'fa-wand-magic-sparkles' },
       };
@@ -7195,11 +7192,6 @@
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
                               style={{ fontSize: 13, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', whiteSpace: 'nowrap' }}>
                               <i className="fas fa-list-ol" style={{ marginRight: 4 }} />View Steps
-                            </button>
-                          ) : f.category === 'On-Page Issues' ? (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); if (setActiveTab) setActiveTab('onpage-audit'); else setReviewFinding(f); }}
-                              style={{ fontSize: 13, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-file-alt" style={{ marginRight: 4 }} />Fix On-Page
                             </button>
                           ) : f.category === 'Crawlability' ? (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
@@ -11290,7 +11282,7 @@
       const PILLAR_VALID_CATS = {
         GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
         GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
-        Website: ['Site Health', 'Crawlability', 'On-Page Issues', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
+        Website: ['Site Health', 'Crawlability', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
       };
       const ALL_VALID_CATS = new Set([...PILLAR_VALID_CATS.GBP, ...PILLAR_VALID_CATS.GSC, ...PILLAR_VALID_CATS.Website]);
 

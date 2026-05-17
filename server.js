@@ -2016,7 +2016,7 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
       GBP_Internal: ['Relevance > Description', 'Relevance > Categories', 'Relevance > Hours', 'Relevance > Services', 'Relevance > NAP', 'Relevance > Content', 'Relevance > Website', 'Proximity > Service Areas', 'Prominence > Reviews', 'Prominence > Posts', 'Prominence > Photos'],
       GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
-      Website: ['Site Health', 'On-Page Issues', 'Alt Text', 'Content Quality', 'Schema & Data'],
+      Website: ['Site Health', 'Alt Text', 'Content Quality', 'Schema & Data'],
     };
     const ALIASES = {
       'quick win': 'Quick Win', 'quick wins': 'Quick Win',
@@ -2035,7 +2035,6 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       'photos': 'Photos & Media', 'media': 'Photos & Media', 'photos & media': 'Photos & Media',
       'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'suburb coverage': 'Suburb Coverage', 'service area': 'Suburb Coverage', 'service areas': 'Suburb Coverage',
       'schema': 'Schema & Data', 'structured data': 'Schema & Data', 'schema & data': 'Schema & Data',
-      'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'on_page': 'On-Page Issues', 'meta': 'On-Page Issues',
       'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
       'crawl': 'Site Health', 'crawlability': 'Site Health', 'robots': 'Site Health', 'sitemap': 'Site Health',
@@ -2622,7 +2621,7 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
     const DISPLAY_PILLAR_CATS = {
       GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage'],
       GSC: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
-      Website: ['Site Health', 'On-Page Issues', 'Alt Text', 'Content Quality', 'Schema & Data'],
+      Website: ['Site Health', 'Alt Text', 'Content Quality', 'Schema & Data'],
     };
     const CAT_ALIASES = {
       'quick win': 'Quick Win', 'quick wins': 'Quick Win',
@@ -2641,7 +2640,6 @@ app.get('/api/projects/:id/orchestrator', async (req, res) => {
       'photos': 'Photos & Media', 'media': 'Photos & Media', 'photos & media': 'Photos & Media',
       'suburb': 'Suburb Coverage', 'suburbs': 'Suburb Coverage', 'suburb coverage': 'Suburb Coverage', 'service area': 'Suburb Coverage',
       'schema': 'Schema & Data', 'structured data': 'Schema & Data', 'schema & data': 'Schema & Data',
-      'on-page': 'On-Page Issues', 'on page': 'On-Page Issues', 'on-page issues': 'On-Page Issues', 'meta': 'On-Page Issues',
       'content': 'Content Quality', 'content quality': 'Content Quality', 'thin content': 'Content Quality',
       'cwv': 'Core Web Vitals', 'core web vitals': 'Core Web Vitals', 'performance': 'Core Web Vitals', 'speed': 'Core Web Vitals',
       'crawl': 'Site Health', 'crawlability': 'Site Health', 'robots': 'Site Health', 'sitemap': 'Site Health',
@@ -16251,7 +16249,7 @@ Quality check before outputting: remove any finding where current_value or descr
 // Valid categories per pillar — findings MUST map to one of these
 const PILLAR_CATEGORIES = {
   gbp_external: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
-  website: ['Site Health', 'On-Page Issues', 'Alt Text', 'Content Quality', 'Schema & Data'],
+  website: ['Site Health', 'Alt Text', 'Content Quality', 'Schema & Data'],
   gsc_agent: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
   gsc: ['Quick Win', 'Low CTR', 'Zero Clicks', 'Cannibalization', 'Underperforming Page', 'Brand Dependency', 'Indexing Issues', 'Mobile Usability', 'Mobile Gap', 'Declining Keyword', 'Growing Keyword', 'Sitemap Coverage', 'Search Appearance'],
 };
@@ -16272,7 +16270,7 @@ function serverNormalizeSection(name) {
     'action plan': 'Summary', 'priority action plan': 'Summary', 'summary': 'Summary',
     'site health': 'Site Health', 'site health overview': 'Site Health',
     'crawlability': 'Site Health', 'crawlability & indexing': 'Site Health', 'crawlability and indexing': 'Site Health',
-    'on-page issues': 'On-Page Issues', 'on-page seo issues': 'On-Page Issues', 'on page issues': 'On-Page Issues',
+    'on-page issues': 'Site Health', 'on-page seo issues': 'Site Health', 'on page issues': 'Site Health',
     'content quality': 'Content Quality',
     'core web vitals': 'Core Web Vitals', 'cwv': 'Core Web Vitals',
     'schema & structured data': 'Schema & Data', 'schema and structured data': 'Schema & Data', 'structured data': 'Schema & Data', 'schema': 'Schema & Data',
@@ -16294,7 +16292,7 @@ function serverNormalizeSection(name) {
   if (/action.?plan|priority.?action|next.?action|implementation|summary/i.test(n)) return 'Summary';
   if (/site.?health|overall.?health|site.?overview/i.test(n)) return 'Site Health';
   if (/crawl|index|robot|sitemap/i.test(n)) return 'Site Health';
-  if (/on.?page|title.?tag|meta.?desc|h1|heading/i.test(n)) return 'On-Page Issues';
+  if (/on.?page|title.?tag|meta.?desc|h1|heading/i.test(n)) return 'Site Health';
   if (/content.?quality|thin.?content|e-?e-?a-?t|word.?count/i.test(n)) return 'Content Quality';
   if (/core.?web|vital|cwv|speed|lcp|cls|inp|fcp/i.test(n)) return 'Core Web Vitals';
   if (/schema|structured.?data|rich.?result|json.?ld/i.test(n)) return 'Schema & Data';
@@ -17730,37 +17728,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // ===== ON-PAGE ISSUES (per-page — each page gets its own finding listing all its issues) =====
-    const titleMap = {};
+    // ===== ALT TEXT (per-page — On-Page Issues handled by dedicated On-Page Audit & Fix page) =====
     for (const p of successPages) {
-      if (p.metaTitle) {
-        if (!titleMap[p.metaTitle]) titleMap[p.metaTitle] = [];
-        titleMap[p.metaTitle].push(p.path);
-      }
-    }
-    const dupTitleSet = new Set();
-    for (const [title, pages] of Object.entries(titleMap)) {
-      if (pages.length > 1) pages.forEach(path => dupTitleSet.add(path));
-    }
-
-    for (const p of successPages) {
-      const issues = [];
-      // Title issues
-      if (!p.metaTitle || p.metaTitleLength < 10) issues.push({ text: 'Missing or too short title tag', fix: `Write a unique title (50-60 chars) with the target keyword for this page.`, severity: 'Critical' });
-      else if (p.metaTitleLength > 60) issues.push({ text: `Title too long (${p.metaTitleLength} chars)`, fix: `Shorten to 50-60 chars. Current: "${(p.metaTitle || '').substring(0, 65)}..."`, severity: 'Medium' });
-      // Duplicate title
-      if (dupTitleSet.has(p.path)) {
-        const dupes = titleMap[p.metaTitle]?.filter(x => x !== p.path) || [];
-        issues.push({ text: `Duplicate title — shared with ${dupes.slice(0, 3).join(', ')}`, fix: 'Write a unique title for this page targeting a different keyword.', severity: 'Medium' });
-      }
-      // Meta description
-      if (!p.metaDesc || p.metaDescLength < 10) issues.push({ text: 'Missing or too short meta description', fix: 'Write a unique meta description (120-155 chars) with a call-to-action.', severity: 'Medium' });
-      else if (p.metaDescLength > 160) issues.push({ text: `Meta description too long (${p.metaDescLength} chars)`, fix: 'Shorten to 120-155 chars to avoid truncation in search results.', severity: 'Low' });
-      // H1 issues
-      if (p.h1s.length === 0) issues.push({ text: 'Missing H1 heading', fix: 'Add one H1 tag containing the primary keyword for this page.', severity: 'Critical' });
-      else if (p.h1s.length > 1) issues.push({ text: `${p.h1s.length} H1 headings (should be 1)`, fix: 'Keep only one H1. Convert the others to H2 or H3.', severity: 'Medium' });
-
-      // Alt text → separate category
       if (p.imagesWithoutAlt > 0) {
         const altSlug = p.path.replace(/^\/|\/$/g, '') || 'homepage';
         findings.push({
@@ -17773,30 +17742,6 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           recommended_value: 'All images have alt text'
         });
       }
-
-      if (issues.length === 0) continue;
-
-      const topSeverity = issues.some(i => i.severity === 'Critical') ? 'Critical' : issues.some(i => i.severity === 'High') ? 'High' : 'Medium';
-      const slug = p.path.replace(/^\/|\/$/g, '') || 'homepage';
-      const shortLabels = issues.map(i => {
-        if (i.text.includes('Missing H1')) return 'no H1';
-        if (i.text.includes('H1 headings')) return 'multiple H1s';
-        if (i.text.includes('Missing or too short title')) return 'no title';
-        if (i.text.includes('Title too long')) return 'title too long';
-        if (i.text.includes('Duplicate title')) return 'duplicate title';
-        if (i.text.includes('Missing or too short meta')) return 'no meta desc';
-        if (i.text.includes('Meta description too long')) return 'meta desc too long';
-        return i.text.substring(0, 30);
-      });
-      findings.push({
-        pillar: 'website', category: 'On-Page Issues',
-        title: `${slug} — ${shortLabels.join(', ')}`,
-        description: issues.map(i => `• ${i.text}`).join('\n'),
-        recommendation: issues.map(i => `${i.text}: ${i.fix}`).join('\n'),
-        severity: topSeverity,
-        current_value: JSON.stringify(issues.map(i => i.text)),
-        recommended_value: `Fix ${issues.length} issue${issues.length > 1 ? 's' : ''} on this page`
-      });
     }
 
     // ===== CONTENT QUALITY =====
@@ -18274,15 +18219,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         continue;
       }
 
-      // On-Page Issues: remove old aggregated ones — BUT ONLY if crawl was full
-      if (efCat.includes('on-page')) {
-        if (!crawlWasDegraded && !newTitles.has(ef.title)) {
-          await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
-          console.log(`[website-audit] Removed stale on-page finding: "${ef.title}" (status=${ef.status}, not reproduced)`);
-          removedDuplicates++;
-        }
-        continue;
-      }
+      // On-Page Issues handled by dedicated On-Page Audit & Fix page — skip any legacy ones
+      if (efCat.includes('on-page')) continue;
 
       // Non-schema findings: keep fixed/rejected ones, remove unreproduced new/approved ones
       if (newTitles.has(ef.title) || ef.status === 'fixed' || ef.status === 'rejected') continue;
