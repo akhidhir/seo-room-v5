@@ -17644,6 +17644,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       } catch (e) { sitemapOk = true; sitemapUrls = allPages.length; } // Can't verify — don't flag
     }
 
+    // Normalize connector pages: they don't have statusCode, so default to 200
+    if (usedConnector) {
+      crawlResults = crawlResults.map(p => ({
+        ...p,
+        statusCode: p.statusCode || 200,
+        isHttps: p.isHttps !== undefined ? p.isHttps : true,
+      }));
+    }
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
     const findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
