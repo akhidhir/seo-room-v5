@@ -429,6 +429,16 @@ async function initDb() {
       )
     `);
 
+    // Posts cache — stores GBP post data for local intel
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS posts_cache (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        posts JSONB DEFAULT '[]',
+        total_count INTEGER DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // WordPress change history — universal rollback for ALL WP writes
     await client.query(`
       CREATE TABLE IF NOT EXISTS wp_change_history (
@@ -25098,6 +25108,23 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         } catch (e) { console.log(`[local-intel] RC posts fetch failed: ${e.message}`); }
       }
     }
+    // Fallback: load posts from seed file
+    if (gbpPosts.length === 0) {
+      try {
+        const seedPath = require('path').join(__dirname, 'data', 'local_intel_seed.json');
+        if (require('fs').existsSync(seedPath)) {
+          const seed = JSON.parse(require('fs').readFileSync(seedPath, 'utf8'));
+          const locId = project.gbp_location_id;
+          const locData = seed[locId];
+          if (locData?.posts) {
+            for (const p of locData.posts) {
+              gbpPosts.push({ summary: (p.summary || '').substring(0, 200), state: 'LIVE', url: '', createTime: '' });
+            }
+            console.log(`[local-intel] Using ${gbpPosts.length} posts from seed file for ${locId}`);
+          }
+        }
+      } catch (e) { console.log(`[local-intel] Seed posts fallback failed: ${e.message}`); }
+    }
 
     // 2. Website pages (from onpage_audit_cache + discoverPages for full coverage)
     const opR = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
@@ -25319,133 +25346,54 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Cross-reference: Review mentions — use cached reviews from DB, or fetch ALL from RC API
+    // Cross-reference: Review mentions — use cached reviews from DB, or load from seed file
     let allReviews = [];
-    // 1. Check for cached reviews in reviews_cache table (use if < 7 days old)
+    // 1. Check for cached reviews in reviews_cache table (use if < 30 days old)
     try {
       const rvR = await pool.query('SELECT reviews, total_count, updated_at FROM reviews_cache WHERE project_id=$1', [projectId]);
       if (rvR.rows[0]?.reviews) {
         const cached = typeof rvR.rows[0].reviews === 'string' ? JSON.parse(rvR.rows[0].reviews) : rvR.rows[0].reviews;
         const ageMs = Date.now() - new Date(rvR.rows[0].updated_at).getTime();
-        if (Array.isArray(cached) && cached.length > 0 && ageMs < 7 * 24 * 60 * 60 * 1000) {
+        if (Array.isArray(cached) && cached.length > 0 && ageMs < 30 * 24 * 60 * 60 * 1000) {
           allReviews = cached;
           console.log(`[local-intel] Using ${cached.length} cached reviews (age: ${Math.round(ageMs / 3600000)}h)`);
         }
       }
     } catch (e) { /* reviews_cache table may not exist yet */ }
-    // 2. Fetch ALL reviews from RC API if cache is empty/stale
+    // 2. Fallback: load from bundled seed file
     if (allReviews.length === 0) {
-      const RC_TOKEN = process.env.RC_API_TOKEN;
-      const gbpLocId = project.gbp_location_id;
-      const rcLocId = project.rc_location_id;
-      if (RC_TOKEN && (gbpLocId || rcLocId)) {
-        try {
-          console.log(`[local-intel] Fetching ALL reviews from RC API (gbp=${gbpLocId}, rc_id=${rcLocId})...`);
-          const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
-          const reviewMap = new Map();
-          let page = 1;
-          const perPage = 100;
-          let totalFetched = 0;
-          let hasMore = true;
-          // Try GET and POST for multiple URL patterns until one works
-          const attempts = [
-            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/reviews?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${p}` },
-            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/reviews`, body: (p) => ({ location_id: gbpLocId, per_page: perPage, page: p }) },
-            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/reviews/list`, body: (p) => ({ location_id: gbpLocId, per_page: perPage, page: p }) },
-            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/reviews/list?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${p}` },
-            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/locations/${rcLocId}/reviews?per_page=${perPage}&page=${p}` },
-            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/locations/${rcLocId}/reviews`, body: (p) => ({ per_page: perPage, page: p }) },
-          ];
-          let workingAttempt = null;
-          for (const attempt of attempts) {
-            const testUrl = attempt.url(1);
-            const fetchOpts = { method: attempt.method, headers: rcHeaders };
-            if (attempt.body) fetchOpts.body = JSON.stringify(attempt.body(1));
-            console.log(`[local-intel] Trying ${attempt.method} ${testUrl}`);
-            try {
-              const testResp = await fetch(testUrl, fetchOpts);
-              console.log(`[local-intel] → ${testResp.status}`);
-              if (testResp.ok) {
-                const testData = await testResp.json();
-                if (testData.reviews || testData.data) {
-                  workingAttempt = attempt;
-                  const reviews = testData.reviews || testData.data || [];
-                  for (const r of reviews) {
-                    const rid = r.review_id || r.id || `${r.reviewer?.displayName}-${r.create_time}`;
-                    if (!reviewMap.has(rid)) {
-                      reviewMap.set(rid, {
-                        comment: (r.comment || r.text || '').substring(0, 500),
-                        reviewer: r.reviewer?.displayName || r.reviewer_name || '',
-                        rating: r.rating || r.star_rating || 0,
-                        date: r.create_time || r.created_at || null,
-                        reply: (r.review_reply?.comment || r.reply?.comment || '').substring(0, 500),
-                      });
-                    }
-                  }
-                  totalFetched += reviews.length;
-                  hasMore = reviews.length >= perPage && totalFetched < (testData.total || Infinity);
-                  page = 2;
-                  console.log(`[local-intel] ✓ RC reviews works! ${attempt.method} — got ${reviews.length} on page 1 (total: ${testData.total || '?'})`);
-                  break;
-                }
-              }
-            } catch (e) { console.log(`[local-intel] → error: ${e.message}`); }
-          }
-          // Fetch remaining pages
-          if (workingAttempt) {
-            while (hasMore && page <= 20) {
-              const fetchOpts = { method: workingAttempt.method, headers: rcHeaders };
-              if (workingAttempt.body) fetchOpts.body = JSON.stringify(workingAttempt.body(page));
-              const resp = await fetch(workingAttempt.url(page), fetchOpts);
-              if (!resp.ok) break;
-              const data = await resp.json();
-              const reviews = data.reviews || data.data || [];
-              for (const r of reviews) {
-                const rid = r.review_id || r.id || `${r.reviewer?.displayName}-${r.create_time}`;
-                if (!reviewMap.has(rid)) {
-                  reviewMap.set(rid, {
-                    comment: (r.comment || r.text || '').substring(0, 500),
-                    reviewer: r.reviewer?.displayName || r.reviewer_name || '',
-                    rating: r.rating || r.star_rating || 0,
-                    date: r.create_time || r.created_at || null,
-                    reply: (r.review_reply?.comment || r.reply?.comment || '').substring(0, 500),
-                  });
-                }
-              }
-              totalFetched += reviews.length;
-              hasMore = reviews.length >= perPage && totalFetched < (data.total || Infinity);
-              page++;
-            }
-          }
-          allReviews = Array.from(reviewMap.values());
-          console.log(`[local-intel] Final: ${totalFetched} fetched, ${allReviews.length} unique reviews`);
-          // Cache to DB
-          if (allReviews.length > 0) {
+      try {
+        const seedPath = require('path').join(__dirname, 'data', 'local_intel_seed.json');
+        if (require('fs').existsSync(seedPath)) {
+          const seed = JSON.parse(require('fs').readFileSync(seedPath, 'utf8'));
+          const locId = project.gbp_location_id;
+          const locData = seed[locId];
+          if (locData?.reviews) {
+            allReviews = locData.reviews.filter(r => r.comment).map(r => ({
+              comment: r.comment || '',
+              reviewer: '',
+              rating: 5,
+              date: null,
+              reply: r.reply || ''
+            }));
+            console.log(`[local-intel] Using ${allReviews.length} reviews from seed file for ${locId}`);
+            // Cache to DB for faster next load
             try {
               await pool.query(
                 `INSERT INTO reviews_cache (project_id, reviews, total_count, updated_at)
                  VALUES ($1, $2, $3, NOW())
                  ON CONFLICT (project_id)
                  DO UPDATE SET reviews=$2, total_count=$3, updated_at=NOW()`,
-                [projectId, JSON.stringify(allReviews), allReviews.length]
+                [projectId, JSON.stringify(allReviews), locData.total_reviews || allReviews.length]
               );
-            } catch (ce) { console.log(`[local-intel] reviews_cache write failed: ${ce.message}`); }
+            } catch (ce) { /* ignore cache write error */ }
           }
-        } catch (e) {
-          console.log(`[local-intel] RC reviews fetch failed: ${e.message}`);
         }
-      }
-    }
-    // 3. Final fallback: RC profile sample reviews
-    if (allReviews.length === 0 && profile?.sampleReviews) {
-      allReviews = profile.sampleReviews.map(r => ({ comment: r.text || '', reviewer: r.author || '', rating: r.rating || 0, reply: '' }));
+      } catch (e) { console.log(`[local-intel] Seed file fallback failed: ${e.message}`); }
     }
 
     // Scan review text + reply text for suburb mentions
-    console.log(`[local-intel] REVIEW DEBUG: allReviews.length=${allReviews.length}, gbpPosts.length=${gbpPosts.length}, suburbs=${allSuburbNames.size}`);
-    if (allReviews.length > 0) {
-      console.log(`[local-intel] REVIEW SAMPLE[0]: comment="${(allReviews[0].comment || '').substring(0, 80)}", reply="${(allReviews[0].reply || '').substring(0, 50)}"`);
-    }
+    console.log(`[local-intel] Reviews: ${allReviews.length}, Posts: ${gbpPosts.length}, Suburbs: ${allSuburbNames.size}`);
     for (const review of allReviews) {
       const text = normalize(review.comment || review.text || '');
       const replyText = normalize(review.reply || review.review_reply?.comment || review.response || '');
