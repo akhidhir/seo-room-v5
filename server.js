@@ -2789,6 +2789,15 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
             return { assignee: 'Manual', execType: 'manual' };
           }
 
+          // --- GSC: Route by category (don't let description text override) ---
+          if (pillar === 'gsc' || pillar === 'gsc_agent') {
+            if (cat === 'search appearance' && /\b(schema|faq|review)\b/i.test(title)) return { assignee: 'Automated', execType: 'automated' };
+            if (cat === 'low ctr') return { assignee: 'Copywriter', execType: 'copywriter' };
+            // Everything else: Quick Wins, Indexing Issues, Cannibalization, Zero Clicks,
+            // Sitemap Coverage, Declining, Growing — all manual SEO work
+            return { assignee: 'Manual', execType: 'manual' };
+          }
+
           // --- AUTOMATED: only things SEO Room Connector plugin or WP REST API can execute ---
           // Core Web Vitals — all can be attempted via seoroom-helper (preconnect, defer, preload, etc.)
           if (cat === 'core web vitals') return { assignee: 'Automated', execType: 'automated' };
@@ -25201,10 +25210,39 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       if (plumberMatch) {
         suburbName = plumberMatch[1].replace(/-/g, ' ');
       }
-      // Pattern 2: /service-areas/{suburb}/, /locations/{suburb}/
+      // Pattern 2: /service-areas/{slug}/, /locations/{slug}/
+      // Slug may be just "{suburb}" or "{service}-{suburb}" (e.g. "car-key-replacement-alkimos")
+      // Strategy: try matching the tail against GBP suburbs first, then strip longest non-suburb prefix
       if (!suburbName) {
         const saMatch = urlPath.match(/^(service-?areas?|locations?|areas?|suburbs?)\/([\w-]+)$/);
-        if (saMatch) suburbName = saMatch[2].replace(/-/g, ' ');
+        if (saMatch) {
+          const rawSlug = saMatch[2];
+          const words = rawSlug.split('-');
+          // Try progressively shorter tails to find the suburb part
+          // e.g. "car-key-replacement-alkimos" → try "alkimos", "replacement-alkimos", etc.
+          let bestSuburb = null;
+          for (let start = words.length - 1; start >= 0; start--) {
+            const candidate = words.slice(start).join(' ');
+            const candidateNorm = candidate.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+            // Check against GBP suburbs
+            if (gbpSuburbs.some(gs => normalize(gs) === candidateNorm)) {
+              bestSuburb = candidate;
+              break; // shortest match from the end = just the suburb
+            }
+          }
+          // If no GBP match found, take the last 1-2 words as suburb (heuristic: service names are longer)
+          if (!bestSuburb) {
+            if (words.length >= 3) {
+              // Last 1-2 words are likely the suburb
+              bestSuburb = words.length <= 2 ? words.join(' ') : words.slice(-1).join(' ');
+              // If single word is too short (< 4 chars) and there's a second word, take last 2
+              if (bestSuburb.length < 4 && words.length >= 2) bestSuburb = words.slice(-2).join(' ');
+            } else {
+              bestSuburb = words.join(' ');
+            }
+          }
+          suburbName = bestSuburb;
+        }
       }
       // Pattern 3: /{trade}-{suburb}/ where trade is a known profession word
       if (!suburbName) {
