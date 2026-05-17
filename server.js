@@ -18986,23 +18986,30 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             await pool.query(`UPDATE audit_findings SET status='fixed', verification=$2 WHERE id=$1`, [finding_id, verificationData]);
           }
 
-          return res.json({
-            success: true, fix_type: 'schema', schema_type: 'Service',
-            message: liveVerified
-              ? `Service schema verified on live page (${fixedCount} page(s)).`
-              : metaVerified
-                ? `Service schema verified in WordPress (${fixedCount} page(s)). Live page will update when cache refreshes.`
-                : `Schema write attempted on ${fixedCount} page(s) but could not confirm.`,
-            verified,
-            verification: { post_fix: { result: verResult }, pages_fixed: fixedCount }
-          });
-        } else {
+          // For bulk fix: continue to LocalBusiness + FAQ instead of returning
+          if (isBulkNoSchema) {
+            var bulkServiceResult = { fixedCount, verified, verResult };
+          } else {
+            return res.json({
+              success: true, fix_type: 'schema', schema_type: 'Service',
+              message: liveVerified
+                ? `Service schema verified on live page (${fixedCount} page(s)).`
+                : metaVerified
+                  ? `Service schema verified in WordPress (${fixedCount} page(s)). Live page will update when cache refreshes.`
+                  : `Schema write attempted on ${fixedCount} page(s) but could not confirm.`,
+              verified,
+              verification: { post_fix: { result: verResult }, pages_fixed: fixedCount }
+            });
+          }
+        } else if (!isBulkNoSchema) {
           return res.json({ success: false, error: `No service pages found in WordPress (${allWpPages.length} total pages). Make sure your site has published service/content pages (utility pages like About, Contact, Privacy are excluded).` });
+        } else {
+          var bulkServiceResult = { fixedCount: 0, verified: false, verResult: 'no_service_pages' };
         }
       }
 
-      // LocalBusiness schema → inject on homepage
-      if (!schemaJson && (title.includes('localbusiness') || title.includes('local business'))) {
+      // LocalBusiness schema → inject on homepage (also runs for bulk fix)
+      if (!schemaJson && (isBulkNoSchema || title.includes('localbusiness') || title.includes('local business'))) {
         const biz = rcProfile || {};
         const addr = biz.storefrontAddress || {};
         const hours = (biz.regularHours?.periods || []).map(p => {
@@ -19145,8 +19152,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         }
       }
 
-      // FAQ schema → inject on specific page mentioned in finding
-      if (title.includes('faq') || title.includes('q&a')) {
+      // FAQ schema → inject on specific page mentioned in finding (also runs for bulk fix)
+      if (isBulkNoSchema || title.includes('faq') || title.includes('q&a')) {
         // Extract slug from title (e.g. "Missing FAQPage schema on /car-locksmith-vs-traditional-locksmith/")
         let slug = null;
         const pathMatch = (finding.title || '').match(/on\s+\/?([a-z0-9][a-z0-9-]+[a-z0-9])\/?$/i)
@@ -19162,7 +19169,29 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
             }
           } catch {}
         }
+        // Helper: extract FAQ Q&A pairs from HTML content
+        const extractFaqPairs = (content) => {
+          const qaPairs = [];
+          const headingRegex = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
+          let match;
+          const headings = [];
+          while ((match = headingRegex.exec(content)) !== null) {
+            headings.push({ text: match[1].replace(/<[^>]+>/g, '').trim(), index: match.index + match[0].length });
+          }
+          for (let i = 0; i < headings.length; i++) {
+            const q = headings[i].text;
+            if (q.includes('?') || q.toLowerCase().startsWith('how') || q.toLowerCase().startsWith('what') || q.toLowerCase().startsWith('why') || q.toLowerCase().startsWith('when') || q.toLowerCase().startsWith('can') || q.toLowerCase().startsWith('do')) {
+              const nextIdx = i + 1 < headings.length ? content.indexOf('<h', headings[i].index) : content.length;
+              const answerHtml = content.substring(headings[i].index, nextIdx > headings[i].index ? nextIdx : headings[i].index + 500);
+              const answer = answerHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 300);
+              if (answer.length > 20) qaPairs.push({ q, a: answer });
+            }
+          }
+          return qaPairs;
+        };
+
         if (slug) {
+          // Single page FAQ fix
           try {
             for (const type of ['pages', 'posts']) {
               const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
@@ -19171,24 +19200,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
                 if (items.length > 0) {
                   targetPageId = items[0].id;
                   targetPageType = type;
-                  // Extract Q&As from page content (H2/H3 as questions, following content as answers)
-                  const content = items[0].content?.rendered || '';
-                  const qaPairs = [];
-                  const headingRegex = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
-                  let match;
-                  const headings = [];
-                  while ((match = headingRegex.exec(content)) !== null) {
-                    headings.push({ text: match[1].replace(/<[^>]+>/g, '').trim(), index: match.index + match[0].length });
-                  }
-                  for (let i = 0; i < headings.length; i++) {
-                    const q = headings[i].text;
-                    if (q.includes('?') || q.toLowerCase().startsWith('how') || q.toLowerCase().startsWith('what') || q.toLowerCase().startsWith('why') || q.toLowerCase().startsWith('when') || q.toLowerCase().startsWith('can') || q.toLowerCase().startsWith('do')) {
-                      const nextIdx = i + 1 < headings.length ? content.indexOf('<h', headings[i].index) : content.length;
-                      const answerHtml = content.substring(headings[i].index, nextIdx > headings[i].index ? nextIdx : headings[i].index + 500);
-                      const answer = answerHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 300);
-                      if (answer.length > 20) qaPairs.push({ q, a: answer });
-                    }
-                  }
+                  const qaPairs = extractFaqPairs(items[0].content?.rendered || '');
                   if (qaPairs.length > 0) {
                     schemaJson = {
                       "@context": "https://schema.org",
@@ -19205,6 +19217,95 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
               }
             }
           } catch {}
+        } else if (isBulkNoSchema) {
+          // Bulk FAQ fix: scan all WP pages for Q&A content and inject FAQPage schema
+          let faqFixedCount = 0;
+          try {
+            const faqPagesResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&_fields=id,slug,content,meta&status=publish&context=edit`, {
+              headers: authHeaders, signal: AbortSignal.timeout(20000)
+            });
+            if (faqPagesResp.ok) {
+              const faqPages = await faqPagesResp.json();
+              for (const page of faqPages) {
+                const content = page.content?.rendered || '';
+                const qaPairs = extractFaqPairs(content);
+                if (qaPairs.length >= 2) { // need at least 2 Q&As for FAQPage schema
+                  // Check if already has FAQ schema
+                  const existingSchema = page.meta?._seoroom_schema || '';
+                  if (existingSchema.includes('"FAQPage"')) { faqFixedCount++; continue; }
+                  // If page already has Service schema from our earlier fix, combine them
+                  let combinedSchema;
+                  if (existingSchema && existingSchema.includes('"Service"')) {
+                    // Add FAQ as separate schema — use array
+                    const faqSchema = {
+                      "@context": "https://schema.org",
+                      "@type": "FAQPage",
+                      "mainEntity": qaPairs.slice(0, 20).map(qa => ({
+                        "@type": "Question", "name": qa.q,
+                        "acceptedAnswer": { "@type": "Answer", "text": qa.a }
+                      }))
+                    };
+                    try {
+                      const existing = JSON.parse(existingSchema);
+                      combinedSchema = JSON.stringify([existing, faqSchema]);
+                    } catch { combinedSchema = JSON.stringify(faqSchema); }
+                  } else {
+                    combinedSchema = JSON.stringify({
+                      "@context": "https://schema.org",
+                      "@type": "FAQPage",
+                      "mainEntity": qaPairs.slice(0, 20).map(qa => ({
+                        "@type": "Question", "name": qa.q,
+                        "acceptedAnswer": { "@type": "Answer", "text": qa.a }
+                      }))
+                    });
+                  }
+                  try {
+                    const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page.id}`, {
+                      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ meta: { _seoroom_schema: combinedSchema } }),
+                      signal: AbortSignal.timeout(10000)
+                    });
+                    if (writeResp.ok) {
+                      faqFixedCount++;
+                      console.log(`[technical-fix] FAQPage schema written to pages/${page.id} (${page.slug}) — ${qaPairs.length} Q&As`);
+                    }
+                  } catch (e) { console.log(`[technical-fix] FAQ write error ${page.slug}: ${e.message}`); }
+                }
+              }
+            }
+          } catch (e) { console.log(`[technical-fix] Bulk FAQ scan error: ${e.message}`); }
+          console.log(`[technical-fix] Bulk FAQ: ${faqFixedCount} pages with FAQPage schema`);
+
+          // Return combined bulk result (Service + LocalBusiness + FAQ)
+          const svcCount = bulkServiceResult?.fixedCount || 0;
+          const lbDone = schemaJson ? 1 : 0;
+          const totalFixed = svcCount + lbDone + faqFixedCount;
+          if (totalFixed > 0) {
+            await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+          }
+          const parts = [];
+          if (svcCount > 0) parts.push(`Service schema on ${svcCount} service pages`);
+          if (lbDone > 0) parts.push(`LocalBusiness schema on homepage`);
+          if (faqFixedCount > 0) parts.push(`FAQPage schema on ${faqFixedCount} pages`);
+          if (parts.length === 0) parts.push('No pages could be fixed');
+
+          // Inject LocalBusiness on homepage if we have it
+          if (schemaJson && targetPageId) {
+            try {
+              await fetch(`${wpUrl}/wp-json/wp/v2/${targetPageType}/${targetPageId}`, {
+                method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meta: { _seoroom_schema: JSON.stringify(schemaJson) } }),
+                signal: AbortSignal.timeout(15000)
+              });
+              console.log(`[technical-fix] LocalBusiness schema written to homepage ${targetPageType}/${targetPageId}`);
+            } catch (e) { console.log(`[technical-fix] LocalBusiness write error: ${e.message}`); }
+          }
+
+          return res.json({
+            success: totalFixed > 0, fix_type: 'schema', schema_type: 'Bulk',
+            message: `Bulk schema fix: ${parts.join(', ')}.`,
+            verification: { service: svcCount, localBusiness: lbDone, faq: faqFixedCount, total: totalFixed }
+          });
         }
       }
 
