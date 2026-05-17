@@ -2882,12 +2882,15 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
             doneKeys.add(`tp:${(d.title || '').toLowerCase().trim()}|${(d.pillar || '').toLowerCase()}`);
           }
 
-          // 2. Delete only pending action_items (done ones stay)
-          await client.query(`DELETE FROM action_items WHERE project_id=$1 AND status NOT IN ('done', 'completed', 'in-progress', 'ignored')`, [projectId]);
+          // 2. Delete pending items + all automated/copywriter items (they don't belong in Action Plan)
+          await client.query(`DELETE FROM action_items WHERE project_id=$1 AND (status NOT IN ('done', 'completed', 'in-progress', 'ignored') OR execution_type IN ('automated', 'copywriter'))`, [projectId]);
 
-          // 3. Insert new items only if not already done
+          // 3. Insert new items — only MANUAL (human) tasks. Automated → Fix buttons. Copywriter → Queue.
           for (const item of uniqueItems) {
             if (!item.title) continue;
+            if (item.execution_type !== 'manual') {
+              continue; // Skip automated and copywriter items — they belong elsewhere
+            }
             const fidKey = item._finding_id ? `fid:${item._finding_id}` : null;
             const tpKey = `tp:${(item.title || '').toLowerCase().trim()}|${(item.pillar || '').toLowerCase()}`;
             if ((fidKey && doneKeys.has(fidKey)) || doneKeys.has(tpKey)) {
