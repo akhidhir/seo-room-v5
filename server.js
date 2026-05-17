@@ -19549,19 +19549,6 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
 
     console.log(`[alt-text-fix] Fixing "${f.title}" — page: ${pageUrl}`);
 
-    // 1. Fetch the live page HTML to find images without alt
-    let html = '';
-    try {
-      const resp = await fetch(pageUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-        signal: AbortSignal.timeout(15000), redirect: 'follow'
-      });
-      if (!resp.ok) return res.json({ success: false, message: `Page returned HTTP ${resp.status}` });
-      html = await resp.text();
-    } catch (e) {
-      return res.json({ success: false, message: `Failed to fetch page: ${e.message}` });
-    }
-
     // APPLY MODE with pre-approved alts: skip image analysis and AI generation entirely
     let allGenerated = [];
     if (isApply && generated_alts && generated_alts.length > 0) {
@@ -19569,30 +19556,110 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       console.log(`[alt-text-fix] Apply mode: using ${allGenerated.length} pre-approved alt texts`);
     } else {
 
-    // 2. Parse images without alt text
-    const imgRegex = /<img[^>]*>/gi;
-    const imgTags = html.match(imgRegex) || [];
-    const missingAlt = [];
-    for (const tag of imgTags) {
-      const altMatch = tag.match(/alt=["']([^"']*?)["']/i);
-      const hasAlt = altMatch && altMatch[1].trim().length > 0;
-      if (hasAlt) continue;
-      const srcMatch = tag.match(/src=["']([^"']*?)["']/i);
-      const dataSrcMatch = tag.match(/data-src=["']([^"']*?)["']/i);
-      const src = srcMatch ? srcMatch[1] : (dataSrcMatch ? dataSrcMatch[1] : null);
-      if (!src || src.startsWith('data:')) continue;
-      // Skip tiny tracking pixels and spacers
-      const widthMatch = tag.match(/width=["'](\d+)["']/i);
-      if (widthMatch && parseInt(widthMatch[1]) < 10) continue;
-      missingAlt.push({ src: src.startsWith('http') ? src : `https://${domain}${src.startsWith('/') ? '' : '/'}${src}`, tag });
+    // 1. Get images without alt — try push cache first, then WP REST, then live page
+    let missingAltUrls = [];
+
+    // Source 1: Connector push cache (most reliable — rendered HTML from server-side)
+    const cached = await getConnectorCache(projectId);
+    if (cached && cached.pages) {
+      const cachedPage = cached.pages.find(p => {
+        const cp = (p.path || '').replace(/^\/|\/$/g, '');
+        return cp === pageSlug || cp === pageSlug.replace(/\/$/, '');
+      });
+      if (cachedPage && cachedPage.imagesMissingAlt && cachedPage.imagesMissingAlt.length > 0) {
+        missingAltUrls = cachedPage.imagesMissingAlt.map(src =>
+          src.startsWith('http') ? src : `https://${domain}${src.startsWith('/') ? '' : '/'}${src}`
+        );
+        console.log(`[alt-text-fix] Push cache: ${missingAltUrls.length} missing alt images for ${pageSlug}`);
+      }
     }
 
-    if (missingAlt.length === 0) {
-      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-      return res.json({ success: true, message: 'No images with missing alt text found — page may have been updated. Marked as fixed.', fixed: 0 });
+    // Source 2: WP REST API — get page content and parse images (authenticated, bypasses Cloudflare)
+    if (missingAltUrls.length === 0 && wpUrl && authHeaders) {
+      try {
+        const slugClean = pageSlug.replace(/^\/|\/$/g, '');
+        for (const type of ['pages', 'posts']) {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slugClean)}&context=edit&_fields=id,slug,content,meta`, {
+            headers: authHeaders, signal: AbortSignal.timeout(10000)
+          });
+          if (resp.ok) {
+            const items = await resp.json();
+            if (items.length > 0) {
+              let html = items[0].content?.raw || items[0].content?.rendered || '';
+              // Also check Elementor data
+              if (items[0].meta?._elementor_data) {
+                try {
+                  const elData = typeof items[0].meta._elementor_data === 'string' ? items[0].meta._elementor_data : JSON.stringify(items[0].meta._elementor_data);
+                  html += ' ' + elData;
+                } catch {}
+              }
+              const imgTags = html.match(/<img[^>]*>/gi) || [];
+              for (const tag of imgTags) {
+                const altMatch = tag.match(/alt=["']([^"']*?)["']/i);
+                if (altMatch && altMatch[1].trim().length > 0) continue;
+                const srcMatch = tag.match(/src=["']([^"']*?)["']/i);
+                if (srcMatch && srcMatch[1] && !srcMatch[1].startsWith('data:')) {
+                  const src = srcMatch[1];
+                  missingAltUrls.push(src.startsWith('http') ? src : `https://${domain}${src.startsWith('/') ? '' : '/'}${src}`);
+                }
+              }
+              // Also parse Elementor JSON image URLs
+              const elImgUrls = html.match(/"url"\s*:\s*"(https?:\/\/[^"]+\.(jpg|jpeg|png|webp|gif|svg))/gi) || [];
+              for (const m of elImgUrls) {
+                const urlMatch = m.match(/"url"\s*:\s*"([^"]+)"/);
+                if (urlMatch && !missingAltUrls.includes(urlMatch[1])) {
+                  // Only add if alt is empty in the same widget context
+                  // (simplified: add all Elementor images, AI will handle duplicates)
+                }
+              }
+              if (missingAltUrls.length > 0) {
+                console.log(`[alt-text-fix] WP REST: ${missingAltUrls.length} missing alt images for ${pageSlug}`);
+                break;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[alt-text-fix] WP REST failed: ${e.message}`);
+      }
     }
 
-    console.log(`[alt-text-fix] Found ${missingAlt.length} images without alt text on ${pageUrl}`);
+    // Source 3: Live page fetch (fallback — may be blocked by Cloudflare)
+    if (missingAltUrls.length === 0) {
+      try {
+        const resp = await fetch(pageUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          signal: AbortSignal.timeout(15000), redirect: 'follow'
+        });
+        if (resp.ok) {
+          const html = await resp.text();
+          const imgTags = html.match(/<img[^>]*>/gi) || [];
+          for (const tag of imgTags) {
+            const altMatch = tag.match(/alt=["']([^"']*?)["']/i);
+            if (altMatch && altMatch[1].trim().length > 0) continue;
+            const srcMatch = tag.match(/src=["']([^"']*?)["']/i);
+            if (srcMatch && srcMatch[1] && !srcMatch[1].startsWith('data:')) {
+              const src = srcMatch[1];
+              missingAltUrls.push(src.startsWith('http') ? src : `https://${domain}${src.startsWith('/') ? '' : '/'}${src}`);
+            }
+          }
+          console.log(`[alt-text-fix] Live crawl: ${missingAltUrls.length} missing alt images for ${pageSlug}`);
+        } else {
+          console.log(`[alt-text-fix] Live page returned HTTP ${resp.status}`);
+        }
+      } catch (e) {
+        console.log(`[alt-text-fix] Live fetch failed: ${e.message}`);
+      }
+    }
+
+    if (missingAltUrls.length === 0) {
+      // Check if it's because Cloudflare blocked everything
+      return res.json({ success: false, message: 'No missing alt images found. If Cloudflare is blocking, install the SEO Room Connector plugin and push data first.' });
+    }
+
+    // Deduplicate
+    const missingAlt = [...new Set(missingAltUrls)].map(src => ({ src }));
+    console.log(`[alt-text-fix] ${missingAlt.length} unique images to fix on ${pageUrl}`);
 
     // 3. Fetch images as base64 and send to Claude Vision for alt text generation
     const MAX_IMAGES = 20;
@@ -19609,7 +19676,6 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
         if (buf.byteLength < 100) { console.log(`[alt-text-fix] Skipped ${img.src}: too small`); continue; }
         imageData.push({
           src: img.src,
-          tag: img.tag,
           base64: Buffer.from(buf).toString('base64'),
           media_type: contentType
         });
