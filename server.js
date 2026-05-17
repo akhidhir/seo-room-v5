@@ -17355,7 +17355,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       'indexed location pages', 'critical blocker', 'schema types detected', 'redirects', 'https / ssl'];
     await pool.query(
       `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (
-        LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement'
+        LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement' OR LOWER(category)='site health'
         OR LOWER(title) LIKE '%— title too long%' OR LOWER(title) LIKE '%— title too short%'
         OR LOWER(title) LIKE '%— description too long%' OR LOWER(title) LIKE '%— description too short%'
         OR LOWER(title) LIKE '%— missing meta description%' OR LOWER(title) LIKE '%— missing h1%'
