@@ -2886,9 +2886,11 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           await client.query(`DELETE FROM action_items WHERE project_id=$1 AND (status NOT IN ('done', 'completed', 'in-progress', 'ignored') OR execution_type IN ('automated', 'copywriter'))`, [projectId]);
 
           // 3. Insert new items — only MANUAL (human) tasks. Automated → Fix buttons. Copywriter → Queue.
+          const skippedTypes = { automated: 0, copywriter: 0 };
           for (const item of uniqueItems) {
             if (!item.title) continue;
             if (item.execution_type !== 'manual') {
+              skippedTypes[item.execution_type] = (skippedTypes[item.execution_type] || 0) + 1;
               continue; // Skip automated and copywriter items — they belong elsewhere
             }
             const fidKey = item._finding_id ? `fid:${item._finding_id}` : null;
@@ -2915,7 +2917,7 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
           client.release();
         }
 
-        console.log(`[orchestrator] Saved ${savedCount} action items from ${allFindings.length} findings for project ${projectId}`);
+        console.log(`[orchestrator] Saved ${savedCount} manual action items from ${allFindings.length} findings (skipped: ${skippedTypes.automated} automated, ${skippedTypes.copywriter} copywriter) for project ${projectId}`);
         if (global._orchestratorStatus) global._orchestratorStatus[projectId] = { status: 'completed', itemCount: savedCount, error: null };
       } catch (e) {
         console.error('[orchestrator] Error:', e.message, e.stack);
