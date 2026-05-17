@@ -19520,6 +19520,335 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
   }
 });
 
+// ==================== ALT TEXT FIX — AI vision generates alt text, writes to WordPress ====================
+app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { finding_id } = req.body;
+    if (!finding_id) return res.status(400).json({ error: 'finding_id required' });
+
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and Application Password required in Project Settings' });
+
+    const finding = await pool.query('SELECT * FROM audit_findings WHERE id=$1 AND project_id=$2', [finding_id, projectId]);
+    if (!finding.rows.length) return res.status(404).json({ error: 'Finding not found' });
+    const f = finding.rows[0];
+
+    // Extract page slug from title: "plumber-chermside — 6 missing alt"
+    const titleMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+    if (!titleMatch) return res.status(400).json({ error: 'Cannot parse page slug from finding title' });
+    const pageSlug = titleMatch[1].trim();
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const pageUrl = pageSlug === 'homepage' ? `https://${domain}/` : `https://${domain}/${pageSlug}/`;
+
+    console.log(`[alt-text-fix] Fixing "${f.title}" — page: ${pageUrl}`);
+
+    // 1. Fetch the live page HTML to find images without alt
+    let html = '';
+    try {
+      const resp = await fetch(pageUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+        signal: AbortSignal.timeout(15000), redirect: 'follow'
+      });
+      if (!resp.ok) return res.json({ success: false, message: `Page returned HTTP ${resp.status}` });
+      html = await resp.text();
+    } catch (e) {
+      return res.json({ success: false, message: `Failed to fetch page: ${e.message}` });
+    }
+
+    // 2. Parse images without alt text
+    const imgRegex = /<img[^>]*>/gi;
+    const imgTags = html.match(imgRegex) || [];
+    const missingAlt = [];
+    for (const tag of imgTags) {
+      const altMatch = tag.match(/alt=["']([^"']*?)["']/i);
+      const hasAlt = altMatch && altMatch[1].trim().length > 0;
+      if (hasAlt) continue;
+      const srcMatch = tag.match(/src=["']([^"']*?)["']/i);
+      const dataSrcMatch = tag.match(/data-src=["']([^"']*?)["']/i);
+      const src = srcMatch ? srcMatch[1] : (dataSrcMatch ? dataSrcMatch[1] : null);
+      if (!src || src.startsWith('data:')) continue;
+      // Skip tiny tracking pixels and spacers
+      const widthMatch = tag.match(/width=["'](\d+)["']/i);
+      if (widthMatch && parseInt(widthMatch[1]) < 10) continue;
+      missingAlt.push({ src: src.startsWith('http') ? src : `https://${domain}${src.startsWith('/') ? '' : '/'}${src}`, tag });
+    }
+
+    if (missingAlt.length === 0) {
+      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+      return res.json({ success: true, message: 'No images with missing alt text found — page may have been updated. Marked as fixed.', fixed: 0 });
+    }
+
+    console.log(`[alt-text-fix] Found ${missingAlt.length} images without alt text on ${pageUrl}`);
+
+    // 3. Fetch images as base64 and send to Claude Vision for alt text generation
+    const MAX_IMAGES = 20;
+    const imagesToFix = missingAlt.slice(0, MAX_IMAGES);
+    const imageData = [];
+    for (const img of imagesToFix) {
+      try {
+        const imgResp = await fetch(img.src, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
+        if (!imgResp.ok) { console.log(`[alt-text-fix] Skipped ${img.src}: HTTP ${imgResp.status}`); continue; }
+        const contentType = (imgResp.headers.get('content-type') || 'image/jpeg').split(';')[0];
+        if (!contentType.startsWith('image/')) { console.log(`[alt-text-fix] Skipped ${img.src}: not an image (${contentType})`); continue; }
+        const buf = await imgResp.arrayBuffer();
+        if (buf.byteLength > 3 * 1024 * 1024) { console.log(`[alt-text-fix] Skipped ${img.src}: too large (${(buf.byteLength/1024/1024).toFixed(1)}MB)`); continue; }
+        if (buf.byteLength < 100) { console.log(`[alt-text-fix] Skipped ${img.src}: too small`); continue; }
+        imageData.push({
+          src: img.src,
+          tag: img.tag,
+          base64: Buffer.from(buf).toString('base64'),
+          media_type: contentType
+        });
+      } catch (e) {
+        console.log(`[alt-text-fix] Skipped ${img.src}: ${e.message}`);
+      }
+    }
+
+    if (imageData.length === 0) {
+      return res.json({ success: false, message: 'Could not fetch any of the images (blocked or too large). Alt text must be added manually.' });
+    }
+
+    // 4. Send to Claude Vision in batches of 5
+    const BATCH_SIZE = 5;
+    const allGenerated = [];
+    const businessName = project.business_name || project.name || '';
+    const industry = project.industry || '';
+
+    for (let i = 0; i < imageData.length; i += BATCH_SIZE) {
+      const batch = imageData.slice(i, i + BATCH_SIZE);
+      const content = [
+        { type: 'text', text: `Generate SEO-optimized alt text for each image below. Context: page "${pageSlug}" on ${businessName} website (${domain}). Industry: ${industry}. Return ONLY a JSON array: [{"src":"image_url","alt":"generated alt text"}]. Rules: 1) Be descriptive and specific to what's visible, 2) Include relevant service/location keywords naturally if they fit, 3) Keep under 125 characters, 4) Don't start with "image of" or "photo of", 5) Be useful for screen readers, 6) If it's a stock/generic image describe what it shows.` }
+      ];
+      for (const img of batch) {
+        content.push({ type: 'text', text: `Image: ${img.src.split('/').pop()}` });
+        content.push({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.base64 } });
+      }
+
+      try {
+        const aiResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1500,
+          messages: [{ role: 'user', content }]
+        });
+        const text = aiResp.content?.[0]?.text || '';
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          allGenerated.push(...parsed);
+        }
+      } catch (e) {
+        console.error(`[alt-text-fix] Vision API error: ${e.message}`);
+      }
+    }
+
+    if (allGenerated.length === 0) {
+      return res.json({ success: false, message: 'AI could not generate alt text. Try again or add manually.' });
+    }
+
+    console.log(`[alt-text-fix] Generated ${allGenerated.length} alt texts`);
+
+    // 5. Find the WordPress page/post ID for this slug
+    let wpPageId = null;
+    let wpPageType = 'pages';
+    const slugClean = pageSlug.replace(/^\/|\/$/g, '');
+
+    // Try pages first, then posts
+    for (const type of ['pages', 'posts']) {
+      try {
+        const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slugClean)}&_fields=id,slug,content,meta&status=publish`, {
+          headers: authHeaders, signal: AbortSignal.timeout(10000)
+        });
+        if (resp.ok) {
+          const items = await resp.json();
+          if (items.length > 0) { wpPageId = items[0].id; wpPageType = type; break; }
+        }
+      } catch {}
+    }
+
+    // Homepage fallback
+    if (!wpPageId && (slugClean === '' || slugClean === 'homepage' || slugClean === 'home')) {
+      try {
+        const settingsResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+        if (settingsResp.ok) {
+          const settings = await settingsResp.json();
+          if (settings.page_on_front) { wpPageId = settings.page_on_front; wpPageType = 'pages'; }
+        }
+      } catch {}
+    }
+
+    // 6. Update media library alt text for matched attachments
+    let mediaFixed = 0;
+    let contentFixed = 0;
+    const changes = [];
+
+    for (const gen of allGenerated) {
+      if (!gen.alt || !gen.src) continue;
+      const filename = gen.src.split('/').pop().split('?')[0].replace(/\.[^.]+$/, '');
+
+      // Try to find in WP media library
+      try {
+        const mediaResp = await fetch(`${wpUrl}/wp-json/wp/v2/media?search=${encodeURIComponent(filename)}&per_page=5`, {
+          headers: authHeaders, signal: AbortSignal.timeout(10000)
+        });
+        if (mediaResp.ok) {
+          const items = await mediaResp.json();
+          const match = items.find(m => {
+            const mFile = (m.source_url || '').split('/').pop();
+            const gFile = gen.src.split('/').pop();
+            return mFile === gFile;
+          });
+          if (match) {
+            const oldAlt = match.alt_text || '';
+            const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/media/${match.id}`, {
+              method: 'POST',
+              headers: authHeaders,
+              body: JSON.stringify({ alt_text: gen.alt }),
+              signal: AbortSignal.timeout(10000)
+            });
+            if (writeResp.ok) {
+              mediaFixed++;
+              changes.push({
+                project_id: parseInt(projectId), page_id: match.id, page_url: gen.src,
+                page_title: filename, change_type: 'alt_text_fix', field_name: 'alt_text',
+                original_value: oldAlt, new_value: gen.alt
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[alt-text-fix] Media lookup failed for ${filename}: ${e.message}`);
+      }
+    }
+
+    // 7. Update post content to add alt attributes inline
+    if (wpPageId) {
+      try {
+        const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPageType}/${wpPageId}?context=edit`, {
+          headers: authHeaders, signal: AbortSignal.timeout(10000)
+        });
+        if (pageResp.ok) {
+          const pageData = await pageResp.json();
+          let content = pageData.content?.raw || '';
+          let originalContent = content;
+
+          // Also check Elementor
+          let elementorData = null;
+          let originalElementor = null;
+          if (pageData.meta?._elementor_data) {
+            try {
+              elementorData = typeof pageData.meta._elementor_data === 'string' ? JSON.parse(pageData.meta._elementor_data) : pageData.meta._elementor_data;
+              originalElementor = JSON.stringify(elementorData);
+            } catch {}
+          }
+
+          for (const gen of allGenerated) {
+            if (!gen.alt || !gen.src) continue;
+            const srcFile = gen.src.split('/').pop().split('?')[0];
+            const escapedFile = srcFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const safeAlt = gen.alt.replace(/"/g, '&quot;');
+
+            // Update in classic content
+            if (content) {
+              // Match img tags containing this filename, replace or add alt
+              const imgPattern = new RegExp(`(<img[^>]*${escapedFile}[^>]*)(/?>)`, 'gi');
+              content = content.replace(imgPattern, (match, before, close) => {
+                let updated = before.replace(/\s*alt=["'][^"']*["']/i, '');
+                return `${updated} alt="${safeAlt}"${close}`;
+              });
+            }
+
+            // Update in Elementor data
+            if (elementorData) {
+              const updateElementorAlt = (elements) => {
+                for (const el of elements) {
+                  if (el.settings?.image?.url && el.settings.image.url.includes(srcFile)) {
+                    el.settings.image.alt = gen.alt;
+                  }
+                  if (el.settings?.background_image?.url && el.settings.background_image.url.includes(srcFile)) {
+                    el.settings.background_image.alt = gen.alt;
+                  }
+                  if (el.elements) updateElementorAlt(el.elements);
+                }
+              };
+              updateElementorAlt(elementorData);
+            }
+          }
+
+          // Write back if changed
+          if (content !== originalContent) {
+            const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPageType}/${wpPageId}`, {
+              method: 'POST', headers: authHeaders,
+              body: JSON.stringify({ content }),
+              signal: AbortSignal.timeout(15000)
+            });
+            if (writeResp.ok) {
+              contentFixed++;
+              changes.push({
+                project_id: parseInt(projectId), page_id: wpPageId, page_url: pageUrl,
+                page_title: pageSlug, change_type: 'alt_text_fix', field_name: 'content',
+                original_value: originalContent, new_value: content
+              });
+            }
+          }
+
+          if (elementorData && JSON.stringify(elementorData) !== originalElementor) {
+            const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPageType}/${wpPageId}`, {
+              method: 'POST', headers: authHeaders,
+              body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elementorData) } }),
+              signal: AbortSignal.timeout(15000)
+            });
+            if (writeResp.ok) {
+              contentFixed++;
+              changes.push({
+                project_id: parseInt(projectId), page_id: wpPageId, page_url: pageUrl,
+                page_title: pageSlug, change_type: 'alt_text_fix', field_name: '_elementor_data',
+                original_value: originalElementor, new_value: JSON.stringify(elementorData)
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[alt-text-fix] Content update error: ${e.message}`);
+      }
+    }
+
+    // 8. Save all changes to wp_change_history
+    for (const c of changes) {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [c.project_id, c.page_id, c.page_url, c.page_title, c.change_type, c.field_name, c.original_value, c.new_value]
+      );
+    }
+
+    // 9. Mark finding as fixed
+    if (mediaFixed > 0 || contentFixed > 0) {
+      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+    }
+
+    // 10. Try to purge cache
+    try { await purgeCloudflareCache(project, [pageUrl]); } catch {}
+
+    const totalFixed = allGenerated.length;
+    console.log(`[alt-text-fix] Done: ${totalFixed} alt texts generated, ${mediaFixed} media updated, ${contentFixed} content updates, ${changes.length} history records`);
+    res.json({
+      success: true,
+      message: `Fixed ${totalFixed} image alt texts on ${pageSlug}. Media library: ${mediaFixed}, page content: ${contentFixed > 0 ? 'updated' : 'unchanged'}.`,
+      fixed: totalFixed, mediaFixed, contentFixed,
+      generated: allGenerated
+    });
+
+  } catch (e) {
+    console.error('[alt-text-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== PURGE CACHE — direct server-side (no plugin needed) ====================
 app.post('/api/projects/:projectId/purge-cache', async (req, res) => {
   const { projectId } = req.params;
