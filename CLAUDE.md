@@ -100,7 +100,7 @@ Sandbox can't git push. The workflow is:
 
 ## Database Tables
 
-projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**
+projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**
 
 ### wp_change_history (Universal WordPress Rollback)
 ```sql
@@ -146,12 +146,34 @@ CREATE TABLE IF NOT EXISTS grid_scans (
 - `competitors`: `{top: [{name, rating, reviews, type, website, appearances, top1, top3, avg_position, dominance}], our_business: {rating, reviews, type, title}}`
 - Metrics: ARP (avg rank of found), ATRP (avg true rank, unfound=21), SOLV (% top 3), found_in/data_points
 
+### reviews_cache (Local Intel review text matching)
+```sql
+CREATE TABLE IF NOT EXISTS reviews_cache (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  reviews JSONB DEFAULT '[]',
+  total_count INTEGER DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+)
+```
+Stores review text for service-name matching in Local Intel KPI grid. Populated from `data/local_intel_seed.json` on first load (30-day TTL).
+
+### posts_cache (Local Intel post text matching)
+```sql
+CREATE TABLE IF NOT EXISTS posts_cache (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  posts JSONB DEFAULT '[]',
+  total_count INTEGER DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+)
+```
+
 ### Projects table extra columns
 - `wp_username TEXT` — WordPress Application Password username
 - `wp_app_password TEXT` — WordPress Application Password
 
 ## Key Code Patterns
 
+- `data/local_intel_seed.json` — bundled review + post text for Local Intel fallback. Keyed by GBP location ID. Fetched via RC MCP tools. Refresh by re-fetching via MCP and updating file.
 - `serpApiSearch(params)` — global helper, filters undefined/null values from params
 - `anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', ... })` — AI audit analysis
 - `getGscAccessToken(userId)` / `getGbpAccessToken(userId)` — OAuth token helpers with auto-refresh
@@ -212,6 +234,13 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
+- **Local Intel Reviews & Posts fix** — RC API direct calls return 405 (all 6 URL patterns). Fixed by: fetching real data via RC MCP tools, bundling into `data/local_intel_seed.json` (74 reviews + 28 posts across 4 projects). Server reads seed file as fallback, caches to `reviews_cache` DB table on first load (30-day TTL). REVIEWS and POSTS columns now show accurate green counts.
+- **Seed file approach** — `data/local_intel_seed.json` keyed by GBP location ID. Contains real review text (comment + reply) and post summaries. Used for service-name text matching in Local Intel KPI grid.
+- **Simplified review fetching** — Removed 120-line 6-URL RC API attempt block. Now: check DB cache → fallback to seed file. Clean, fast, reliable.
+- **Posts seed fallback** — Added after RC posts API attempt. Same pattern as reviews.
+- **posts_cache table** — New DB table for future use.
+
+### Previous Session
 - **Action Plan Calendar** — Month/Week/Day views with navigation. Week view shows date range header ("May 11 — May 17, 2026"). Auto-distribute endpoint assigns tasks across months.
 - **Rule-based Technical Audit Engine** — No AI cost. Crawls 15 pages, checks 15+ technical SEO factors, saves findings to DB.
 - **Fix buttons on Website Audit** — Green "Fix" for auto-fixable issues (schema, canonical, noindex, mixed content, H1), "Review" for manual. In review detail: "Fix Now" with live feedback.
@@ -220,7 +249,7 @@ const PILLAR_CATEGORIES = {
 - **Rankings-first architecture** — Audits are diagnostic only. Rankings (Maps + SERP) drive Action Plan priorities.
 - **List view table fix** — Removed `tableLayout: 'fixed'` that caused vertical text in ACTION column. Normalized font sizes.
 
-### Previous Session
+### Two Sessions Ago
 - **Preview (Design-Safe) button** — always shows green on all pages.
 - **Project switch reload** — clears cached audit reports, remounts components.
 - **Import Current Copy** — force-refreshes, tries WP REST + live HTML.
@@ -279,10 +308,13 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 
 ## Known Issues
 
+- **RC API direct calls return 405** — Server cannot fetch reviews/posts from `local.ratingcaptain.com/api/reviews` (all HTTP methods return 405). The RC MCP tool (`mcp__rc-local-prod__reviews-list-tool`) uses an internal proxy that works. Current workaround: bundled seed file (`data/local_intel_seed.json`). To refresh: fetch via MCP, update seed file, redeploy.
+- **Local Intel seed is partial coverage** — Seed has 74 reviews (of 1,467 total) and 28 posts. Enough for service-name matching but not exhaustive. Future: scheduled Cowork task to refresh all reviews via MCP weekly.
 - **Schema fix writes to post_content** — Currently injects into `post_content` which Elementor ignores. NEEDS UPDATE: switch to `_seoroom_schema` meta field (requires seoroom-schema plugin on WP sites). Endpoint code ready, just needs the injection method swap.
 - **Old auto-fix endpoint still references seoroom-helper** — Route 2 (schema) and Route 3 (CWV) at `/projects/:id/auto-fix` still try to call seoroom-helper plugin. Should be cleaned up to use standard WP API.
 - **Import Current Copy on some sites** — WP REST API returns classic editor content only; Elementor/ACF sites may have content elsewhere. Live HTML fetch works but depends on server-side rendering.
 - **Duplicated logic** — URL resolution, content fetching, editor state loading duplicated across endpoints. See "Shared helper refactor" in Pending.
+- **Gold PC reviews API returns duplicates** — RC API returns each review 3× for this location. Seed file is deduplicated (8 unique from 25 returned).
 - GBP audit AI sometimes flags "Missing Business Description" even when SerpAPI doesn't return that field.
 - GBP Management API: 0 quota. Using manual Place ID input.
 - Places API (New): billing project limit reached, can't enable.
