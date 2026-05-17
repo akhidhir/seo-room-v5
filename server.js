@@ -17786,7 +17786,25 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // FAQPage schema findings removed — handled in Schema Audit sub-page only
+    // FAQPage schema — per-page findings under Schema & Data
+    for (const p of successPages) {
+      const hasQA = (p.questionHeadings || 0) >= 3 || p.hasFAQSection;
+      if (!hasQA) continue;
+      const alreadyHasFAQ = p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage'));
+      const pageUrl = p.url || `https://${domain}${p.path}`;
+      const normSlug = (p.path || '').replace(/^\/|\/$/g, '');
+      if (!alreadyHasFAQ) {
+        findings.push({
+          pillar: 'website', category: 'Schema & Data',
+          title: `Missing FAQPage schema on ${normSlug}`,
+          description: `${pageUrl} has FAQ-style Q&A content (${p.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
+          recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
+          severity: 'Low',
+          current_value: JSON.stringify([pageUrl]),
+          recommended_value: 'FAQPage schema on this page'
+        });
+      }
+    }
 
     // Check for Service schema on service pages — classification-aware
     // page_exclusions stores { path, label } per page. Labels: Home, Service, Suburb, Blog, About, Contact, Review, Other
