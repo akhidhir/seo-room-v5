@@ -17846,10 +17846,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       const alreadyHasFAQ = p.schemas.some(s => typeof s === 'string' && s.includes('FAQPage'));
       const pageUrl = p.url || `https://${domain}${p.path}`;
       const normSlug = (p.path || '').replace(/^\/|\/$/g, '');
+      const faqLabel = normSlug || 'homepage';
       if (!alreadyHasFAQ) {
         findings.push({
           pillar: 'website', category: 'Schema & Data',
-          title: `Missing FAQPage schema on ${normSlug}`,
+          title: `Missing FAQPage schema on ${faqLabel}`,
           description: `${pageUrl} has FAQ-style Q&A content (${p.questionHeadings || 0} question headings) but no FAQPage structured data. Adding FAQPage schema enables rich FAQ snippets in Google search results.`,
           recommendation: 'Add FAQPage JSON-LD schema to this page. Include each question as "name" and answer as "acceptedAnswer".',
           severity: 'Low',
