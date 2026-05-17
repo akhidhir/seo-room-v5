@@ -25075,7 +25075,12 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       const gbpLocId = project.gbp_location_id;
       if (RC_TOKEN && gbpLocId) {
         try {
-          const url = `https://local.ratingcaptain.com/api/posts?location_id=${encodeURIComponent(gbpLocId)}&status=all&per_page=100&page=1`;
+          // Use getRcLocationDetails to get the correct location_id format
+          let rcLocDetail = null;
+          try { rcLocDetail = await getRcLocationDetails(projectId); } catch (e) { /* no RC location */ }
+          const postLocId = rcLocDetail?.location_id || gbpLocId;
+          const url = `https://local.ratingcaptain.com/api/posts?location_id=${encodeURIComponent(postLocId)}&status=all&per_page=100&page=1`;
+          console.log(`[local-intel] Fetching posts from RC: ${url}`);
           const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' } });
           if (resp.ok) {
             const data = await resp.json();
@@ -25086,7 +25091,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
                 if ((p.createTime || p.created_at || p.publish_date || '').startsWith(thisMonthStr)) gbpPostsThisMonth++;
               }
             }
-            console.log(`[local-intel] Fetched ${gbpPosts.length} published posts from RC API`);
+            console.log(`[local-intel] Fetched ${gbpPosts.length} published posts from RC API (total in response: ${posts.length})`);
+          } else {
+            console.log(`[local-intel] RC posts API returned ${resp.status}`);
           }
         } catch (e) { console.log(`[local-intel] RC posts fetch failed: ${e.message}`); }
       }
@@ -25330,38 +25337,88 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     if (allReviews.length === 0) {
       const RC_TOKEN = process.env.RC_API_TOKEN;
       const gbpLocId = project.gbp_location_id;
-      if (RC_TOKEN && gbpLocId) {
+      const rcLocId = project.rc_location_id;
+      if (RC_TOKEN && (gbpLocId || rcLocId)) {
         try {
-          console.log(`[local-intel] Fetching ALL reviews from RC API for ${gbpLocId}...`);
-          const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
-          const reviewMap = new Map(); // deduplicate by review_id
+          console.log(`[local-intel] Fetching ALL reviews from RC API (gbp=${gbpLocId}, rc_id=${rcLocId})...`);
+          const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
+          const reviewMap = new Map();
           let page = 1;
           const perPage = 100;
           let totalFetched = 0;
           let hasMore = true;
-          while (hasMore && page <= 20) { // max 2000 reviews safety limit
-            const url = `https://local.ratingcaptain.com/api/reviews?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${page}`;
-            const resp = await fetch(url, { headers: rcHeaders });
-            if (!resp.ok) { console.log(`[local-intel] RC reviews API page ${page} failed: ${resp.status}`); break; }
-            const data = await resp.json();
-            const reviews = data.reviews || [];
-            for (const r of reviews) {
-              if (!reviewMap.has(r.review_id)) {
-                reviewMap.set(r.review_id, {
-                  comment: (r.comment || '').substring(0, 500),
-                  reviewer: r.reviewer?.displayName || '',
-                  rating: r.rating || 0,
-                  date: r.create_time || null,
-                  reply: (r.review_reply?.comment || '').substring(0, 500),
-                });
+          // Try GET and POST for multiple URL patterns until one works
+          const attempts = [
+            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/reviews?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${p}` },
+            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/reviews`, body: (p) => ({ location_id: gbpLocId, per_page: perPage, page: p }) },
+            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/reviews/list`, body: (p) => ({ location_id: gbpLocId, per_page: perPage, page: p }) },
+            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/reviews/list?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${p}` },
+            { method: 'GET', url: (p) => `https://local.ratingcaptain.com/api/locations/${rcLocId}/reviews?per_page=${perPage}&page=${p}` },
+            { method: 'POST', url: (p) => `https://local.ratingcaptain.com/api/locations/${rcLocId}/reviews`, body: (p) => ({ per_page: perPage, page: p }) },
+          ];
+          let workingAttempt = null;
+          for (const attempt of attempts) {
+            const testUrl = attempt.url(1);
+            const fetchOpts = { method: attempt.method, headers: rcHeaders };
+            if (attempt.body) fetchOpts.body = JSON.stringify(attempt.body(1));
+            console.log(`[local-intel] Trying ${attempt.method} ${testUrl}`);
+            try {
+              const testResp = await fetch(testUrl, fetchOpts);
+              console.log(`[local-intel] → ${testResp.status}`);
+              if (testResp.ok) {
+                const testData = await testResp.json();
+                if (testData.reviews || testData.data) {
+                  workingAttempt = attempt;
+                  const reviews = testData.reviews || testData.data || [];
+                  for (const r of reviews) {
+                    const rid = r.review_id || r.id || `${r.reviewer?.displayName}-${r.create_time}`;
+                    if (!reviewMap.has(rid)) {
+                      reviewMap.set(rid, {
+                        comment: (r.comment || r.text || '').substring(0, 500),
+                        reviewer: r.reviewer?.displayName || r.reviewer_name || '',
+                        rating: r.rating || r.star_rating || 0,
+                        date: r.create_time || r.created_at || null,
+                        reply: (r.review_reply?.comment || r.reply?.comment || '').substring(0, 500),
+                      });
+                    }
+                  }
+                  totalFetched += reviews.length;
+                  hasMore = reviews.length >= perPage && totalFetched < (testData.total || Infinity);
+                  page = 2;
+                  console.log(`[local-intel] ✓ RC reviews works! ${attempt.method} — got ${reviews.length} on page 1 (total: ${testData.total || '?'})`);
+                  break;
+                }
               }
+            } catch (e) { console.log(`[local-intel] → error: ${e.message}`); }
+          }
+          // Fetch remaining pages
+          if (workingAttempt) {
+            while (hasMore && page <= 20) {
+              const fetchOpts = { method: workingAttempt.method, headers: rcHeaders };
+              if (workingAttempt.body) fetchOpts.body = JSON.stringify(workingAttempt.body(page));
+              const resp = await fetch(workingAttempt.url(page), fetchOpts);
+              if (!resp.ok) break;
+              const data = await resp.json();
+              const reviews = data.reviews || data.data || [];
+              for (const r of reviews) {
+                const rid = r.review_id || r.id || `${r.reviewer?.displayName}-${r.create_time}`;
+                if (!reviewMap.has(rid)) {
+                  reviewMap.set(rid, {
+                    comment: (r.comment || r.text || '').substring(0, 500),
+                    reviewer: r.reviewer?.displayName || r.reviewer_name || '',
+                    rating: r.rating || r.star_rating || 0,
+                    date: r.create_time || r.created_at || null,
+                    reply: (r.review_reply?.comment || r.reply?.comment || '').substring(0, 500),
+                  });
+                }
+              }
+              totalFetched += reviews.length;
+              hasMore = reviews.length >= perPage && totalFetched < (data.total || Infinity);
+              page++;
             }
-            totalFetched += reviews.length;
-            hasMore = reviews.length === perPage && totalFetched < (data.total || 0);
-            page++;
           }
           allReviews = Array.from(reviewMap.values());
-          console.log(`[local-intel] Fetched ${totalFetched} reviews, ${allReviews.length} unique (deduped from ${totalFetched})`);
+          console.log(`[local-intel] Final: ${totalFetched} fetched, ${allReviews.length} unique reviews`);
           // Cache to DB
           if (allReviews.length > 0) {
             try {
