@@ -17301,8 +17301,8 @@ async function getConnectorCache(projectId) {
 
 app.post('/api/connector-push/:projectId', async (req, res) => {
   try {
-    const token = (req.headers.authorization || '').replace('Bearer ', '');
-    const expectedToken = process.env.CONNECTOR_PUSH_TOKEN;
+    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+    const expectedToken = (process.env.CONNECTOR_PUSH_TOKEN || '').trim();
     if (!expectedToken || token !== expectedToken) {
       return res.status(401).json({ error: 'Invalid push token' });
     }
@@ -17338,8 +17338,9 @@ app.post('/api/connector-push/:projectId', async (req, res) => {
 // GET: test connection from WP plugin — validates token + project exists
 app.get('/api/connector-push/:projectId/test', async (req, res) => {
   try {
-    const token = (req.headers.authorization || '').replace('Bearer ', '');
-    const expectedToken = process.env.CONNECTOR_PUSH_TOKEN;
+    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+    const expectedToken = (process.env.CONNECTOR_PUSH_TOKEN || '').trim();
+    console.log(`[connector-test] Token received: "${token.substring(0,8)}..." Expected: "${expectedToken.substring(0,8)}..." Match: ${token === expectedToken}`);
     if (!expectedToken || token !== expectedToken) {
       return res.status(401).json({ success: false, error: 'Invalid push token' });
     }
