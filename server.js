@@ -25348,6 +25348,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // Cross-reference: Review mentions — use cached reviews from DB, or load from seed file
     let allReviews = [];
+    let cachedCount = 0;
     // 1. Check for cached reviews in reviews_cache table (use if < 30 days old)
     try {
       const rvR = await pool.query('SELECT reviews, total_count, updated_at FROM reviews_cache WHERE project_id=$1', [projectId]);
@@ -25356,12 +25357,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         const ageMs = Date.now() - new Date(rvR.rows[0].updated_at).getTime();
         if (Array.isArray(cached) && cached.length > 0 && ageMs < 30 * 24 * 60 * 60 * 1000) {
           allReviews = cached;
+          cachedCount = cached.length;
           console.log(`[local-intel] Using ${cached.length} cached reviews (age: ${Math.round(ageMs / 3600000)}h)`);
         }
       }
     } catch (e) { /* reviews_cache table may not exist yet */ }
-    // 2. Fallback: load from bundled seed file
-    if (allReviews.length === 0) {
+    // 2. Always check seed file — use if it has MORE reviews than cache (seed was updated)
+    {
       try {
         const seedPath = require('path').join(__dirname, 'data', 'local_intel_seed.json');
         if (require('fs').existsSync(seedPath)) {
@@ -25369,24 +25371,28 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           const locId = project.gbp_location_id;
           const locData = seed[locId];
           if (locData?.reviews) {
-            allReviews = locData.reviews.filter(r => r.comment).map(r => ({
+            const seedReviews = locData.reviews.filter(r => r.comment).map(r => ({
               comment: r.comment || '',
               reviewer: '',
               rating: 5,
               date: null,
               reply: r.reply || ''
             }));
-            console.log(`[local-intel] Using ${allReviews.length} reviews from seed file for ${locId}`);
-            // Cache to DB for faster next load
-            try {
-              await pool.query(
-                `INSERT INTO reviews_cache (project_id, reviews, total_count, updated_at)
-                 VALUES ($1, $2, $3, NOW())
-                 ON CONFLICT (project_id)
-                 DO UPDATE SET reviews=$2, total_count=$3, updated_at=NOW()`,
-                [projectId, JSON.stringify(allReviews), locData.total_reviews || allReviews.length]
-              );
-            } catch (ce) { /* ignore cache write error */ }
+            // Use seed if cache is empty OR seed has more data (updated seed deployed)
+            if (seedReviews.length > cachedCount) {
+              allReviews = seedReviews;
+              console.log(`[local-intel] Using ${allReviews.length} reviews from seed file for ${locId} (seed > cache ${cachedCount})`);
+              // Re-cache to DB
+              try {
+                await pool.query(
+                  `INSERT INTO reviews_cache (project_id, reviews, total_count, updated_at)
+                   VALUES ($1, $2, $3, NOW())
+                   ON CONFLICT (project_id)
+                   DO UPDATE SET reviews=$2, total_count=$3, updated_at=NOW()`,
+                  [projectId, JSON.stringify(allReviews), locData.total_reviews || allReviews.length]
+                );
+              } catch (ce) { /* ignore cache write error */ }
+            }
           }
         }
       } catch (e) { console.log(`[local-intel] Seed file fallback failed: ${e.message}`); }
