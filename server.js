@@ -17451,11 +17451,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       const pagesToCrawl = allPages.slice(0, 50);
       console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length} (service-first sort)`);
 
-    // 2. Fetch robots.txt
+    // 2. Fetch robots.txt (handle Cloudflare 403 — don't flag as missing)
     try {
       const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000) });
       if (robotsResp.ok) robotsTxt = await robotsResp.text();
-    } catch (e) { /* no robots.txt */ }
+      else if (robotsResp.status === 403) robotsTxt = '__cloudflare_blocked__';
+    } catch (e) { robotsTxt = '__fetch_failed__'; }
 
     // 3. Fetch sitemap (follow sub-sitemaps to get actual URL count)
     try {
@@ -17482,6 +17483,11 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         } else {
           sitemapUrls = (smXml.match(/<loc>/g) || []).length;
         }
+      } else if (smResp.status === 403) {
+        // Cloudflare blocked — don't flag as missing
+        sitemapOk = true;
+        sitemapUrls = allPages.length;
+        console.log(`[website-audit] Sitemap returned 403 (Cloudflare) — suppressing false positive`);
       }
     } catch (e) { /* no sitemap */ }
 
