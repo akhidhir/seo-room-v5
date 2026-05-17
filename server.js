@@ -19524,8 +19524,10 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
 app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { finding_id } = req.body;
+    const { finding_id, mode, generated_alts } = req.body;
+    // mode: 'preview' (default) = generate alt texts and return for review, 'apply' = write pre-approved alts to WordPress
     if (!finding_id) return res.status(400).json({ error: 'finding_id required' });
+    const isApply = mode === 'apply';
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
@@ -19559,6 +19561,13 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     } catch (e) {
       return res.json({ success: false, message: `Failed to fetch page: ${e.message}` });
     }
+
+    // APPLY MODE with pre-approved alts: skip image analysis and AI generation entirely
+    let allGenerated = [];
+    if (isApply && generated_alts && generated_alts.length > 0) {
+      allGenerated = generated_alts;
+      console.log(`[alt-text-fix] Apply mode: using ${allGenerated.length} pre-approved alt texts`);
+    } else {
 
     // 2. Parse images without alt text
     const imgRegex = /<img[^>]*>/gi;
@@ -19615,7 +19624,6 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
 
     // 4. Send to Claude Vision in batches of 5
     const BATCH_SIZE = 5;
-    const allGenerated = [];
     const businessName = project.business_name || project.name || '';
     const industry = project.industry || '';
 
@@ -19651,6 +19659,16 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     }
 
     console.log(`[alt-text-fix] Generated ${allGenerated.length} alt texts`);
+    } // end else (not apply-with-preapproved)
+
+    // PREVIEW MODE: return generated alt texts for review (don't write to WordPress yet)
+    if (!isApply) {
+      return res.json({ success: true, preview: true, generated: allGenerated, pageUrl, pageSlug, message: `Generated ${allGenerated.length} alt texts for review` });
+    }
+
+    // APPLY MODE: use user-approved alts (may have been edited)
+    // If generated_alts provided, use those instead of AI-generated ones (user may have edited)
+    const altsToApply = generated_alts || allGenerated;
 
     // 5. Find the WordPress page/post ID for this slug
     let wpPageId = null;
@@ -19686,7 +19704,7 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     let contentFixed = 0;
     const changes = [];
 
-    for (const gen of allGenerated) {
+    for (const gen of altsToApply) {
       if (!gen.alt || !gen.src) continue;
       const filename = gen.src.split('/').pop().split('?')[0].replace(/\.[^.]+$/, '');
 
@@ -19746,7 +19764,7 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
             } catch {}
           }
 
-          for (const gen of allGenerated) {
+          for (const gen of altsToApply) {
             if (!gen.alt || !gen.src) continue;
             const srcFile = gen.src.split('/').pop().split('?')[0];
             const escapedFile = srcFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -19834,13 +19852,13 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     // 10. Try to purge cache
     try { await purgeCloudflareCache(project, [pageUrl]); } catch {}
 
-    const totalFixed = allGenerated.length;
-    console.log(`[alt-text-fix] Done: ${totalFixed} alt texts generated, ${mediaFixed} media updated, ${contentFixed} content updates, ${changes.length} history records`);
+    const totalFixed = altsToApply.length;
+    console.log(`[alt-text-fix] Done: ${totalFixed} alt texts applied, ${mediaFixed} media updated, ${contentFixed} content updates, ${changes.length} history records`);
     res.json({
-      success: true,
+      success: true, applied: true,
       message: `Fixed ${totalFixed} image alt texts on ${pageSlug}. Media library: ${mediaFixed}, page content: ${contentFixed > 0 ? 'updated' : 'unchanged'}.`,
       fixed: totalFixed, mediaFixed, contentFixed,
-      generated: allGenerated
+      generated: altsToApply
     });
 
   } catch (e) {

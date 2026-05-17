@@ -6616,24 +6616,41 @@
         setFilterStatus('all');
       };
 
-      // Fix alt text via AI vision
-      const fixAltText = async (f) => {
-        setFixing(f.id); setFixResult(null);
+      // Fix alt text via AI vision — two-step: preview then apply
+      const [altPreview, setAltPreview] = useState(null); // { findingId, generated: [{src, alt}], pageSlug }
+      const previewAltText = async (f) => {
+        setFixing(f.id); setFixResult(null); setAltPreview(null);
         try {
-          setFixResult({ id: f.id, ok: true, msg: 'Step 1/3: Analyzing images with AI vision...' });
+          setFixResult({ id: f.id, ok: true, msg: 'Analyzing images with AI vision...' });
           const r = await api(`/projects/${project.id}/alt-text-fix`, { method: 'POST', body: { finding_id: f.id } });
           if (!r.success) {
-            setFixResult({ id: f.id, ok: false, msg: r.error || r.message || 'Fix failed' });
-            setFixing(null);
-            return;
+            setFixResult({ id: f.id, ok: false, msg: r.error || r.message || 'Failed' });
+            setFixing(null); return;
           }
-          setFixResult({ id: f.id, ok: true, msg: 'Step 2/3: Purging cache...' });
-          try { await api(`/projects/${project.id}/purge-cache`, { method: 'POST', body: {} }); } catch {}
-          setFixResult({ id: f.id, ok: true, msg: `Done! ${r.fixed} alt texts generated. ${r.message}` });
-          setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
-          if (reviewFinding?.id === f.id) setReviewFinding({ ...reviewFinding, status: 'fixed' });
+          setAltPreview({ findingId: f.id, generated: r.generated, pageSlug: r.pageSlug, pageUrl: r.pageUrl });
+          setFixResult({ id: f.id, ok: true, msg: `Generated ${r.generated.length} alt texts — review below` });
         } catch (e) {
           setFixResult({ id: f.id, ok: false, msg: e.message });
+        }
+        setFixing(null);
+      };
+
+      const applyAltText = async (findingId, alts) => {
+        setFixing(findingId); setFixResult(null);
+        try {
+          setFixResult({ id: findingId, ok: true, msg: 'Applying alt texts to WordPress...' });
+          const r = await api(`/projects/${project.id}/alt-text-fix`, { method: 'POST', body: { finding_id: findingId, mode: 'apply', generated_alts: alts } });
+          if (!r.success) {
+            setFixResult({ id: findingId, ok: false, msg: r.error || r.message || 'Apply failed' });
+            setFixing(null); return;
+          }
+          try { await api(`/projects/${project.id}/purge-cache`, { method: 'POST', body: {} }); } catch {}
+          setFixResult({ id: findingId, ok: true, msg: `Applied! ${r.fixed} alt texts written. Media: ${r.mediaFixed}, Content: ${r.contentFixed > 0 ? 'updated' : 'unchanged'}` });
+          setFindings(prev => prev.map(x => x.id === findingId ? { ...x, status: 'fixed' } : x));
+          if (reviewFinding?.id === findingId) setReviewFinding({ ...reviewFinding, status: 'fixed' });
+          setAltPreview(null);
+        } catch (e) {
+          setFixResult({ id: findingId, ok: false, msg: e.message });
         }
         setFixing(null);
       };
@@ -6650,12 +6667,19 @@
           const f = altFindings[i];
           setFixAllAltProgress(prev => ({ ...prev, current: i + 1, currentTitle: f.title?.substring(0, 60) }));
           try {
-            const r = await api(`/projects/${project.id}/alt-text-fix`, { method: 'POST', body: { finding_id: f.id } });
-            if (r.success) {
-              results.push({ id: f.id, ok: true });
-              setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+            // Step 1: Generate alt texts
+            const preview = await api(`/projects/${project.id}/alt-text-fix`, { method: 'POST', body: { finding_id: f.id } });
+            if (!preview.success || !preview.generated?.length) {
+              results.push({ id: f.id, ok: false, msg: preview.message || 'Generation failed' });
             } else {
-              results.push({ id: f.id, ok: false, msg: r.error || r.message || 'Failed' });
+              // Step 2: Apply immediately (bulk mode skips manual review)
+              const apply = await api(`/projects/${project.id}/alt-text-fix`, { method: 'POST', body: { finding_id: f.id, mode: 'apply', generated_alts: preview.generated } });
+              if (apply.success) {
+                results.push({ id: f.id, ok: true, count: preview.generated.length });
+                setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+              } else {
+                results.push({ id: f.id, ok: false, msg: apply.message || 'Apply failed' });
+              }
             }
           } catch (e) {
             results.push({ id: f.id, ok: false, msg: e.message });
@@ -6901,9 +6925,37 @@
                   </>
                 ) : isAltTextFixable(f) ? (
                   <>
-                    <button className="btn btn-success" onClick={() => fixAltText(f)} disabled={fixing === f.id} style={{ fontSize: 16, padding: '12px 28px' }}>
-                      {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Generating alt text...</> : <><i className="fas fa-image" style={{ marginRight: 8 }} />Fix Alt Text (AI)</>}
+                    <button className="btn btn-success" onClick={() => previewAltText(f)} disabled={fixing === f.id} style={{ fontSize: 16, padding: '12px 28px' }}>
+                      {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Analyzing images...</> : <><i className="fas fa-image" style={{ marginRight: 8 }} />Generate Alt Text (AI)</>}
                     </button>
+                    {altPreview?.findingId === f.id && (
+                      <div style={{ width: '100%', marginTop: 16, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text1)' }}><i className="fas fa-eye" style={{ marginRight: 8, color: '#f97316' }} />Preview — {altPreview.generated.length} alt texts</span>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="btn btn-small" onClick={() => setAltPreview(null)} style={{ fontSize: 13, color: 'var(--text3)' }}>Cancel</button>
+                            <button className="btn btn-small" onClick={() => applyAltText(f.id, altPreview.generated)} disabled={fixing === f.id}
+                              style={{ fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40', fontWeight: 600 }}>
+                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Applying...</> : <><i className="fas fa-check" style={{ marginRight: 4 }} />Apply All</>}
+                            </button>
+                          </div>
+                        </div>
+                        {altPreview.generated.map((g, gi) => (
+                          <div key={gi} style={{ padding: '10px 16px', borderBottom: gi < altPreview.generated.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', gap: 12, alignItems: 'center' }}>
+                            <img src={g.src} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, flexShrink: 0, background: '#1a1a2e' }}
+                              onError={e => { e.target.style.display = 'none'; }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.src.split('/').pop()}</div>
+                              <input type="text" value={g.alt} onChange={e => {
+                                const updated = [...altPreview.generated];
+                                updated[gi] = { ...updated[gi], alt: e.target.value };
+                                setAltPreview({ ...altPreview, generated: updated });
+                              }} style={{ width: '100%', background: 'var(--card)', color: '#22c55e', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 14, fontFamily: 'monospace' }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </>
                 ) : isAutoFixable(f) ? (
                   <>
@@ -7268,7 +7320,7 @@
                               {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Sending...</> : <><i className="fas fa-pen-nib" style={{ marginRight: 4 }} />Send to Copywriter</>}
                             </button>
                           ) : isAltTextFixable(f) ? (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); fixAltText(f); }} disabled={fixing === f.id}
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); previewAltText(f); }} disabled={fixing === f.id}
                               style={{ fontSize: 14, background: '#f9731620', color: '#f97316', border: '1px solid #f9731640' }}>
                               {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />AI...</> : <><i className="fas fa-image" style={{ marginRight: 4 }} />Fix</>}
                             </button>
