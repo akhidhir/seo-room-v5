@@ -25442,7 +25442,10 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     // Scan review text + reply text for suburb mentions
-    console.log(`[local-intel] Scanning ${allReviews.length} reviews for suburb/service mentions across ${allSuburbNames.size} suburbs`);
+    console.log(`[local-intel] REVIEW DEBUG: allReviews.length=${allReviews.length}, gbpPosts.length=${gbpPosts.length}, suburbs=${allSuburbNames.size}`);
+    if (allReviews.length > 0) {
+      console.log(`[local-intel] REVIEW SAMPLE[0]: comment="${(allReviews[0].comment || '').substring(0, 80)}", reply="${(allReviews[0].reply || '').substring(0, 50)}"`);
+    }
     for (const review of allReviews) {
       const text = normalize(review.comment || review.text || '');
       const replyText = normalize(review.reply || review.review_reply?.comment || review.response || '');
@@ -25588,6 +25591,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       return stem.length >= 4 && text.includes(stem);
     };
 
+    let _svcDebugIdx = 0;
     const serviceMatrix = allOfferings.map(({ name, type }) => {
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const nameNorm = normalize(name);
@@ -25726,6 +25730,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
             snippet: (review.comment || review.text || '').substring(0, 120),
           });
         }
+      }
+
+      // Debug first 3 services
+      if (_svcDebugIdx++ < 3) {
+        console.log(`[local-intel] SVC "${name}": nameWords=[${nameWords.join(',')}], reviewMentions=${reviewMentions.length}, posts=${posts.length}, allReviews=${allReviews.length}`);
       }
 
       // Build gaps
