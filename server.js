@@ -1006,6 +1006,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
   if (req.path.match(/^\/api\/invite\//)) return next();
+  // Allow connector-push routes (they use their own push token auth)
+  if (req.path.match(/^\/api\/connector-push\//)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
