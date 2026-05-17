@@ -18252,15 +18252,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // from a previous AI audit (code-based audit is now the source of truth for all schema findings)
     const newTopics = new Set(findings.flatMap(f => getTopics(f.title)));
 
+    // SAFETY: if this audit crawled very few pages (e.g. Cloudflare blocked), don't delete old findings
+    // Only cleanup unreproduced findings if we crawled a meaningful number of pages
+    const crawlWasDegraded = successPages.length < 5;
+    if (crawlWasDegraded) {
+      console.log(`[website-audit] Degraded crawl (${successPages.length} pages) — skipping cleanup of unreproduced findings to preserve existing data`);
+    }
+
     const keptFromPrevious = [];
     let removedDuplicates = 0;
     for (const ef of existingFindings.rows) {
       const efCat = (ef.category || '').toLowerCase();
 
-      // Schema & Data findings: ALWAYS remove if not reproduced by this audit
-      // (code-based audit is the source of truth — even 'fixed' findings should go if the issue no longer exists)
+      // Schema & Data findings: remove if not reproduced — BUT ONLY if crawl was full
       if (efCat.includes('schema')) {
-        if (!newTitles.has(ef.title)) {
+        if (!crawlWasDegraded && !newTitles.has(ef.title)) {
           await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
           console.log(`[website-audit] Removed stale schema finding: "${ef.title}" (status=${ef.status}, not reproduced)`);
           removedDuplicates++;
@@ -18268,9 +18274,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         continue;
       }
 
-      // On-Page Issues: code-based audit generates per-page findings now — remove old aggregated ones
+      // On-Page Issues: remove old aggregated ones — BUT ONLY if crawl was full
       if (efCat.includes('on-page')) {
-        if (!newTitles.has(ef.title)) {
+        if (!crawlWasDegraded && !newTitles.has(ef.title)) {
           await pool.query('DELETE FROM audit_findings WHERE id=$1', [ef.id]);
           console.log(`[website-audit] Removed stale on-page finding: "${ef.title}" (status=${ef.status}, not reproduced)`);
           removedDuplicates++;
@@ -18288,7 +18294,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Final cleanup: delete ANY status='new' Schema & Data finding whose topic overlaps with a 'fixed' one
     // This catches zombie AI findings from old audits that survived previous merges
     // For per-page findings: only delete if exact title matches a fixed one (not by topic)
-    if (fixedTopics.size > 0 || fixedTitles.size > 0) {
+    // Skip if crawl was degraded — don't touch existing data
+    if (!crawlWasDegraded && (fixedTopics.size > 0 || fixedTitles.size > 0)) {
       const allSchemaFindings = await pool.query(
         `SELECT id, title, status FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Schema & Data' AND status='new'`,
         [projectId]
