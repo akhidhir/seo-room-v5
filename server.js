@@ -25058,15 +25058,37 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Extract GBP posts topics
+    // Extract GBP posts topics — from RC cached data, or fetch from RC API
     const gbpPosts = [];
     const now = new Date();
     const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     let gbpPostsThisMonth = 0;
-    if (rc?.posts?.published_posts) {
+    if (rc?.posts?.published_posts && rc.posts.published_posts.length > 0) {
       for (const p of rc.posts.published_posts) {
         gbpPosts.push({ summary: (p.summary || '').substring(0, 120), state: p.state, url: p.callToAction?.url || '', createTime: p.createTime || '' });
         if ((p.createTime || '').startsWith(thisMonthStr)) gbpPostsThisMonth++;
+      }
+    }
+    // Fetch from RC posts API if no cached posts
+    if (gbpPosts.length === 0) {
+      const RC_TOKEN = process.env.RC_API_TOKEN;
+      const gbpLocId = project.gbp_location_id;
+      if (RC_TOKEN && gbpLocId) {
+        try {
+          const url = `https://local.ratingcaptain.com/api/posts?location_id=${encodeURIComponent(gbpLocId)}&status=all&per_page=100&page=1`;
+          const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' } });
+          if (resp.ok) {
+            const data = await resp.json();
+            const posts = data.data || data.posts || (Array.isArray(data) ? data : []);
+            for (const p of posts) {
+              if (p.status === 'published' || p.state === 'LIVE') {
+                gbpPosts.push({ summary: (p.summary || p.content || p.text || '').substring(0, 120), state: p.state || p.status, url: p.callToAction?.url || p.url || '', createTime: p.createTime || p.created_at || p.publish_date || '' });
+                if ((p.createTime || p.created_at || p.publish_date || '').startsWith(thisMonthStr)) gbpPostsThisMonth++;
+              }
+            }
+            console.log(`[local-intel] Fetched ${gbpPosts.length} published posts from RC API`);
+          }
+        } catch (e) { console.log(`[local-intel] RC posts fetch failed: ${e.message}`); }
       }
     }
 
@@ -25290,32 +25312,90 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Cross-reference: Review mentions — use cached reviews from DB, or fetch via SerpAPI
+    // Cross-reference: Review mentions — use cached reviews from DB, or fetch ALL from RC API
     let allReviews = [];
-    // 1. Check for cached reviews in reviews_cache table
+    // 1. Check for cached reviews in reviews_cache table (use if < 7 days old)
     try {
-      const rvR = await pool.query('SELECT reviews, updated_at FROM reviews_cache WHERE project_id=$1', [projectId]);
+      const rvR = await pool.query('SELECT reviews, total_count, updated_at FROM reviews_cache WHERE project_id=$1', [projectId]);
       if (rvR.rows[0]?.reviews) {
         const cached = typeof rvR.rows[0].reviews === 'string' ? JSON.parse(rvR.rows[0].reviews) : rvR.rows[0].reviews;
-        if (Array.isArray(cached)) allReviews = cached;
+        const ageMs = Date.now() - new Date(rvR.rows[0].updated_at).getTime();
+        if (Array.isArray(cached) && cached.length > 0 && ageMs < 7 * 24 * 60 * 60 * 1000) {
+          allReviews = cached;
+          console.log(`[local-intel] Using ${cached.length} cached reviews (age: ${Math.round(ageMs / 3600000)}h)`);
+        }
       }
     } catch (e) { /* reviews_cache table may not exist yet */ }
-    // 2. Fallback: SerpAPI Place Details reviews (top ~10 most relevant)
+    // 2. Fetch ALL reviews from RC API if cache is empty/stale
+    if (allReviews.length === 0) {
+      const RC_TOKEN = process.env.RC_API_TOKEN;
+      const gbpLocId = project.gbp_location_id;
+      if (RC_TOKEN && gbpLocId) {
+        try {
+          console.log(`[local-intel] Fetching ALL reviews from RC API for ${gbpLocId}...`);
+          const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+          const reviewMap = new Map(); // deduplicate by review_id
+          let page = 1;
+          const perPage = 100;
+          let totalFetched = 0;
+          let hasMore = true;
+          while (hasMore && page <= 20) { // max 2000 reviews safety limit
+            const url = `https://local.ratingcaptain.com/api/reviews?location_id=${encodeURIComponent(gbpLocId)}&per_page=${perPage}&page=${page}`;
+            const resp = await fetch(url, { headers: rcHeaders });
+            if (!resp.ok) { console.log(`[local-intel] RC reviews API page ${page} failed: ${resp.status}`); break; }
+            const data = await resp.json();
+            const reviews = data.reviews || [];
+            for (const r of reviews) {
+              if (!reviewMap.has(r.review_id)) {
+                reviewMap.set(r.review_id, {
+                  comment: (r.comment || '').substring(0, 500),
+                  reviewer: r.reviewer?.displayName || '',
+                  rating: r.rating || 0,
+                  date: r.create_time || null,
+                  reply: (r.review_reply?.comment || '').substring(0, 500),
+                });
+              }
+            }
+            totalFetched += reviews.length;
+            hasMore = reviews.length === perPage && totalFetched < (data.total || 0);
+            page++;
+          }
+          allReviews = Array.from(reviewMap.values());
+          console.log(`[local-intel] Fetched ${totalFetched} reviews, ${allReviews.length} unique (deduped from ${totalFetched})`);
+          // Cache to DB
+          if (allReviews.length > 0) {
+            try {
+              await pool.query(
+                `INSERT INTO reviews_cache (project_id, reviews, total_count, updated_at)
+                 VALUES ($1, $2, $3, NOW())
+                 ON CONFLICT (project_id)
+                 DO UPDATE SET reviews=$2, total_count=$3, updated_at=NOW()`,
+                [projectId, JSON.stringify(allReviews), allReviews.length]
+              );
+            } catch (ce) { console.log(`[local-intel] reviews_cache write failed: ${ce.message}`); }
+          }
+        } catch (e) {
+          console.log(`[local-intel] RC reviews fetch failed: ${e.message}`);
+        }
+      }
+    }
+    // 3. Final fallback: RC profile sample reviews
     if (allReviews.length === 0 && profile?.sampleReviews) {
-      allReviews = profile.sampleReviews.map(r => ({ comment: r.text || '', reviewer: r.author || '', rating: r.rating || 0 }));
+      allReviews = profile.sampleReviews.map(r => ({ comment: r.text || '', reviewer: r.author || '', rating: r.rating || 0, reply: '' }));
     }
 
-    // Scan review text for suburb mentions
+    // Scan review text + reply text for suburb mentions
+    console.log(`[local-intel] Scanning ${allReviews.length} reviews for suburb/service mentions across ${allSuburbNames.size} suburbs`);
     for (const review of allReviews) {
       const text = normalize(review.comment || review.text || '');
-      const replyText = normalize(review.review_reply?.comment || review.response || '');
+      const replyText = normalize(review.reply || review.review_reply?.comment || review.response || '');
       const fullText = text + ' ' + replyText;
       for (const n of allSuburbNames) {
         // Only match suburb names 4+ chars to avoid false positives (e.g. "como" in "recommend")
         if (n.length >= 4 && fullText.includes(n)) {
           if (!suburbSources[n].reviewMentions) suburbSources[n].reviewMentions = [];
           suburbSources[n].reviewMentions.push({
-            reviewer: review.reviewer?.displayName || '',
+            reviewer: review.reviewer?.displayName || review.reviewer || '',
             rating: review.rating || review.starRating || 0,
             snippet: (review.comment || review.text || '').substring(0, 100),
           });
@@ -25576,11 +25656,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         }
       }
 
-      // Match reviews mentioning this service
+      // Match reviews mentioning this service (check both customer text + business reply)
       const reviewMentions = [];
       for (const review of allReviews) {
         const text = normalize(review.comment || review.text || '');
-        const replyText = normalize(review.review_reply?.comment || review.response || '');
+        const replyText = normalize(review.reply || review.review_reply?.comment || review.response || '');
         const fullText = text + ' ' + replyText;
         if (nameWords.length > 0 && nameWords.filter(w => w.length >= 3).some(w => fullText.includes(w))) {
           reviewMentions.push({
