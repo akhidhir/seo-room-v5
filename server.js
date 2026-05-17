@@ -17451,11 +17451,18 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       const pagesToCrawl = allPages.slice(0, 50);
       console.log(`[website-audit] Discovered ${allPages.length} pages, crawling ${pagesToCrawl.length} (service-first sort)`);
 
-    // 2. Fetch robots.txt (handle Cloudflare 403 — don't flag as missing)
+    // 2. Fetch robots.txt (handle Cloudflare 403 or challenge page — don't flag as missing)
     try {
       const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000) });
-      if (robotsResp.ok) robotsTxt = await robotsResp.text();
-      else if (robotsResp.status === 403) robotsTxt = '__cloudflare_blocked__';
+      console.log(`[website-audit] robots.txt status=${robotsResp.status}`);
+      if (robotsResp.ok) {
+        robotsTxt = await robotsResp.text();
+        if (robotsTxt.includes('Cloudflare') || robotsTxt.includes('challenge-platform') || robotsTxt.includes('Ray ID')) {
+          console.log(`[website-audit] robots.txt is Cloudflare challenge (200), blocking`);
+          robotsTxt = '__cloudflare_blocked__';
+        }
+      }
+      else if (robotsResp.status === 403 || robotsResp.status === 503) robotsTxt = '__cloudflare_blocked__';
     } catch (e) { robotsTxt = '__fetch_failed__'; }
 
     // 3. Fetch sitemap (follow sub-sitemaps to get actual URL count)
@@ -17645,20 +17652,53 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     if (usedConnector) {
       try {
         const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000) });
-        if (robotsResp.ok) robotsTxt = await robotsResp.text();
-        else if (robotsResp.status === 403) robotsTxt = '__cloudflare_blocked__'; // Don't flag as missing
-      } catch (e) { robotsTxt = '__fetch_failed__'; }
+        console.log(`[website-audit] robots.txt status=${robotsResp.status}`);
+        if (robotsResp.ok) {
+          robotsTxt = await robotsResp.text();
+          // Cloudflare might return 200 with challenge HTML instead of actual robots.txt
+          if (robotsTxt.includes('Cloudflare') || robotsTxt.includes('challenge-platform') || robotsTxt.includes('Ray ID')) {
+            console.log(`[website-audit] robots.txt returned Cloudflare challenge page (200), treating as blocked`);
+            robotsTxt = '__cloudflare_blocked__';
+          }
+        }
+        else if (robotsResp.status === 403 || robotsResp.status === 503) robotsTxt = '__cloudflare_blocked__';
+      } catch (e) { robotsTxt = '__fetch_failed__'; console.log(`[website-audit] robots.txt fetch error: ${e.message}`); }
       try {
         const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
+        console.log(`[website-audit] sitemap.xml status=${smResp.status}`);
         if (smResp.ok) {
           const smXml = await smResp.text();
+          // Cloudflare might return 200 with challenge HTML
+          if (smXml.includes('Cloudflare') && (smXml.includes('challenge-platform') || smXml.includes('Ray ID'))) {
+            console.log(`[website-audit] sitemap.xml returned Cloudflare challenge (200), treating as blocked`);
+            sitemapOk = true;
+            sitemapUrls = allPages.length;
+          } else {
+            sitemapOk = true;
+            // Follow sitemap index (sub-sitemaps) to get actual URL count
+            const subSitemapLocs = (smXml.match(/<loc>([^<]+\.xml[^<]*)<\/loc>/gi) || []).map(m => m.replace(/<\/?loc>/g, ''));
+            if (subSitemapLocs.length > 0) {
+              let totalUrls = 0;
+              for (const subUrl of subSitemapLocs.slice(0, 10)) {
+                try {
+                  const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000) });
+                  if (subResp.ok) {
+                    const subXml = await subResp.text();
+                    totalUrls += (subXml.match(/<loc>/g) || []).length;
+                  }
+                } catch {}
+              }
+              sitemapUrls = totalUrls || subSitemapLocs.length;
+              console.log(`[website-audit] Connector sitemap index: ${subSitemapLocs.length} sub-sitemaps, ${totalUrls} total URLs`);
+            } else {
+              sitemapUrls = (smXml.match(/<loc>/g) || []).length;
+            }
+          }
+        } else if (smResp.status === 403 || smResp.status === 503) {
           sitemapOk = true;
-          sitemapUrls = (smXml.match(/<loc>/g) || []).length;
-        } else if (smResp.status === 403) {
-          sitemapOk = true; // Don't flag as missing — Cloudflare blocked our check
-          sitemapUrls = allPages.length; // Assume sitemap matches discovered pages
+          sitemapUrls = allPages.length;
         }
-      } catch (e) { sitemapOk = true; sitemapUrls = allPages.length; } // Can't verify — don't flag
+      } catch (e) { sitemapOk = true; sitemapUrls = allPages.length; }
     }
 
     // Normalize connector pages: they don't have statusCode, so default to 200
@@ -17742,6 +17782,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // ===== CRAWLABILITY → Site Health =====
+    console.log(`[website-audit] SITE HEALTH DEBUG: usedConnector=${usedConnector}, robotsTxt="${robotsTxt ? robotsTxt.substring(0, 50) : ''}", sitemapOk=${sitemapOk}, sitemapUrls=${sitemapUrls}, allPages.length=${allPages.length}, errorPages.length=${errorPages.length}`);
+    console.log(`[website-audit] SITE HEALTH DEBUG: errorPages=`, errorPages.map(p => `${p.path}:${p.statusCode}:${p.error}:cf=${p.cloudflareBlocked}`).join(' | '));
     // Missing robots.txt (skip if Cloudflare blocked our check — false positive)
     if (!robotsTxt) {
       findings.push({
