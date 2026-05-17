@@ -17335,6 +17335,25 @@ app.post('/api/connector-push/:projectId', async (req, res) => {
   }
 });
 
+// GET: test connection from WP plugin — validates token + project exists
+app.get('/api/connector-push/:projectId/test', async (req, res) => {
+  try {
+    const token = (req.headers.authorization || '').replace('Bearer ', '');
+    const expectedToken = process.env.CONNECTOR_PUSH_TOKEN;
+    if (!expectedToken || token !== expectedToken) {
+      return res.status(401).json({ success: false, error: 'Invalid push token' });
+    }
+    const { projectId } = req.params;
+    const projR = await pool.query('SELECT id, name, domain FROM projects WHERE id=$1', [parseInt(projectId)]);
+    if (!projR.rows[0]) {
+      return res.status(404).json({ success: false, error: `Project ID ${projectId} not found` });
+    }
+    res.json({ success: true, project: { id: projR.rows[0].id, name: projR.rows[0].name, domain: projR.rows[0].domain } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET: check cache status
 app.get('/api/connector-push/:projectId/status', async (req, res) => {
   try {
