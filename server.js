@@ -18676,10 +18676,12 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       console.log(`[technical-fix] Pre-verify on ${targetUrls.length} page(s): ${JSON.stringify(Object.fromEntries(Object.entries(preVerify).map(([u, v]) => [u, v.schemas])))}`);
 
       // Determine which schema type this finding is about
+      const isBulkNoSchema = title.includes('without any structured data') || title.includes('without schema');
       const schemaTypeNeeded = title.includes('localbusiness') || title.includes('local business') ? 'localbusiness'
         : title.includes('faq') ? 'faqpage'
         : title.includes('aggregaterating') ? 'aggregaterating'
         : title.includes('service') ? 'service'
+        : isBulkNoSchema ? 'service' // bulk fix → treat as service schema (covers most pages)
         : null;
 
       // Check if the needed schema already exists on any verified page
@@ -18713,8 +18715,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       let targetPageType = 'pages'; // default to homepage
       let targetPageId = null;
 
-      // Service schema → inject on each service page
-      if (title.includes('service schema') || (title.includes('service') && title.includes('schema') && !title.includes('localbusiness'))) {
+      // Service schema → inject on each service page (also handles bulk "without any structured data" findings)
+      if (isBulkNoSchema || title.includes('service schema') || (title.includes('service') && title.includes('schema') && !title.includes('localbusiness'))) {
         if (!wpUrl || !authHeaders) {
           return res.json({ success: false, error: 'WordPress connection required for Service schema fix. Set WordPress URL and App Password in Project Settings.' });
         }
