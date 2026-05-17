@@ -17261,8 +17261,17 @@ app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res)
 });
 
 // ==================== CONNECTOR PUSH (plugin → dashboard, bypasses Cloudflare) ====================
-// In-memory cache of pushed connector data per project
-const connectorCache = new Map(); // projectId → { pages, pushedAt }
+// Persisted to DB via project_integrations (kind='connector_cache') — survives deploys/restarts
+
+async function getConnectorCache(projectId) {
+  const r = await pool.query(
+    `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`,
+    [parseInt(projectId)]
+  );
+  if (r.rows.length === 0) return null;
+  const config = typeof r.rows[0].config === 'string' ? JSON.parse(r.rows[0].config) : r.rows[0].config;
+  return { ...config, pushedAt: config.pushedAt || r.rows[0].updated_at };
+}
 
 app.post('/api/connector-push/:projectId', async (req, res) => {
   try {
@@ -17279,14 +17288,21 @@ app.post('/api/connector-push/:projectId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid payload — expected { success: true, pages: [...] }' });
     }
 
-    connectorCache.set(projectId, {
+    const cacheData = {
       pages: data.pages,
       pushedAt: new Date().toISOString(),
       pageCount: data.pages.length
-    });
+    };
 
-    console.log(`[connector-push] Project ${projectId}: received ${data.pages.length} pages from WP plugin`);
-    res.json({ success: true, pages: data.pages.length, cached: true });
+    await pool.query(
+      `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+       VALUES ($1, 'connector_cache', $2::jsonb, 'connected', NOW())
+       ON CONFLICT (project_id, kind) DO UPDATE SET config=$2::jsonb, status='connected', updated_at=NOW()`,
+      [parseInt(projectId), JSON.stringify(cacheData)]
+    );
+
+    console.log(`[connector-push] Project ${projectId}: received ${data.pages.length} pages from WP plugin (saved to DB)`);
+    res.json({ success: true, pages: data.pages.length, cached: true, persisted: true });
   } catch (e) {
     console.error('[connector-push] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -17295,12 +17311,15 @@ app.post('/api/connector-push/:projectId', async (req, res) => {
 
 // GET: check cache status
 app.get('/api/connector-push/:projectId/status', async (req, res) => {
-  const cached = connectorCache.get(req.params.projectId);
-  if (cached) {
-    res.json({ cached: true, pageCount: cached.pageCount, pushedAt: cached.pushedAt });
-  } else {
-    res.json({ cached: false });
-  }
+  try {
+    const cached = await getConnectorCache(req.params.projectId);
+    if (cached && cached.pages) {
+      const cacheAge = Date.now() - new Date(cached.pushedAt).getTime();
+      res.json({ cached: true, pageCount: cached.pageCount, pushedAt: cached.pushedAt, ageMinutes: Math.round(cacheAge / 60000) });
+    } else {
+      res.json({ cached: false });
+    }
+  } catch (e) { res.json({ cached: false, error: e.message }); }
 });
 
 // ==================== CODE-BASED WEBSITE AUDIT ====================
@@ -17362,8 +17381,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let usedConnector = false;
     let allPages = [];
 
-    // 1. Check push cache (plugin pushes data to dashboard, no Cloudflare issue)
-    const cached = connectorCache.get(String(projectId));
+    // 1. Check push cache in DB (plugin pushes data to dashboard, no Cloudflare issue)
+    const cached = await getConnectorCache(projectId);
     if (cached && cached.pages && cached.pages.length > 0) {
       // Use cached data if pushed within last 24 hours
       const cacheAge = Date.now() - new Date(cached.pushedAt).getTime();
@@ -17371,7 +17390,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         crawlResults = cached.pages;
         allPages = cached.pages.map(p => ({ url: p.url, slug: p.path, title: p.title }));
         usedConnector = true;
-        console.log(`[website-audit] Using push cache: ${cached.pages.length} pages (pushed ${Math.round(cacheAge / 60000)}min ago)`);
+        console.log(`[website-audit] Using push cache from DB: ${cached.pages.length} pages (pushed ${Math.round(cacheAge / 60000)}min ago)`);
       } else {
         console.log(`[website-audit] Push cache expired (${Math.round(cacheAge / 3600000)}h old), trying REST API`);
       }
