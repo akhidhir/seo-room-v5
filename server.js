@@ -2773,15 +2773,19 @@ app.post('/api/projects/:projectId/orchestrator/run', async (req, res) => {
         // COPYWRITER = website content tasks only (writing, rewriting, meta, headings, alt text)
         // MANUAL = everything else (GBP, directories, physical actions, external sites)
         function assignItem(finding) {
-          const t = ((finding.title || '') + ' ' + (finding.description || '') + ' ' + (finding.category || '')).toLowerCase();
+          const title = (finding.title || '').toLowerCase();
+          const desc = (finding.description || '').toLowerCase();
+          const t = (title + ' ' + desc + ' ' + (finding.category || '')).toLowerCase();
           const cat = (finding.category || '').toLowerCase();
           const pillar = (finding.pillar || '').toLowerCase();
 
-          // --- GBP: Copywriter for content tasks, Manual for everything else ---
+          // --- GBP: Copywriter for content/writing tasks (match on TITLE only to avoid false positives) ---
           if (pillar.includes('gbp')) {
-            if (/\b(description|write|post|respond.*review|reply.*review|review.*response|create.*post|weekly.*post|content|caption|update.*description|expand.*description|business.*description)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
-            if (/\b(photo.*caption|add.*photo.*desc|service.*desc|product.*desc)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
-            if (/\b(create.*page|add.*page|suburb.*page|service.*area.*page|landing.*page|keyword)\b/.test(t)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(write|rewrite|draft|craft)\b/.test(title)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(update|expand|improve|optimis[ez]).*description\b/.test(title)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(respond|reply).*review\b/.test(title)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(create|write|schedule).*post\b/.test(title)) return { assignee: 'Copywriter', execType: 'copywriter' };
+            if (/\b(create|write|add).*(page|content|landing)\b/.test(title)) return { assignee: 'Copywriter', execType: 'copywriter' };
             return { assignee: 'Manual', execType: 'manual' };
           }
 
@@ -25365,9 +25369,14 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }).sort((a, b) => b.score - a.score);
 
     // ============ CROSS-REFERENCE: SERVICES & PRODUCTS ============
-    // SOURCE OF TRUTH: Curated lists from project settings (defined_services + defined_products)
-    // For each item: match against sitemap pages, GBP services, keywords, GSC, posts
-    const definedServices = Array.isArray(project.defined_services) ? project.defined_services : [];
+    // SOURCE OF TRUTH: GBP services (auto-imported) + user curated additions
+    // Auto-populate defined_services from GBP if empty
+    let definedServices = Array.isArray(project.defined_services) ? project.defined_services : [];
+    if (definedServices.length === 0 && gbpServices.length > 0) {
+      definedServices = [...gbpServices];
+      await pool.query('UPDATE projects SET defined_services=$1 WHERE id=$2', [JSON.stringify(definedServices), projectId]);
+      console.log(`[local-intel] Auto-populated ${definedServices.length} services from GBP for project ${projectId}`);
+    }
     const definedProducts = Array.isArray(project.defined_products) ? project.defined_products : [];
     const allOfferings = [
       ...definedServices.map(name => ({ name, type: 'service' })),
