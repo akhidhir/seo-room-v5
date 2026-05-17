@@ -17457,13 +17457,31 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       if (robotsResp.ok) robotsTxt = await robotsResp.text();
     } catch (e) { /* no robots.txt */ }
 
-    // 3. Fetch sitemap
+    // 3. Fetch sitemap (follow sub-sitemaps to get actual URL count)
     try {
       const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
       if (smResp.ok) {
         const smXml = await smResp.text();
         sitemapOk = true;
-        sitemapUrls = (smXml.match(/<loc>/g) || []).length;
+        // Check if it's a sitemap index (contains <sitemapindex> or sub-sitemap URLs ending in .xml)
+        const subSitemapLocs = (smXml.match(/<loc>([^<]+\.xml[^<]*)<\/loc>/gi) || []).map(m => m.replace(/<\/?loc>/g, ''));
+        if (subSitemapLocs.length > 0) {
+          // It's a sitemap index — follow sub-sitemaps to count actual URLs
+          let totalUrls = 0;
+          for (const subUrl of subSitemapLocs.slice(0, 10)) { // limit to 10 sub-sitemaps
+            try {
+              const subResp = await fetch(subUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000) });
+              if (subResp.ok) {
+                const subXml = await subResp.text();
+                totalUrls += (subXml.match(/<loc>/g) || []).length;
+              }
+            } catch {}
+          }
+          sitemapUrls = totalUrls || subSitemapLocs.length;
+          console.log(`[website-audit] Sitemap index: ${subSitemapLocs.length} sub-sitemaps, ${totalUrls} total URLs`);
+        } else {
+          sitemapUrls = (smXml.match(/<loc>/g) || []).length;
+        }
       }
     } catch (e) { /* no sitemap */ }
 
@@ -17606,10 +17624,34 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
     } // end if (!usedConnector)
 
+    // When using connector, try to fetch robots.txt and sitemap separately (may fail due to Cloudflare)
+    if (usedConnector) {
+      try {
+        const robotsResp = await fetch(`${baseUrl}/robots.txt`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000) });
+        if (robotsResp.ok) robotsTxt = await robotsResp.text();
+        else if (robotsResp.status === 403) robotsTxt = '__cloudflare_blocked__'; // Don't flag as missing
+      } catch (e) { robotsTxt = '__fetch_failed__'; }
+      try {
+        const smResp = await fetch(`${baseUrl}/sitemap.xml`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
+        if (smResp.ok) {
+          const smXml = await smResp.text();
+          sitemapOk = true;
+          sitemapUrls = (smXml.match(/<loc>/g) || []).length;
+        } else if (smResp.status === 403) {
+          sitemapOk = true; // Don't flag as missing — Cloudflare blocked our check
+          sitemapUrls = allPages.length; // Assume sitemap matches discovered pages
+        }
+      } catch (e) { sitemapOk = true; sitemapUrls = allPages.length; } // Can't verify — don't flag
+    }
+
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
     const findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
-    const errorPages = crawlResults.filter(p => p.error || p.statusCode >= 400);
+    // Filter out Cloudflare 403 errors from error pages (false positives — site works fine for real users)
+    const errorPages = crawlResults.filter(p => {
+      if (p.statusCode === 403) return false; // Suppress Cloudflare blocks
+      return p.error || p.statusCode >= 400;
+    });
 
     // ===== SITE HEALTH =====
     // Broken pages (4xx, 5xx)
@@ -17673,7 +17715,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     }
 
     // ===== CRAWLABILITY → Site Health =====
-    // Missing robots.txt
+    // Missing robots.txt (skip if Cloudflare blocked our check — false positive)
     if (!robotsTxt) {
       findings.push({
         pillar: 'website', category: 'Site Health',
