@@ -2,11 +2,124 @@
 /**
  * Plugin Name: SEO Room Connector
  * Description: Connects WordPress to the SEO Room Dashboard — Yoast meta access, CWV auto-fix, schema injection, and universal cache purge. Required by SEO Room Dashboard.
- * Version: 3.1.0
+ * Version: 3.4.1
  * Author: The SEO Room
  */
 
 if (!defined('ABSPATH')) exit;
+
+// ============================================================
+// PUSH-MODE CONNECTOR — sends page data TO the dashboard
+// Bypasses Cloudflare since requests go outbound from WordPress
+// ============================================================
+
+// Settings: Dashboard URL + Push Token (shown on plugin page via Settings link)
+add_action('admin_menu', function() {
+    add_menu_page('SEO Room Connector', 'SEO Room', 'manage_options', 'seoroom-connector', 'seoroom_settings_page', 'dashicons-chart-area', 80);
+});
+
+// Add "Settings" link on the Plugins page
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), function($links) {
+    $settings_link = '<a href="admin.php?page=seoroom-connector">Settings</a>';
+    array_unshift($links, $settings_link);
+    return $links;
+});
+
+add_action('admin_init', function() {
+    register_setting('seoroom_settings', 'seoroom_dashboard_url');
+    register_setting('seoroom_settings', 'seoroom_push_token');
+    register_setting('seoroom_settings', 'seoroom_project_id');
+});
+
+function seoroom_settings_page() {
+    ?>
+    <div class="wrap">
+        <h1>SEO Room Connector</h1>
+        <form method="post" action="options.php">
+            <?php settings_fields('seoroom_settings'); ?>
+            <table class="form-table">
+                <tr><th>Dashboard URL</th><td><input type="url" name="seoroom_dashboard_url" value="<?php echo esc_attr(get_option('seoroom_dashboard_url', 'https://seo-room-v5-production.up.railway.app')); ?>" class="regular-text" /></td></tr>
+                <tr><th>Project ID</th><td><input type="number" name="seoroom_project_id" value="<?php echo esc_attr(get_option('seoroom_project_id', '')); ?>" class="small-text" /></td></tr>
+                <tr><th>Push Token</th><td><input type="text" name="seoroom_push_token" value="<?php echo esc_attr(get_option('seoroom_push_token', '')); ?>" class="regular-text" /><p class="description">Must match CONNECTOR_PUSH_TOKEN env var on dashboard</p></td></tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+        <hr>
+        <h2>Manual Push</h2>
+        <p>Push page audit data to the dashboard now:</p>
+        <form method="post">
+            <?php wp_nonce_field('seoroom_manual_push'); ?>
+            <input type="hidden" name="seoroom_do_push" value="1" />
+            <?php submit_button('Push Now', 'secondary'); ?>
+        </form>
+        <?php
+        if (isset($_POST['seoroom_do_push']) && wp_verify_nonce($_POST['_wpnonce'], 'seoroom_manual_push')) {
+            $result = seoroom_push_audit_data();
+            if ($result['success']) {
+                echo '<div class="notice notice-success"><p>Push successful! ' . esc_html($result['pages']) . ' pages sent.</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>Push failed: ' . esc_html($result['error']) . '</p></div>';
+            }
+        }
+        ?>
+    </div>
+    <?php
+}
+
+// Push audit data to dashboard
+function seoroom_push_audit_data() {
+    $dashboard_url = rtrim(get_option('seoroom_dashboard_url', ''), '/');
+    $project_id = get_option('seoroom_project_id', '');
+    $token = get_option('seoroom_push_token', '');
+
+    if (!$dashboard_url || !$project_id || !$token) {
+        return ['success' => false, 'error' => 'Missing dashboard URL, project ID, or push token'];
+    }
+
+    // Reuse existing page-audit logic
+    $audit_data = seoroom_page_audit();
+    if (is_wp_error($audit_data)) {
+        return ['success' => false, 'error' => $audit_data->get_error_message()];
+    }
+    $data = $audit_data->get_data();
+
+    $response = wp_remote_post("{$dashboard_url}/api/connector-push/{$project_id}", [
+        'timeout' => 120,
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $token,
+        ],
+        'body' => wp_json_encode($data),
+    ]);
+
+    if (is_wp_error($response)) {
+        return ['success' => false, 'error' => $response->get_error_message()];
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+
+    if ($code === 200 && !empty($body['success'])) {
+        update_option('seoroom_last_push', current_time('mysql'));
+        return ['success' => true, 'pages' => count($data['pages'] ?? [])];
+    }
+
+    return ['success' => false, 'error' => "HTTP {$code}: " . ($body['error'] ?? 'Unknown error')];
+}
+
+// WP-Cron: auto-push every 6 hours
+add_action('wp', function() {
+    if (!wp_next_scheduled('seoroom_push_cron')) {
+        wp_schedule_event(time(), 'sixhours', 'seoroom_push_cron');
+    }
+});
+
+add_filter('cron_schedules', function($schedules) {
+    $schedules['sixhours'] = ['interval' => 21600, 'display' => 'Every 6 Hours'];
+    return $schedules;
+});
+
+add_action('seoroom_push_cron', 'seoroom_push_audit_data');
 
 add_action('init', function() {
     $post_types = ['page', 'post'];
