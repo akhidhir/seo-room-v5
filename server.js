@@ -17260,6 +17260,49 @@ app.get('/api/projects/:projectId/audits/website-agent/status', async (req, res)
   }
 });
 
+// ==================== CONNECTOR PUSH (plugin → dashboard, bypasses Cloudflare) ====================
+// In-memory cache of pushed connector data per project
+const connectorCache = new Map(); // projectId → { pages, pushedAt }
+
+app.post('/api/connector-push/:projectId', async (req, res) => {
+  try {
+    const token = (req.headers.authorization || '').replace('Bearer ', '');
+    const expectedToken = process.env.CONNECTOR_PUSH_TOKEN;
+    if (!expectedToken || token !== expectedToken) {
+      return res.status(401).json({ error: 'Invalid push token' });
+    }
+
+    const { projectId } = req.params;
+    const data = req.body;
+
+    if (!data || !Array.isArray(data.pages)) {
+      return res.status(400).json({ error: 'Invalid payload — expected { success: true, pages: [...] }' });
+    }
+
+    connectorCache.set(projectId, {
+      pages: data.pages,
+      pushedAt: new Date().toISOString(),
+      pageCount: data.pages.length
+    });
+
+    console.log(`[connector-push] Project ${projectId}: received ${data.pages.length} pages from WP plugin`);
+    res.json({ success: true, pages: data.pages.length, cached: true });
+  } catch (e) {
+    console.error('[connector-push] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET: check cache status
+app.get('/api/connector-push/:projectId/status', async (req, res) => {
+  const cached = connectorCache.get(req.params.projectId);
+  if (cached) {
+    res.json({ cached: true, pageCount: cached.pageCount, pushedAt: cached.pushedAt });
+  } else {
+    res.json({ cached: false });
+  }
+});
+
 // ==================== CODE-BASED WEBSITE AUDIT ====================
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
@@ -17314,11 +17357,28 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const authHeaders = project.wp_username && project.wp_app_password
       ? { Authorization: 'Basic ' + Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64') } : null;
 
-    // ===== TRY CONNECTOR FIRST (bypasses Cloudflare) =====
+    // ===== TRY PUSH CACHE FIRST, then REST API, then external crawl =====
     let crawlResults = [];
     let usedConnector = false;
     let allPages = [];
-    if (wpUrl && authHeaders) {
+
+    // 1. Check push cache (plugin pushes data to dashboard, no Cloudflare issue)
+    const cached = connectorCache.get(String(projectId));
+    if (cached && cached.pages && cached.pages.length > 0) {
+      // Use cached data if pushed within last 24 hours
+      const cacheAge = Date.now() - new Date(cached.pushedAt).getTime();
+      if (cacheAge < 24 * 60 * 60 * 1000) {
+        crawlResults = cached.pages;
+        allPages = cached.pages.map(p => ({ url: p.url, slug: p.path, title: p.title }));
+        usedConnector = true;
+        console.log(`[website-audit] Using push cache: ${cached.pages.length} pages (pushed ${Math.round(cacheAge / 60000)}min ago)`);
+      } else {
+        console.log(`[website-audit] Push cache expired (${Math.round(cacheAge / 3600000)}h old), trying REST API`);
+      }
+    }
+
+    // 2. Try REST API connector (may be blocked by Cloudflare)
+    if (!usedConnector && wpUrl && authHeaders) {
       try {
         console.log(`[website-audit] Trying connector at ${wpUrl}/wp-json/seoroom/v1/page-audit`);
         const connResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/seoroom/v1/page-audit`, {
