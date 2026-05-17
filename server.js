@@ -19160,14 +19160,26 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           || (finding.title || '').match(/\/([a-z0-9-]+)\/?/i);
         if (pathMatch) slug = pathMatch[1];
         // Fallback: extract slug from current_value URL
+        let isHomepage = false;
         if (!slug) {
           try {
             const cv = finding.current_value || '';
             if (cv.startsWith('[')) {
               const urls = JSON.parse(cv);
-              if (urls.length > 0) slug = new URL(urls[0]).pathname.replace(/^\/|\/$/g, '').split('/').pop();
+              if (urls.length > 0) {
+                const pathname = new URL(urls[0]).pathname.replace(/^\/|\/$/g, '');
+                if (pathname) {
+                  slug = pathname.split('/').pop();
+                } else {
+                  isHomepage = true; // URL is the homepage (e.g. https://domain.com/)
+                }
+              }
             }
           } catch {}
+        }
+        // If slug is empty but title ends with "on" or "on /" → homepage
+        if (!slug && !isHomepage && /on\s*\/?$/i.test(finding.title || '')) {
+          isHomepage = true;
         }
         // Helper: extract FAQ Q&A pairs from HTML content
         const extractFaqPairs = (content) => {
@@ -19190,29 +19202,53 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           return qaPairs;
         };
 
-        if (slug) {
-          // Single page FAQ fix
+        if (slug || isHomepage) {
+          // Single page FAQ fix (or homepage)
           try {
-            for (const type of ['pages', 'posts']) {
-              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
-              if (resp.ok) {
-                const items = await resp.json();
-                if (items.length > 0) {
-                  targetPageId = items[0].id;
-                  targetPageType = type;
-                  const qaPairs = extractFaqPairs(items[0].content?.rendered || '');
+            if (isHomepage) {
+              // Find homepage page ID using same methods as LocalBusiness fix
+              const homeSlugs = ['home', 'homepage', 'front-page', 'frontpage'];
+              for (const hs of homeSlugs) {
+                if (targetPageId) break;
+                try {
+                  const resp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?slug=${hs}&_fields=id,slug,content`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+                  if (resp.ok) { const items = await resp.json(); if (items.length > 0) { targetPageId = items[0].id; targetPageType = 'pages'; } }
+                } catch {}
+              }
+              if (!targetPageId) {
+                try {
+                  const settResp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+                  if (settResp.ok) { const sett = await settResp.json(); if (sett.page_on_front) { targetPageId = sett.page_on_front; targetPageType = 'pages'; } }
+                } catch {}
+              }
+              if (targetPageId) {
+                const hpResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${targetPageId}?_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+                if (hpResp.ok) {
+                  const hpData = await hpResp.json();
+                  const qaPairs = extractFaqPairs(hpData.content?.rendered || '');
                   if (qaPairs.length > 0) {
-                    schemaJson = {
-                      "@context": "https://schema.org",
-                      "@type": "FAQPage",
-                      "mainEntity": qaPairs.slice(0, 20).map(qa => ({
-                        "@type": "Question",
-                        "name": qa.q,
-                        "acceptedAnswer": { "@type": "Answer", "text": qa.a }
-                      }))
+                    schemaJson = { "@context": "https://schema.org", "@type": "FAQPage",
+                      "mainEntity": qaPairs.slice(0, 20).map(qa => ({ "@type": "Question", "name": qa.q, "acceptedAnswer": { "@type": "Answer", "text": qa.a } }))
                     };
                   }
-                  break;
+                }
+              }
+            } else {
+              for (const type of ['pages', 'posts']) {
+                const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+                if (resp.ok) {
+                  const items = await resp.json();
+                  if (items.length > 0) {
+                    targetPageId = items[0].id;
+                    targetPageType = type;
+                    const qaPairs = extractFaqPairs(items[0].content?.rendered || '');
+                    if (qaPairs.length > 0) {
+                      schemaJson = { "@context": "https://schema.org", "@type": "FAQPage",
+                        "mainEntity": qaPairs.slice(0, 20).map(qa => ({ "@type": "Question", "name": qa.q, "acceptedAnswer": { "@type": "Answer", "text": qa.a } }))
+                      };
+                    }
+                    break;
+                  }
                 }
               }
             }
