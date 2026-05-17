@@ -25305,6 +25305,21 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         const tradeMatch = urlPath.match(/^(electrician|carpenter|painter|roofer|landscaper|handyman)-([\w-]+)$/);
         if (tradeMatch) suburbName = tradeMatch[2].replace(/-/g, ' ');
       }
+      // Pattern 4: ANY page URL ending with a known GBP suburb (e.g. /computer-repairs-bayswater/, /car-key-replacement-alkimos/)
+      // This catches ALL business types regardless of trade prefix
+      if (!suburbName && gbpSuburbs.length > 0) {
+        const slugWords = urlPath.replace(/\//g, '').split('-');
+        // Try matching 1-word, 2-word, and 3-word suburb names from the end of the URL
+        for (let tailLen = 1; tailLen <= Math.min(3, slugWords.length - 1); tailLen++) {
+          const tail = slugWords.slice(-tailLen).join(' ');
+          const tailNorm = tail.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+          if (tailNorm.length < 3) continue;
+          if (gbpSuburbs.some(gs => normalize(gs) === tailNorm)) {
+            suburbName = tail;
+            break;
+          }
+        }
+      }
 
       if (suburbName) {
         if (suburbName.length < 2) continue;
