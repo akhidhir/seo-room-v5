@@ -17280,13 +17280,6 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     const baseUrl = `https://${domain}`;
     const wpUrl = project.wordpress_url || null;
 
-    // Load existing findings for merge (don't delete — we'll merge after crawl)
-    const existingFindings = await pool.query(
-      `SELECT id, title, status, category, severity FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]
-    );
-    const existingByTitle = new Map();
-    existingFindings.rows.forEach(f => existingByTitle.set(f.title, f));
-
     // Deduplicate fixed findings — keep only the most recent per unique title
     await pool.query(`
       DELETE FROM audit_findings WHERE id IN (
@@ -17297,11 +17290,18 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       )`, [projectId]);
 
     // Delete ALL old On-Page Issues findings — code audit regenerates them per-page now
-    // Also delete CWV findings — speed data lives in PageSpeed Scores page only
+    // Also delete CWV, Crawlability, FAQ Enhancement findings — handled in dedicated sub-pages
     await pool.query(
       `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND (LOWER(category)='on-page issues' OR LOWER(category)='core web vitals' OR LOWER(category)='crawlability' OR LOWER(category)='faq enhancement')`,
       [projectId]
     );
+
+    // Load existing findings for merge AFTER cleanup (so deleted findings don't block new ones)
+    const existingFindings = await pool.query(
+      `SELECT id, title, status, category, severity FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]
+    );
+    const existingByTitle = new Map();
+    existingFindings.rows.forEach(f => existingByTitle.set(f.title, f));
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
