@@ -3799,13 +3799,17 @@
       // Business KPI score
       const bizChecks = [gbpComplete, myReviews >= (compB.avgReviews || 999), myRating >= (compB.avgRating || 5), (s.gbpPostCount || 0) > 0];
       const bizScore = Math.round(bizChecks.filter(Boolean).length / bizChecks.length * 100);
-      // Service KPI score — services need page + GBP + suburbs (3 signals), products need page + GBP (2 signals)
-      const svcSignals = (servicesWithPages + servicesInGbp + servicesWithSuburbPages) + (productsWithPages + productsInGbp);
-      const svcMaxSignals = (services.length * 3) + (products.length * 2) || 1;
-      const svcScore = Math.round((svcSignals / svcMaxSignals) * 100);
-      // Suburb KPI score — 3 core signals: has landing page, in GBP, mentioned in reviews
-      const subTotal = suburbs.length || 1;
-      const subScore = Math.round(((suburbsWithPages + suburbsInGbp + suburbsWithReviews) / (subTotal * 3)) * 100);
+      // Relevance score — services/products: inGbp + hasPage + hasPosts(services only)
+      const relevanceSignals = servicesInGbp + productsInGbp + (servicesWithPages + productsWithPages) + servicesWithPosts;
+      const relevanceMax = (services.length + products.length) * 2 + services.length || 1;
+      const relevanceScore = Math.round((relevanceSignals / relevanceMax) * 100);
+      // Proximity score — suburbs: inGbp + hasPage
+      const proximitySignals = suburbsInGbp + suburbsWithPages;
+      const proximityMax = suburbs.length * 2 || 1;
+      const proximityScore = Math.round((proximitySignals / proximityMax) * 100);
+      // Prominence score — reviews, rating, response rate, citations
+      const prominenceChecks = [myReviews >= (compB.avgReviews || 999), myRating >= 4.8, (s.reviewStats?.reply_rate || 0) >= 100, directoryList.filter(d => d.listed).length >= 15];
+      const prominenceScore = Math.round(prominenceChecks.filter(Boolean).length / prominenceChecks.length * 100);
 
       const kpiScoreColor = (score) => score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
 
@@ -3817,7 +3821,7 @@
               <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <i className="fas fa-brain" style={{ color: '#8b5cf6' }} /> Local Intel
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>What does each location need to rank? Business, Service, and Location signals in one place.</div>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>What does each location need to rank? Relevance, Proximity, and Prominence signals in one place.</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn" onClick={runGbpAudit} disabled={auditRunning} style={{ fontSize: 13 }}>
@@ -3829,8 +3833,8 @@
             </div>
           </div>
 
-          {/* 3-Level KPI Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: gbpOnlyServices.length > 0 ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+          {/* Pillar KPI Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: gbpOnlyServices.length > 0 ? 'repeat(5, 1fr)' : 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
             {/* BUSINESS CARD */}
             <div onClick={() => setExpandedKpi(expandedKpi === 'business' ? null : 'business')}
               style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'business' ? '2px solid #8b5cf6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
@@ -3848,38 +3852,55 @@
               <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Global signals that affect all suburbs — your GBP profile, reviews, rating, citations</div>
             </div>
 
-            {/* SERVICE CARD */}
-            <div onClick={() => setExpandedKpi(expandedKpi === 'service' ? null : 'service')}
-              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'service' ? '2px solid #3b82f6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
-              onMouseEnter={e => { if (expandedKpi !== 'service') e.currentTarget.style.borderColor = '#3b82f644'; }}
-              onMouseLeave={e => { if (expandedKpi !== 'service') e.currentTarget.style.borderColor = 'var(--border)'; }}>
+            {/* RELEVANCE CARD */}
+            <div onClick={() => setExpandedKpi(expandedKpi === 'relevance' ? null : 'relevance')}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'relevance' ? '2px solid #3b82f6' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              onMouseEnter={e => { if (expandedKpi !== 'relevance') e.currentTarget.style.borderColor = '#3b82f644'; }}
+              onMouseLeave={e => { if (expandedKpi !== 'relevance') e.currentTarget.style.borderColor = 'var(--border)'; }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ width: 44, height: 44, borderRadius: 12, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 20 }} />
+                    <i className="fas fa-crosshairs" style={{ color: '#3b82f6', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Service & Product KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Relevance</span>
                 </div>
-                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(svcScore) }}>{svcScore}%</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(relevanceScore) }}>{relevanceScore}%</span>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>{services.length} services, {products.length} products — {servicesWithPages + productsWithPages} have pages, {servicesWithSuburbPages} with suburb pages</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Do your services match what people search?</div>
             </div>
 
-            {/* SUBURB CARD */}
-            <div onClick={() => setExpandedKpi(expandedKpi === 'suburb' ? null : 'suburb')}
-              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'suburb' ? '2px solid #22c55e' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
-              onMouseEnter={e => { if (expandedKpi !== 'suburb') e.currentTarget.style.borderColor = '#22c55e44'; }}
-              onMouseLeave={e => { if (expandedKpi !== 'suburb') e.currentTarget.style.borderColor = 'var(--border)'; }}>
+            {/* PROXIMITY CARD */}
+            <div onClick={() => setExpandedKpi(expandedKpi === 'proximity' ? null : 'proximity')}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'proximity' ? '2px solid #22c55e' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              onMouseEnter={e => { if (expandedKpi !== 'proximity') e.currentTarget.style.borderColor = '#22c55e44'; }}
+              onMouseLeave={e => { if (expandedKpi !== 'proximity') e.currentTarget.style.borderColor = 'var(--border)'; }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ width: 44, height: 44, borderRadius: 12, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
+                    <i className="fas fa-map-marked-alt" style={{ color: '#22c55e', fontSize: 20 }} />
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Location Level KPIs</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Proximity</span>
                 </div>
-                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(subScore) }}>{subScore}%</span>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(proximityScore) }}>{proximityScore}%</span>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>Per-location signals — has landing page, listed in GBP service areas, mentioned in a Google review</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>How close is your business to the searcher?</div>
+            </div>
+
+            {/* PROMINENCE CARD */}
+            <div onClick={() => setExpandedKpi(expandedKpi === 'prominence' ? null : 'prominence')}
+              style={{ background: 'var(--card)', borderRadius: 14, padding: '28px 24px', border: expandedKpi === 'prominence' ? '2px solid #f97316' : '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s' }}
+              onMouseEnter={e => { if (expandedKpi !== 'prominence') e.currentTarget.style.borderColor = '#f9731644'; }}
+              onMouseLeave={e => { if (expandedKpi !== 'prominence') e.currentTarget.style.borderColor = 'var(--border)'; }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#f9731618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-trophy" style={{ color: '#f97316', fontSize: 20 }} />
+                  </div>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--text1)' }}>Prominence</span>
+                </div>
+                <span style={{ fontSize: 28, fontWeight: 800, color: kpiScoreColor(prominenceScore) }}>{prominenceScore}%</span>
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>How well-known is your business online?</div>
             </div>
 
             {/* UNMATCHED GBP CARD */}
@@ -4369,8 +4390,8 @@
             );
           })()}
 
-          {/* EXPANDED KPI DETAIL — SERVICE */}
-          {expandedKpi === 'service' && (() => {
+          {/* EXPANDED KPI DETAIL — RELEVANCE */}
+          {expandedKpi === 'relevance' && (() => {
             const createAction = (title, desc, pillar, priority) => {
               api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
                 title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
@@ -4541,11 +4562,11 @@
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={{ width: 44, height: 44, borderRadius: 12, background: '#3b82f618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-wrench" style={{ color: '#3b82f6', fontSize: 20 }} />
+                    <i className="fas fa-crosshairs" style={{ color: '#3b82f6', fontSize: 20 }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Service & Product KPIs</div>
-                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Services need suburb pages — Products need a page only</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Relevance</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>Do your services match what people search?</div>
                   </div>
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
@@ -4554,29 +4575,23 @@
               {/* Summary stat boxes */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
                 {[
-                  { key: 'services', label: 'Services', value: services.length, color: '#3b82f6' },
-                  { key: 'products', label: 'Products', value: products.length, color: '#8b5cf6' },
-                  { key: 'services', label: 'Suburb Pages', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : suburbsWithPages > 0 ? '#f59e0b' : '#ef4444' },
-                  { key: 'products', label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#f59e0b' },
-                ].map((box, idx) => {
-                  const isActive = activeSvcTab === box.key;
-                  return (
-                  <div key={idx} onClick={() => setActiveSvcTab(box.key)}
-                    style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
-                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = `${box.color}40`; }}
-                    onMouseLeave={e => { e.currentTarget.style.opacity = isActive ? '1' : '0.5'; e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; }}>
+                  { label: 'Services', value: services.length, color: '#3b82f6' },
+                  { label: 'Products', value: products.length, color: '#8b5cf6' },
+                  { label: 'On Website', value: `${servicesWithPages + productsWithPages}/${services.length + products.length}`, color: (servicesWithPages + productsWithPages) === (services.length + products.length) ? '#22c55e' : '#ef4444' },
+                  { label: 'In GBP', value: `${servicesInGbp + productsInGbp}/${services.length + products.length}`, color: (servicesInGbp + productsInGbp) === (services.length + products.length) ? '#22c55e' : '#ef4444' },
+                ].map((box, idx) => (
+                  <div key={idx}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: 'var(--bg)', border: '2px solid var(--border)', textAlign: 'center' }}>
                     <div style={{ fontSize: 40, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
                   </div>
-                  );
-                })}
+                ))}
               </div>
 
               {/* ── SERVICES TABLE ── */}
-              {activeSvcTab === 'services' && (<React.Fragment>
               <div id="svc-section" style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-wrench" />Services ({services.length})
-                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + suburb pages + GBP listing</span>
+                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing</span>
               </div>
                 <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: COL_GRID, gap: 0, padding: '12px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
@@ -4596,9 +4611,8 @@
                       style={{ padding: '6px 14px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
                   </div>
                 </div>
-              </React.Fragment>)}
+
               {/* ── PRODUCTS TABLE ── */}
-              {activeSvcTab === 'products' && (<React.Fragment>
               <div id="prod-section" style={{ fontSize: 15, fontWeight: 800, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <i className="fas fa-box" />Products ({products.length})
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>— need page + GBP listing only</span>
@@ -4621,7 +4635,36 @@
                       style={{ padding: '6px 14px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
                   </div>
                 </div>
-              </React.Fragment>)}
+
+              {/* ── GAPS ── */}
+              {services.filter(svc => svc.hasPage && !svc.inGbp).length > 0 && (
+                <div style={{ marginTop: 16, padding: '14px 18px', borderRadius: 12, background: '#ef444408', border: '1px solid #ef444420' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444', marginBottom: 8 }}>
+                    <i className="fas fa-exclamation-triangle" style={{ marginRight: 8 }} />
+                    On website but NOT in GBP ({services.filter(svc => svc.hasPage && !svc.inGbp).length})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {services.filter(svc => svc.hasPage && !svc.inGbp).map((svc, i) => (
+                      <span key={i} style={{ padding: '5px 12px', borderRadius: 8, background: '#ef444412', border: '1px solid #ef444425', fontSize: 13, color: '#ef4444', fontWeight: 600 }}>{svc.service}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Action: Add these to your GBP services list</div>
+                </div>
+              )}
+              {services.filter(svc => !svc.hasPage && svc.inGbp).length > 0 && (
+                <div style={{ marginTop: 12, padding: '14px 18px', borderRadius: 12, background: '#f59e0b08', border: '1px solid #f59e0b20' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>
+                    <i className="fas fa-exclamation-triangle" style={{ marginRight: 8 }} />
+                    In GBP but NO website page ({services.filter(svc => !svc.hasPage && svc.inGbp).length})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {services.filter(svc => !svc.hasPage && svc.inGbp).map((svc, i) => (
+                      <span key={i} style={{ padding: '5px 12px', borderRadius: 8, background: '#f59e0b12', border: '1px solid #f59e0b25', fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>{svc.service}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Action: Create landing pages for these services</div>
+                </div>
+              )}
 
             </div>
             );
@@ -4707,14 +4750,8 @@
             );
           })()}
 
-          {/* EXPANDED KPI DETAIL — SUBURB */}
-          {expandedKpi === 'suburb' && (() => {
-            const subNoPage = suburbs.filter(sub => !sub.hasPage);
-            const subNotIndexed = suburbs.filter(sub => sub.hasPage && sub.indexingStatus === 'issues');
-            const subNoGbp = suburbs.filter(sub => !sub.inGbp);
-            const subNoTrack = suburbs.filter(sub => sub.keywordCount === 0);
-            const subWithReviews = suburbs.filter(sub => sub.reviewMentions > 0);
-            const subNoReviews = suburbs.filter(sub => !sub.reviewMentions);
+          {/* EXPANDED KPI DETAIL — PROXIMITY */}
+          {expandedKpi === 'proximity' && (() => {
             const createAction = (title, desc, pillar, priority) => {
               api(`/projects/${project.id}/action-items`, { method: 'POST', body: {
                 title, description: desc, pillar: pillar || 'website', priority: priority || 'high', status: 'pending', type: 'manual',
@@ -4725,11 +4762,11 @@
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={{ width: 44, height: 44, borderRadius: 12, background: '#22c55e18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <i className="fas fa-map-pin" style={{ color: '#22c55e', fontSize: 20 }} />
+                    <i className="fas fa-map-marked-alt" style={{ color: '#22c55e', fontSize: 20 }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Location Level KPIs</div>
-                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>3 signals per location: has landing page, listed in GBP service areas, mentioned in a review</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Proximity</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>How close is your business to the searcher?</div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -4743,281 +4780,197 @@
                 </div>
               </div>
 
-              {/* Summary stat boxes — clickable tabs */}
+              {/* Summary stat boxes */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
                 {[
-                  { key: 'pages', label: 'Has Page', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' },
-                  { key: 'indexed', label: 'Indexed', value: `${suburbsIndexed}/${suburbs.length}`, color: suburbsIndexed === suburbs.length ? '#22c55e' : '#f59e0b' },
-                  { key: 'gbp', label: 'In GBP', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#f59e0b' },
-                  { key: 'reviews', label: 'Reviews', value: `${subWithReviews.length}/${suburbs.length}`, color: subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444' },
-                ].map((box) => {
-                  const isActive = activeLocTab === box.key;
-                  return (
-                  <div key={box.key} onClick={() => setActiveLocTab(box.key)}
-                    style={{ padding: '20px 16px', borderRadius: 14, background: isActive ? `${box.color}0a` : 'var(--bg)', border: `2px solid ${isActive ? box.color + '40' : 'var(--border)'}`, textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s', opacity: isActive ? 1 : 0.5 }}
-                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.borderColor = `${box.color}40`; }}
-                    onMouseLeave={e => { e.currentTarget.style.opacity = isActive ? '1' : '0.5'; e.currentTarget.style.borderColor = isActive ? `${box.color}40` : 'var(--border)'; }}>
+                  { label: 'Targets', value: suburbs.length, color: '#3b82f6' },
+                  { label: 'In GBP', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#ef4444' },
+                  { label: 'Pages', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444' },
+                  { label: 'Scanned', value: `${suburbsTracked}/${suburbs.length}`, color: '#f59e0b' },
+                ].map((box, idx) => (
+                  <div key={idx}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: 'var(--bg)', border: '2px solid var(--border)', textAlign: 'center' }}>
                     <div style={{ fontSize: 36, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
                   </div>
-                  );
-                })}
+                ))}
               </div>
 
-              {/* Warning: No location pages on website */}
-              {!hasLocationPages && (
-                <div style={{ background: '#ef444412', border: '1px solid #ef444440', borderRadius: 12, padding: '16px 20px', marginBottom: 20, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                  <i className="fas fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 20, marginTop: 2 }} />
-                  <div>
-                    <div style={{ fontWeight: 800, color: '#ef4444', fontSize: 15, marginBottom: 6 }}>No Location Pages Found</div>
-                    <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
-                      This website has no dedicated location pages (e.g. /plumber-suburb/ or /service-areas/suburb-name/). Google uses location-specific pages as a strong ranking signal for local search. Without them, competitors with location pages will rank higher in Maps and local results.
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginTop: 10 }}>
-                      Recommendation: Create a /service-areas/ section with a dedicated page for each target suburb, including unique content about your services in that area.
-                    </div>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 6 }}>
-                      Suburbs below are sourced from {suburbSource === 'gbp' ? 'GBP service areas' : suburbSource === 'settings' ? 'Project Settings' : 'website scan'} instead.
-                    </div>
+              {/* ── Missing from GBP ── */}
+              {suburbs.filter(sub => !sub.inGbp).length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="fas fa-exclamation-triangle" />Missing from GBP service areas ({suburbs.filter(sub => !sub.inGbp).length})
                   </div>
-                </div>
-              )}
-
-              {/* ── LANDING PAGES ── */}
-              {activeLocTab === 'pages' && <KpiItem itemKey="sub-pages" icon="file-alt" iconColor="#8b5cf6"
-                title="Location Landing Pages"
-                subtitle={subNoPage.length === 0 ? 'All locations have a landing page' : `${subNoPage.length} locations missing a page`}
-                badge={`${suburbsWithPages}/${suburbs.length}`}
-                badgeColor={subNoPage.length === 0 ? '#22c55e' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  {/* Done chips */}
-                  {suburbsWithPages > 0 && (
-                    <div style={{ marginBottom: 14 }}>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />Have Page ({suburbsWithPages})
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {suburbs.filter(sub => sub.pageCount > 0).map((sub, i) => (
-                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>{sub.suburb}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {/* Missing list */}
-                  {subNoPage.length > 0 && (
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1 }}>
-                          <i className="fas fa-times-circle" style={{ marginRight: 6 }} />No Page ({subNoPage.filter(s => !skippedKpiItems.has(`subpg-${s.suburb}`)).length})
-                        </div>
-                        {subNoPage.some(s => skippedKpiItems.has(`subpg-${s.suburb}`)) && (
-                          <button onClick={() => subNoPage.forEach(s => resetItem(`subpg-${s.suburb}`))}
-                            style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                            <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset All
-                          </button>
-                        )}
-                      </div>
-                      {subNoPage.map((sub, i) => {
-                        const isSkipped = skippedKpiItems.has(`subpg-${sub.suburb}`);
-                        if (isSkipped) return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
-                            <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                            <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{sub.suburb}</span>
-                            <button onClick={(e) => { e.stopPropagation(); resetItem(`subpg-${sub.suburb}`); }}
-                              style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                              <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
-                            </button>
-                          </div>
-                        );
-                        return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                            <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                            <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                            <button onClick={(e) => { e.stopPropagation(); skipItem(`subpg-${sub.suburb}`); }}
-                              title="Ignore" style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, cursor: 'pointer' }}>
-                              <i className="fas fa-forward" />
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${sub.suburb}`, `Create a suburb landing page for "${sub.suburb}".\n\nPage should target "[service] ${sub.suburb}" keywords and include:\n• Suburb-specific content (500+ words)\n• Services offered in this area\n• Local landmarks/references\n• Google Maps embed\n• Customer testimonials from ${sub.suburb}`, 'website', 'high'); }}
-                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </KpiItem>}
-
-              {/* ── INDEXING ── */}
-              {activeLocTab === 'indexed' && <KpiItem itemKey="sub-index" icon="search" iconColor="#3b82f6"
-                title="Indexing Status"
-                subtitle={subNotIndexed.length === 0 && suburbsWithPages === suburbs.length ? 'All pages indexed by Google' : subNotIndexed.length > 0 ? `${subNotIndexed.length} pages not indexed` : `${subNoPage.length} suburbs need a page first`}
-                badge={`${suburbsIndexed}/${suburbs.length}`}
-                badgeColor={suburbsIndexed === suburbs.length ? '#22c55e' : suburbsIndexed >= suburbs.length * 0.7 ? '#f59e0b' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  {skippedKpiItems.size > 0 && suburbs.some(sub => skippedKpiItems.has(`idx-${sub.suburb}`)) && (
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                      <button onClick={() => suburbs.forEach(sub => resetItem(`idx-${sub.suburb}`))}
-                        style={{ fontSize: 12, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
-                        <i className="fas fa-undo" style={{ marginRight: 4 }} />Reset All Ignored
-                      </button>
-                    </div>
-                  )}
-                  {suburbs.map((sub, i) => {
-                    const hasPage = sub.pageCount > 0;
-                    const isIndexed = sub.indexingStatus === 'indexed';
-                    const isUnchecked = sub.indexingStatus === 'unchecked' || (!sub.indexingStatus && hasPage);
-                    const hasIssue = hasPage && !isIndexed && !isUnchecked;
-                    const isSkipped = skippedKpiItems.has(`idx-${sub.suburb}`);
-                    if (isSkipped) return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 10, marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', opacity: 0.5 }}>
-                        <i className="fas fa-forward" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                        <span style={{ flex: 1, fontSize: 14, color: 'var(--text3)', textDecoration: 'line-through' }}>{sub.suburb}</span>
-                        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Ignored</span>
-                        <button onClick={(e) => { e.stopPropagation(); resetItem(`idx-${sub.suburb}`); }}
-                          style={{ fontSize: 11, color: 'var(--text3)', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer' }}>
-                          <i className="fas fa-undo" style={{ marginRight: 3 }} />Reset
-                        </button>
-                      </div>
-                    );
-                    const pageUrl = sub.pages && sub.pages[0] ? sub.pages[0].url : null;
-                    return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: isIndexed ? '#22c55e06' : hasIssue ? '#ef444406' : 'var(--bg)', border: `1px solid ${isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--border)'}18` }}>
-                        <i className={`fas fa-${isIndexed ? 'check-circle' : hasIssue ? 'exclamation-triangle' : 'minus-circle'}`} style={{ color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : 'var(--text3)', fontSize: 18 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                          {pageUrl && <a href={pageUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: 12, color: 'var(--text3)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }} onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text3)'}>{pageUrl.replace(/^https?:\/\//, '')}</a>}
-                        </div>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: isIndexed ? '#22c55e' : hasIssue ? '#ef4444' : isUnchecked ? '#f59e0b' : 'var(--text3)' }}>
-                          {isIndexed ? 'Indexed' : hasIssue ? 'Not Indexed' : isUnchecked ? 'Not Checked' : 'No Page'}
-                        </span>
-                        {hasIssue && (
-                          <>
-                            <button onClick={(e) => { e.stopPropagation(); skipItem(`idx-${sub.suburb}`); }}
-                              title="Ignore this item"
-                              style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
-                              <i className="fas fa-forward" />
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); createAction(`Fix Indexing: ${sub.suburb}`, `The landing page for "${sub.suburb}" exists but is not indexed by Google.\n\nSteps to fix:\n1. Check Google Search Console for indexing errors\n2. Submit URL for indexing via URL Inspection tool\n3. Ensure page has proper meta robots (no noindex)\n4. Check for canonical tag issues\n5. Verify internal links point to this page`, 'website', 'high'); }}
-                              style={{ padding: '6px 12px', borderRadius: 8, background: '#ef444415', border: '1px solid #ef444430', color: '#ef4444', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </KpiItem>}
-
-              {/* ── GBP SERVICE AREAS ── */}
-              {activeLocTab === 'gbp' && <KpiItem itemKey="sub-gbp" icon="map-marker-alt" iconColor="#22c55e"
-                title="Locations in GBP Service Areas"
-                subtitle={subNoGbp.length === 0 ? 'All locations listed as service areas' : `${subNoGbp.length} locations not in GBP`}
-                badge={`${suburbsInGbp}/${suburbs.length}`}
-                badgeColor={subNoGbp.length === 0 ? '#22c55e' : '#f59e0b'}>
-                <div style={{ marginTop: 14 }}>
-                  {suburbsInGbp > 0 && (
-                    <div style={{ marginBottom: 14 }}>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />In GBP ({suburbsInGbp})
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {suburbs.filter(sub => sub.inGbp).map((sub, i) => (
-                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>{sub.suburb}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {subNoGbp.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />Not in GBP ({subNoGbp.length})
-                      </div>
-                      {subNoGbp.map((sub, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                          <button onClick={(e) => { e.stopPropagation(); createAction(`Add ${sub.suburb} to GBP Service Areas`, `Add "${sub.suburb}" as a service area in your Google Business Profile.\n\nGo to business.google.com → Edit Profile → Location & Areas → Service Areas → Add "${sub.suburb}".`, 'gbp', 'medium'); }}
-                            style={{ padding: '6px 12px', borderRadius: 8, background: '#22c55e15', border: '1px solid #22c55e30', color: '#22c55e', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            <i className="fas fa-plus" style={{ marginRight: 4 }} />Action
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </KpiItem>}
-
-              {/* ── REVIEW MENTIONS ── */}
-              {activeLocTab === 'reviews' && <KpiItem itemKey="sub-reviews" icon="star" iconColor="#f97316"
-                title="Review Mentions"
-                subtitle={subNoReviews.length === 0 ? 'All locations mentioned in Google reviews' : `${subNoReviews.length} locations with no review mentions`}
-                badge={`${subWithReviews.length}/${suburbs.length}`}
-                badgeColor={subWithReviews.length === suburbs.length ? '#22c55e' : subWithReviews.length > 0 ? '#f59e0b' : '#ef4444'}>
-                <div style={{ marginTop: 14 }}>
-                  {subWithReviews.length > 0 && (
-                    <div style={{ marginBottom: 14 }}>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-check-circle" style={{ marginRight: 6 }} />Mentioned in Reviews ({subWithReviews.length})
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {subWithReviews.map((sub, i) => (
-                          <span key={i} style={{ padding: '6px 14px', borderRadius: 8, background: '#22c55e12', border: '1px solid #22c55e30', fontSize: 14, color: '#22c55e', fontWeight: 700 }}>
-                            {sub.suburb} <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.8 }}>({sub.reviewMentions})</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {subNoReviews.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                        <i className="fas fa-times-circle" style={{ marginRight: 6 }} />No Review Mentions ({subNoReviews.length})
-                      </div>
-                      {subNoReviews.map((sub, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#ef444406', border: '1px solid #ef444418' }}>
-                          <i className="fas fa-times-circle" style={{ color: '#ef4444', fontSize: 18 }} />
-                          <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
-                          <span style={{ fontSize: 12, color: 'var(--text3)' }}>Ask customers from {sub.suburb} to mention location in review</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {s.totalReviews > 0 && (
-                    <div style={{ marginTop: 16, padding: '12px 16px', borderRadius: 10, background: '#3b82f608', border: '1px solid #3b82f620', fontSize: 13, color: 'var(--text2)' }}>
-                      <i className="fas fa-info-circle" style={{ marginRight: 6, color: '#3b82f6' }} />
-                      Scanned {s.totalReviews} Google reviews for location mentions. Encourage customers to include their suburb in reviews — it helps Maps rankings.
-                    </div>
-                  )}
-                </div>
-              </KpiItem>}
-
-              {/* ── GBP-ONLY LOCATIONS (in GBP but no website page) ── */}
-              {activeLocTab === 'gbp' && (data.gbpOnlyLocations || []).length > 0 && (
-                <KpiItem itemKey="sub-gbp-only" icon="exclamation-circle" iconColor="#f97316"
-                  title="GBP-Only Locations"
-                  subtitle={`${data.gbpOnlyLocations.length} in GBP but no website page`}
-                  badge={data.gbpOnlyLocations.length}
-                  badgeColor="#f97316">
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12, lineHeight: 1.6 }}>
-                      These locations are listed in your GBP service areas but have no matching page on your website. Create landing pages to strengthen local rankings, or remove from GBP if you don't serve these areas.
-                    </div>
-                    {data.gbpOnlyLocations.map((loc, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 10, marginBottom: 6, background: '#f9731606', border: '1px solid #f9731618' }}>
-                        <i className="fas fa-map-marker-alt" style={{ color: '#f97316', fontSize: 18 }} />
-                        <span style={{ flex: 1, fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>{loc}</span>
-                        <button onClick={(e) => { e.stopPropagation(); createAction(`Create Landing Page: ${loc}`, `Create a location landing page for "${loc}".\n\nThis suburb is in your GBP service areas but has no website page. Create a dedicated page targeting "[service] ${loc}" keywords.`, 'website', 'high'); }}
-                          style={{ padding: '6px 12px', borderRadius: 8, background: '#f9731615', border: '1px solid #f9731630', color: '#f97316', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                          <i className="fas fa-plus" style={{ marginRight: 4 }} />Create Page
-                        </button>
-                      </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {suburbs.filter(sub => !sub.inGbp).map((sub, i) => (
+                      <span key={i} style={{ padding: '5px 12px', borderRadius: 20, background: '#f59e0b12', color: '#92400e', fontSize: 13, fontWeight: 600 }}>{sub.suburb}</span>
                     ))}
                   </div>
-                </KpiItem>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Action: Add these to GBP service areas</div>
+                </div>
               )}
+
+              {/* ── Suburb coverage table ── */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 10 }}>Suburb coverage</div>
+                <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 0.7fr 0.7fr', padding: '10px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase' }}>Suburb</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>In GBP</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Has Page</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Tracked</span>
+                  </div>
+                  {suburbs.map((sub, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 0.7fr 0.7fr', padding: '10px 16px', borderBottom: i < suburbs.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)' }}>{sub.suburb}</span>
+                      <span style={{ textAlign: 'center' }}><i className={`fas fa-${sub.inGbp ? 'check-circle' : 'times-circle'}`} style={{ color: sub.inGbp ? '#22c55e' : '#ef4444', fontSize: 16 }} /></span>
+                      <span style={{ textAlign: 'center' }}><i className={`fas fa-${sub.hasPage ? 'check-circle' : 'times-circle'}`} style={{ color: sub.hasPage ? '#22c55e' : '#ef4444', fontSize: 16 }} /></span>
+                      <span style={{ textAlign: 'center' }}><i className={`fas fa-${sub.keywordCount > 0 ? 'check-circle' : 'minus-circle'}`} style={{ color: sub.keywordCount > 0 ? '#22c55e' : 'var(--text3)', fontSize: 16 }} /></span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Not yet scanned ── */}
+              {suburbs.filter(sub => sub.keywordCount === 0).length > 0 && (
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text3)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="fas fa-satellite-dish" style={{ fontSize: 14 }} />Not yet scanned ({suburbs.filter(sub => sub.keywordCount === 0).length})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {suburbs.filter(sub => sub.keywordCount === 0).slice(0, 15).map((sub, i) => (
+                      <span key={i} style={{ padding: '5px 12px', borderRadius: 20, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 13 }}>{sub.suburb}</span>
+                    ))}
+                    {suburbs.filter(sub => sub.keywordCount === 0).length > 15 && (
+                      <span style={{ padding: '5px 12px', borderRadius: 20, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text3)', fontSize: 13 }}>+{suburbs.filter(sub => sub.keywordCount === 0).length - 15} more</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Action: Run grid scan on priority suburbs (closest first)</div>
+                </div>
+              )}
+            </div>
+            );
+          })()}
+
+          {/* EXPANDED KPI DETAIL — PROMINENCE */}
+          {expandedKpi === 'prominence' && (() => {
+            const topCompetitorName = compB.topCompetitorName || 'top competitor';
+            return (
+            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #f9731644', marginBottom: 24, borderTop: '4px solid #f97316' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: '#f9731618', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="fas fa-trophy" style={{ color: '#f97316', fontSize: 20 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)' }}>Prominence</div>
+                    <div style={{ fontSize: 14, color: 'var(--text3)' }}>How well-known is your business online?</div>
+                  </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
+              </div>
+
+              {/* Summary stat boxes */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
+                {[
+                  { label: 'Targets', value: 25, color: '#3b82f6' },
+                  { label: 'Rating', value: `${myRating}★`, color: myRating >= 4.8 ? '#22c55e' : myRating >= 4.5 ? '#f59e0b' : '#ef4444' },
+                  { label: 'Reviews', value: myReviews, color: myReviews >= (compB.avgReviews || 999) ? '#22c55e' : '#ef4444' },
+                  { label: 'Response', value: `${s.reviewStats?.reply_rate || 0}%`, color: (s.reviewStats?.reply_rate || 0) >= 100 ? '#22c55e' : '#ef4444' },
+                  { label: 'Citations', value: `${directoryList.filter(d => d.listed).length}/${directoryList.length}`, color: directoryList.filter(d => d.listed).length >= 15 ? '#22c55e' : '#ef4444' },
+                ].map((box, idx) => (
+                  <div key={idx}
+                    style={{ padding: '20px 16px', borderRadius: 14, background: 'var(--bg)', border: '2px solid var(--border)', textAlign: 'center' }}>
+                    <div style={{ fontSize: 36, fontWeight: 800, color: box.color, lineHeight: 1.1 }}>{box.value}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 6, letterSpacing: 1 }}>{box.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Review gap bar chart ── */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className="fas fa-star" style={{ color: '#f59e0b' }} />Review gap vs competitors
+                </div>
+                <div style={{ borderRadius: 12, border: '1px solid var(--border)', padding: '16px' }}>
+                  {/* You */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <span style={{ fontSize: 13, color: 'var(--text2)', minWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>You ({myReviews})</span>
+                    <div style={{ flex: 1, height: 18, background: 'var(--bg)', borderRadius: 9, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, (myReviews / (compB.maxReviews || myReviews || 1)) * 100)}%`, height: '100%', background: '#3b82f6', borderRadius: 9 }} />
+                    </div>
+                  </div>
+                  {/* Competitors */}
+                  {competitors.slice(0, 5).map((c, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: i < Math.min(competitors.length, 5) - 1 ? 10 : 0 }}>
+                      <span style={{ fontSize: 13, color: 'var(--text2)', minWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} ({c.reviews})</span>
+                      <div style={{ flex: 1, height: 18, background: 'var(--bg)', borderRadius: 9, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, ((c.reviews || 0) / (compB.maxReviews || 1)) * 100)}%`, height: '100%', background: 'var(--border)', borderRadius: 9 }} />
+                      </div>
+                    </div>
+                  ))}
+                  {compB.maxReviews && myReviews < compB.maxReviews && (
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
+                      Gap to #1: need <span style={{ color: '#ef4444', fontWeight: 700 }}>{compB.maxReviews - myReviews} more reviews</span> to match {topCompetitorName}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Citations / directories table ── */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className="fas fa-building" style={{ color: 'var(--text3)' }} />Citations / directories
+                </div>
+                <div style={{ borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr', padding: '10px 16px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase' }}>Directory</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Listed</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Type</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Free</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Priority</span>
+                  </div>
+                  {directoryList.map((d, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr', padding: '10px 16px', borderBottom: i < directoryList.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text1)' }}>{d.name}</span>
+                      <span style={{ textAlign: 'center' }}><i className={`fas fa-${d.listed ? 'check-circle' : 'times-circle'}`} style={{ color: d.listed ? '#22c55e' : '#ef4444', fontSize: 16 }} /></span>
+                      <span style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{d.type || '—'}</span>
+                      <span style={{ textAlign: 'center', fontSize: 13, color: d.free ? '#22c55e' : '#f59e0b', fontWeight: 700 }}>{d.free ? 'Free' : 'Paid'}</span>
+                      <span style={{ textAlign: 'center' }}>
+                        {!d.listed && <span style={{ padding: '2px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, background: d.type === 'Essential' ? '#ef444418' : '#f59e0b18', color: d.type === 'Essential' ? '#ef4444' : '#f59e0b' }}>{d.type === 'Essential' ? 'High' : 'Med'}</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Organic SEO signals ── */}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text1)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className="fas fa-globe" style={{ color: 'var(--text3)' }} />Organic ranking (SEO signals)
+                </div>
+                <div style={{ borderRadius: 12, border: '1px solid var(--border)', padding: '16px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, textAlign: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Organic Clicks</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>last 28 days (GSC)</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Avg Position</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>all queries</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Pages Indexed</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>of submitted</div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>Google uses organic web ranking as a prominence signal for Maps. Better SEO = higher Maps position.</div>
+                </div>
+              </div>
             </div>
             );
           })()}
