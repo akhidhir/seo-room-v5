@@ -4417,132 +4417,109 @@
             // Categories
             const categories = s.gbpCategories || [];
 
+            const rc = { bg: '#232523', bgInner: '#2b2d2a', border: '#343834', text: '#e7e7e1', muted: '#9b9f98', blue: '#4b8bd8' };
             return (
-            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #3b82f644', marginBottom: 24, borderTop: '4px solid #3b82f6' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 2 }}>Relevance</div>
-                <div style={{ fontSize: 14, color: 'var(--text3)' }}>Does your GBP match what people search?</div>
-              </div>
-              <button onClick={(e) => { e.stopPropagation(); setExpandedKpi(null); }} style={{ position: 'absolute', right: 32, top: 32, background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 20, padding: 8, lineHeight: 1 }}>✕</button>
-
-              {/* Summary cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 28 }}>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Services</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesInGbp === services.length ? '#22c55e' : '#f59e0b', lineHeight: 1.1 }}>{servicesInGbp}/{services.length}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>in GBP</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Categories</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: categories.length >= 3 ? '#22c55e' : '#f59e0b', lineHeight: 1.1 }}>{categories.length}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>set in GBP</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Description</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: descMatched >= (allOfferings.length * 0.7) ? '#22c55e' : allOfferings.length === 0 ? 'var(--text3)' : '#ef4444', lineHeight: 1.1 }}>{allOfferings.length > 0 ? `${descMatched}/${allOfferings.length}` : '—'}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>keywords matched</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Posts</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: servicesWithPostsList.length === services.length ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{servicesWithPostsList.length}/{services.length}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>services covered</div>
-                </div>
+            <div style={{ background: rc.bg, borderRadius: 8, padding: '20px 24px', marginBottom: 16, borderTop: `3px solid ${rc.blue}`, border: `1px solid ${rc.border}`, borderTopColor: rc.blue }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: rc.blue, textTransform: 'uppercase', letterSpacing: 1.5 }}>Relevance</div>
+                <div style={{ fontSize: 11, color: rc.muted }}>Does your GBP match what people search?</div>
               </div>
 
-              {/* ── Services — X on website, Y in GBP ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-link" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  Services — {services.length} on website, {servicesInGbp} in GBP
-                </div>
-                {services.map((svc, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderBottom: i < services.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                    <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{svc.service}</span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: svc.inGbp ? '#22c55e' : '#ef4444' }}>
-                      {svc.inGbp ? 'In GBP' : 'Not in GBP'}
-                    </span>
+              {/* Metric tiles */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+                {[
+                  { label: 'Services', value: `${servicesInGbp}/${services.length}`, sub: 'in GBP', color: servicesInGbp === services.length ? '#2fa876' : '#b98223' },
+                  { label: 'Categories', value: categories.length, sub: 'set in GBP', color: categories.length >= 3 ? '#2fa876' : '#b98223' },
+                  { label: 'Description', value: allOfferings.length > 0 ? `${descMatched}/${allOfferings.length}` : '—', sub: 'keywords matched', color: descMatched >= (allOfferings.length * 0.7) ? '#2fa876' : allOfferings.length === 0 ? rc.muted : '#d34b45' },
+                  { label: 'Posts', value: `${servicesWithPostsList.length}/${services.length}`, sub: 'services covered', color: servicesWithPostsList.length === services.length ? '#2fa876' : '#d34b45' },
+                ].map((m, i) => (
+                  <div key={i} style={{ padding: '12px 10px', borderRadius: 6, border: `1px solid ${rc.border}`, background: rc.bgInner, textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{m.label}</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: m.color, lineHeight: 1.1 }}>{m.value}</div>
+                    <div style={{ fontSize: 10, color: rc.muted, marginTop: 2 }}>{m.sub}</div>
                   </div>
                 ))}
               </div>
 
-              {/* ── GBP categories ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-tags" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  GBP categories — primary is the #1 ranking signal
+              {/* Services */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>🔗</span> Services — {services.length} on website, {servicesInGbp} in GBP
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-                  {categories.length > 0 ? categories.map((cat, i) => (
-                    <span key={i} style={{ padding: '8px 16px', borderRadius: 10, border: i === 0 ? '1.5px solid #f59e0b' : '1px solid var(--border)', background: 'transparent', fontSize: 15, fontWeight: i === 0 ? 700 : 500, color: i === 0 ? '#f59e0b' : 'var(--text2)' }}>
-                      {i === 0 ? `${cat} (primary)` : cat}
-                    </span>
-                  )) : (
-                    <span style={{ fontSize: 15, color: '#ef4444', fontWeight: 700 }}>No categories set</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10 }}>Google says: use fewest possible, most specific. Primary category is the strongest ranking signal.</div>
+                {services.map((svc, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', borderBottom: i < services.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                    <span style={{ fontSize: 12, color: rc.text }}>{svc.service}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: svc.inGbp ? '#2fa876' : '#d34b45' }}>{svc.inGbp ? 'In GBP' : 'Not in GBP'}</span>
+                  </div>
+                ))}
               </div>
 
-              {/* ── Business description — keyword coverage ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-file-alt" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  Business description — keyword coverage
+              {/* Categories */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>🏷️</span> GBP categories — primary is the #1 ranking signal
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {categories.length > 0 ? categories.map((cat, i) => (
+                    <span key={i} style={{ padding: '4px 12px', borderRadius: 6, border: i === 0 ? '1.5px solid #b98223' : `1px solid ${rc.border}`, fontSize: 12, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? '#b98223' : rc.muted }}>
+                      {i === 0 ? `${cat} (primary)` : cat}
+                    </span>
+                  )) : <span style={{ fontSize: 12, color: '#d34b45' }}>No categories set</span>}
+                </div>
+                <div style={{ fontSize: 10, color: rc.muted, marginTop: 8 }}>Google says: use fewest possible, most specific. Primary category is the strongest ranking signal.</div>
+              </div>
+
+              {/* Description keywords */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>📄</span> Business description — keyword coverage
                 </div>
                 {descKeywords.length > 0 ? (
                   <React.Fragment>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {descKeywords.map((k, i) => (
-                        <span key={i} style={{ padding: '6px 14px', borderRadius: 10, border: `1px solid ${k.found ? '#22c55e50' : '#ef444450'}`, background: 'transparent', fontSize: 14, fontWeight: 600, color: k.found ? '#22c55e' : '#ef4444' }}>
+                        <span key={i} style={{ padding: '3px 10px', borderRadius: 6, border: `1px solid ${k.found ? '#2fa87650' : '#d34b4550'}`, fontSize: 11, fontWeight: 500, color: k.found ? '#2fa876' : '#d34b45' }}>
                           {k.keyword}
                         </span>
                       ))}
                     </div>
-                    <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10 }}>Top GSC queries checked against business description. Red = searched-for terms not mentioned.</div>
+                    <div style={{ fontSize: 10, color: rc.muted, marginTop: 8 }}>Top GSC queries checked against business description. Red = searched-for terms not mentioned.</div>
                   </React.Fragment>
                 ) : (
-                  <div style={{ fontSize: 14, color: 'var(--text3)' }}>Add services or products to check which ones are mentioned in your GBP description.</div>
+                  <div style={{ fontSize: 11, color: rc.muted }}>Add services or products to check which ones are mentioned in your GBP description.</div>
                 )}
               </div>
 
-              {/* ── GBP posts — service coverage ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-newspaper" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  GBP posts — service coverage (last 6 months)
+              {/* Posts */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>📰</span> GBP posts — service coverage (last 6 months)
                 </div>
                 {services.map((svc, i) => {
                   const pc = svc.postCount || 0;
                   return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderBottom: i < services.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                      <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{svc.service}</span>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: pc > 0 ? '#22c55e' : '#ef4444' }}>
-                        {pc > 0 ? `${pc} post${pc > 1 ? 's' : ''}` : 'No posts'}
-                      </span>
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', borderBottom: i < services.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                      <span style={{ fontSize: 12, color: rc.text }}>{svc.service}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: pc > 0 ? '#2fa876' : '#d34b45' }}>{pc > 0 ? `${pc} post${pc > 1 ? 's' : ''}` : 'No posts'}</span>
                     </div>
                   );
                 })}
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10 }}>Each service should have at least 1 GBP post. Posts signal freshness and relevance to Google.</div>
+                <div style={{ fontSize: 10, color: rc.muted, marginTop: 8 }}>Each service should have at least 1 GBP post. Posts signal freshness and relevance to Google.</div>
               </div>
 
-              {/* ── What people are searching (GSC) ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: '#3b82f6', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-search" style={{ fontSize: 14 }} />
-                  What people are searching (GSC — last 28 days)
+              {/* GSC table */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.blue, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>🔍</span> What people are searching (GSC — last 28 days)
                 </div>
                 {(() => {
                   const queryRows = gscQueries.length > 0 ? gscQueries.map(q => ({ query: q.query, impressions: q.impressions, clicks: q.clicks })) : services.map(svc => ({ query: svc.service.toLowerCase(), impressions: null, clicks: null }));
                   return (
-                  <div style={{ borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.8fr 0.6fr 0.6fr 0.5fr 0.5fr 0.5fr', padding: '10px 16px', background: 'var(--card)', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Query</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'right' }}>Impr.</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'right' }}>Clicks</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Service</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>GBP</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Desc.</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Post</span>
+                  <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.7fr 0.6fr 0.5fr 0.5fr 0.5fr 0.5fr', padding: '6px 10px', borderBottom: `1px solid ${rc.border}` }}>
+                      {['Query', 'Impr.', 'Clicks', 'Service', 'GBP', 'Desc.', 'Post'].map((h, i) => (
+                        <span key={i} style={{ fontSize: 10, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', textAlign: i === 0 ? 'left' : i <= 2 ? 'right' : 'center' }}>{h}</span>
+                      ))}
                     </div>
                     {queryRows.map((q, i) => {
                       const qLower = q.query.toLowerCase();
@@ -4551,21 +4528,20 @@
                       const matchesDesc = descLower && qLower.split(/\s+/).some(w => w.length > 2 && descLower.includes(w));
                       const matchesPost = services.filter(svc => (svc.postCount || 0) > 0).some(svc => qLower.includes(svc.service.toLowerCase().split(' ')[0]));
                       return (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.8fr 0.6fr 0.6fr 0.5fr 0.5fr 0.5fr', padding: '10px 16px', borderBottom: i < queryRows.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{q.query}</span>
-                          <span style={{ fontSize: 14, color: 'var(--text2)', textAlign: 'right' }}>{q.impressions != null ? q.impressions.toLocaleString() : '—'}</span>
-                          <span style={{ fontSize: 14, color: 'var(--text2)', textAlign: 'right' }}>{q.clicks != null ? q.clicks.toLocaleString() : '—'}</span>
-                          <span style={{ textAlign: 'center', fontSize: 15, color: matchesService ? '#22c55e' : '#ef4444' }}>{matchesService ? '✓' : '✗'}</span>
-                          <span style={{ textAlign: 'center', fontSize: 15, color: matchesGbp ? '#22c55e' : '#ef4444' }}>{matchesGbp ? '✓' : '✗'}</span>
-                          <span style={{ textAlign: 'center', fontSize: 15, color: matchesDesc ? '#22c55e' : '#ef4444' }}>{matchesDesc ? '✓' : '✗'}</span>
-                          <span style={{ textAlign: 'center', fontSize: 15, color: matchesPost ? '#22c55e' : '#ef4444' }}>{matchesPost ? '✓' : '✗'}</span>
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.7fr 0.6fr 0.5fr 0.5fr 0.5fr 0.5fr', padding: '7px 10px', borderBottom: i < queryRows.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                          <span style={{ fontSize: 12, fontWeight: 500, color: rc.text }}>{q.query}</span>
+                          <span style={{ fontSize: 12, color: rc.muted, textAlign: 'right' }}>{q.impressions != null ? q.impressions.toLocaleString() : '—'}</span>
+                          <span style={{ fontSize: 12, color: rc.muted, textAlign: 'right' }}>{q.clicks != null ? q.clicks.toLocaleString() : '—'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 12, color: matchesService ? '#2fa876' : '#d34b45' }}>{matchesService ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 12, color: matchesGbp ? '#2fa876' : '#d34b45' }}>{matchesGbp ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 12, color: matchesDesc ? '#2fa876' : '#d34b45' }}>{matchesDesc ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 12, color: matchesPost ? '#2fa876' : '#d34b45' }}>{matchesPost ? '✓' : '✗'}</span>
                         </div>
                       );
                     })}
                   </div>
                   );
                 })()}
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10 }}>Each query checked against 4 relevance signals: has service page, in GBP services, in description, has GBP post. More checks = stronger match.</div>
               </div>
             </div>
             );
@@ -4656,104 +4632,87 @@
             const subNoGbp = suburbs.filter(sub => !sub.inGbp);
             const subNotScanned = suburbs.filter(sub => sub.keywordCount === 0);
             const subRankingLow = suburbs.filter(sub => sub.keywordCount > 0 && (sub.avgRank || 99) >= 10);
+            const rc = { bg: '#232523', bgInner: '#2b2d2a', border: '#343834', text: '#e7e7e1', muted: '#9b9f98', green: '#2fa876' };
             return (
-            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #22c55e44', marginBottom: 24, borderTop: '4px solid #22c55e' }}>
+            <div style={{ background: rc.bg, borderRadius: 8, padding: '20px 24px', marginBottom: 16, borderTop: `3px solid ${rc.green}`, border: `1px solid ${rc.border}`, borderTopColor: rc.green }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 2 }}>Proximity</div>
-                <div style={{ fontSize: 14, color: 'var(--text3)' }}>How close does Google think you are to each searcher?</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: rc.green, textTransform: 'uppercase', letterSpacing: 1.5 }}>Proximity</div>
+                <div style={{ fontSize: 11, color: rc.muted }}>How close does Google think you are to each searcher?</div>
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 20, lineHeight: 1.6 }}>Google ranks by distance from searcher. Service areas in GBP + suburb pages + grid scan positions tell you where you're visible.</div>
+              <div style={{ fontSize: 11, color: rc.muted, marginBottom: 16, lineHeight: 1.5 }}>Google ranks by distance from searcher. Service areas in GBP + suburb pages + grid scan positions tell you where you're visible.</div>
 
-              {/* Summary cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 28 }}>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Target suburbs</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text1)', lineHeight: 1.1 }}>{suburbs.length}</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>In GBP areas</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: suburbsInGbp === suburbs.length ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{suburbsInGbp}/{suburbs.length}</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Has landing page</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: suburbsWithPages === suburbs.length ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{suburbsWithPages}/{suburbs.length}</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Grid scanned</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b', lineHeight: 1.1 }}>{suburbsTracked}/{suburbs.length}</div>
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+                {[
+                  { label: 'Target suburbs', value: suburbs.length, color: rc.text },
+                  { label: 'In GBP areas', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#2fa876' : '#d34b45' },
+                  { label: 'Has landing page', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#2fa876' : '#d34b45' },
+                  { label: 'Grid scanned', value: `${suburbsTracked}/${suburbs.length}`, color: '#b98223' },
+                ].map((m, i) => (
+                  <div key={i} style={{ padding: '12px 10px', borderRadius: 6, border: `1px solid ${rc.border}`, background: rc.bgInner, textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{m.label}</div>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: m.color, lineHeight: 1.1 }}>{m.value}</div>
+                  </div>
+                ))}
               </div>
 
-              {/* ── Suburb coverage table ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-crosshairs" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  Suburb coverage — 3 signals per suburb
-                </div>
-                <div style={{ borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden', marginTop: 14 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '10px 16px', background: 'var(--card)', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Suburb</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>GBP area</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Page</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Grid rank</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Distance</span>
+              {/* Suburb table */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: rc.text, marginBottom: 10 }}>Suburb coverage — 3 signals per suburb</div>
+                <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '6px 10px', borderBottom: `1px solid ${rc.border}` }}>
+                    {['Suburb', 'GBP area', 'Page', 'Grid rank', 'Distance'].map((h, i) => (
+                      <span key={i} style={{ fontSize: 10, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', textAlign: i === 0 ? 'left' : 'center' }}>{h}</span>
+                    ))}
                   </div>
                   {suburbs.map((sub, i) => {
                     const rank = sub.avgRank || null;
-                    const rankColor = rank ? (rank <= 3 ? '#22c55e' : rank <= 7 ? '#f59e0b' : rank <= 15 ? '#f97316' : '#ef4444') : null;
+                    const rankColor = rank ? (rank <= 3 ? '#2fa876' : rank <= 7 ? '#b98223' : rank <= 15 ? '#d86f2a' : '#d34b45') : null;
                     const dist = sub.distance ? `${sub.distance.toFixed(1)} km` : '—';
                     return (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '12px 16px', borderBottom: i < suburbs.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{sub.suburb}</span>
-                        <span style={{ textAlign: 'center', fontSize: 15, color: sub.inGbp ? '#22c55e' : '#ef4444' }}>{sub.inGbp ? '✓' : '✗'}</span>
-                        <span style={{ textAlign: 'center', fontSize: 15, color: sub.hasPage ? '#22c55e' : '#ef4444' }}>{sub.hasPage ? '✓' : '✗'}</span>
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '7px 10px', borderBottom: i < suburbs.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: rc.text }}>{sub.suburb}</span>
+                        <span style={{ textAlign: 'center', fontSize: 12, color: sub.inGbp ? '#2fa876' : '#d34b45' }}>{sub.inGbp ? '✓' : '✗'}</span>
+                        <span style={{ textAlign: 'center', fontSize: 12, color: sub.hasPage ? '#2fa876' : '#d34b45' }}>{sub.hasPage ? '✓' : '✗'}</span>
                         <span style={{ textAlign: 'center' }}>
-                          {rank ? (
-                            <span style={{ padding: '2px 10px', borderRadius: 8, fontSize: 13, fontWeight: 700, background: `${rankColor}18`, color: rankColor, border: `1px solid ${rankColor}30` }}>#{rank}</span>
-                          ) : (
-                            <span style={{ color: 'var(--text3)' }}>—</span>
-                          )}
+                          {rank ? <span style={{ fontSize: 11, fontWeight: 600, color: rankColor }}>#{rank}</span> : <span style={{ color: rc.muted, fontSize: 12 }}>—</span>}
                         </span>
-                        <span style={{ textAlign: 'center', fontSize: 14, color: 'var(--text2)' }}>{dist}</span>
+                        <span style={{ textAlign: 'center', fontSize: 12, color: rc.muted }}>{dist}</span>
                       </div>
                     );
                   })}
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10 }}>Sorted by distance from business. Grid rank = average position from last scan. — = not scanned yet.</div>
+                <div style={{ fontSize: 10, color: rc.muted, marginTop: 8 }}>Sorted by distance from business. Grid rank = average position from last scan. — = not scanned yet.</div>
               </div>
 
-              {/* ── Actions ── */}
+              {/* Actions */}
               {(subNoGbp.length > 0 || subNotScanned.length > 0 || subRankingLow.length > 0) && (
-                <div style={{ background: '#ef444408', borderRadius: 14, padding: '24px 28px', border: '1px solid #ef444420' }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14 }}>
-                    <i className="fas fa-exclamation-triangle" style={{ marginRight: 8 }} />Actions
-                  </div>
+                <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', border: `1px solid ${rc.border}` }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#d34b45', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>⚠ Actions</div>
                   {subNoGbp.length > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', marginBottom: 8 }}>
-                      <span style={{ padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, background: '#f59e0b18', color: '#f59e0b', whiteSpace: 'nowrap' }}>{subNoGbp.length} suburbs</span>
-                      <span style={{ fontSize: 15, color: 'var(--text1)' }}>Not in GBP service areas — add them</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderBottom: `1px solid ${rc.border}`, marginBottom: 4 }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: '#b9822320', color: '#b98223' }}>{subNoGbp.length} suburbs</span>
+                      <span style={{ fontSize: 12, color: rc.text }}>Not in GBP service areas — add them</span>
                     </div>
                   )}
                   {subNotScanned.length > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', marginBottom: 8 }}>
-                      <span style={{ padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, background: '#22c55e18', color: '#22c55e', whiteSpace: 'nowrap' }}>{subNotScanned.length} suburbs</span>
-                      <span style={{ fontSize: 15, color: 'var(--text1)' }}>Not grid scanned — run scan to check visibility</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderBottom: `1px solid ${rc.border}`, marginBottom: 4 }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: '#2fa87620', color: '#2fa876' }}>{subNotScanned.length} suburbs</span>
+                      <span style={{ fontSize: 12, color: rc.text }}>Not grid scanned — run scan to check visibility</span>
                     </div>
                   )}
                   {subRankingLow.length > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
-                      <span style={{ padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, background: '#ef444418', color: '#ef4444', whiteSpace: 'nowrap' }}>{subRankingLow.length} suburbs</span>
-                      <span style={{ fontSize: 15, color: 'var(--text1)' }}>Ranking #10+ — need more reviews/citations mentioning these areas</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px' }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: '#d34b4520', color: '#d34b45' }}>{subRankingLow.length} suburbs</span>
+                      <span style={{ fontSize: 12, color: rc.text }}>Ranking #10+ — need more reviews/citations mentioning these areas</span>
                     </div>
                   )}
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
                 <button onClick={(e) => { e.stopPropagation(); handleDiscoverSuburbs(); }}
                   disabled={discoveringSuburbs}
-                  style={{ background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: discoveringSuburbs ? 'wait' : 'pointer', opacity: discoveringSuburbs ? 0.6 : 1 }}>
-                  <i className={discoveringSuburbs ? 'fas fa-spinner fa-spin' : 'fas fa-search'} style={{ marginRight: 6 }} />
+                  style={{ background: '#2fa876', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 11, fontWeight: 600, cursor: discoveringSuburbs ? 'wait' : 'pointer', opacity: discoveringSuburbs ? 0.6 : 1 }}>
                   {discoveringSuburbs ? 'Scanning...' : 'Discover Locations'}
                 </button>
               </div>
@@ -4766,123 +4725,107 @@
             const listedCount = directoryList.filter(d => d.listed).length;
             const replyRate = s.reviewStats?.reply_rate || 0;
             return (
-            <div style={{ background: 'var(--card)', borderRadius: 16, padding: '32px', border: '1px solid #f9731644', marginBottom: 24, borderTop: '4px solid #f97316' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#f97316', textTransform: 'uppercase', letterSpacing: 2 }}>Prominence</div>
-                <div style={{ fontSize: 14, color: 'var(--text3)' }}>How well-known is your business online?</div>
+            <div style={{ background: '#232523', borderRadius: 8, padding: '20px 24px', marginBottom: 16, borderTop: '3px solid #d86f2a', border: '1px solid #343834', borderTopColor: '#d86f2a' }}>
+              {(() => { const rc = { bg: '#232523', bgInner: '#2b2d2a', border: '#343834', text: '#e7e7e1', muted: '#9b9f98', orange: '#d86f2a' }; return (<>
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: rc.orange, textTransform: 'uppercase', letterSpacing: 1.5 }}>Prominence</div>
+                <div style={{ fontSize: 11, color: rc.muted }}>How well-known is your business online?</div>
               </div>
 
-              {/* Summary cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 28 }}>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Targets</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#3b82f6', lineHeight: 1.1 }}>{directoryList.length}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>directories</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Rating</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: myRating >= 4.8 ? '#22c55e' : myRating >= 4.5 ? '#f59e0b' : '#ef4444', lineHeight: 1.1 }}>{myRating}★</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Google average</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Reviews</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: myReviews >= (compB.avgReviews || 999) ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{myReviews}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>vs competitor avg {compB.avgReviews || '—'}</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Response</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: replyRate >= 100 ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{replyRate}%</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>replies to reviews</div>
-                </div>
-                <div style={{ padding: '18px 16px', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Citations</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: listedCount >= 15 ? '#22c55e' : '#ef4444', lineHeight: 1.1 }}>{listedCount}/{directoryList.length}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>directories listed</div>
-                </div>
+              {/* Metric tiles — 5 cols */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 18 }}>
+                {[
+                  { label: 'Targets', value: directoryList.length, sub: 'directories', color: '#4b8bd8' },
+                  { label: 'Rating', value: myRating + '★', sub: 'Google average', color: myRating >= 4.8 ? '#2fa876' : myRating >= 4.5 ? '#b98223' : '#d34b45' },
+                  { label: 'Reviews', value: myReviews, sub: `vs competitor avg ${compB.avgReviews || '—'}`, color: myReviews >= (compB.avgReviews || 999) ? '#2fa876' : '#d34b45' },
+                  { label: 'Response', value: replyRate + '%', sub: 'replies to reviews', color: replyRate >= 100 ? '#2fa876' : '#d34b45' },
+                  { label: 'Citations', value: `${listedCount}/${directoryList.length}`, sub: 'directories listed', color: listedCount >= 15 ? '#2fa876' : '#d34b45' },
+                ].map((t, i) => (
+                  <div key={i} style={{ background: rc.bgInner, borderRadius: 6, padding: '12px 10px', textAlign: 'center', border: `1px solid ${rc.border}` }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{t.label}</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: t.color, lineHeight: 1.1 }}>{t.value}</div>
+                    <div style={{ fontSize: 10, color: rc.muted, marginTop: 3 }}>{t.sub}</div>
+                  </div>
+                ))}
               </div>
 
-              {/* ── Review gap vs competitors ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-star" style={{ color: '#f59e0b', fontSize: 14 }} />
-                  Review gap vs top 5 competitors
+              {/* Review gap vs top 5 competitors */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: '#b98223', fontSize: 11 }}>☆</span> Review gap vs top 5 competitors
                 </div>
                 {/* You bar */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                  <span style={{ fontSize: 14, color: 'var(--text2)', minWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>You ({myReviews})</span>
-                  <div style={{ flex: 1, height: 18, background: 'var(--card)', borderRadius: 9, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(100, Math.round((myReviews / (compB.maxReviews || myReviews || 1)) * 100))}%`, height: '100%', background: '#3b82f6', borderRadius: 9 }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, color: rc.muted, minWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>You ({myReviews})</span>
+                  <div style={{ flex: 1, height: 12, background: rc.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(100, Math.round((myReviews / (compB.maxReviews || myReviews || 1)) * 100))}%`, height: '100%', background: '#4b8bd8', borderRadius: 3 }} />
                   </div>
                 </div>
                 {/* Competitor bars */}
                 {competitors.slice(0, 5).map((c, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: i < Math.min(competitors.length, 5) - 1 ? 10 : 0 }}>
-                    <span style={{ fontSize: 14, color: 'var(--text2)', minWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} ({c.reviews})</span>
-                    <div style={{ flex: 1, height: 18, background: 'var(--card)', borderRadius: 9, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.min(100, Math.round(((c.reviews || 0) / (compB.maxReviews || 1)) * 100))}%`, height: '100%', background: 'var(--border)', borderRadius: 9 }} />
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: i < Math.min(competitors.length, 5) - 1 ? 6 : 0 }}>
+                    <span style={{ fontSize: 11, color: rc.muted, minWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name} ({c.reviews})</span>
+                    <div style={{ flex: 1, height: 12, background: rc.border, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, Math.round(((c.reviews || 0) / (compB.maxReviews || 1)) * 100))}%`, height: '100%', background: '#64686460', borderRadius: 3 }} />
                     </div>
                   </div>
                 ))}
                 {compB.maxReviews && myReviews < compB.maxReviews && (
-                  <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 14 }}>
-                    Gap to #1: need <span style={{ color: '#ef4444', fontWeight: 700 }}>{compB.maxReviews - myReviews} more reviews</span> to match {compB.topCompetitorName || 'top competitor'}
+                  <div style={{ fontSize: 11, color: rc.muted, marginTop: 10 }}>
+                    Gap to #1: need <span style={{ color: '#d34b45', fontWeight: 700 }}>{compB.maxReviews - myReviews} more reviews</span> to match {compB.topCompetitorName || 'top competitor'}
                   </div>
                 )}
               </div>
 
-              {/* ── Citations / directories ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', marginBottom: 16, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-building" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  Citations / directories
+              {/* Citations / directories table */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', marginBottom: 12, border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11 }}>◻</span> Citations / directories
                 </div>
-                <div style={{ borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr', padding: '10px 16px', background: 'var(--card)', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Directory</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Listed</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Type</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Free</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', textAlign: 'center' }}>Priority</span>
+                <div style={{ borderRadius: 4, border: `1px solid ${rc.border}`, overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.7fr 0.6fr 0.7fr', padding: '7px 12px', background: rc.bg, borderBottom: `1px solid ${rc.border}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase' }}>Directory</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase', textAlign: 'center' }}>Listed</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase', textAlign: 'center' }}>Type</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase', textAlign: 'center' }}>Free</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase', textAlign: 'center' }}>Priority</span>
                   </div>
                   {directoryList.map((d, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr', padding: '12px 16px', borderBottom: i < directoryList.length - 1 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg)' : 'transparent' }}>
-                      <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)' }}>{d.name}</span>
-                      <span style={{ textAlign: 'center', fontSize: 15, color: d.listed ? '#22c55e' : '#ef4444' }}>{d.listed ? '✓' : '✗'}</span>
-                      <span style={{ textAlign: 'center', fontSize: 13, color: 'var(--text2)' }}>{d.type || '—'}</span>
-                      <span style={{ textAlign: 'center', fontSize: 14, color: d.free ? '#22c55e' : '#f59e0b', fontWeight: 700 }}>{d.free ? 'Free' : 'Paid'}</span>
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.7fr 0.6fr 0.7fr', padding: '7px 12px', borderBottom: i < directoryList.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: rc.text }}>{d.name}</span>
+                      <span style={{ textAlign: 'center', fontSize: 12, color: d.listed ? '#2fa876' : '#d34b45' }}>{d.listed ? '✓' : '✗'}</span>
+                      <span style={{ textAlign: 'center', fontSize: 11, color: rc.muted }}>{d.type || '—'}</span>
+                      <span style={{ textAlign: 'center', fontSize: 11, color: d.free ? '#2fa876' : '#b98223', fontWeight: 700 }}>{d.free ? 'Free' : 'Paid'}</span>
                       <span style={{ textAlign: 'center' }}>
-                        {!d.listed && <span style={{ padding: '2px 10px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: d.type === 'Essential' ? '#ef444418' : '#f59e0b18', color: d.type === 'Essential' ? '#ef4444' : '#f59e0b' }}>{d.type === 'Essential' ? 'High' : 'Med'}</span>}
+                        {!d.listed && <span style={{ fontSize: 10, fontWeight: 700, color: d.type === 'Essential' ? '#d34b45' : '#b98223' }}>{d.type === 'Essential' ? 'High' : 'Med'}</span>}
                       </span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* ── Organic SEO signals ── */}
-              <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '24px 28px', border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text1)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <i className="fas fa-globe" style={{ color: 'var(--text3)', fontSize: 14 }} />
-                  Organic ranking (SEO signals)
+              {/* Organic ranking (SEO signals) */}
+              <div style={{ background: rc.bgInner, borderRadius: 6, padding: '14px 16px', border: `1px solid ${rc.border}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: rc.text, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11 }}>⚙</span> Organic ranking (SEO signals)
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, textAlign: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Organic Clicks</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>last 28 days (GSC)</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Avg Position</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>all queries</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Pages Indexed</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text1)', marginTop: 4 }}>—</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>of submitted</div>
-                  </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, textAlign: 'center' }}>
+                  {[
+                    { label: 'Organic Clicks', value: '—', sub: 'last 28 days (GSC)' },
+                    { label: 'Avg Position', value: '—', sub: 'all queries' },
+                    { label: 'Pages Indexed', value: '—', sub: 'of submitted' },
+                  ].map((o, i) => (
+                    <div key={i}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: rc.muted, textTransform: 'uppercase' }}>{o.label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: rc.text, marginTop: 3 }}>{o.value}</div>
+                      <div style={{ fontSize: 10, color: rc.muted }}>{o.sub}</div>
+                    </div>
+                  ))}
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 14 }}>Google uses organic web ranking as a prominence signal for Maps. Better SEO = higher Maps position.</div>
+                <div style={{ fontSize: 11, color: rc.muted, marginTop: 10 }}>Google uses organic web ranking as a prominence signal for Maps. Better SEO = higher Maps position.</div>
               </div>
+              </>); })()}
             </div>
             );
           })()}
