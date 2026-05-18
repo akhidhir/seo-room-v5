@@ -531,6 +531,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 20`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -1627,6 +1628,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
   const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
+  const grid_scan_limit = b.grid_scan_limit ?? b.gridScanLimit;
   const phone = b.phone;
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
@@ -1671,7 +1673,8 @@ app.put('/api/projects/:id', async (req, res) => {
            monthly_ai_budget=COALESCE($37, monthly_ai_budget),
            monthly_hours=COALESCE($38, monthly_hours),
            monthly_fee=COALESCE($39, monthly_fee),
-           cloudflare_zone_id=COALESCE($40, cloudflare_zone_id)
+           cloudflare_zone_id=COALESCE($40, cloudflare_zone_id),
+           grid_scan_limit=COALESCE($41, grid_scan_limit)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -1695,7 +1698,8 @@ app.put('/api/projects/:id', async (req, res) => {
        monthly_ai_budget !== undefined ? parseFloat(monthly_ai_budget) || null : null,
        monthly_hours !== undefined ? parseFloat(monthly_hours) || null : null,
        monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null,
-       cloudflare_zone_id || null]
+       cloudflare_zone_id || null,
+       grid_scan_limit !== undefined ? parseInt(grid_scan_limit) || null : null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -21604,11 +21608,18 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
   const { keywords } = req.body; // [{keyword, volume, position, url, competition}]
   if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
   try {
+    // Enforce grid_scan_limit
+    const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
+    const limit = projR.rows[0]?.grid_scan_limit || 20;
+    const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
+    const current = parseInt(currentCount.rows[0].count);
+
     let added = 0;
     const baseTime = Date.now();
     for (let i = 0; i < keywords.length; i++) {
       const k = keywords[i];
       if (!k.keyword) continue;
+      if (current + added >= limit) break;
       const kw = k.keyword.trim();
       // Insert into rank_keywords with volume
       await pool.query(
@@ -21620,7 +21631,7 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
-    res.json({ ok: true, added, total: rows.length });
+    res.json({ ok: true, added, total: rows.length, limit });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -21888,9 +21899,18 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
   const { keywords, location_code, location } = req.body; // keywords: string[], location: string (suburb/city for Maps), location_code: number
   if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
   try {
+    // Enforce grid_scan_limit
+    const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
+    const limit = projR.rows[0]?.grid_scan_limit || 20;
+    const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
+    const current = parseInt(currentCount.rows[0].count);
+    const available = limit - current;
+    if (available <= 0) return res.status(400).json({ error: `Keyword limit reached (${limit}). Upgrade your plan or remove existing keywords.`, limit, current });
+
     let added = 0;
     for (const kw of keywords) {
       if (!kw || typeof kw !== 'string') continue;
+      if (current + added >= limit) break;
       await pool.query(
         `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
         [projectId, kw.trim(), location || '', location_code || 2036]
@@ -21898,7 +21918,7 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY added_at DESC', [projectId]);
-    res.json({ ok: true, added, total: rows.length, keywords: rows });
+    res.json({ ok: true, added, total: rows.length, limit, keywords: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

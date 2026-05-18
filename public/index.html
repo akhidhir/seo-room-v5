@@ -24238,7 +24238,7 @@
 
       const startEditQuota = (proj) => {
         setEditingQuota(proj.id);
-        setQuotaDraft({ monthly_fee: proj.monthly_fee || 0, monthly_ai_budget: proj.monthly_ai_budget || 0, monthly_hours: proj.monthly_hours || 0 });
+        setQuotaDraft({ monthly_fee: proj.monthly_fee || 0, monthly_ai_budget: proj.monthly_ai_budget || 0, monthly_hours: proj.monthly_hours || 0, grid_scan_limit: proj.grid_scan_limit || 20 });
       };
 
       const handleSaveQuota = async (projId) => {
@@ -24300,19 +24300,27 @@
                       </button>
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
                     {[
                       { label: '$/month', field: 'monthly_fee', value: proj.monthly_fee, icon: 'fa-dollar-sign', color: '#22c55e', prefix: '$' },
                       { label: 'AI Budget', field: 'monthly_ai_budget', value: proj.monthly_ai_budget, icon: 'fa-brain', color: '#8b5cf6', prefix: '$' },
-                      { label: 'Hours/month', field: 'monthly_hours', value: proj.monthly_hours, icon: 'fa-clock', color: '#3b82f6', prefix: '' }
+                      { label: 'Hours/month', field: 'monthly_hours', value: proj.monthly_hours, icon: 'fa-clock', color: '#3b82f6', prefix: '' },
+                      { label: 'KW Limit', field: 'grid_scan_limit', value: proj.grid_scan_limit || 20, icon: 'fa-key', color: '#f59e0b', prefix: '', isSelect: true, options: [10,20,30,40,50] }
                     ].map(q => (
                       <div key={q.field} style={{ padding: 14, borderRadius: 10, background: 'var(--bg)', border: '1px solid var(--border)', textAlign: 'center' }}>
                         <div style={{ fontSize: 10, fontWeight: 700, color: q.color, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
                           <i className={`fa-solid ${q.icon}`} style={{ marginRight: 4 }} />{q.label}
                         </div>
                         {editingQuota === proj.id ? (
-                          <input type="number" value={quotaDraft[q.field] || ''} onChange={e => setQuotaDraft(d => ({ ...d, [q.field]: e.target.value }))}
-                            style={{ width: '100%', fontSize: 20, fontWeight: 900, textAlign: 'center', background: 'var(--card)', border: `2px solid ${q.color}`, borderRadius: 8, color: q.color, outline: 'none', padding: '6px 0' }} />
+                          q.isSelect ? (
+                            <select value={quotaDraft[q.field] || 20} onChange={e => setQuotaDraft(d => ({ ...d, [q.field]: parseInt(e.target.value) }))}
+                              style={{ width: '100%', fontSize: 20, fontWeight: 900, textAlign: 'center', background: 'var(--card)', border: `2px solid ${q.color}`, borderRadius: 8, color: q.color, outline: 'none', padding: '6px 0', cursor: 'pointer' }}>
+                              {q.options.map(o => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          ) : (
+                            <input type="number" value={quotaDraft[q.field] || ''} onChange={e => setQuotaDraft(d => ({ ...d, [q.field]: e.target.value }))}
+                              style={{ width: '100%', fontSize: 20, fontWeight: 900, textAlign: 'center', background: 'var(--card)', border: `2px solid ${q.color}`, borderRadius: 8, color: q.color, outline: 'none', padding: '6px 0' }} />
+                          )
                         ) : (
                           <div style={{ fontSize: 24, fontWeight: 900, color: q.color }}>
                             {q.prefix}{(q.value || 0).toLocaleString()}
