@@ -25515,14 +25515,25 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
-    // Get business center coordinates from grid scans or RC profile
+    // Get business center coordinates from grid scans, RC profile address, or project location
     let bizLat = null, bizLng = null;
     for (const gs of Object.values(gridMap)) {
       if (gs.center_lat && gs.center_lng) { bizLat = parseFloat(gs.center_lat); bizLng = parseFloat(gs.center_lng); break; }
     }
-    if (!bizLat && rcData?.profile?.latlng) {
-      bizLat = rcData.profile.latlng.latitude; bizLng = rcData.profile.latlng.longitude;
+    // Fallback: RC profile storefrontAddress locality → SUBURB_GPS
+    if (!bizLat && rc?.profile?.storefrontAddress?.locality) {
+      const loc = rc.profile.storefrontAddress.locality.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (SUBURB_GPS[loc]) { bizLat = SUBURB_GPS[loc].lat; bizLng = SUBURB_GPS[loc].lng; }
     }
+    // Fallback: project.location → parse suburb name → SUBURB_GPS
+    if (!bizLat && project.location) {
+      const locParts = project.location.replace(/,/g, ' ').replace(/\s+(WA|QLD|NSW|VIC|SA|NT|TAS|ACT|Australia)\s*/gi, ' ').trim().toLowerCase().split(/\s+/);
+      // Try full string first, then first word (suburb name)
+      const locFull = locParts.join(' ');
+      if (SUBURB_GPS[locFull]) { bizLat = SUBURB_GPS[locFull].lat; bizLng = SUBURB_GPS[locFull].lng; }
+      else if (SUBURB_GPS[locParts[0]]) { bizLat = SUBURB_GPS[locParts[0]].lat; bizLng = SUBURB_GPS[locParts[0]].lng; }
+    }
+    console.log(`[local-intel] bizLat=${bizLat}, bizLng=${bizLng}, location="${project.location}", rcLocality="${rc?.profile?.storefrontAddress?.locality}"`);
     // Haversine distance helper (km)
     const haversineDist = (lat1, lng1, lat2, lng2) => {
       const R = 6371, toRad = d => d * Math.PI / 180;
