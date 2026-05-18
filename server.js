@@ -3480,8 +3480,52 @@ app.post('/api/projects/:projectId/cwv-fix', async (req, res) => {
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders.Authorization) return res.status(400).json({ error: 'WordPress URL and Application Password required in Project Settings' });
 
-    const { page_url, opportunities } = req.body;
-    if (!page_url || !opportunities?.length) return res.status(400).json({ error: 'page_url and opportunities required' });
+    const { page_url } = req.body;
+    let { opportunities } = req.body;
+    if (!page_url) return res.status(400).json({ error: 'page_url required' });
+
+    // If no opportunities provided, fetch fresh PageSpeed data
+    if (!opportunities?.length) {
+      try {
+        console.log(`[cwv-fix] No opportunities for ${page_url}, fetching fresh PageSpeed data...`);
+        const psData = await runPageSpeedAudit(page_url, 'mobile');
+        const metrics = psData.lighthouseResult?.audits || {};
+        opportunities = [];
+        const fixableAudits = [
+          'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
+          'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
+          'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
+          'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
+          'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
+          'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
+        ];
+        for (const key of fixableAudits) {
+          const audit = metrics[key];
+          if (audit && audit.score !== null && audit.score < 1) {
+            const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
+            if (audit.details?.items?.length) {
+              opp.items = audit.details.items.slice(0, 10).map(item => {
+                const cleaned = {};
+                if (item.url) cleaned.url = item.url;
+                if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
+                if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
+                if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
+                if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
+                if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
+                return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
+              });
+            }
+            opportunities.push(opp);
+          }
+        }
+        console.log(`[cwv-fix] Fetched ${opportunities.length} opportunities for ${page_url}`);
+      } catch (psErr) {
+        console.error(`[cwv-fix] PageSpeed fetch failed for ${page_url}: ${psErr.message}`);
+        return res.status(500).json({ error: `Failed to fetch PageSpeed data: ${psErr.message}` });
+      }
+    }
+
+    if (!opportunities.length) return res.json({ success: true, fixes_applied: 0, message: 'No performance issues detected by PageSpeed' });
 
     // Use Haiku to analyze opportunities and generate fix instructions
     const fixPrompt = `You are a WordPress Core Web Vitals expert. Analyze these Lighthouse audit failures for the page "${page_url}" and generate fix instructions that can be applied via a WordPress helper plugin (no theme file changes).
