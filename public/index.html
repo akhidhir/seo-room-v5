@@ -3612,6 +3612,8 @@
       const [activeSvcTab, setActiveSvcTab] = useState('services'); // 'services' | 'products'
       const [activeLocTab, setActiveLocTab] = useState('pages'); // 'pages' | 'indexed' | 'gbp' | 'reviews'
       const [expandedKpiItem, setExpandedKpiItem] = useState(null); // for Not Done expand
+      const [proxSortCol, setProxSortCol] = useState('distance');
+      const [proxSortDir, setProxSortDir] = useState('asc');
       const [skippedKpiItems, setSkippedKpiItems] = useState(new Set()); // track skipped/ignored items by key
       const skipItem = (key) => setSkippedKpiItems(prev => new Set([...prev, key]));
       const resetItem = (key) => setSkippedKpiItems(prev => { const s = new Set(prev); s.delete(key); return s; });
@@ -4655,38 +4657,69 @@
                 ))}
               </div>
 
-              {/* Suburb table */}
-              <div style={{ background: rc.bgInner, borderRadius: 8, padding: '24px 26px', marginBottom: 20, border: `1px solid ${rc.border}` }}>
-                <div style={{ fontSize: 16, fontWeight: 600, color: rc.text, marginBottom: 16 }}>Suburb coverage — 3 signals per suburb</div>
-                <div style={{ borderRadius: 6, overflow: 'hidden' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '12px 16px', borderBottom: `1px solid ${rc.border}` }}>
-                    {['Suburb', 'GBP area', 'Page', 'Grid rank', 'Distance'].map((h, i) => (
-                      <span key={i} style={{ fontSize: 13, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', textAlign: i === 0 ? 'left' : 'center' }}>{h}</span>
-                    ))}
-                  </div>
-                  {suburbs.map((sub, i) => {
-                    const rank = sub.avgRank || null;
-                    const isNotFound = sub.rankSource === 'atrp';
-                    const rankColor = rank ? (isNotFound ? '#d34b45' : rank <= 3 ? '#2fa876' : rank <= 7 ? '#b98223' : rank <= 15 ? '#d86f2a' : '#d34b45') : null;
-                    const hasScans = sub.gridScanCount > 0;
-                    const dist = sub.distance ? `${sub.distance.toFixed(1)} km` : '—';
-                    return (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '14px 16px', minHeight: 50, alignItems: 'center', borderBottom: i < suburbs.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
-                        <span style={{ fontSize: 15, fontWeight: 500, color: rc.text }}>{sub.suburb}</span>
-                        <span style={{ textAlign: 'center', fontSize: 16, color: sub.inGbp ? '#2fa876' : '#d34b45' }}>{sub.inGbp ? '✓' : '✗'}</span>
-                        <span style={{ textAlign: 'center', fontSize: 16, color: sub.hasPage ? '#2fa876' : '#d34b45' }}>{sub.hasPage ? '✓' : '✗'}</span>
-                        <span style={{ textAlign: 'center' }}>
-                          {isNotFound ? <span style={{ fontSize: 13, fontWeight: 600, color: '#d34b45' }}>20+</span>
-                            : rank ? <span style={{ fontSize: 15, fontWeight: 600, color: rankColor }}>#{rank}</span>
-                            : <span style={{ color: rc.muted, fontSize: 15 }}>{hasScans ? '20+' : '—'}</span>}
+              {/* Suburb table — sortable */}
+              {(() => {
+                const cols = [
+                  { key: 'suburb', label: 'Suburb', align: 'left', sortFn: (a, b) => a.suburb.localeCompare(b.suburb) },
+                  { key: 'inGbp', label: 'GBP area', align: 'center', sortFn: (a, b) => (b.inGbp ? 1 : 0) - (a.inGbp ? 1 : 0) },
+                  { key: 'hasPage', label: 'Page', align: 'center', sortFn: (a, b) => (b.hasPage ? 1 : 0) - (a.hasPage ? 1 : 0) },
+                  { key: 'avgRank', label: 'Grid rank', align: 'center', sortFn: (a, b) => (a.avgRank || 99) - (b.avgRank || 99) },
+                  { key: 'gscImpressions', label: 'Impressions', align: 'center', sortFn: (a, b) => (b.gscImpressions || 0) - (a.gscImpressions || 0) },
+                  { key: 'distance', label: 'Distance', align: 'center', sortFn: (a, b) => (a.distance || 999) - (b.distance || 999) },
+                ];
+                const sorted = [...suburbs].sort((a, b) => {
+                  const col = cols.find(c => c.key === proxSortCol);
+                  if (!col) return 0;
+                  const result = col.sortFn(a, b);
+                  return proxSortDir === 'desc' ? -result : result;
+                });
+                const handleSort = (key) => {
+                  if (proxSortCol === key) {
+                    setProxSortDir(proxSortDir === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setProxSortCol(key);
+                    setProxSortDir(key === 'suburb' ? 'asc' : key === 'distance' ? 'asc' : 'desc');
+                  }
+                };
+                return (
+                <div style={{ background: rc.bgInner, borderRadius: 8, padding: '24px 26px', marginBottom: 20, border: `1px solid ${rc.border}` }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: rc.text, marginBottom: 16 }}>Suburb coverage — 3 signals per suburb</div>
+                  <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 0.7fr 0.8fr 0.9fr 0.8fr', padding: '12px 16px', borderBottom: `1px solid ${rc.border}` }}>
+                      {cols.map((col) => (
+                        <span key={col.key} onClick={() => handleSort(col.key)}
+                          style={{ fontSize: 13, fontWeight: 600, color: proxSortCol === col.key ? rc.green : rc.muted, textTransform: 'uppercase', textAlign: col.align, cursor: 'pointer', userSelect: 'none' }}>
+                          {col.label} {proxSortCol === col.key ? (proxSortDir === 'asc' ? '▲' : '▼') : ''}
                         </span>
-                        <span style={{ textAlign: 'center', fontSize: 15, color: rc.muted }}>{dist}</span>
-                      </div>
-                    );
-                  })}
+                      ))}
+                    </div>
+                    {sorted.map((sub, i) => {
+                      const rank = sub.avgRank || null;
+                      const isNotFound = sub.rankSource === 'atrp';
+                      const rankColor = rank ? (isNotFound ? '#d34b45' : rank <= 3 ? '#2fa876' : rank <= 7 ? '#b98223' : rank <= 15 ? '#d86f2a' : '#d34b45') : null;
+                      const hasScans = sub.gridScanCount > 0;
+                      const dist = sub.distance ? `${sub.distance.toFixed(1)} km` : '—';
+                      const imp = sub.gscImpressions || 0;
+                      return (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 0.7fr 0.8fr 0.9fr 0.8fr', padding: '14px 16px', minHeight: 50, alignItems: 'center', borderBottom: i < sorted.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                          <span style={{ fontSize: 15, fontWeight: 500, color: rc.text }}>{sub.suburb}</span>
+                          <span style={{ textAlign: 'center', fontSize: 16, color: sub.inGbp ? '#2fa876' : '#d34b45' }}>{sub.inGbp ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 16, color: sub.hasPage ? '#2fa876' : '#d34b45' }}>{sub.hasPage ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center' }}>
+                            {isNotFound ? <span style={{ fontSize: 13, fontWeight: 600, color: '#d34b45' }}>20+</span>
+                              : rank ? <span style={{ fontSize: 15, fontWeight: 600, color: rankColor }}>#{rank}</span>
+                              : <span style={{ color: rc.muted, fontSize: 15 }}>{hasScans ? '20+' : '—'}</span>}
+                          </span>
+                          <span style={{ textAlign: 'center', fontSize: 15, color: imp > 0 ? '#4b8bd8' : rc.muted, fontWeight: imp > 0 ? 600 : 400 }}>{imp > 0 ? imp.toLocaleString() : '—'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 15, color: rc.muted }}>{dist}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: 13, color: rc.muted, marginTop: 12 }}>Click column headers to sort. Grid rank = avg position from last scan. Impressions = GSC search impressions for suburb keywords.</div>
                 </div>
-                <div style={{ fontSize: 13, color: rc.muted, marginTop: 12 }}>Sorted by distance from business. Grid rank = average position from last scan. — = not scanned yet.</div>
-              </div>
+                );
+              })()}
 
               {/* Actions */}
               {(subNoGbp.length > 0 || subNotScanned.length > 0 || subRankingLow.length > 0) && (
