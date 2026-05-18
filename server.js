@@ -3246,9 +3246,6 @@ async function checkMonthlyAuditLimit(projectId, pillar) {
 // Run speed audit on ALL pages (via Google PageSpeed Insights) — async background job
 app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   try {
-    const limit = await checkMonthlyAuditLimit(req.params.projectId, 'speed');
-    if (limit.limited) return res.status(429).json({ error: `Speed audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
-
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = projRes.rows[0];
