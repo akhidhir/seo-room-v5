@@ -7918,6 +7918,7 @@
       const [bulkFixing, setBulkFixing] = useState(false);
       const [fixingPage, setFixingPage] = useState(null);
       const [fixResults, setFixResults] = useState({});
+      const [retestingPage, setRetestingPage] = useState(null);
 
       const handleAutoFix = async (pageKey, page) => {
         setFixingPage(pageKey);
@@ -7931,10 +7932,45 @@
             result.fixes_applied = (result.applied || []).length;
           }
           setFixResults(prev => ({ ...prev, [pageKey]: result }));
+          // Auto re-test after successful fix to show updated score
+          if (result.success && result.fixes_applied > 0) {
+            const idx = sortedResults.findIndex(r => r.url === page.url);
+            if (idx >= 0) {
+              setTimeout(() => handleRetestPage(idx, page), 3000); // Wait 3s for WP cache to clear
+            }
+          }
         } catch (e) {
           setFixResults(prev => ({ ...prev, [pageKey]: { error: e.message } }));
         }
         setFixingPage(null);
+      };
+
+      const handleRetestPage = async (pageIdx, page) => {
+        const pageKey = `speed_${pageIdx}`;
+        setRetestingPage(pageKey);
+        try {
+          const result = await api(`/speed-audit/${project.id}/retest-page`, {
+            method: 'POST',
+            body: { page_url: page.url }
+          });
+          if (result.success) {
+            // Update the local speedResults with fresh data
+            setSpeedResults(prev => {
+              const updated = [...prev];
+              const realIdx = updated.findIndex(r => r.url === page.url);
+              if (realIdx >= 0) {
+                updated[realIdx] = { ...updated[realIdx], cwv: result.cwv, performance_score: result.score, opportunities: result.opportunities };
+              }
+              _speedCache[_spck] = updated;
+              return updated;
+            });
+            // Clear any previous fix result for this page since we have fresh data
+            setFixResults(prev => { const n = {...prev}; delete n[pageKey]; return n; });
+          }
+        } catch (e) {
+          console.error('Retest failed:', e.message);
+        }
+        setRetestingPage(null);
       };
 
       const isPageAdded = (pageKey, page) => {
@@ -8061,9 +8097,17 @@
                           <td style={{ padding: '10px 10px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               {needsAction && <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'}`} style={{ fontSize: 10, color: 'var(--text3)', width: 12 }} />}
-                              <div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontWeight: 600, fontSize: 13 }}>{page.title || page.slug}</div>
-                                <div style={{ fontSize: 11, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>/{page.slug}</div>
+                                <div style={{ fontSize: 11, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220, display: 'inline' }}>/{page.slug}</div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                                <button title="Re-test this page" onClick={() => handleRetestPage(idx, page)} disabled={retestingPage === pageKey} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', cursor: 'pointer', color: retestingPage === pageKey ? '#3b82f6' : 'var(--text3)', fontSize: 11 }}>
+                                  <i className={`fas fa-sync-alt${retestingPage === pageKey ? ' fa-spin' : ''}`} />
+                                </button>
+                                <a href={`https://pagespeed.web.dev/analysis?url=${encodeURIComponent(page.url)}`} target="_blank" rel="noopener noreferrer" title="Test on PageSpeed Insights" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', color: 'var(--text3)', fontSize: 11, textDecoration: 'none' }}>
+                                  <i className="fas fa-external-link-alt" />
+                                </a>
                               </div>
                             </div>
                           </td>

@@ -3452,6 +3452,89 @@ app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
   }
 });
 
+// Re-test a single page's PageSpeed score and update stored audit data
+app.post('/api/speed-audit/:projectId/retest-page', async (req, res) => {
+  const { page_url } = req.body;
+  if (!page_url) return res.status(400).json({ error: 'page_url required' });
+
+  try {
+    console.log(`[speed-retest] Testing ${page_url} for project ${req.params.projectId}`);
+    const psData = await runPageSpeedAudit(page_url, 'mobile');
+    const metrics = psData.lighthouseResult?.audits || {};
+    const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+
+    // Extract opportunities (same logic as full audit)
+    const opportunities = [];
+    const fixableAudits = [
+      'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
+      'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
+      'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
+      'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
+      'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
+      'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
+    ];
+    for (const key of fixableAudits) {
+      const audit = metrics[key];
+      if (audit && audit.score !== null && audit.score < 1) {
+        const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
+        if (audit.details?.items?.length) {
+          opp.items = audit.details.items.slice(0, 10).map(item => {
+            const cleaned = {};
+            if (item.url) cleaned.url = item.url;
+            if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
+            if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
+            if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
+            if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
+            if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
+            return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
+          });
+        }
+        opportunities.push(opp);
+      }
+    }
+
+    const updatedPage = {
+      cwv: {
+        lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
+        fid: metrics['max-potential-fid']?.displayValue || 'N/A',
+        cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
+        fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
+        si: metrics['speed-index']?.displayValue || 'N/A',
+        tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
+        score,
+      },
+      performance_score: score,
+      opportunities,
+    };
+
+    // Update stored audit data in DB
+    try {
+      const auditRow = await pool.query(
+        `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [req.params.projectId]
+      );
+      if (auditRow.rows.length > 0) {
+        const auditData = typeof auditRow.rows[0].audit_data === 'string' ? JSON.parse(auditRow.rows[0].audit_data) : auditRow.rows[0].audit_data;
+        if (auditData.results) {
+          const idx = auditData.results.findIndex(r => r.url === page_url);
+          if (idx >= 0) {
+            auditData.results[idx] = { ...auditData.results[idx], ...updatedPage };
+            await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`, [JSON.stringify(auditData), auditRow.rows[0].id]);
+            console.log(`[speed-retest] Updated stored data for ${page_url} — score: ${score}`);
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.warn(`[speed-retest] DB update failed: ${dbErr.message}`);
+    }
+
+    res.json({ success: true, score, cwv: updatedPage.cwv, opportunities, url: page_url });
+  } catch (e) {
+    console.error(`[speed-retest] Error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get latest speed audit results (for persistence across navigation)
 app.get('/api/projects/:projectId/audits/speed/latest', async (req, res) => {
   try {
