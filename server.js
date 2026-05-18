@@ -17751,15 +17751,29 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       } catch (e) { sitemapOk = true; sitemapUrls = allPages.length; }
     }
 
-    // Normalize connector pages: they don't have statusCode, so default to 200
+    // Normalize connector pages: defaults for fields the connector might not provide
     if (usedConnector) {
       crawlResults = crawlResults.map(p => ({
         ...p,
         statusCode: p.statusCode || 200,
         isHttps: p.isHttps !== undefined ? p.isHttps : true,
+        schemas: Array.isArray(p.schemas) ? p.schemas : [],
+        schemaSources: Array.isArray(p.schemaSources) ? p.schemaSources : [],
+        hasOG: p.hasOG !== undefined ? p.hasOG : false,
+        hasViewport: p.hasViewport !== undefined ? p.hasViewport : true,
+        questionHeadings: p.questionHeadings || 0,
+        hasFAQSection: p.hasFAQSection || false,
       }));
     }
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
+    // Debug: log schemas from first 5 pages + homepage
+    const homeDebug = crawlResults.find(p => {
+      const path = (p.path || '').replace(/^\/|\/$/g, '');
+      return !path || path === '' || path === 'home';
+    });
+    console.log(`[website-audit] Homepage schemas: ${JSON.stringify(homeDebug?.schemas || 'NOT FOUND')}, schemaSources: ${JSON.stringify(homeDebug?.schemaSources?.slice(0, 5) || 'none')}`);
+    const allSchemasSample = crawlResults.slice(0, 5).map(p => ({ path: p.path, schemas: p.schemas }));
+    console.log(`[website-audit] First 5 pages schemas: ${JSON.stringify(allSchemasSample)}`);
     const findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
     // Filter out Cloudflare blocks from error pages (false positives — site works fine for real users)
