@@ -26471,6 +26471,11 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       citationCount,
       citationScanned,
       directoryList,
+      gscQueries: gscKeywords
+        .filter(g => (g.impressions || 0) > 0)
+        .sort((a, b) => (b.impressions || 0) - (a.impressions || 0))
+        .slice(0, 20)
+        .map(g => ({ query: g.keyword, impressions: g.impressions || 0, clicks: g.clicks || 0, ctr: g.ctr || 0, position: g.position || 0 })),
     });
   } catch (e) {
     console.error('[local-intel] Error:', e.message, e.stack);
