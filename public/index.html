@@ -4456,9 +4456,9 @@
                   Services — {services.length} on website, {servicesInGbp} in GBP
                 </div>
                 {services.map((svc, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', marginBottom: 4, borderRadius: 10, background: svc.inGbp ? 'var(--bg)' : '#fef2f2', border: svc.inGbp ? 'none' : '0.5px solid #fecaca' }}>
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', marginBottom: 4, borderRadius: 10, background: svc.inGbp ? 'var(--bg)' : '#ef444412', border: svc.inGbp ? 'none' : '1px solid #ef444425' }}>
                     <span style={{ fontSize: 16, fontWeight: svc.inGbp ? 600 : 700, color: 'var(--text1)' }}>{svc.service}</span>
-                    <span style={{ padding: '4px 14px', borderRadius: 99, fontSize: 13, fontWeight: 600, background: svc.inGbp ? '#dcfce7' : '#fee2e2', color: svc.inGbp ? '#166534' : '#991b1b', border: 'none' }}>
+                    <span style={{ padding: '4px 14px', borderRadius: 99, fontSize: 13, fontWeight: 600, background: svc.inGbp ? '#22c55e18' : '#ef444418', color: svc.inGbp ? '#22c55e' : '#ef4444', border: 'none' }}>
                       {svc.inGbp ? 'In GBP' : 'Not in GBP'}
                     </span>
                   </div>
@@ -4473,7 +4473,7 @@
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
                   {categories.length > 0 ? categories.map((cat, i) => (
-                    <span key={i} style={{ padding: '8px 16px', borderRadius: 99, border: 'none', background: i === 0 ? '#dbeafe' : 'var(--bg)', fontSize: 15, fontWeight: i === 0 ? 700 : 500, color: i === 0 ? '#1e40af' : 'var(--text2)' }}>
+                    <span key={i} style={{ padding: '8px 16px', borderRadius: 99, border: i === 0 ? '1px solid #3b82f640' : '1px solid var(--border)', background: i === 0 ? '#3b82f618' : 'var(--bg)', fontSize: 15, fontWeight: i === 0 ? 700 : 500, color: i === 0 ? '#3b82f6' : 'var(--text2)' }}>
                       {i === 0 ? `${cat} (primary)` : cat}
                     </span>
                   )) : (
@@ -4493,7 +4493,7 @@
                   <React.Fragment>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {descKeywords.map((k, i) => (
-                        <span key={i} style={{ padding: '6px 14px', borderRadius: 99, border: 'none', background: k.found ? '#dcfce7' : '#fee2e2', fontSize: 14, fontWeight: 600, color: k.found ? '#166534' : '#991b1b' }}>
+                        <span key={i} style={{ padding: '6px 14px', borderRadius: 99, border: `1px solid ${k.found ? '#22c55e30' : '#ef444430'}`, background: k.found ? '#22c55e15' : '#ef444415', fontSize: 14, fontWeight: 600, color: k.found ? '#22c55e' : '#ef4444' }}>
                           {k.keyword}
                         </span>
                       ))}
@@ -4514,7 +4514,7 @@
                 {services.map((svc, i) => {
                   const pc = svc.postCount || 0;
                   return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', marginBottom: 4, borderRadius: 10, background: pc > 0 ? 'var(--bg)' : '#fef2f2', border: pc > 0 ? 'none' : '0.5px solid #fecaca' }}>
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', marginBottom: 4, borderRadius: 10, background: pc > 0 ? 'var(--bg)' : '#ef444412', border: pc > 0 ? 'none' : '1px solid #ef444425' }}>
                       <span style={{ fontSize: 16, fontWeight: pc > 0 ? 600 : 700, color: 'var(--text1)' }}>{svc.service}</span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: pc > 0 ? '#22c55e' : '#ef4444' }}>
                         {pc > 0 ? `${pc} post${pc > 1 ? 's' : ''}` : 'No posts'}
@@ -4552,7 +4552,7 @@
                       const matchesPost = services.filter(svc => (svc.postCount || 0) > 0).some(svc => qLower.includes(svc.service.toLowerCase().split(' ')[0]));
                       const hasGap = !matchesGbp || !matchesDesc;
                       return (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.8fr 0.6fr 0.6fr 0.5fr 0.5fr 0.5fr', padding: '12px 16px', borderBottom: i < queryRows.length - 1 ? '1px solid var(--border)' : 'none', background: hasGap ? '#fef2f2' : 'transparent' }}>
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2.5fr 0.8fr 0.6fr 0.6fr 0.5fr 0.5fr 0.5fr', padding: '12px 16px', borderBottom: i < queryRows.length - 1 ? '1px solid var(--border)' : 'none', background: hasGap ? '#f59e0b08' : 'transparent' }}>
                           <span style={{ fontSize: 15, fontWeight: hasGap ? 700 : 500, color: 'var(--text1)' }}>{q.query}</span>
                           <span style={{ fontSize: 15, color: 'var(--text2)', textAlign: 'right' }}>{q.impressions != null ? q.impressions.toLocaleString() : '—'}</span>
                           <span style={{ fontSize: 15, color: 'var(--text2)', textAlign: 'right' }}>{q.clicks != null ? q.clicks.toLocaleString() : '—'}</span>
