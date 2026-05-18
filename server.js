@@ -25505,6 +25505,17 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
+    // Match GBP posts to suburbs
+    for (const post of gbpPosts) {
+      const postText = normalize(post.summary || '');
+      for (const n of allSuburbNames) {
+        if (n.length >= 4 && postText.includes(n)) {
+          if (!suburbSources[n].postMentions) suburbSources[n].postMentions = [];
+          suburbSources[n].postMentions.push({ summary: (post.summary || '').substring(0, 120), date: post.createTime || '' });
+        }
+      }
+    }
+
     // Match keywords to suburbs
     for (const kw of rankKeywords) {
       const kwN = normalize(kw.keyword);
@@ -25640,6 +25651,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
         reviewMentions: s.reviewMentions?.length || 0,
         reviewSnippets: (s.reviewMentions || []).slice(0, 3),
+        postMentions: s.postMentions?.length || 0,
         indexedPages,
         notIndexedPages,
         indexingStatus: notIndexedPages > 0 ? 'issues' : indexedPages > 0 ? 'indexed' : s.hasPage ? 'unchecked' : null,

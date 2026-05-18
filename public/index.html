@@ -4713,6 +4713,8 @@
                   { key: 'suburb', label: 'Suburb', align: 'left', sortFn: (a, b) => a.suburb.localeCompare(b.suburb) },
                   { key: 'inGbp', label: 'GBP', align: 'center', sortFn: (a, b) => (b.inGbp ? 1 : 0) - (a.inGbp ? 1 : 0) },
                   { key: 'hasPage', label: 'Page', align: 'center', sortFn: (a, b) => (b.hasPage ? 1 : 0) - (a.hasPage ? 1 : 0) },
+                  { key: 'reviewMentions', label: 'Reviews', align: 'center', sortFn: (a, b) => (b.reviewMentions || 0) - (a.reviewMentions || 0) },
+                  { key: 'postMentions', label: 'Posts', align: 'center', sortFn: (a, b) => (b.postMentions || 0) - (a.postMentions || 0) },
                   { key: 'avgRank', label: 'Grid rank', align: 'center', sortFn: (a, b) => (a.avgRank || 99) - (b.avgRank || 99) },
                   { key: 'gscImpressions', label: 'Impressions', align: 'center', sortFn: (a, b) => (b.gscImpressions || 0) - (a.gscImpressions || 0) },
                   { key: 'distance', label: 'Distance', align: 'center', sortFn: (a, b) => (a.distance || 999) - (b.distance || 999) },
@@ -4733,9 +4735,9 @@
                 };
                 return (
                 <div style={{ background: rc.bgInner, borderRadius: 8, padding: '24px 26px', marginBottom: 20, border: `1px solid ${rc.border}` }}>
-                  <div style={{ fontSize: 16, fontWeight: 600, color: rc.text, marginBottom: 16 }}>Suburb coverage — 3 signals per suburb</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: rc.text, marginBottom: 16 }}>Suburb coverage — ranking signals per suburb</div>
                   <div style={{ borderRadius: 6, overflow: 'hidden' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.8fr 0.9fr 0.8fr', padding: '12px 16px', borderBottom: `1px solid ${rc.border}` }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr 0.8fr 0.9fr 0.8fr', padding: '12px 16px', borderBottom: `1px solid ${rc.border}` }}>
                       {cols.map((col) => (
                         <span key={col.key} onClick={() => handleSort(col.key)}
                           style={{ fontSize: 12, fontWeight: 600, color: proxSortCol === col.key ? rc.green : rc.muted, textTransform: 'uppercase', textAlign: col.align, cursor: 'pointer', userSelect: 'none', letterSpacing: 0.3 }}>
@@ -4751,10 +4753,12 @@
                       const dist = sub.distance ? `${sub.distance.toFixed(1)} km` : '—';
                       const imp = sub.gscImpressions || 0;
                       return (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.8fr 0.9fr 0.8fr', padding: '14px 16px', minHeight: 50, alignItems: 'center', borderBottom: i < sorted.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.6fr 0.6fr 0.7fr 0.7fr 0.8fr 0.9fr 0.8fr', padding: '14px 16px', minHeight: 50, alignItems: 'center', borderBottom: i < sorted.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
                           <span style={{ fontSize: 15, fontWeight: 500, color: rc.text }}>{sub.suburb}</span>
                           <span style={{ textAlign: 'center', fontSize: 16, color: sub.inGbp ? '#2fa876' : '#d34b45' }}>{sub.inGbp ? '✓' : '✗'}</span>
                           <span style={{ textAlign: 'center', fontSize: 16, color: sub.hasPage ? '#2fa876' : '#d34b45' }}>{sub.hasPage ? '✓' : '✗'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 14, fontWeight: (sub.reviewMentions || 0) > 0 ? 600 : 400, color: (sub.reviewMentions || 0) > 0 ? '#2fa876' : rc.muted }}>{(sub.reviewMentions || 0) > 0 ? sub.reviewMentions : '—'}</span>
+                          <span style={{ textAlign: 'center', fontSize: 14, fontWeight: (sub.postMentions || 0) > 0 ? 600 : 400, color: (sub.postMentions || 0) > 0 ? '#2fa876' : rc.muted }}>{(sub.postMentions || 0) > 0 ? sub.postMentions : '—'}</span>
                           <span style={{ textAlign: 'center' }}>
                             {isNotFound ? <span style={{ fontSize: 13, fontWeight: 600, color: '#d34b45' }}>20+</span>
                               : rank ? <span style={{ fontSize: 15, fontWeight: 600, color: rankColor }}>#{rank}</span>
@@ -4766,7 +4770,7 @@
                       );
                     })}
                   </div>
-                  <div style={{ fontSize: 13, color: rc.muted, marginTop: 12 }}>Click column headers to sort. Impressions = GSC search volume for suburb keywords.</div>
+                  <div style={{ fontSize: 13, color: rc.muted, marginTop: 12 }}>Click column headers to sort. Reviews/Posts = mentions of suburb name. Impressions = GSC search volume.</div>
                 </div>
                 );
               })()}
