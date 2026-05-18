@@ -4657,6 +4657,69 @@
                 ))}
               </div>
 
+              {/* Low Hanging Fruits */}
+              {(() => {
+                const calcOppLhf = (sub) => {
+                  const imp = sub.gscImpressions || 0;
+                  if (imp === 0) return 0;
+                  const rank = sub.avgRank || 21;
+                  const rankGap = Math.max(0, rank - 3);
+                  const pageBonus = sub.hasPage ? 1.2 : 0.5;
+                  return Math.round(imp * rankGap * pageBonus);
+                };
+                const fruits = [...suburbs]
+                  .map(s => ({ ...s, opp: calcOppLhf(s) }))
+                  .filter(s => s.opp > 0)
+                  .sort((a, b) => b.opp - a.opp)
+                  .slice(0, 5);
+                if (fruits.length === 0) return null;
+                return (
+                  <div style={{ background: rc.bgInner, borderRadius: 8, padding: '24px 26px', marginBottom: 20, border: `1px solid ${rc.border}`, borderLeft: '3px solid #f59e0b' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+                      <span style={{ fontSize: 20 }}>🎯</span>
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>Low Hanging Fruits</div>
+                        <div style={{ fontSize: 13, color: rc.muted }}>High GSC impressions + poor Maps rank = biggest wins with least effort</div>
+                      </div>
+                    </div>
+                    {fruits.map((sub, i) => {
+                      const rank = sub.avgRank || 21;
+                      const missing = [];
+                      if (!sub.inGbp) missing.push('Add to GBP areas');
+                      if (!sub.hasPage) missing.push('Create landing page');
+                      if (sub.reviewMentions === 0) missing.push('Get reviews mentioning suburb');
+                      if (sub.gridScanCount === 0) missing.push('Run grid scan');
+                      if (rank > 10) missing.push('Optimize page content + internal links');
+                      return (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 16px', borderRadius: 8, background: i === 0 ? '#f59e0b0c' : 'transparent', borderBottom: i < fruits.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                          <div style={{ minWidth: 32, fontSize: 20, fontWeight: 900, color: i === 0 ? '#f59e0b' : i < 3 ? '#b98223' : rc.muted, textAlign: 'center' }}>#{i + 1}</div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+                              <span style={{ fontSize: 15, fontWeight: 600, color: rc.text }}>{sub.suburb}</span>
+                              <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: '#f59e0b18', color: '#f59e0b', fontWeight: 700 }}>{sub.opp > 1000 ? `${(sub.opp / 1000).toFixed(1)}k` : sub.opp} opp</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 12, color: '#4b8bd8' }}>{(sub.gscImpressions || 0).toLocaleString()} impressions</span>
+                              <span style={{ fontSize: 12, color: rc.muted }}>·</span>
+                              <span style={{ fontSize: 12, color: rank > 10 ? '#d34b45' : rank > 5 ? '#b98223' : '#2fa876' }}>Maps rank: {rank > 20 ? '20+' : `#${rank}`}</span>
+                              <span style={{ fontSize: 12, color: rc.muted }}>·</span>
+                              <span style={{ fontSize: 12, color: sub.distance ? rc.muted : '#b98223' }}>{sub.distance ? `${sub.distance.toFixed(1)} km` : 'unknown distance'}</span>
+                            </div>
+                            {missing.length > 0 && (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                                {missing.map((m, j) => (
+                                  <span key={j} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#2fa87615', color: '#2fa876', fontWeight: 500 }}>{m}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
               {/* Suburb table — sortable */}
               {(() => {
                 // Opportunity score: high impressions + bad rank = biggest opportunity
