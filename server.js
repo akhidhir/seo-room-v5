@@ -26420,6 +26420,29 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       suburbSource,
       hasLocationPages,
       suburbs: suburbMatrix,
+      unmatchedGscSuburbs: (() => {
+        // Find GSC keywords with suburb-like patterns NOT in our target list
+        const matchedKws = new Set();
+        for (const [kwLower] of Object.entries(gscMap)) {
+          for (const n of allSuburbNames) {
+            if (kwLower.includes(n)) matchedKws.add(kwLower);
+          }
+        }
+        // Check all SUBURB_GPS names + common suburb patterns
+        const allKnownSuburbs = Object.keys(SUBURB_GPS);
+        const discovered = [];
+        for (const [kwLower, gsc] of Object.entries(gscMap)) {
+          if (matchedKws.has(kwLower)) continue;
+          if ((gsc.impressions || 0) < 5) continue;
+          for (const sub of allKnownSuburbs) {
+            if (kwLower.includes(sub) && !allSuburbNames.has(sub)) {
+              discovered.push({ keyword: gsc.keyword, suburb: sub, impressions: gsc.impressions, clicks: gsc.clicks, position: gsc.position });
+              break;
+            }
+          }
+        }
+        return discovered.sort((a, b) => (b.impressions || 0) - (a.impressions || 0)).slice(0, 20);
+      })(),
       services: serviceMatrix.filter(s => s.type === 'service'),
       products: serviceMatrix.filter(s => s.type === 'product'),
       definedServices,

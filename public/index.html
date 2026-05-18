@@ -3732,7 +3732,7 @@
       );
       if (!data) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>No data available. Run audits and sync RC data first.</div>;
 
-      const { summary: s, suburbs, services, products: _products = [], recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, gbpAuditChecks = [], competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [], suburbSource = 'website', hasLocationPages = true, gbpOnlyLocations = [] } = data;
+      const { summary: s, suburbs, services, products: _products = [], recommendations, competitors = [], matrix = [], serviceNames = [], gbpCompleteness: gbpC = {}, gbpAuditChecks = [], competitorBenchmarks: compB = {}, citationCount = 0, directoryList = [], suburbSource = 'website', hasLocationPages = true, gbpOnlyLocations = [], unmatchedGscSuburbs = [] } = data;
       const Check = ({ ok }) => <span style={{ color: ok ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 18 }}>{ok ? '✓' : '✗'}</span>;
       const ScorePill = ({ score }) => {
         const color = score >= 80 ? '#22c55e' : score >= 60 ? '#f59e0b' : score >= 40 ? '#f97316' : '#ef4444';
@@ -4706,6 +4706,31 @@
                   </div>
                 );
               })()}
+
+              {/* Discovered suburbs from GSC — not in target list */}
+              {unmatchedGscSuburbs.length > 0 && (
+                <div style={{ background: rc.bgInner, borderRadius: 8, padding: '24px 26px', marginBottom: 20, border: `1px solid ${rc.border}`, borderLeft: '3px solid #4b8bd8' }}>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#4b8bd8', marginBottom: 4 }}>Discovered from GSC</div>
+                    <div style={{ fontSize: 13, color: rc.muted }}>These suburbs have GSC impressions but aren't in your target list. Consider adding them.</div>
+                  </div>
+                  <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 2fr 0.8fr 0.8fr', padding: '10px 14px', borderBottom: `1px solid ${rc.border}` }}>
+                      {['Suburb', 'Keyword', 'Impressions', 'Clicks'].map((h, i) => (
+                        <span key={i} style={{ fontSize: 12, fontWeight: 600, color: rc.muted, textTransform: 'uppercase' }}>{h}</span>
+                      ))}
+                    </div>
+                    {unmatchedGscSuburbs.map((u, i) => (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.5fr 2fr 0.8fr 0.8fr', padding: '12px 14px', alignItems: 'center', borderBottom: i < unmatchedGscSuburbs.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: '#4b8bd8', textTransform: 'capitalize' }}>{u.suburb}</span>
+                        <span style={{ fontSize: 13, color: rc.text }}>{u.keyword}</span>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: '#4b8bd8' }}>{(u.impressions || 0).toLocaleString()}</span>
+                        <span style={{ fontSize: 14, color: (u.clicks || 0) > 0 ? '#2fa876' : rc.muted }}>{u.clicks || 0}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Suburb table — sortable */}
               {(() => {
