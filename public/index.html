@@ -4646,7 +4646,7 @@
                   { label: 'Target suburbs', value: suburbs.length, color: rc.text },
                   { label: 'In GBP areas', value: `${suburbsInGbp}/${suburbs.length}`, color: suburbsInGbp === suburbs.length ? '#2fa876' : '#d34b45' },
                   { label: 'Has landing page', value: `${suburbsWithPages}/${suburbs.length}`, color: suburbsWithPages === suburbs.length ? '#2fa876' : '#d34b45' },
-                  { label: 'Grid scanned', value: `${suburbsTracked}/${suburbs.length}`, color: '#b98223' },
+                  { label: 'Grid scanned', value: `${suburbs.filter(s => s.gridScanCount > 0).length}/${suburbs.length}`, color: '#b98223' },
                 ].map((m, i) => (
                   <div key={i} style={{ padding: '22px 16px', borderRadius: 8, border: `1px solid ${rc.border}`, background: rc.bgInner, textAlign: 'center' }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: rc.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>{m.label}</div>
@@ -4666,7 +4666,9 @@
                   </div>
                   {suburbs.map((sub, i) => {
                     const rank = sub.avgRank || null;
-                    const rankColor = rank ? (rank <= 3 ? '#2fa876' : rank <= 7 ? '#b98223' : rank <= 15 ? '#d86f2a' : '#d34b45') : null;
+                    const isNotFound = sub.rankSource === 'atrp';
+                    const rankColor = rank ? (isNotFound ? '#d34b45' : rank <= 3 ? '#2fa876' : rank <= 7 ? '#b98223' : rank <= 15 ? '#d86f2a' : '#d34b45') : null;
+                    const hasScans = sub.gridScanCount > 0;
                     const dist = sub.distance ? `${sub.distance.toFixed(1)} km` : '—';
                     return (
                       <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.8fr', padding: '14px 16px', minHeight: 50, alignItems: 'center', borderBottom: i < suburbs.length - 1 ? `1px solid ${rc.border}` : 'none' }}>
@@ -4674,7 +4676,9 @@
                         <span style={{ textAlign: 'center', fontSize: 16, color: sub.inGbp ? '#2fa876' : '#d34b45' }}>{sub.inGbp ? '✓' : '✗'}</span>
                         <span style={{ textAlign: 'center', fontSize: 16, color: sub.hasPage ? '#2fa876' : '#d34b45' }}>{sub.hasPage ? '✓' : '✗'}</span>
                         <span style={{ textAlign: 'center' }}>
-                          {rank ? <span style={{ fontSize: 15, fontWeight: 600, color: rankColor }}>#{rank}</span> : <span style={{ color: rc.muted, fontSize: 15 }}>—</span>}
+                          {isNotFound ? <span style={{ fontSize: 13, fontWeight: 600, color: '#d34b45' }}>20+</span>
+                            : rank ? <span style={{ fontSize: 15, fontWeight: 600, color: rankColor }}>#{rank}</span>
+                            : <span style={{ color: rc.muted, fontSize: 15 }}>{hasScans ? '20+' : '—'}</span>}
                         </span>
                         <span style={{ textAlign: 'center', fontSize: 15, color: rc.muted }}>{dist}</span>
                       </div>

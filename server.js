@@ -25521,7 +25521,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       for (const n of allSuburbNames) {
         if (kwLower.includes(n)) {
           if (!suburbSources[n].gridScans) suburbSources[n].gridScans = [];
-          suburbSources[n].gridScans.push({ keyword: kwLower, arp: gs.arp, solv: gs.solv });
+          suburbSources[n].gridScans.push({ keyword: kwLower, arp: gs.arp, atrp: gs.atrp, solv: gs.solv, found_in: gs.found_in });
         }
       }
     }
@@ -25592,15 +25592,26 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       const notIndexedPages = s.indexing?.filter(i => i.verdict === 'FAIL' || i.verdict === 'NEUTRAL').length || 0;
       if (notIndexedPages > 0) gaps.push('Fix indexing issues');
 
-      // Auto-link: avgRank from grid scans ARP or keyword maps positions
+      // Auto-link: avgRank from grid scans ARP (or ATRP if not found), or keyword maps positions
       let avgRank = null;
+      let rankSource = null;
       if (s.gridScans?.length) {
         const arps = s.gridScans.map(g => g.arp).filter(v => v != null && v > 0);
-        if (arps.length) avgRank = Math.round(arps.reduce((a, b) => a + b, 0) / arps.length * 10) / 10;
+        if (arps.length) {
+          avgRank = Math.round(arps.reduce((a, b) => a + b, 0) / arps.length * 10) / 10;
+          rankSource = 'arp';
+        } else {
+          // Business not found — use ATRP (treats unfound as 21)
+          const atrps = s.gridScans.map(g => g.atrp).filter(v => v != null && v > 0);
+          if (atrps.length) {
+            avgRank = Math.round(atrps.reduce((a, b) => a + b, 0) / atrps.length * 10) / 10;
+            rankSource = 'atrp';
+          }
+        }
       }
       if (avgRank == null && s.keywords?.length) {
         const mapsPos = s.keywords.map(k => k.maps).filter(v => v != null && v > 0);
-        if (mapsPos.length) avgRank = Math.round(mapsPos.reduce((a, b) => a + b, 0) / mapsPos.length * 10) / 10;
+        if (mapsPos.length) { avgRank = Math.round(mapsPos.reduce((a, b) => a + b, 0) / mapsPos.length * 10) / 10; rankSource = 'serp'; }
       }
 
       // Auto-link: distance from business center to suburb GPS
@@ -25622,6 +25633,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         gridScanCount: s.gridScans?.length || 0,
         bestSolv: s.gridScans?.length ? Math.max(...s.gridScans.map(g => g.solv || 0)) : null,
         avgRank,
+        rankSource,
         distance,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
