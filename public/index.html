@@ -7922,14 +7922,13 @@
       const handleAutoFix = async (pageKey, page) => {
         setFixingPage(pageKey);
         try {
-          const result = await api(`/projects/${project.id}/speed-fix`, {
+          const result = await api(`/projects/${project.id}/cwv-fix`, {
             method: 'POST',
-            body: { page_url: page.url, page_id: page.page_id, opportunities: page.opportunities || [] }
+            body: { page_url: page.url, opportunities: page.opportunities || [] }
           });
-          // Normalize response for UI: map applied array length to fixes_applied
-          if (result.success && result.applied) {
-            result.fixes_applied = result.applied.length;
-            result.applied = result.applied.map(a => ({ fix_type: a }));
+          // cwv-fix returns { success, fixes_applied, applied: [{fix_type, fix_id, reason}], failed }
+          if (!result.fixes_applied && result.fixes_applied !== 0) {
+            result.fixes_applied = (result.applied || []).length;
           }
           setFixResults(prev => ({ ...prev, [pageKey]: result }));
         } catch (e) {
@@ -7945,7 +7944,7 @@
       };
 
       const failingPages = useMemo(() => {
-        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !fixResults[pageKey]?.success);
+        return sortedResults.map((page, i) => ({ pageKey: `speed_${i}`, page })).filter(({ pageKey, page }) => (page.cwv?.score || 0) < 90 && !fixResults[pageKey]?.success && fixResults[pageKey]?.fixes_applied !== 0);
       }, [sortedResults, fixResults]);
 
       const handleAddAll = async () => {
@@ -8085,6 +8084,8 @@
                                 <span style={{ color: '#ef4444', fontSize: 11 }}>Failed</span>
                                 <button className="btn btn-primary" onClick={() => handleAutoFix(pageKey, page)} style={{ fontSize: 11, padding: '4px 9px' }}>Retry</button>
                               </div>
+                            ) : fixResults[pageKey]?.fixes_applied === 0 ? (
+                              <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}><i className="fas fa-info-circle" style={{ marginRight: 3 }} />Manual</span>
                             ) : (
                               <button className="btn btn-primary" onClick={() => handleAutoFix(pageKey, page)} disabled={fixingPage === pageKey} style={{ fontSize: 11, padding: '4px 9px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
                                 {fixingPage === pageKey ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
@@ -8135,22 +8136,32 @@
 
                               {/* Auto-Fix Button */}
                               {page.opportunities?.length > 0 && (
-                                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <div style={{ marginTop: 12 }}>
                                   {fixResults[pageKey]?.error ? (
                                     <div style={{ fontSize: 12, color: '#ef4444' }}><i className="fas fa-times-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].error}</div>
                                   ) : fixResults[pageKey]?.fixes_applied > 0 ? (
-                                    <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>
-                                      <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
-                                      {fixResults[pageKey].fixes_applied} fixes applied
+                                    <div>
+                                      <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600, marginBottom: 8 }}>
+                                        <i className="fas fa-check-circle" style={{ marginRight: 4 }} />
+                                        {fixResults[pageKey].fixes_applied} fixes applied via SEO Room plugin
+                                      </div>
                                       {fixResults[pageKey].applied?.map((a, ai) => (
-                                        <span key={ai} style={{ display: 'inline-block', marginLeft: 8, padding: '2px 6px', background: 'rgba(34,197,94,0.1)', borderRadius: 4, fontSize: 11 }}>{a.fix_type}</span>
+                                        <div key={ai} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, padding: '4px 10px', background: 'rgba(34,197,94,0.06)', borderRadius: 6, fontSize: 12 }}>
+                                          <span style={{ fontWeight: 600, color: '#22c55e' }}>{a.fix_type}</span>
+                                          {a.reason && <span style={{ color: 'var(--text3)' }}>— {a.reason}</span>}
+                                        </div>
                                       ))}
+                                      {fixResults[pageKey].failed?.length > 0 && (
+                                        <div style={{ marginTop: 6, fontSize: 11, color: '#f59e0b' }}>
+                                          <i className="fas fa-exclamation-triangle" style={{ marginRight: 4 }} />{fixResults[pageKey].failed.length} fix(es) failed — may need manual action
+                                        </div>
+                                      )}
                                     </div>
                                   ) : fixResults[pageKey]?.fixes_applied === 0 ? (
-                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].message || 'No safe auto-fixes available — remaining issues need manual optimization'}</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{fixResults[pageKey].message || 'BerqWP likely handles the remaining issues — no additional fixes needed'}</div>
                                   ) : (
                                     <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); handleAutoFix(pageKey, page); }} disabled={fixingPage === pageKey} style={{ fontSize: 12, padding: '6px 16px' }}>
-                                      {fixingPage === pageKey ? <><span className="spinner"></span>Analyzing & Fixing...</> : <><i className="fas fa-magic" style={{ marginRight: 6 }} />Auto-Fix via Plugin</>}
+                                      {fixingPage === pageKey ? <><span className="spinner"></span>AI analyzing & applying fixes...</> : <><i className="fas fa-magic" style={{ marginRight: 6 }} />Auto-Fix via AI</>}
                                     </button>
                                   )}
                                 </div>
