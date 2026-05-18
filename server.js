@@ -25244,15 +25244,16 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const rankMap = {};
     for (const r of rtR.rows) rankMap[r.keyword.toLowerCase()] = r;
 
-    // 4. Grid scans (latest per keyword) — include competitors + center coords
+    // 4. Grid scans (latest per keyword+location) — include competitors + center coords
     const gsR = await pool.query(`
-      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, competitors, center_lat, center_lng, scanned_at
-      FROM grid_scans WHERE project_id=$1 ORDER BY keyword, scanned_at DESC
+      SELECT DISTINCT ON (keyword, COALESCE(location,'')) keyword, location, arp, atrp, solv, found_in, data_points, competitors, center_lat, center_lng, scanned_at
+      FROM grid_scans WHERE project_id=$1 ORDER BY keyword, COALESCE(location,''), scanned_at DESC
     `, [projectId]);
     const gridMap = {};
     for (const g of gsR.rows) {
       const comps = typeof g.competitors === 'string' ? JSON.parse(g.competitors) : (g.competitors || {});
-      gridMap[g.keyword.toLowerCase()] = { ...g, competitors: comps };
+      const mapKey = g.location ? `${g.keyword} ${g.location}`.toLowerCase() : g.keyword.toLowerCase();
+      gridMap[mapKey] = { ...g, competitors: comps };
     }
 
     // 4b. External audit competitor findings
