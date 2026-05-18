@@ -25208,9 +25208,9 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     const rankMap = {};
     for (const r of rtR.rows) rankMap[r.keyword.toLowerCase()] = r;
 
-    // 4. Grid scans (latest per keyword) — include competitors
+    // 4. Grid scans (latest per keyword) — include competitors + center coords
     const gsR = await pool.query(`
-      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, competitors, scanned_at
+      SELECT DISTINCT ON (keyword) keyword, arp, atrp, solv, found_in, data_points, competitors, center_lat, center_lng, scanned_at
       FROM grid_scans WHERE project_id=$1 ORDER BY keyword, scanned_at DESC
     `, [projectId]);
     const gridMap = {};
@@ -25515,6 +25515,22 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       }
     }
 
+    // Get business center coordinates from grid scans or RC profile
+    let bizLat = null, bizLng = null;
+    for (const gs of Object.values(gridMap)) {
+      if (gs.center_lat && gs.center_lng) { bizLat = parseFloat(gs.center_lat); bizLng = parseFloat(gs.center_lng); break; }
+    }
+    if (!bizLat && rcData?.profile?.latlng) {
+      bizLat = rcData.profile.latlng.latitude; bizLng = rcData.profile.latlng.longitude;
+    }
+    // Haversine distance helper (km)
+    const haversineDist = (lat1, lng1, lat2, lng2) => {
+      const R = 6371, toRad = d => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
     // Build suburb matrix
     const suburbMatrix = Array.from(allSuburbNames).map(n => {
       const s = suburbSources[n];
@@ -25528,6 +25544,25 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       const indexedPages = s.indexing?.filter(i => i.verdict === 'PASS').length || 0;
       const notIndexedPages = s.indexing?.filter(i => i.verdict === 'FAIL' || i.verdict === 'NEUTRAL').length || 0;
       if (notIndexedPages > 0) gaps.push('Fix indexing issues');
+
+      // Auto-link: avgRank from grid scans ARP or keyword maps positions
+      let avgRank = null;
+      if (s.gridScans?.length) {
+        const arps = s.gridScans.map(g => g.arp).filter(v => v != null && v > 0);
+        if (arps.length) avgRank = Math.round(arps.reduce((a, b) => a + b, 0) / arps.length * 10) / 10;
+      }
+      if (avgRank == null && s.keywords?.length) {
+        const mapsPos = s.keywords.map(k => k.maps).filter(v => v != null && v > 0);
+        if (mapsPos.length) avgRank = Math.round(mapsPos.reduce((a, b) => a + b, 0) / mapsPos.length * 10) / 10;
+      }
+
+      // Auto-link: distance from business center to suburb GPS
+      let distance = null;
+      const subGps = SUBURB_GPS[n];
+      if (bizLat && subGps) {
+        distance = Math.round(haversineDist(bizLat, bizLng, subGps.lat, subGps.lng) * 10) / 10;
+      }
+
       return {
         suburb: s.original,
         hasPage: !!s.hasPage,
@@ -25539,6 +25574,8 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
         keywords: (s.keywords || []).slice(0, 5),
         gridScanCount: s.gridScans?.length || 0,
         bestSolv: s.gridScans?.length ? Math.max(...s.gridScans.map(g => g.solv || 0)) : null,
+        avgRank,
+        distance,
         gscImpressions: s.gsc?.reduce((sum, g) => sum + (g.impressions || 0), 0) || 0,
         gscClicks: s.gsc?.reduce((sum, g) => sum + (g.clicks || 0), 0) || 0,
         reviewMentions: s.reviewMentions?.length || 0,
