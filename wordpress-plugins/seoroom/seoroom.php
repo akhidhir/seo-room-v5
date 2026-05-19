@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
- * Description: All-in-one SEO optimization — automatic speed optimization (lazy loading, CSS/JS minification, browser caching, GZIP, font optimization, preconnect) + JSON-LD schema injection. Safe, non-destructive, instant revert on deactivation.
- * Version: 4.1.0
+ * Description: All-in-one SEO optimization — automatic speed optimization (lazy loading, critical CSS, image compression, CSS/JS minification, browser caching, GZIP, font optimization, preconnect, LCP preload) + JSON-LD schema injection. Safe, non-destructive, instant revert on deactivation.
+ * Version: 4.3.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '4.1.0');
+define('SEOROOM_VERSION', '4.3.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -23,7 +23,8 @@ function sropt_defaults() {
         'enable_lazy_load'     => true,
         'enable_image_dims'    => true,
         'enable_css_minify'    => true,
-        'enable_css_defer'     => false, // Off by default — can break layout
+        'enable_critical_css'  => true,
+        'enable_css_defer'     => false, // Legacy — critical CSS handles deferral when enabled
         'enable_js_defer'      => true,
         'enable_js_minify'     => true,
         'enable_gzip'          => true,
@@ -31,19 +32,27 @@ function sropt_defaults() {
         'enable_font_swap'     => true,
         'enable_preconnect'    => true,
         'enable_dns_prefetch'  => true,
+        'enable_lcp_preload'   => true,
         'safe_mode'            => false,
         'exclude_css'          => '',
         'exclude_js'           => '',
         'cache_ttl'            => 604800,
+        // Image Compression
+        'enable_image_compress' => true,
+        'image_compress_quality' => 82,
         // Page Cache
         'enable_page_cache'    => true,
-        'page_cache_ttl'       => 86400, // 24 hours
+        'page_cache_ttl'       => 86400,
         'cache_exclude_urls'   => '',
         // WebP
         'enable_webp'          => true,
         'webp_quality'         => 80,
         // Schema
         'enable_schema'        => true,
+        // Dashboard Connection
+        'dashboard_url'        => 'https://seo-room-v5-production.up.railway.app',
+        'project_id'           => '',
+        'connection_code'      => '',
     );
 }
 
@@ -59,36 +68,50 @@ function sropt_activate() {
     $options = sropt_get_options();
     update_option('sropt_options', $options);
 
-    $cache_dir = WP_CONTENT_DIR . '/cache/seoroom/';
-    if (!file_exists($cache_dir)) wp_mkdir_p($cache_dir);
-
-    $page_cache_dir = WP_CONTENT_DIR . '/cache/seoroom/pages/';
-    if (!file_exists($page_cache_dir)) wp_mkdir_p($page_cache_dir);
-
-    $webp_dir = WP_CONTENT_DIR . '/cache/seoroom/webp/';
-    if (!file_exists($webp_dir)) wp_mkdir_p($webp_dir);
+    $dirs = array(
+        WP_CONTENT_DIR . '/cache/seoroom/',
+        WP_CONTENT_DIR . '/cache/seoroom/pages/',
+        WP_CONTENT_DIR . '/cache/seoroom/webp/',
+        WP_CONTENT_DIR . '/cache/seoroom/critical/',
+    );
+    foreach ($dirs as $dir) {
+        if (!file_exists($dir)) wp_mkdir_p($dir);
+    }
 
     flush_rewrite_rules();
 }
 
 register_deactivation_hook(__FILE__, 'sropt_deactivate');
 function sropt_deactivate() {
-    // Clean up all cache directories
     $dirs = array(
+        WP_CONTENT_DIR . '/cache/seoroom/critical/',
         WP_CONTENT_DIR . '/cache/seoroom/pages/',
         WP_CONTENT_DIR . '/cache/seoroom/webp/',
         WP_CONTENT_DIR . '/cache/seoroom/',
     );
     foreach ($dirs as $dir) {
         if (file_exists($dir)) {
-            $files = glob($dir . '*');
-            if ($files) array_map(function($f) { if (is_file($f)) @unlink($f); }, $files);
+            $iter = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($iter as $item) {
+                if ($item->isFile()) @unlink($item->getPathname());
+                elseif ($item->isDir()) @rmdir($item->getPathname());
+            }
             @rmdir($dir);
         }
     }
     sropt_remove_htaccess_rules();
     flush_rewrite_rules();
 }
+
+// ============ PLUGIN ACTION LINKS (Settings link on Plugins page) ============
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), function($links) {
+    $settings_link = '<a href="' . admin_url('options-general.php?page=seoroom') . '">Settings</a>';
+    array_unshift($links, $settings_link);
+    return $links;
+});
 
 // ============ ADMIN MENU & SETTINGS PAGE ============
 add_action('admin_menu', 'sropt_admin_menu');
@@ -121,17 +144,25 @@ function sropt_sanitize($input) {
     }
 
     // Clear all caches on settings save
+    sropt_clear_all_caches();
+
+    return $sanitized;
+}
+
+function sropt_clear_all_caches() {
     $cache_dir = WP_CONTENT_DIR . '/cache/seoroom/';
     if (file_exists($cache_dir)) {
         array_map('unlink', array_filter(glob("$cache_dir*.css"), 'is_file'));
         array_map('unlink', array_filter(glob("$cache_dir*.js"), 'is_file'));
     }
-    $page_cache_dir = WP_CONTENT_DIR . '/cache/seoroom/pages/';
-    if (file_exists($page_cache_dir)) {
-        array_map('unlink', array_filter(glob("$page_cache_dir*.html"), 'is_file'));
+    $page_dir = WP_CONTENT_DIR . '/cache/seoroom/pages/';
+    if (file_exists($page_dir)) {
+        array_map('unlink', array_filter(glob("$page_dir*.html"), 'is_file'));
     }
-
-    return $sanitized;
+    $critical_dir = WP_CONTENT_DIR . '/cache/seoroom/critical/';
+    if (file_exists($critical_dir)) {
+        array_map('unlink', array_filter(glob("$critical_dir*.css"), 'is_file'));
+    }
 }
 
 function sropt_settings_page() {
@@ -151,13 +182,91 @@ function sropt_settings_page() {
             <?php endif; ?>
 
             <table class="form-table">
+                <!-- DASHBOARD CONNECTION -->
+                <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">🔗 Dashboard Connection</h2></th></tr>
+                <tr>
+                    <th>Project ID</th>
+                    <td>
+                        <input type="number" name="sropt_options[project_id]" id="sropt_project_id" value="<?php echo esc_attr($options['project_id']); ?>" min="1" step="1" style="width:100px;" />
+                        <p class="description">Your project ID from SEO Room Dashboard → Settings → Projects.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Dashboard URL</th>
+                    <td>
+                        <input type="url" name="sropt_options[dashboard_url]" id="sropt_dashboard_url" value="<?php echo esc_attr($options['dashboard_url']); ?>" class="regular-text" />
+                        <p class="description">Your SEO Room Dashboard URL.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Connection Code</th>
+                    <td>
+                        <input type="text" name="sropt_options[connection_code]" id="sropt_connection_code" value="<?php echo esc_attr($options['connection_code']); ?>" class="regular-text" placeholder="Paste code from Dashboard → Project Settings" />
+                        <p class="description">Generated in SEO Room Dashboard → Project Settings → Plugin Connection Code.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Status</th>
+                    <td>
+                        <span id="sropt_connection_status">
+                            <?php if ($options['project_id'] && $options['connection_code']): ?>
+                                <span style="color:#22c55e;font-weight:600;">● Connected</span>
+                                <span style="color:#666;margin-left:8px;">Project #<?php echo esc_html($options['project_id']); ?></span>
+                            <?php elseif ($options['project_id']): ?>
+                                <span style="color:#f59e0b;font-weight:600;">● Missing connection code</span>
+                            <?php else: ?>
+                                <span style="color:#f59e0b;font-weight:600;">● Not configured</span>
+                            <?php endif; ?>
+                        </span>
+                        <br><br>
+                        <button type="button" id="sropt_test_connection" class="button button-secondary">Test Connection</button>
+                        <span id="sropt_test_result" style="margin-left:10px;"></span>
+                        <script>
+                        document.getElementById('sropt_test_connection').addEventListener('click', function() {
+                            var btn = this;
+                            var result = document.getElementById('sropt_test_result');
+                            var url = document.getElementById('sropt_dashboard_url').value.replace(/\/$/, '');
+                            var pid = document.getElementById('sropt_project_id').value;
+                            var code = document.getElementById('sropt_connection_code').value;
+
+                            if (!url || !pid || !code) {
+                                result.innerHTML = '<span style="color:#ef4444;">Fill in all fields first.</span>';
+                                return;
+                            }
+
+                            btn.disabled = true;
+                            result.innerHTML = '<span style="color:#666;">Testing...</span>';
+
+                            fetch(url + '/api/projects/' + pid + '/plugin-verify', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ code: code, site_url: '<?php echo esc_url(home_url()); ?>', plugin_version: '<?php echo SEOROOM_VERSION; ?>' })
+                            })
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) {
+                                if (data.ok) {
+                                    result.innerHTML = '<span style="color:#22c55e;font-weight:600;">✓ Connected to ' + (data.project_name || 'Project #' + pid) + '</span>';
+                                    document.getElementById('sropt_connection_status').innerHTML = '<span style="color:#22c55e;font-weight:600;">● Connected</span> <span style="color:#666;margin-left:8px;">' + (data.project_name || 'Project #' + pid) + '</span>';
+                                } else {
+                                    result.innerHTML = '<span style="color:#ef4444;">✗ ' + (data.error || 'Invalid code or project ID') + '</span>';
+                                }
+                            })
+                            .catch(function(e) {
+                                result.innerHTML = '<span style="color:#ef4444;">✗ Could not reach dashboard: ' + e.message + '</span>';
+                            })
+                            .finally(function() { btn.disabled = false; });
+                        });
+                        </script>
+                    </td>
+                </tr>
+
                 <!-- SAFETY -->
                 <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">🛡️ Safety</h2></th></tr>
                 <tr>
                     <th>Safe Mode</th>
                     <td>
                         <label><input type="checkbox" name="sropt_options[safe_mode]" value="1" <?php checked($options['safe_mode']); ?> /> Enable safe mode (only non-breaking optimizations)</label>
-                        <p class="description">When enabled, CSS/JS minification and deferral are disabled. Schema, lazy load, fonts, and preconnect remain active.</p>
+                        <p class="description">When enabled, CSS/JS minification, deferral, and critical CSS are disabled. Schema, lazy load, fonts, and preconnect remain active.</p>
                     </td>
                 </tr>
 
@@ -181,6 +290,37 @@ function sropt_settings_page() {
                     <th>Image Dimensions</th>
                     <td><label><input type="checkbox" name="sropt_options[enable_image_dims]" value="1" <?php checked($options['enable_image_dims']); ?> /> Add missing width/height attributes to prevent CLS</label></td>
                 </tr>
+                <tr>
+                    <th>Image Compression</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_image_compress]" value="1" <?php checked($options['enable_image_compress']); ?> /> Compress images on upload (lossless EXIF strip + lossy quality reduction)</label>
+                        <p class="description">Compresses JPEG/PNG on upload. Original quality preserved in WordPress revision. Works alongside WebP conversion.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>JPEG Quality</th>
+                    <td>
+                        <input type="number" name="sropt_options[image_compress_quality]" value="<?php echo esc_attr($options['image_compress_quality']); ?>" min="60" max="95" step="1" style="width:80px;" />
+                        <p class="description">JPEG compression quality (82 recommended). Lower = smaller files, less quality. PNG uses lossless optimization.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>LCP Image Preload</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_lcp_preload]" value="1" <?php checked($options['enable_lcp_preload']); ?> /> Auto-detect and preload the largest contentful paint image</label>
+                        <p class="description">Adds &lt;link rel="preload"&gt; for the hero/banner image. Reduces LCP time by 200-500ms.</p>
+                    </td>
+                </tr>
+
+                <!-- CRITICAL CSS -->
+                <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">⚡ Critical CSS</h2></th></tr>
+                <tr>
+                    <th>Critical CSS Inlining</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_critical_css]" value="1" <?php checked($options['enable_critical_css']); ?> /> Extract and inline above-the-fold CSS, defer the rest</label>
+                        <p class="description">Generates critical CSS per page, inlines it in &lt;head&gt;, and safely defers all other stylesheets. Eliminates render-blocking CSS. <strong>Biggest single performance improvement (10-15 points).</strong></p>
+                    </td>
+                </tr>
 
                 <!-- CSS -->
                 <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">📄 CSS</h2></th></tr>
@@ -191,15 +331,15 @@ function sropt_settings_page() {
                 <tr>
                     <th>Defer Non-Critical CSS</th>
                     <td>
-                        <label><input type="checkbox" name="sropt_options[enable_css_defer]" value="1" <?php checked($options['enable_css_defer']); ?> /> Load non-critical CSS asynchronously</label>
-                        <p class="description" style="color:#d63384;">⚠️ Can cause flash of unstyled content. Test carefully.</p>
+                        <label><input type="checkbox" name="sropt_options[enable_css_defer]" value="1" <?php checked($options['enable_css_defer']); ?> /> Load non-critical CSS asynchronously (legacy — use Critical CSS instead)</label>
+                        <p class="description" style="color:#d63384;">⚠️ Only needed if Critical CSS is off. Can cause FOUC without critical CSS inlining.</p>
                     </td>
                 </tr>
                 <tr>
                     <th>Exclude CSS</th>
                     <td>
                         <input type="text" name="sropt_options[exclude_css]" value="<?php echo esc_attr($options['exclude_css']); ?>" class="regular-text" />
-                        <p class="description">Comma-separated CSS handles or filenames to exclude (e.g., <code>elementor-frontend,style</code>)</p>
+                        <p class="description">Comma-separated CSS handles or filenames to exclude from deferral (e.g., <code>elementor-frontend,style</code>)</p>
                     </td>
                 </tr>
 
@@ -304,14 +444,21 @@ function sropt_settings_page() {
                 <a href="https://pagespeed.web.dev/analysis?url=<?php echo urlencode(home_url('/')); ?>" target="_blank" class="button">Test on PageSpeed Insights</a>
             </p>
             <?php
-            $page_count = count(glob(WP_CONTENT_DIR . '/cache/seoroom/pages/*.html'));
-            $webp_files = glob(WP_CONTENT_DIR . '/cache/seoroom/webp/**/*.webp') ?: array();
-            $webp_count = count($webp_files);
+            $page_count = count(glob(WP_CONTENT_DIR . '/cache/seoroom/pages/*.html') ?: array());
+            $webp_count = 0;
+            $webp_dir = WP_CONTENT_DIR . '/cache/seoroom/webp/';
+            if (file_exists($webp_dir)) {
+                $iter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($webp_dir, RecursiveDirectoryIterator::SKIP_DOTS));
+                foreach ($iter as $f) { if ($f->isFile() && pathinfo($f, PATHINFO_EXTENSION) === 'webp') $webp_count++; }
+            }
+            $critical_count = count(glob(WP_CONTENT_DIR . '/cache/seoroom/critical/*.css') ?: array());
             ?>
             <p style="color:#666;font-size:13px;margin-top:8px;">
                 📄 Page cache: <strong><?php echo $page_count; ?></strong> cached pages
                 &nbsp;|&nbsp;
                 🖼️ WebP cache: <strong><?php echo $webp_count; ?></strong> converted images
+                &nbsp;|&nbsp;
+                ⚡ Critical CSS: <strong><?php echo $critical_count; ?></strong> cached pages
             </p>
         </div>
     </div>
@@ -321,18 +468,7 @@ function sropt_settings_page() {
 // Clear cache action
 add_action('admin_post_sropt_clear_cache', function() {
     check_admin_referer('sropt_clear_cache');
-    // Clear minified CSS/JS
-    $cache_dir = WP_CONTENT_DIR . '/cache/seoroom/';
-    if (file_exists($cache_dir)) {
-        $files = glob($cache_dir . '*.{css,js}', GLOB_BRACE);
-        if ($files) array_map('unlink', $files);
-    }
-    // Clear page cache
-    $page_dir = WP_CONTENT_DIR . '/cache/seoroom/pages/';
-    if (file_exists($page_dir)) {
-        $files = glob($page_dir . '*.html');
-        if ($files) array_map('unlink', $files);
-    }
+    sropt_clear_all_caches();
     // Clear WebP cache
     $webp_dir = WP_CONTENT_DIR . '/cache/seoroom/webp/';
     if (file_exists($webp_dir)) {
@@ -363,7 +499,7 @@ add_action('init', function() {
             'auth_callback' => function() { return current_user_can('edit_posts'); },
         ]);
     }
-}, 20); // Priority 20 = after seoroom-helper
+}, 20);
 
 // Output JSON-LD in <head>
 add_action('wp_head', 'sropt_output_schema', 5);
@@ -465,7 +601,88 @@ function sropt_image_dimensions($content) {
 
 
 // ================================================================
-// HTML OUTPUT BUFFER — CSS/JS minification, font-swap, preconnect
+// IMAGE COMPRESSION ON UPLOAD
+// Compress JPEG/PNG on upload — strip EXIF, reduce quality.
+// Non-destructive: WP keeps original in revision history.
+// ================================================================
+
+add_filter('wp_handle_upload', 'sropt_compress_uploaded_image');
+function sropt_compress_uploaded_image($upload) {
+    $options = sropt_get_options();
+    if (!$options['enable_image_compress']) return $upload;
+
+    $file = $upload['file'];
+    $type = $upload['type'] ?? '';
+
+    if ($type === 'image/jpeg' || $type === 'image/jpg') {
+        sropt_compress_jpeg($file, (int)$options['image_compress_quality']);
+    } elseif ($type === 'image/png') {
+        sropt_compress_png($file);
+    }
+
+    return $upload;
+}
+
+function sropt_compress_jpeg($file, $quality = 82) {
+    if (!function_exists('imagecreatefromjpeg')) return false;
+
+    $img = @imagecreatefromjpeg($file);
+    if (!$img) return false;
+
+    // Strip EXIF by re-encoding (imagecreatefromjpeg doesn't preserve EXIF)
+    // Save with target quality
+    $result = @imagejpeg($img, $file, $quality);
+    imagedestroy($img);
+    return $result;
+}
+
+function sropt_compress_png($file) {
+    if (!function_exists('imagecreatefrompng')) return false;
+
+    $img = @imagecreatefrompng($file);
+    if (!$img) return false;
+
+    // Preserve transparency
+    imagealphablending($img, false);
+    imagesavealpha($img, true);
+
+    // PNG compression level 6 (0=none, 9=max compression)
+    // Level 6 is good balance of speed vs size
+    $result = @imagepng($img, $file, 6);
+    imagedestroy($img);
+    return $result;
+}
+
+// Also compress generated thumbnails/sizes
+add_filter('wp_generate_attachment_metadata', 'sropt_compress_thumbnails', 10, 2);
+function sropt_compress_thumbnails($metadata, $attachment_id) {
+    $options = sropt_get_options();
+    if (!$options['enable_image_compress']) return $metadata;
+
+    $upload_dir = wp_upload_dir();
+    $base_dir = $upload_dir['basedir'];
+    $file_dir = dirname($metadata['file']);
+
+    if (!empty($metadata['sizes'])) {
+        foreach ($metadata['sizes'] as $size => $data) {
+            $file_path = $base_dir . '/' . $file_dir . '/' . $data['file'];
+            if (!file_exists($file_path)) continue;
+
+            $mime = $data['mime-type'] ?? '';
+            if ($mime === 'image/jpeg' || $mime === 'image/jpg') {
+                sropt_compress_jpeg($file_path, (int)$options['image_compress_quality']);
+            } elseif ($mime === 'image/png') {
+                sropt_compress_png($file_path);
+            }
+        }
+    }
+
+    return $metadata;
+}
+
+
+// ================================================================
+// HTML OUTPUT BUFFER — Critical CSS, CSS/JS minification, font-swap, preconnect
 // ================================================================
 
 add_action('template_redirect', 'sropt_start_buffer', 1);
@@ -476,7 +693,7 @@ function sropt_start_buffer() {
     $options = sropt_get_options();
     $is_safe = $options['safe_mode'];
 
-    $needs_buffer = (!$is_safe && ($options['enable_css_minify'] || $options['enable_js_minify']))
+    $needs_buffer = (!$is_safe && ($options['enable_css_minify'] || $options['enable_js_minify'] || $options['enable_critical_css']))
         || $options['enable_font_swap'] || $options['enable_preconnect'] || $options['enable_dns_prefetch'];
 
     if ($needs_buffer) ob_start('sropt_process_html');
@@ -488,6 +705,11 @@ function sropt_process_html($html) {
 
     $options = sropt_get_options();
     $is_safe = $options['safe_mode'];
+
+    // ---- CRITICAL CSS INJECTION ----
+    if ($options['enable_critical_css'] && !$is_safe) {
+        $html = sropt_inject_critical_css($html, $options);
+    }
 
     // CSS minification (inline <style> blocks)
     if ($options['enable_css_minify'] && !$is_safe) {
@@ -581,6 +803,288 @@ function sropt_process_html($html) {
 
 
 // ================================================================
+// CRITICAL CSS — Extract above-fold CSS, inline in <head>, defer rest
+// ================================================================
+
+function sropt_inject_critical_css($html, $options) {
+    // Generate a cache key from the request URI
+    $uri = $_SERVER['REQUEST_URI'] ?? '/';
+    $cache_key = md5(($_SERVER['HTTP_HOST'] ?? '') . $uri);
+    $cache_dir = WP_CONTENT_DIR . '/cache/seoroom/critical/';
+    $cache_file = $cache_dir . $cache_key . '.css';
+
+    // Check if we have cached critical CSS
+    $critical_css = '';
+    if (file_exists($cache_file) && (time() - filemtime($cache_file)) < 604800) { // 7-day TTL
+        $critical_css = file_get_contents($cache_file);
+    }
+
+    if (empty($critical_css)) {
+        // Generate critical CSS from stylesheets in the HTML
+        $critical_css = sropt_generate_critical_css($html);
+
+        // Cache it
+        if (!file_exists($cache_dir)) wp_mkdir_p($cache_dir);
+        if (!empty($critical_css)) {
+            @file_put_contents($cache_file, $critical_css);
+        }
+    }
+
+    if (empty($critical_css)) return $html;
+
+    // Minify the critical CSS
+    $critical_css = preg_replace('!/\*.*?\*/!s', '', $critical_css);
+    $critical_css = preg_replace('/\s+/', ' ', $critical_css);
+    $critical_css = preg_replace('/\s*([{}:;,>~+])\s*/', '$1', $critical_css);
+    $critical_css = preg_replace('/;}/', '}', $critical_css);
+    $critical_css = trim($critical_css);
+
+    // Cap at 60KB to avoid bloating HTML
+    if (strlen($critical_css) > 61440) {
+        $critical_css = substr($critical_css, 0, 61440);
+        // Find the last complete rule
+        $last_brace = strrpos($critical_css, '}');
+        if ($last_brace !== false) $critical_css = substr($critical_css, 0, $last_brace + 1);
+    }
+
+    // Inject critical CSS inline in <head>
+    $critical_tag = "\n<style id=\"seoroom-critical-css\">" . $critical_css . "</style>\n";
+
+    // Find insertion point — after <meta charset> or right after <head>
+    if (preg_match('/<meta[^>]*charset[^>]*>/i', $html, $meta_match, PREG_OFFSET_CAPTURE)) {
+        $pos = $meta_match[0][1] + strlen($meta_match[0][0]);
+        $html = substr($html, 0, $pos) . $critical_tag . substr($html, $pos);
+    } elseif (($head_pos = stripos($html, '<head>')) !== false) {
+        $pos = $head_pos + 6;
+        $html = substr($html, 0, $pos) . $critical_tag . substr($html, $pos);
+    }
+
+    // Defer non-critical stylesheets — convert <link rel="stylesheet"> to async loading
+    $excludes = array_filter(array_map('trim', explode(',', $options['exclude_css'])));
+    $never_defer_css = array('admin-bar', 'dashicons', 'wp-admin');
+
+    $html = preg_replace_callback('/<link\b([^>]*rel\s*=\s*["\']stylesheet["\'][^>]*)>/i', function($matches) use ($excludes, $never_defer_css) {
+        $attrs = $matches[1];
+
+        // Extract handle/href for exclusion checking
+        $href = '';
+        if (preg_match('/href\s*=\s*["\']([^"\']+)["\']/i', $attrs, $href_match)) {
+            $href = $href_match[1];
+        }
+        $handle = '';
+        if (preg_match('/id\s*=\s*["\']([^"\']+)-css["\']/i', $attrs, $id_match)) {
+            $handle = $id_match[1];
+        }
+
+        // Check exclusions
+        if (in_array($handle, $never_defer_css)) return $matches[0];
+        foreach ($excludes as $exc) {
+            if ($handle === $exc || strpos($href, $exc) !== false) return $matches[0];
+        }
+
+        // Already deferred?
+        if (preg_match('/media\s*=\s*["\']print["\']/i', $attrs)) return $matches[0];
+
+        // Convert to async loading with print/onload pattern
+        $deferred = $matches[0];
+        $deferred = preg_replace("/media\s*=\s*['\"]all['\"]/i", "media=\"print\" onload=\"this.media='all'\"", $deferred);
+        // If no media attribute was present, add one
+        if (!preg_match('/onload/i', $deferred)) {
+            $deferred = str_replace('rel="stylesheet"', 'rel="stylesheet" media="print" onload="this.media=\'all\'"', $deferred);
+            $deferred = str_replace("rel='stylesheet'", "rel='stylesheet' media='print' onload=\"this.media='all'\"", $deferred);
+        }
+
+        // Add noscript fallback
+        $noscript = '<noscript>' . $matches[0] . '</noscript>';
+        return $deferred . "\n" . $noscript;
+    }, $html);
+
+    return $html;
+}
+
+function sropt_generate_critical_css($html) {
+    // 1. Extract all stylesheet URLs from HTML
+    $stylesheet_urls = array();
+    preg_match_all('/<link\b[^>]*rel\s*=\s*["\']stylesheet["\'][^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>/i', $html, $m1);
+    if (!empty($m1[1])) $stylesheet_urls = array_merge($stylesheet_urls, $m1[1]);
+    preg_match_all('/<link\b[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*rel\s*=\s*["\']stylesheet["\'][^>]*>/i', $html, $m2);
+    if (!empty($m2[1])) $stylesheet_urls = array_merge($stylesheet_urls, $m2[1]);
+    $stylesheet_urls = array_unique($stylesheet_urls);
+
+    // 2. Read stylesheet files from disk
+    $all_css = '';
+    foreach ($stylesheet_urls as $url) {
+        $path = sropt_url_to_local_path($url);
+        if ($path && file_exists($path) && is_readable($path)) {
+            $content = @file_get_contents($path);
+            if ($content) {
+                // Resolve relative URLs in CSS (url(../images/...) etc.)
+                $css_dir_url = dirname($url);
+                $content = preg_replace_callback('/url\s*\(\s*["\']?(?!data:|https?:|\/\/)([^"\')\s]+)["\']?\s*\)/i', function($m) use ($css_dir_url) {
+                    $resolved = $css_dir_url . '/' . $m[1];
+                    return 'url(' . $resolved . ')';
+                }, $content);
+                $all_css .= $content . "\n";
+            }
+        }
+    }
+
+    // 3. Also extract inline <style> blocks from the HTML
+    preg_match_all('/<style\b[^>]*>(.*?)<\/style>/is', $html, $style_matches);
+    if (!empty($style_matches[1])) {
+        foreach ($style_matches[1] as $inline) {
+            // Skip JSON-LD and template styles
+            if (strpos($inline, 'application/ld+json') !== false) continue;
+            $all_css .= $inline . "\n";
+        }
+    }
+
+    if (empty(trim($all_css))) return '';
+
+    // 4. Extract critical rules
+    return sropt_extract_critical_rules($all_css);
+}
+
+function sropt_url_to_local_path($url) {
+    // Remove query string
+    $url = preg_replace('/\?.*$/', '', $url);
+
+    // Handle protocol-relative URLs
+    if (strpos($url, '//') === 0) $url = 'https:' . $url;
+
+    $site_url = site_url();
+    $abspath = rtrim(ABSPATH, '/');
+
+    // Check if it's a local URL
+    if (strpos($url, $site_url) === 0) {
+        $relative = str_replace($site_url, '', $url);
+        return $abspath . $relative;
+    }
+
+    // Try wp-content path
+    if (preg_match('#/wp-content/(.+)#', $url, $m)) {
+        return WP_CONTENT_DIR . '/' . $m[1];
+    }
+
+    // Try wp-includes path
+    if (preg_match('#/wp-includes/(.+)#', $url, $m)) {
+        return ABSPATH . 'wp-includes/' . $m[1];
+    }
+
+    return false;
+}
+
+function sropt_extract_critical_rules($all_css) {
+    $critical = '';
+    $max_size = 60000; // 60KB max
+
+    // Selectors that are typically above the fold
+    $element_pattern = 'html|body|header|nav|main|section|article|div|span|a|p|h[1-6]|img|figure|figcaption|ul|ol|li|input|button|form|select|textarea|label|table|tr|td|th|video|svg|picture|source';
+    $class_pattern = 'container|wrapper|row|col|site|page|header|nav|hero|banner|slider|menu|logo|btn|button|elementor|wp-block|entry|post|content|widget|masthead|main|top|above|fold|visible|show|active|open|overlay|modal|popup|breadcrumb|title|heading|text|section|block|grid|flex|layout|inner|outer|wrap|box|card|item|list|link|icon|image|media|featured|cover|bg|background';
+    $id_pattern = 'masthead|site-header|header|nav|menu|page|wrapper|content|main|top|hero|banner';
+
+    // Always keep :root / CSS custom properties
+    if (preg_match_all('/:root\s*\{[^}]+\}/i', $all_css, $roots)) {
+        foreach ($roots[0] as $r) {
+            $critical .= $r . "\n";
+            if (strlen($critical) > $max_size) return $critical;
+        }
+    }
+
+    // Always keep @font-face rules
+    if (preg_match_all('/@font-face\s*\{[^}]+\}/i', $all_css, $font_faces)) {
+        foreach ($font_faces[0] as $ff) {
+            $critical .= $ff . "\n";
+            if (strlen($critical) > $max_size) return $critical;
+        }
+    }
+
+    // Always keep @keyframes (needed for animations visible above fold)
+    if (preg_match_all('/@keyframes\s+[\w-]+\s*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/i', $all_css, $keyframes)) {
+        foreach ($keyframes[0] as $kf) {
+            $critical .= $kf . "\n";
+            if (strlen($critical) > $max_size) return $critical;
+        }
+    }
+
+    // Remove @font-face, @keyframes, and @media blocks from all_css before parsing individual rules
+    $css_no_at = preg_replace('/@font-face\s*\{[^}]+\}/i', '', $all_css);
+    $css_no_at = preg_replace('/@keyframes\s+[\w-]+\s*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/i', '', $css_no_at);
+
+    // Extract @media blocks separately
+    $media_blocks = array();
+    $css_no_media = preg_replace_callback('/@media\s*([^{]+)\{((?:[^{}]*\{[^}]*\})*[^}]*)\}/i', function($m) use (&$media_blocks) {
+        $media_blocks[] = array('query' => trim($m[1]), 'content' => $m[2]);
+        return '';
+    }, $css_no_at);
+
+    // Parse individual CSS rules (selector { declarations })
+    preg_match_all('/([^{}@]+)\{([^{}]+)\}/', $css_no_media, $rules, PREG_SET_ORDER);
+
+    foreach ($rules as $rule) {
+        if (strlen($critical) > $max_size) break;
+
+        $selector = trim($rule[1]);
+        $declarations = trim($rule[2]);
+
+        // Skip keyframe steps
+        if (preg_match('/^\d+%$|^from$|^to$/i', $selector)) continue;
+        // Skip empty declarations
+        if (empty($declarations)) continue;
+
+        // Check if selector matches above-fold patterns
+        if (sropt_is_critical_selector($selector, $element_pattern, $class_pattern, $id_pattern)) {
+            $critical .= $selector . '{' . $declarations . "}\n";
+        }
+    }
+
+    // Process @media blocks — extract critical rules from within
+    foreach ($media_blocks as $mb) {
+        if (strlen($critical) > $max_size) break;
+
+        $inner_critical = '';
+        preg_match_all('/([^{}@]+)\{([^{}]+)\}/', $mb['content'], $inner_rules, PREG_SET_ORDER);
+
+        foreach ($inner_rules as $ir) {
+            $sel = trim($ir[1]);
+            $decl = trim($ir[2]);
+            if (preg_match('/^\d+%$|^from$|^to$/i', $sel)) continue;
+            if (empty($decl)) continue;
+
+            if (sropt_is_critical_selector($sel, $element_pattern, $class_pattern, $id_pattern)) {
+                $inner_critical .= $sel . '{' . $decl . "}\n";
+            }
+        }
+
+        if (!empty($inner_critical)) {
+            $critical .= '@media ' . $mb['query'] . '{' . $inner_critical . "}\n";
+        }
+    }
+
+    return $critical;
+}
+
+function sropt_is_critical_selector($selector, $element_pattern, $class_pattern, $id_pattern) {
+    // Universal selector
+    if (trim($selector) === '*') return true;
+
+    // Element selectors
+    if (preg_match('/(?:^|\s|,)(' . $element_pattern . ')\b/i', $selector)) return true;
+
+    // Class selectors
+    if (preg_match('/\.(' . $class_pattern . ')/i', $selector)) return true;
+
+    // ID selectors
+    if (preg_match('/#(' . $id_pattern . ')/i', $selector)) return true;
+
+    // Attribute selectors on common elements
+    if (preg_match('/\[(?:role|aria-|data-)/i', $selector)) return true;
+
+    return false;
+}
+
+
+// ================================================================
 // JS OPTIMIZATION — DEFER/ASYNC
 // ================================================================
 
@@ -605,14 +1109,20 @@ function sropt_defer_js($tag, $handle, $src) {
 
 
 // ================================================================
-// CSS OPTIMIZATION — DEFER NON-CRITICAL
+// CSS OPTIMIZATION — DEFER NON-CRITICAL (legacy, use Critical CSS instead)
 // ================================================================
 
 add_filter('style_loader_tag', 'sropt_optimize_css_tag', 10, 4);
 function sropt_optimize_css_tag($tag, $handle, $href, $media) {
     if (is_admin()) return $tag;
     $options = sropt_get_options();
-    if ($options['safe_mode'] || !$options['enable_css_defer']) return $tag;
+    if ($options['safe_mode']) return $tag;
+
+    // If critical CSS is enabled, it handles deferral in the output buffer — skip here
+    if ($options['enable_critical_css']) return $tag;
+
+    // Legacy CSS defer (only active when critical CSS is off)
+    if (!$options['enable_css_defer']) return $tag;
 
     $excludes = array_filter(array_map('trim', explode(',', $options['exclude_css'])));
     foreach ($excludes as $exc) {
@@ -721,18 +1231,53 @@ add_action('admin_init', function() {
 
 
 // ================================================================
-// PRELOAD LCP IMAGE
+// PRELOAD LCP IMAGE — Auto-detect hero/banner image
 // ================================================================
 
 add_action('wp_head', 'sropt_preload_hints', 1);
 function sropt_preload_hints() {
     if (is_admin()) return;
-    if (is_singular() && has_post_thumbnail()) {
-        $thumb_id = get_post_thumbnail_id();
-        $thumb_url = wp_get_attachment_image_url($thumb_id, 'large');
-        if ($thumb_url) {
-            echo '<link rel="preload" as="image" href="' . esc_url($thumb_url) . '">' . "\n";
+    $options = sropt_get_options();
+    if (!$options['enable_lcp_preload']) return;
+
+    $preload_url = '';
+
+    if (is_singular()) {
+        // 1. Try post thumbnail (featured image) — most common LCP candidate
+        if (has_post_thumbnail()) {
+            $thumb_id = get_post_thumbnail_id();
+            $thumb_url = wp_get_attachment_image_url($thumb_id, 'large');
+            if ($thumb_url) $preload_url = $thumb_url;
         }
+
+        // 2. If no thumbnail, try first image in content
+        if (!$preload_url) {
+            $post = get_post();
+            if ($post && !empty($post->post_content)) {
+                if (preg_match('/<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\'][^>]*>/i', $post->post_content, $img_match)) {
+                    $preload_url = $img_match[1];
+                }
+            }
+        }
+    }
+
+    // 3. Try custom logo (works for homepage and archive pages)
+    if (!$preload_url && function_exists('get_custom_logo')) {
+        $custom_logo_id = get_theme_mod('custom_logo');
+        if ($custom_logo_id) {
+            $logo_url = wp_get_attachment_image_url($custom_logo_id, 'full');
+            if ($logo_url) $preload_url = $logo_url;
+        }
+    }
+
+    if ($preload_url) {
+        // Determine image type for better preload hint
+        $type = '';
+        if (preg_match('/\.webp(\?|$)/i', $preload_url)) $type = ' type="image/webp"';
+        elseif (preg_match('/\.png(\?|$)/i', $preload_url)) $type = ' type="image/png"';
+        elseif (preg_match('/\.svg(\?|$)/i', $preload_url)) $type = ' type="image/svg+xml"';
+
+        echo '<link rel="preload" as="image" href="' . esc_url($preload_url) . '"' . $type . ' fetchpriority="high">' . "\n";
     }
 }
 
@@ -789,7 +1334,7 @@ function sropt_admin_bar($wp_admin_bar) {
         'id'    => 'seoroom',
         'title' => 'SEO Room: ' . $status,
         'href'  => admin_url('options-general.php?page=seoroom'),
-        'meta'  => array('title' => 'SEO Room — Speed + Schema'),
+        'meta'  => array('title' => 'SEO Room v' . SEOROOM_VERSION . ' — Speed + Schema + Critical CSS'),
     ));
 }
 
@@ -804,19 +1349,17 @@ function sropt_page_cache_serve() {
     if (defined('DOING_CRON') && DOING_CRON) return;
     if (is_user_logged_in()) return;
     if ($_SERVER['REQUEST_METHOD'] !== 'GET') return;
-    if (!empty($_GET)) return; // Don't cache URLs with query strings
+    if (!empty($_GET)) return;
 
     $options = sropt_get_options();
     if (!$options['enable_page_cache'] || $options['safe_mode']) return;
 
-    // Check excluded URLs
     $request_uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
     $excludes = array_filter(array_map('trim', explode(',', $options['cache_exclude_urls'])));
     foreach ($excludes as $exc) {
         if (strpos($request_uri, $exc) !== false) return;
     }
 
-    // Never cache these
     $never_cache = array('/wp-admin', '/wp-login', '/cart', '/checkout', '/my-account', '/wp-json', '/feed');
     foreach ($never_cache as $nc) {
         if (strpos($request_uri, $nc) !== false) return;
@@ -831,7 +1374,7 @@ function sropt_page_cache_serve() {
             readfile($cache_file);
             exit;
         } else {
-            @unlink($cache_file); // Expired
+            @unlink($cache_file);
         }
     }
 }
@@ -855,13 +1398,11 @@ function sropt_page_cache_save() {
     $options = sropt_get_options();
     if (!$options['enable_page_cache'] || $options['safe_mode']) return;
 
-    // Check if we already served from cache
     $headers = headers_list();
     foreach ($headers as $h) {
         if (stripos($h, 'X-SEORoom-Cache: HIT') !== false) return;
     }
 
-    // Check excluded URLs
     $request_uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
     $excludes = array_filter(array_map('trim', explode(',', $options['cache_exclude_urls'])));
     foreach ($excludes as $exc) {
@@ -872,14 +1413,12 @@ function sropt_page_cache_save() {
         if (strpos($request_uri, $nc) !== false) return;
     }
 
-    // Check HTTP status code — only cache 200 responses
     $status = http_response_code();
     if ($status && $status !== 200) return;
 
     $cache_file = sropt_page_cache_path();
     if (!$cache_file) return;
 
-    // Get the page content from output buffering
     $content = '';
     $levels = ob_get_level();
     if ($levels > 0) {
@@ -889,7 +1428,6 @@ function sropt_page_cache_save() {
     if (empty($content) || strlen($content) < 200) return;
     if (stripos($content, '<html') === false) return;
 
-    // Add cache signature
     $content .= "\n<!-- Cached by SEO Room v" . SEOROOM_VERSION . " at " . gmdate('Y-m-d H:i:s') . " UTC -->";
     @file_put_contents($cache_file, $content);
 }
@@ -903,7 +1441,6 @@ function sropt_clear_page_cache($post_id = 0) {
     if (!file_exists($dir)) return;
 
     if ($post_id && is_numeric($post_id)) {
-        // Clear specific page cache
         $url = get_permalink($post_id);
         if ($url) {
             $uri = parse_url($url, PHP_URL_PATH);
@@ -912,13 +1449,18 @@ function sropt_clear_page_cache($post_id = 0) {
             $file = $dir . $key . '.html';
             if (file_exists($file)) @unlink($file);
         }
-        // Also clear homepage
         $home_key = md5(parse_url(home_url(), PHP_URL_HOST) . '/');
         $home_file = $dir . $home_key . '.html';
         if (file_exists($home_file)) @unlink($home_file);
     } else {
-        // Clear all
         $files = glob($dir . '*.html');
+        if ($files) array_map('unlink', $files);
+    }
+
+    // Also clear critical CSS cache on content update
+    $critical_dir = WP_CONTENT_DIR . '/cache/seoroom/critical/';
+    if (file_exists($critical_dir)) {
+        $files = glob($critical_dir . '*.css');
         if ($files) array_map('unlink', $files);
     }
 }
@@ -938,7 +1480,6 @@ function sropt_webp_images($content) {
     $options = sropt_get_options();
     if (!$options['enable_webp']) return $content;
 
-    // Check if GD or Imagick supports WebP
     if (!sropt_can_create_webp()) return $content;
 
     $content = preg_replace_callback('/<img\b([^>]*)\bsrc\s*=\s*["\']([^"\']+)["\']([^>]*)>/i', function($matches) use ($options) {
@@ -946,7 +1487,6 @@ function sropt_webp_images($content) {
         $src = $matches[2];
         $after = $matches[3];
 
-        // Only convert local images (jpg, jpeg, png)
         if (!preg_match('/\.(jpe?g|png)(\?.*)?$/i', $src)) return $matches[0];
         $upload_dir = wp_upload_dir();
         $upload_url = $upload_dir['baseurl'];
@@ -955,7 +1495,6 @@ function sropt_webp_images($content) {
         $webp_url = sropt_get_webp_url($src, (int)$options['webp_quality']);
         if (!$webp_url) return $matches[0];
 
-        // Also convert srcset if present
         $full_attrs = $before . ' src="' . $src . '"' . $after;
         $srcset_webp = '';
         if (preg_match('/\bsrcset\s*=\s*["\']([^"\']+)["\']/i', $full_attrs, $srcset_match)) {
@@ -973,7 +1512,6 @@ function sropt_webp_images($content) {
             $srcset_webp = implode(', ', $webp_entries);
         }
 
-        // Build <picture> element with WebP source + original fallback
         $picture = '<picture>';
         if ($srcset_webp) {
             $picture .= '<source type="image/webp" srcset="' . esc_attr($srcset_webp) . '"';
@@ -984,7 +1522,7 @@ function sropt_webp_images($content) {
         } else {
             $picture .= '<source type="image/webp" srcset="' . esc_attr($webp_url) . '">';
         }
-        $picture .= $matches[0]; // Original <img> as fallback
+        $picture .= $matches[0];
         $picture .= '</picture>';
         return $picture;
     }, $content);
@@ -1008,7 +1546,6 @@ function sropt_can_create_webp() {
 }
 
 function sropt_get_webp_url($src_url, $quality = 80) {
-    // Convert URL to local path
     $upload_dir = wp_upload_dir();
     $upload_url = $upload_dir['baseurl'];
     $upload_path = $upload_dir['basedir'];
@@ -1021,22 +1558,18 @@ function sropt_get_webp_url($src_url, $quality = 80) {
         return false;
     }
 
-    // Remove query string
     $relative = preg_replace('/\?.*$/', '', $relative);
     $src_path = $upload_path . $relative;
     if (!file_exists($src_path)) return false;
 
-    // WebP cache path
     $webp_relative = preg_replace('/\.(jpe?g|png)$/i', '.webp', $relative);
     $webp_dir = WP_CONTENT_DIR . '/cache/seoroom/webp';
     $webp_path = $webp_dir . $webp_relative;
 
-    // Check if cached WebP exists and is newer than source
     if (file_exists($webp_path) && filemtime($webp_path) >= filemtime($src_path)) {
         return content_url('/cache/seoroom/webp' . $webp_relative);
     }
 
-    // Create WebP
     $webp_subdir = dirname($webp_path);
     if (!file_exists($webp_subdir)) wp_mkdir_p($webp_subdir);
 
@@ -1044,7 +1577,6 @@ function sropt_get_webp_url($src_url, $quality = 80) {
     $created = false;
 
     if (function_exists('imagewebp')) {
-        // GD library
         if ($ext === 'png') {
             $img = @imagecreatefrompng($src_path);
             if ($img) {
@@ -1074,7 +1606,6 @@ function sropt_get_webp_url($src_url, $quality = 80) {
 
     if (!$created || !file_exists($webp_path)) return false;
 
-    // Only use WebP if it's actually smaller
     if (filesize($webp_path) >= filesize($src_path)) {
         @unlink($webp_path);
         return false;
@@ -1094,25 +1625,33 @@ add_action('rest_api_init', function() {
         'callback' => function() {
             $options = sropt_get_options();
             $is_safe = $options['safe_mode'];
+            $critical_count = count(glob(WP_CONTENT_DIR . '/cache/seoroom/critical/*.css') ?: array());
             return new WP_REST_Response(array(
-                'active'    => true,
-                'version'   => SEOROOM_VERSION,
-                'safe_mode' => $is_safe,
+                'active'     => true,
+                'version'    => SEOROOM_VERSION,
+                'safe_mode'  => $is_safe,
+                'project_id' => $options['project_id'] ?: null,
                 'features'  => array(
-                    'schema'        => $options['enable_schema'],
-                    'lazy_load'     => $options['enable_lazy_load'],
-                    'image_dims'    => $options['enable_image_dims'],
-                    'css_minify'    => $options['enable_css_minify'] && !$is_safe,
-                    'css_defer'     => $options['enable_css_defer'] && !$is_safe,
-                    'js_defer'      => $options['enable_js_defer'] && !$is_safe,
-                    'js_minify'     => $options['enable_js_minify'] && !$is_safe,
-                    'gzip'          => $options['enable_gzip'],
-                    'cache_headers' => $options['enable_cache_headers'],
-                    'font_swap'     => $options['enable_font_swap'],
-                    'preconnect'    => $options['enable_preconnect'],
-                    'dns_prefetch'  => $options['enable_dns_prefetch'],
-                    'page_cache'    => $options['enable_page_cache'] && !$is_safe,
-                    'webp'          => $options['enable_webp'],
+                    'schema'          => $options['enable_schema'],
+                    'lazy_load'       => $options['enable_lazy_load'],
+                    'image_dims'      => $options['enable_image_dims'],
+                    'image_compress'  => $options['enable_image_compress'],
+                    'critical_css'    => $options['enable_critical_css'] && !$is_safe,
+                    'css_minify'      => $options['enable_css_minify'] && !$is_safe,
+                    'css_defer'       => ($options['enable_critical_css'] || $options['enable_css_defer']) && !$is_safe,
+                    'js_defer'        => $options['enable_js_defer'] && !$is_safe,
+                    'js_minify'       => $options['enable_js_minify'] && !$is_safe,
+                    'gzip'            => $options['enable_gzip'],
+                    'cache_headers'   => $options['enable_cache_headers'],
+                    'font_swap'       => $options['enable_font_swap'],
+                    'preconnect'      => $options['enable_preconnect'],
+                    'dns_prefetch'    => $options['enable_dns_prefetch'],
+                    'lcp_preload'     => $options['enable_lcp_preload'],
+                    'page_cache'      => $options['enable_page_cache'] && !$is_safe,
+                    'webp'            => $options['enable_webp'],
+                ),
+                'cache_stats' => array(
+                    'critical_css_pages' => $critical_count,
                 ),
             ), 200);
         },
