@@ -1010,6 +1010,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/^\/api\/invite\//)) return next();
   // Allow connector-push routes (they use their own push token auth)
   if (req.path.match(/^\/api\/connector-push\//)) return next();
+  // Allow RC grid sync (called by scheduled automation)
+  if (req.path.match(/\/api\/projects\/\d+\/rc-grid-sync$/)) return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   if (whitelistPaths.includes(req.path)) return next();
@@ -27222,3 +27224,4 @@ async function start() {
 }
 
 start();
+
