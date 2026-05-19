@@ -7751,6 +7751,8 @@
       const [speedError, setSpeedError] = useState('');
       const [sortCol, setSortCol] = useState('score');
       const [sortDir, setSortDir] = useState('asc');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [metricFilter, setMetricFilter] = useState(null); // null, 'score', 'lcp', 'fcp', 'cls', 'tbt', 'si'
       const [speedProgress, setSpeedProgress] = useState(null);
       const speedPollRef = React.useRef(null);
       const [expandedRow, setExpandedRow] = useState(null);
@@ -7848,6 +7850,25 @@
 
       const sortedResults = useMemo(() => {
         if (!cwvResults.length) return [];
+        let filtered = cwvResults;
+        // Search filter
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          filtered = filtered.filter(r => (r.title || '').toLowerCase().includes(q) || (r.slug || '').toLowerCase().includes(q) || (r.url || '').toLowerCase().includes(q));
+        }
+        // Metric filter — show only pages failing on that metric
+        if (metricFilter) {
+          filtered = filtered.filter(r => {
+            const cwv = r.cwv || {};
+            if (metricFilter === 'score') return (cwv.score || 0) < 90;
+            if (metricFilter === 'lcp') { const v = parseFloat(cwv.lcp); return !isNaN(v) && v > 2.5; }
+            if (metricFilter === 'fcp') { const v = parseFloat(cwv.fcp); return !isNaN(v) && v > 1.8; }
+            if (metricFilter === 'cls') { const v = parseFloat(cwv.cls); return !isNaN(v) && v > 0.1; }
+            if (metricFilter === 'tbt') { const v = parseFloat(cwv.tbt); return !isNaN(v) && v > 200; }
+            if (metricFilter === 'si') { const v = parseFloat(cwv.si); return !isNaN(v) && v > 3.4; }
+            return true;
+          });
+        }
         const getVal = (r) => {
           const cwv = r.cwv || {};
           if (sortCol === 'score') return cwv.score || 0;
@@ -7858,16 +7879,21 @@
           if (sortCol === 'si') return parseFloat(cwv.si) || 999;
           return r.title || '';
         };
-        return [...cwvResults].sort((a, b) => {
+        return [...filtered].sort((a, b) => {
           const va = getVal(a), vb = getVal(b);
           if (typeof va === 'number') return sortDir === 'asc' ? va - vb : vb - va;
           return sortDir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
         });
-      }, [cwvResults, sortCol, sortDir]);
+      }, [cwvResults, sortCol, sortDir, searchQuery, metricFilter]);
 
       const handleSort = (col) => {
         if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else { setSortCol(col); setSortDir(col === 'page' ? 'asc' : 'asc'); }
+      };
+
+      const handleMetricFilter = (col) => {
+        if (col === 'page') return;
+        setMetricFilter(prev => prev === col ? null : col);
       };
 
       const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
@@ -8058,6 +8084,36 @@
               <button className="btn btn-primary" onClick={handleFixAll} disabled={bulkFixing} style={{ fontSize: 12, padding: '5px 14px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
                 {bulkFixing ? <><span className="spinner"></span>Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix All</>}
               </button>
+            </div>
+          )}
+
+          {cwvResults.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 300 }}>
+                <i className="fas fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 12 }} />
+                <input type="text" placeholder="Search pages..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '7px 10px 7px 30px', border: '1px solid var(--border)', borderRadius: 7, background: 'var(--card)', color: 'var(--text1)', fontSize: 13, outline: 'none' }} />
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11 }}>
+                <span style={{ color: 'var(--text3)', fontWeight: 600 }}>Filter:</span>
+                {[
+                  { key: 'score', label: 'Failing', color: '#ef4444' },
+                  { key: 'lcp', label: 'LCP', color: '#ef4444' },
+                  { key: 'fcp', label: 'FCP', color: '#f59e0b' },
+                  { key: 'cls', label: 'CLS', color: '#f59e0b' },
+                  { key: 'tbt', label: 'TBT', color: '#f59e0b' },
+                  { key: 'si', label: 'SI', color: '#f59e0b' },
+                ].map(f => (
+                  <button key={f.key} onClick={() => handleMetricFilter(f.key)} style={{ padding: '3px 10px', borderRadius: 12, border: metricFilter === f.key ? `1px solid ${f.color}` : '1px solid var(--border)', background: metricFilter === f.key ? `${f.color}15` : 'var(--card)', color: metricFilter === f.key ? f.color : 'var(--text3)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                    {f.label}
+                  </button>
+                ))}
+                {(metricFilter || searchQuery) && (
+                  <button onClick={() => { setMetricFilter(null); setSearchQuery(''); }} style={{ padding: '3px 8px', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', fontSize: 11, cursor: 'pointer' }}>
+                    <i className="fas fa-times" style={{ marginRight: 3 }} />Clear
+                  </button>
+                )}
+              </div>
+              {(metricFilter || searchQuery) && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{sortedResults.length} of {cwvResults.length} pages</span>}
             </div>
           )}
 
