@@ -1770,7 +1770,7 @@ async function callPluginApi(project, path, method = 'GET', body = null) {
   if (!authHeaders) throw new Error('No WP Application Password configured');
   const opts = { method, headers: authHeaders, signal: AbortSignal.timeout(30000) };
   if (body && method !== 'GET') opts.body = JSON.stringify(body);
-  const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1${path}`, opts);
+  const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1${path}`, opts);
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`Plugin API ${resp.status}: ${text.substring(0, 200)}`);
@@ -17807,8 +17807,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // 2. Try REST API connector (may be blocked by Cloudflare)
     if (!usedConnector && wpUrl && authHeaders) {
       try {
-        console.log(`[website-audit] Trying connector at ${wpUrl}/wp-json/seoroom/v1/page-audit`);
-        const connResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/seoroom/v1/page-audit`, {
+        console.log(`[website-audit] Trying connector at ${wpUrl}/wp-json/seoroom-opt/v1/page-audit`);
+        const connResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/seoroom-opt/v1/page-audit`, {
           headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
           signal: AbortSignal.timeout(60000),
         });
@@ -18114,6 +18114,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         hasViewport: p.hasViewport !== undefined ? p.hasViewport : true,
         questionHeadings: p.questionHeadings || 0,
         hasFAQSection: p.hasFAQSection || false,
+        wordCount: p.wordCount || p.word_count || 0,
+        elapsed: p.elapsed || p.response_time || 0,
       }));
     }
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
