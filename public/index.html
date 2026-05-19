@@ -7906,13 +7906,19 @@
 
       const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
-      // Issues the SEO Room plugin handles automatically — don't show Fix button for these
+      // All Lighthouse performance opportunities — plugin + server-level issues we can't fix from dashboard
       const pluginHandledIssues = new Set([
         'render-blocking-resources', 'unused-css', 'unused-javascript',
         'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
         'efficient-animated-content', 'duplicated-javascript', 'legacy-javascript',
         'total-byte-weight', 'modern-image-formats', 'uses-optimized-images',
         'offscreen-images', 'mainthread-work-breakdown', 'long-tasks',
+        'properly-size-images', 'uses-responsive-images', 'unminified-css', 'unminified-javascript',
+        'dom-size', 'server-response-time', 'bootup-time', 'uses-long-cache-ttl',
+        'third-party-summary', 'third-party-facades', 'largest-contentful-paint-element',
+        'layout-shift-elements', 'uses-passive-event-listeners', 'no-document-write',
+        'viewport', 'critical-request-chains', 'redirects', 'network-rtt', 'network-server-latency',
+        'lcp-lazy-loaded', 'prioritize-lcp-image', 'unsized-images',
       ]);
 
       const getContentFixableOpps = (opps) => {
@@ -8215,7 +8221,8 @@
                                 </div>
                               );
                               if (fixResults[pageKey]?.fixes_applied === 0) return <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}><i className="fas fa-info-circle" style={{ marginRight: 3 }} />Plugin</span>;
-                              if (!hasContentFixes) return <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 600 }}><i className="fas fa-plug" style={{ marginRight: 3 }} />Plugin</span>;
+                              if (!hasContentFixes && pluginWarning?.installed) return <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 600 }}><i className="fas fa-plug" style={{ marginRight: 3 }} />Plugin</span>;
+                              if (!hasContentFixes) return <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>;
                               return (
                                 <button className="btn btn-primary" onClick={() => handleAutoFix(pageKey, page)} disabled={fixingPage === pageKey} style={{ fontSize: 11, padding: '4px 9px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
                                   {fixingPage === pageKey ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix</>}
