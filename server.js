@@ -3500,7 +3500,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 5; // 5 pages × 2 calls = 10 concurrent — safe for Google rate limits
+        const BATCH_SIZE = 2; // 2 pages × 2 calls = 4 concurrent Lighthouse instances — avoids Cloudflare flood detection
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -3581,8 +3581,8 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           // Save progress so frontend can show counter
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
             [JSON.stringify({ progress: results.length, total: pages.length }), auditId]);
-          // Pause between batches to avoid Google rate limits
-          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 2000));
+          // Pause between batches — Cloudflare blocks concurrent Lighthouse floods
+          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 5000));
         }
 
         await pool.query(
