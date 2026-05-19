@@ -8132,14 +8132,15 @@
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11 }}>
                 <span style={{ color: 'var(--text3)', fontWeight: 600 }}>Filter:</span>
                 {[
-                  { key: 'score', label: 'Failing', color: '#ef4444' },
+                  { key: null, label: `All (${cwvResults.length})`, color: '#22c55e' },
+                  { key: 'score', label: `Failing (${cwvResults.filter(r => (r.cwv?.score || 0) < 90).length})`, color: '#ef4444' },
                   { key: 'lcp', label: 'LCP', color: '#ef4444' },
                   { key: 'fcp', label: 'FCP', color: '#f59e0b' },
                   { key: 'cls', label: 'CLS', color: '#f59e0b' },
                   { key: 'tbt', label: 'TBT', color: '#f59e0b' },
                   { key: 'si', label: 'SI', color: '#f59e0b' },
                 ].map(f => (
-                  <button key={f.key} onClick={() => handleMetricFilter(f.key)} style={{ padding: '3px 10px', borderRadius: 12, border: metricFilter === f.key ? `1px solid ${f.color}` : '1px solid var(--border)', background: metricFilter === f.key ? `${f.color}15` : 'var(--card)', color: metricFilter === f.key ? f.color : 'var(--text3)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                  <button key={f.key || 'all'} onClick={() => handleMetricFilter(f.key)} style={{ padding: '3px 10px', borderRadius: 12, border: metricFilter === f.key ? `1px solid ${f.color}` : '1px solid var(--border)', background: metricFilter === f.key ? `${f.color}15` : 'var(--card)', color: metricFilter === f.key ? f.color : 'var(--text3)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
                     {f.label}
                   </button>
                 ))}
