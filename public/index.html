@@ -8064,9 +8064,16 @@
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Google PageSpeed performance scores per page (mobile + desktop)</p>
             </div>
-            <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 13 }}>
-              {speedLoading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run CWV Audit</>}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {speedResults.length > 0 && !speedLoading && (
+                <button className="btn" onClick={async () => { if (!confirm('Clear all PageSpeed results?')) return; try { await api(`/speed-audit/${project.id}/clear`, { method: 'DELETE' }); setSpeedResults([]); setSpeedError(''); } catch(e) { setSpeedError(e.message); } }} style={{ fontSize: 13, background: 'var(--bg2)', color: 'var(--text3)' }}>
+                  <i className="fas fa-trash" style={{ marginRight: 6 }} />Clear
+                </button>
+              )}
+              <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 13 }}>
+                {speedLoading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run CWV Audit</>}
+              </button>
+            </div>
           </div>
 
           {speedLoading && (

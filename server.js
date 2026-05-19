@@ -3669,6 +3669,14 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
   }
 });
 
+// Clear speed audit results
+app.delete('/api/speed-audit/:projectId/clear', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM audits WHERE project_id=$1 AND pillar='speed'`, [req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PageSpeed Insights for individual page (used by "Run PageSpeed" button per page)
 app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
   const { url, strategy = 'mobile' } = req.query;
