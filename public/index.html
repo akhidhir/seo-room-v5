@@ -8798,22 +8798,62 @@
       const [sortDir, setSortDir] = useState('asc');
       const [expandedRow, setExpandedRow] = useState(null);
       const [lastChecked, setLastChecked] = useState(null);
+      const [running, setRunning] = useState(false);
+      const [progress, setProgress] = useState(null);
       const isIndexed = pageFilter === 'indexed';
 
-      useEffect(() => {
+      const loadData = async () => {
         if (!project?.id) return;
-        (async () => {
-          setLoading(true);
-          try {
-            const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+        setLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+          if (data.status === 'running') {
+            setRunning(true);
+            setProgress(data.progress != null && data.total ? { current: data.progress, total: data.total } : null);
+          } else {
+            setRunning(false);
+            setProgress(null);
             if (data.results) {
               setResults(data.results);
               if (data.completed_at) setLastChecked(new Date(data.completed_at));
             }
-          } catch (e) { setError(e.message); }
-          finally { setLoading(false); }
-        })();
-      }, [project?.id]);
+          }
+        } catch (e) { setError(e.message); }
+        finally { setLoading(false); }
+      };
+
+      useEffect(() => { loadData(); }, [project?.id]);
+
+      // Poll while running
+      useEffect(() => {
+        if (!running) return;
+        const poll = setInterval(async () => {
+          try {
+            const data = await api(`/projects/${project.id}/audits/indexing/latest`);
+            if (data.status === 'running') {
+              if (data.progress != null && data.total) setProgress({ current: data.progress, total: data.total });
+            } else {
+              clearInterval(poll);
+              setRunning(false);
+              setProgress(null);
+              if (data.results) {
+                setResults(data.results);
+                if (data.completed_at) setLastChecked(new Date(data.completed_at));
+              }
+            }
+          } catch { clearInterval(poll); setRunning(false); }
+        }, 3000);
+        return () => clearInterval(poll);
+      }, [running, project?.id]);
+
+      const runCheck = async () => {
+        setRunning(true); setError(''); setProgress(null);
+        try {
+          const data = await api(`/projects/${project.id}/indexing/check`, { method: 'POST' });
+          if (data.error) { setError(data.error); setRunning(false); return; }
+          // Start polling
+        } catch (e) { setError(e.message); setRunning(false); }
+      };
 
       const filtered = useMemo(() => {
         let list = results.filter(r => isIndexed ? r.verdict === 'PASS' : (r.verdict === 'FAIL' || r.verdict === 'NEUTRAL'));
@@ -8884,6 +8924,10 @@
                 <span style={{ margin: '0 8px', color: 'var(--border)' }}>|</span>
                 <span style={{ color: '#ef4444', fontWeight: 700 }}>{totalNotIndexed}</span> <span style={{ color: 'var(--text3)' }}>not indexed</span>
               </div>
+              <button onClick={runCheck} disabled={running}
+                style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: running ? '#94a3b8' : '#6366f1', color: '#fff', fontWeight: 600, fontSize: 13, cursor: running ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {running ? <><i className="fas fa-spinner fa-spin" /> {progress ? `${progress.current}/${progress.total}` : 'Checking...'}</> : <><i className="fas fa-sync-alt" /> Run Check</>}
+              </button>
             </div>
           </div>
 
