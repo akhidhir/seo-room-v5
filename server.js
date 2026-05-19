@@ -3500,7 +3500,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 3; // 2 API calls per page (mobile+desktop), so limit concurrency
+        const BATCH_SIZE = 10; // 10 pages × 2 calls = 20 concurrent — PageSpeed API handles it fine with API key
         const results = [];
 
         function extractCwvAndOpps(psData) {
