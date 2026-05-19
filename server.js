@@ -6762,7 +6762,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
 
       results.push({
         id: pg.id,
-        url: url.replace(wpBase, '') || '/',
+        url: url || `${wpBase}/`,
         title,
         yoastScore,
         focusKeyword,
