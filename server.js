@@ -532,6 +532,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 20`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -1009,6 +1010,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/^\/api\/invite\//)) return next();
   // Allow connector-push routes (they use their own push token auth)
   if (req.path.match(/^\/api\/connector-push\//)) return next();
+  // Allow plugin-verify (WP plugin uses connection code, not JWT)
+  if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
@@ -1736,6 +1739,35 @@ app.delete('/api/projects/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Plugin Connection Code ──────────────────────────────────────────
+app.post('/api/projects/:id/generate-connection-code', async (req, res) => {
+  try {
+    const code = require('crypto').randomBytes(16).toString('hex');
+    await pool.query('UPDATE projects SET plugin_connection_code=$1 WHERE id=$2', [code, req.params.id]);
+    res.json({ code });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Plugin verify — called by WP plugin's Test Connection button (no auth — plugin doesn't have JWT)
+app.post('/api/projects/:id/plugin-verify', async (req, res) => {
+  try {
+    const { code, site_url, plugin_version } = req.body || {};
+    if (!code) return res.status(400).json({ ok: false, error: 'Missing connection code' });
+    const result = await pool.query('SELECT plugin_connection_code, domain FROM projects WHERE id=$1', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ ok: false, error: 'Project not found' });
+    const project = result.rows[0];
+    if (!project.plugin_connection_code) return res.status(400).json({ ok: false, error: 'No connection code generated for this project' });
+    if (project.plugin_connection_code !== code) return res.status(403).json({ ok: false, error: 'Invalid connection code' });
+    // Connection verified — optionally log site_url + version
+    console.log(`[plugin-verify] Project ${req.params.id} verified. site=${site_url}, version=${plugin_version}`);
+    res.json({ ok: true, project_name: project.domain || 'Connected' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
