@@ -7840,6 +7840,13 @@
         return Math.round(cwvResults.reduce((s, r) => s + (r.cwv?.score || 0), 0) / cwvResults.length);
       }, [cwvResults]);
 
+      const avgDesktopScore = useMemo(() => {
+        if (!cwvResults.length) return null;
+        const withDesktop = cwvResults.filter(r => r.desktop_score);
+        if (!withDesktop.length) return null;
+        return Math.round(withDesktop.reduce((s, r) => s + (r.desktop_score || 0), 0) / withDesktop.length);
+      }, [cwvResults]);
+
       const stats = useMemo(() => {
         if (!cwvResults.length) return null;
         const good = cwvResults.filter(r => (r.cwv?.score || 0) >= 90).length;
@@ -7872,6 +7879,7 @@
         const getVal = (r) => {
           const cwv = r.cwv || {};
           if (sortCol === 'score') return cwv.score || 0;
+          if (sortCol === 'desktop') return r.desktop_score || 0;
           if (sortCol === 'lcp') return parseFloat(cwv.lcp) || 999;
           if (sortCol === 'cls') return parseFloat(cwv.cls) || 999;
           if (sortCol === 'tbt') return parseFloat(cwv.tbt) || 999;
@@ -7985,7 +7993,7 @@
               const updated = [...prev];
               const realIdx = updated.findIndex(r => r.url === page.url);
               if (realIdx >= 0) {
-                updated[realIdx] = { ...updated[realIdx], cwv: result.cwv, performance_score: result.score, opportunities: result.opportunities };
+                updated[realIdx] = { ...updated[realIdx], cwv: result.cwv, performance_score: result.score, opportunities: result.opportunities, desktop_score: result.desktop_score, desktop_cwv: result.desktop_cwv, desktop_opportunities: result.desktop_opportunities };
               }
               _speedCache[_spck] = updated;
               return updated;
@@ -8034,7 +8042,7 @@
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-tachometer-alt" style={{ marginRight: 10, color: '#ef4444' }} />Core Web Vitals
               </h2>
-              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Google PageSpeed performance scores per page (mobile)</p>
+              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Google PageSpeed performance scores per page (mobile + desktop)</p>
             </div>
             <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 13 }}>
               {speedLoading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run CWV Audit</>}
@@ -8054,9 +8062,10 @@
           {speedError && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{speedError}</div>}
 
           {stats && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
               {[
-                { label: 'Average Score', value: avgScore, color: scoreColor(avgScore) },
+                { label: 'Avg Mobile', value: avgScore, color: scoreColor(avgScore) },
+                { label: 'Avg Desktop', value: avgDesktopScore || '—', color: avgDesktopScore ? scoreColor(avgDesktopScore) : 'var(--text3)' },
                 { label: 'Good (90+)', value: stats.good, color: '#22c55e' },
                 { label: 'Needs Work (50-89)', value: stats.needsWork, color: '#f59e0b' },
                 { label: 'Poor (<50)', value: stats.poor, color: '#ef4444' },
@@ -8124,19 +8133,20 @@
                 <thead>
                   <tr style={{ borderBottom: '2px solid var(--border)', background: 'var(--bg)', position: 'sticky', top: 0, zIndex: 2 }}>
                     {[
-                      { col: 'page', label: 'PAGE', width: '28%' },
-                      { col: 'score', label: 'SCORE', width: '8%' },
-                      { col: 'lcp', label: 'LCP', width: '9%' },
-                      { col: 'fcp', label: 'FCP', width: '9%' },
-                      { col: 'cls', label: 'CLS', width: '9%' },
-                      { col: 'tbt', label: 'TBT', width: '9%' },
-                      { col: 'si', label: 'SI', width: '9%' },
+                      { col: 'page', label: 'PAGE', width: '24%' },
+                      { col: 'score', label: 'MOBILE', width: '7%' },
+                      { col: 'desktop', label: 'DESKTOP', width: '7%' },
+                      { col: 'lcp', label: 'LCP', width: '8%' },
+                      { col: 'fcp', label: 'FCP', width: '8%' },
+                      { col: 'cls', label: 'CLS', width: '8%' },
+                      { col: 'tbt', label: 'TBT', width: '8%' },
+                      { col: 'si', label: 'SI', width: '8%' },
                     ].map(h => (
                       <th key={h.col} onClick={() => handleSort(h.col)} style={{ padding: '12px 10px', textAlign: h.col === 'page' ? 'left' : 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', cursor: 'pointer', userSelect: 'none', width: h.width, whiteSpace: 'nowrap', background: 'var(--bg)' }}>
                         {h.label}{sortIcon(h.col)}
                       </th>
                     ))}
-                    <th style={{ padding: '12px 10px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: '19%', background: 'var(--bg)' }}>ACTION</th>
+                    <th style={{ padding: '12px 10px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', width: '14%', background: 'var(--bg)' }}>ACTION</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -8169,6 +8179,9 @@
                           </td>
                           <td style={{ textAlign: 'center', padding: '10px 6px' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: '50%', border: `3px solid ${scoreColor(score)}`, fontWeight: 800, fontSize: 14, color: scoreColor(score) }}>{score}</div>
+                          </td>
+                          <td style={{ textAlign: 'center', padding: '10px 6px' }}>
+                            {(() => { const ds = page.desktop_score || 0; return <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: '50%', border: `3px solid ${scoreColor(ds)}`, fontWeight: 800, fontSize: 14, color: scoreColor(ds) }}>{ds || '—'}</div>; })()}
                           </td>
                           <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: lcpColor(cwv.lcp) }}>{cwv.lcp || 'N/A'}</td>
                           <td style={{ textAlign: 'center', padding: '10px 6px', fontWeight: 600, color: fcpColor(cwv.fcp) }}>{cwv.fcp || 'N/A'}</td>

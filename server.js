@@ -3275,59 +3275,72 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 5;
+        const BATCH_SIZE = 3; // 2 API calls per page (mobile+desktop), so limit concurrency
         const results = [];
+
+        function extractCwvAndOpps(psData) {
+          const metrics = psData.lighthouseResult?.audits || {};
+          const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+          const opportunities = [];
+          const fixableAudits = [
+            'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
+            'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
+            'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
+            'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
+            'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
+            'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
+          ];
+          for (const key of fixableAudits) {
+            const audit = metrics[key];
+            if (audit && audit.score !== null && audit.score < 1) {
+              const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
+              if (audit.details?.items?.length) {
+                opp.items = audit.details.items.slice(0, 10).map(item => {
+                  const cleaned = {};
+                  if (item.url) cleaned.url = item.url;
+                  if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
+                  if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
+                  if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
+                  if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
+                  if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
+                  return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
+                });
+              }
+              opportunities.push(opp);
+            }
+          }
+          return {
+            score,
+            cwv: {
+              lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
+              fid: metrics['max-potential-fid']?.displayValue || 'N/A',
+              cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
+              fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
+              si: metrics['speed-index']?.displayValue || 'N/A',
+              tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
+              score,
+            },
+            opportunities,
+          };
+        }
 
         async function processPage(page) {
           try {
-            const psData = await runPageSpeedAudit(page.url, 'mobile');
-            const metrics = psData.lighthouseResult?.audits || {};
-            const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
-
-            // Extract actionable Lighthouse opportunities & diagnostics
-            const opportunities = [];
-            const fixableAudits = [
-              'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
-              'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
-              'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
-              'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
-              'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
-              'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
-            ];
-            for (const key of fixableAudits) {
-              const audit = metrics[key];
-              if (audit && audit.score !== null && audit.score < 1) {
-                const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
-                // Include items (e.g. which images are unsized, which scripts are render-blocking)
-                if (audit.details?.items?.length) {
-                  opp.items = audit.details.items.slice(0, 10).map(item => {
-                    const cleaned = {};
-                    if (item.url) cleaned.url = item.url;
-                    if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
-                    if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
-                    if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
-                    if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
-                    if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
-                    return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
-                  });
-                }
-                opportunities.push(opp);
-              }
-            }
+            const [mobileData, desktopData] = await Promise.all([
+              runPageSpeedAudit(page.url, 'mobile'),
+              runPageSpeedAudit(page.url, 'desktop'),
+            ]);
+            const mobile = extractCwvAndOpps(mobileData);
+            const desktop = extractCwvAndOpps(desktopData);
 
             return {
               page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
-              performance_score: score,
-              cwv: {
-                lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
-                fid: metrics['max-potential-fid']?.displayValue || 'N/A',
-                cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
-                fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
-                si: metrics['speed-index']?.displayValue || 'N/A',
-                tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
-                score,
-              },
-              opportunities,
+              performance_score: mobile.score,
+              cwv: mobile.cwv,
+              opportunities: mobile.opportunities,
+              desktop_score: desktop.score,
+              desktop_cwv: desktop.cwv,
+              desktop_opportunities: desktop.opportunities,
             };
           } catch (err) {
             console.warn(`[speed-audit] Failed for ${page.url}: ${err.message}`);
@@ -3459,52 +3472,68 @@ app.post('/api/speed-audit/:projectId/retest-page', async (req, res) => {
 
   try {
     console.log(`[speed-retest] Testing ${page_url} for project ${req.params.projectId}`);
-    const psData = await runPageSpeedAudit(page_url, 'mobile');
-    const metrics = psData.lighthouseResult?.audits || {};
-    const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+    const [mobileData, desktopData] = await Promise.all([
+      runPageSpeedAudit(page_url, 'mobile'),
+      runPageSpeedAudit(page_url, 'desktop'),
+    ]);
 
-    // Extract opportunities (same logic as full audit)
-    const opportunities = [];
-    const fixableAudits = [
-      'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
-      'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
-      'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
-      'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
-      'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
-      'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
-    ];
-    for (const key of fixableAudits) {
-      const audit = metrics[key];
-      if (audit && audit.score !== null && audit.score < 1) {
-        const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
-        if (audit.details?.items?.length) {
-          opp.items = audit.details.items.slice(0, 10).map(item => {
-            const cleaned = {};
-            if (item.url) cleaned.url = item.url;
-            if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
-            if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
-            if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
-            if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
-            if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
-            return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
-          });
+    function extractRetestCwvAndOpps(psData) {
+      const metrics = psData.lighthouseResult?.audits || {};
+      const sc = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+      const opps = [];
+      const fixableAudits = [
+        'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
+        'uses-responsive-images', 'offscreen-images', 'uses-optimized-images', 'modern-image-formats',
+        'uses-text-compression', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display',
+        'third-party-summary', 'dom-size', 'critical-request-chains', 'largest-contentful-paint-element',
+        'layout-shift-elements', 'long-tasks', 'efficient-animated-content', 'duplicated-javascript',
+        'legacy-javascript', 'total-byte-weight', 'mainthread-work-breakdown',
+      ];
+      for (const key of fixableAudits) {
+        const audit = metrics[key];
+        if (audit && audit.score !== null && audit.score < 1) {
+          const opp = { id: key, title: audit.title, score: audit.score, displayValue: audit.displayValue || '' };
+          if (audit.details?.items?.length) {
+            opp.items = audit.details.items.slice(0, 10).map(item => {
+              const cleaned = {};
+              if (item.url) cleaned.url = item.url;
+              if (item.node?.snippet) cleaned.snippet = item.node.snippet.slice(0, 200);
+              if (item.wastedBytes) cleaned.wastedBytes = item.wastedBytes;
+              if (item.wastedMs) cleaned.wastedMs = item.wastedMs;
+              if (item.totalBytes) cleaned.totalBytes = item.totalBytes;
+              if (item.source) cleaned.source = typeof item.source === 'object' ? item.source.url : item.source;
+              return Object.keys(cleaned).length > 0 ? cleaned : { raw: JSON.stringify(item).slice(0, 150) };
+            });
+          }
+          opps.push(opp);
         }
-        opportunities.push(opp);
       }
+      return {
+        score: sc,
+        cwv: {
+          lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
+          fid: metrics['max-potential-fid']?.displayValue || 'N/A',
+          cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
+          fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
+          si: metrics['speed-index']?.displayValue || 'N/A',
+          tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
+          score: sc,
+        },
+        opportunities: opps,
+      };
     }
 
+    const mobile = extractRetestCwvAndOpps(mobileData);
+    const desktop = extractRetestCwvAndOpps(desktopData);
+    const score = mobile.score;
+
     const updatedPage = {
-      cwv: {
-        lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
-        fid: metrics['max-potential-fid']?.displayValue || 'N/A',
-        cls: metrics['cumulative-layout-shift']?.displayValue || 'N/A',
-        fcp: metrics['first-contentful-paint']?.displayValue || 'N/A',
-        si: metrics['speed-index']?.displayValue || 'N/A',
-        tbt: metrics['total-blocking-time']?.displayValue || 'N/A',
-        score,
-      },
+      cwv: mobile.cwv,
       performance_score: score,
-      opportunities,
+      opportunities: mobile.opportunities,
+      desktop_score: desktop.score,
+      desktop_cwv: desktop.cwv,
+      desktop_opportunities: desktop.opportunities,
     };
 
     // Update stored audit data in DB
@@ -3528,7 +3557,7 @@ app.post('/api/speed-audit/:projectId/retest-page', async (req, res) => {
       console.warn(`[speed-retest] DB update failed: ${dbErr.message}`);
     }
 
-    res.json({ success: true, score, cwv: updatedPage.cwv, opportunities, url: page_url });
+    res.json({ success: true, score, cwv: updatedPage.cwv, opportunities: mobile.opportunities, desktop_score: desktop.score, desktop_cwv: desktop.cwv, desktop_opportunities: desktop.opportunities, url: page_url });
   } catch (e) {
     console.error(`[speed-retest] Error: ${e.message}`);
     res.status(500).json({ error: e.message });
