@@ -9314,20 +9314,523 @@
       );
     }
 
-    // ============ USER BEHAVIOUR PAGE (Microsoft Clarity) ============
+    // ============ 404s & REDIRECTS PAGE ============
     function RedirectsPage({ project }) {
-      return React.createElement('div', { style: { padding: 32 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 } },
-          React.createElement('i', { className: 'fas fa-directions', style: { fontSize: 24, color: '#6366f1' } }),
-          React.createElement('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, 'Redirects')
+      const e = React.createElement;
+      const [activeTab, setActiveTab] = useState('404s');
+      // 404 state
+      const [fourOhFours, setFourOhFours] = useState([]);
+      const [fourTotal, setFourTotal] = useState(0);
+      const [fourLoading, setFourLoading] = useState(false);
+      const [redirectingId, setRedirectingId] = useState(null);
+      const [redirectTarget, setRedirectTarget] = useState('');
+      const [deletingId, setDeletingId] = useState(null);
+      const [clearingAll, setClearingAll] = useState(false);
+      // Redirects state
+      const [redirects, setRedirects] = useState([]);
+      const [redTotal, setRedTotal] = useState(0);
+      const [redLoading, setRedLoading] = useState(false);
+      const [showAddForm, setShowAddForm] = useState(false);
+      const [addSource, setAddSource] = useState('');
+      const [addTarget, setAddTarget] = useState('');
+      const [addType, setAddType] = useState('301');
+      const [addSaving, setAddSaving] = useState(false);
+      const [editingId, setEditingId] = useState(null);
+      const [editSource, setEditSource] = useState('');
+      const [editTarget, setEditTarget] = useState('');
+      const [editType, setEditType] = useState('301');
+      const [editSaving, setEditSaving] = useState(false);
+      const [redDeletingId, setRedDeletingId] = useState(null);
+      // Broken links state
+      const [brokenLinks, setBrokenLinks] = useState([]);
+      const [blTotal, setBlTotal] = useState(0);
+      const [blLoading, setBlLoading] = useState(false);
+      const [scanning, setScanning] = useState(false);
+      const [clearingBl, setClearingBl] = useState(false);
+
+      const relTime = (d) => {
+        if (!d) return '—';
+        const ms = Date.now() - new Date(d).getTime();
+        const m = Math.floor(ms / 60000);
+        if (m < 1) return 'just now';
+        if (m < 60) return m + 'm ago';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h ago';
+        const days = Math.floor(h / 24);
+        if (days < 30) return days + 'd ago';
+        return new Date(d).toLocaleDateString();
+      };
+
+      const load404s = async () => {
+        if (!project?.id) return;
+        setFourLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/plugin/404s`);
+          const items = (data.items || []).sort((a, b) => (b.hit_count || 0) - (a.hit_count || 0));
+          setFourOhFours(items);
+          setFourTotal(data.total || items.length);
+        } catch (err) { console.error('Load 404s error:', err); }
+        setFourLoading(false);
+      };
+
+      const loadRedirects = async () => {
+        if (!project?.id) return;
+        setRedLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/plugin/redirects`);
+          setRedirects(data.items || []);
+          setRedTotal(data.total || (data.items || []).length);
+        } catch (err) { console.error('Load redirects error:', err); }
+        setRedLoading(false);
+      };
+
+      const loadBrokenLinks = async () => {
+        if (!project?.id) return;
+        setBlLoading(true);
+        try {
+          const data = await api(`/projects/${project.id}/plugin/broken-links`);
+          setBrokenLinks(data.items || []);
+          setBlTotal(data.total || (data.items || []).length);
+        } catch (err) { console.error('Load broken links error:', err); }
+        setBlLoading(false);
+      };
+
+      useEffect(() => {
+        if (activeTab === '404s') load404s();
+        else if (activeTab === 'redirects') loadRedirects();
+        else if (activeTab === 'broken') loadBrokenLinks();
+      }, [activeTab, project?.id]);
+
+      // ---- Actions ----
+      const handle404Delete = async (fid) => {
+        setDeletingId(fid);
+        try {
+          await api(`/projects/${project.id}/plugin/404s/${fid}`, { method: 'DELETE' });
+          setFourOhFours(prev => prev.filter(x => x.id !== fid));
+          setFourTotal(prev => Math.max(0, prev - 1));
+        } catch (err) { console.error(err); }
+        setDeletingId(null);
+      };
+
+      const handle404Redirect = async (fid) => {
+        if (!redirectTarget.trim()) return;
+        try {
+          await api(`/projects/${project.id}/plugin/404s/${fid}/redirect`, {
+            method: 'POST',
+            body: { target_url: redirectTarget.trim() }
+          });
+          setRedirectingId(null);
+          setRedirectTarget('');
+          load404s();
+        } catch (err) { console.error(err); }
+      };
+
+      const handleClearAll404s = async () => {
+        if (!confirm('Clear all 404 entries? This cannot be undone.')) return;
+        setClearingAll(true);
+        try {
+          await api(`/projects/${project.id}/plugin/404s/clear`, { method: 'POST' });
+          setFourOhFours([]);
+          setFourTotal(0);
+        } catch (err) { console.error(err); }
+        setClearingAll(false);
+      };
+
+      const handleAddRedirect = async () => {
+        if (!addSource.trim() || !addTarget.trim()) return;
+        setAddSaving(true);
+        try {
+          await api(`/projects/${project.id}/plugin/redirects`, {
+            method: 'POST',
+            body: { source_url: addSource.trim(), target_url: addTarget.trim(), redirect_type: parseInt(addType) }
+          });
+          setShowAddForm(false);
+          setAddSource('');
+          setAddTarget('');
+          setAddType('301');
+          loadRedirects();
+        } catch (err) { console.error(err); }
+        setAddSaving(false);
+      };
+
+      const handleEditRedirect = async (rid) => {
+        if (!editSource.trim() || !editTarget.trim()) return;
+        setEditSaving(true);
+        try {
+          await api(`/projects/${project.id}/plugin/redirects/${rid}`, {
+            method: 'PUT',
+            body: { source_url: editSource.trim(), target_url: editTarget.trim(), redirect_type: parseInt(editType) }
+          });
+          setEditingId(null);
+          loadRedirects();
+        } catch (err) { console.error(err); }
+        setEditSaving(false);
+      };
+
+      const handleDeleteRedirect = async (rid) => {
+        setRedDeletingId(rid);
+        try {
+          await api(`/projects/${project.id}/plugin/redirects/${rid}`, { method: 'DELETE' });
+          setRedirects(prev => prev.filter(x => x.id !== rid));
+          setRedTotal(prev => Math.max(0, prev - 1));
+        } catch (err) { console.error(err); }
+        setRedDeletingId(null);
+      };
+
+      const handleRunScan = async () => {
+        setScanning(true);
+        try {
+          await api(`/projects/${project.id}/plugin/link-check`, {
+            method: 'POST',
+            body: { max_checks: 200, check_external: true }
+          });
+          await loadBrokenLinks();
+        } catch (err) { console.error(err); }
+        setScanning(false);
+      };
+
+      const handleClearBroken = async () => {
+        if (!confirm('Clear all broken link results?')) return;
+        setClearingBl(true);
+        try {
+          await api(`/projects/${project.id}/plugin/broken-links/clear`, { method: 'POST' });
+          setBrokenLinks([]);
+          setBlTotal(0);
+        } catch (err) { console.error(err); }
+        setClearingBl(false);
+      };
+
+      // ---- Styles ----
+      const cardStyle = { background: 'var(--card-bg, #fff)', border: '1px solid var(--border, #e2e8f0)', borderRadius: 12, padding: 20, marginBottom: 16 };
+      const statCard = (val, label, color) => e('div', { style: { background: 'var(--card-bg, #fff)', border: '1px solid var(--border, #e2e8f0)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 140 } },
+        e('div', { style: { fontSize: 28, fontWeight: 700, color: color || 'var(--text1, #1e293b)', lineHeight: 1.2 } }, val),
+        e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3, #94a3b8)', marginTop: 4, letterSpacing: '0.5px' } }, label)
+      );
+      const btnStyle = (bg, fg) => ({ padding: '8px 14px', borderRadius: 8, border: 'none', background: bg || '#6366f1', color: fg || '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 });
+      const thStyle = { padding: '10px 12px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3, #94a3b8)', textAlign: 'left', borderBottom: '1px solid var(--border, #e2e8f0)', letterSpacing: '0.5px' };
+      const tdStyle = { padding: '10px 12px', fontSize: 13, color: 'var(--text1, #1e293b)', borderBottom: '1px solid var(--border, #f1f5f9)', verticalAlign: 'middle' };
+      const inputStyle = { padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border, #e2e8f0)', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' };
+      const badgeStyle = (bg, fg) => ({ display: 'inline-block', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: bg, color: fg });
+      const urlCell = { maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 };
+
+      // ---- Tab content ----
+      const tabs = [
+        { id: '404s', label: '404 Monitor', icon: 'fas fa-unlink' },
+        { id: 'redirects', label: 'Redirects', icon: 'fas fa-directions' },
+        { id: 'broken', label: 'Broken Links', icon: 'fas fa-chain-broken' },
+      ];
+
+      const unique404Urls = new Set(fourOhFours.map(x => x.url)).size;
+      const last24h = fourOhFours.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + (x.hit_count || 0), 0);
+      const count301 = redirects.filter(x => x.redirect_type === 301 || x.redirect_type === '301').length;
+      const count302 = redirects.filter(x => x.redirect_type === 302 || x.redirect_type === '302').length;
+      const blInternal = brokenLinks.filter(x => x.link_type === 'internal').length;
+      const blExternal = brokenLinks.filter(x => x.link_type === 'external').length;
+
+      // ---- 404 Monitor Tab ----
+      const render404Tab = () => e('div', null,
+        // Stats row
+        e('div', { style: { display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' } },
+          statCard(fourTotal, 'Total 404s', '#ef4444'),
+          statCard(unique404Urls, 'Unique URLs', '#6366f1'),
+          statCard(last24h, 'Last 24h Hits', '#f59e0b')
         ),
-        React.createElement('div', { style: { background: '#f8fafc', border: '2px dashed #e2e8f0', borderRadius: 12, padding: 48, textAlign: 'center' } },
-          React.createElement('i', { className: 'fas fa-directions', style: { fontSize: 48, color: '#cbd5e1', marginBottom: 16 } }),
-          React.createElement('h3', { style: { color: '#64748b', fontWeight: 500, marginBottom: 8 } }, 'Coming Soon'),
-          React.createElement('p', { style: { color: '#94a3b8', maxWidth: 480, margin: '0 auto', lineHeight: 1.6 } },
-            'Manage 301/302 redirects, detect redirect chains, find broken links, and monitor redirect health across all your pages. Redirect rules will be pushed to WordPress via the SEO Room Connector plugin.'
+        // Clear all button
+        fourOhFours.length > 0 && e('div', { style: { marginBottom: 12, textAlign: 'right' } },
+          e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
+            clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
+            clearingAll ? ' Clearing...' : ' Clear All 404s'
+          )
+        ),
+        // Table
+        fourLoading ? e('div', { style: { textAlign: 'center', padding: 40 } },
+          e('i', { className: 'fas fa-spinner fa-spin', style: { fontSize: 24, color: '#6366f1' } })
+        ) : fourOhFours.length === 0 ? e('div', { style: { ...cardStyle, textAlign: 'center', padding: 40, color: 'var(--text3, #94a3b8)' } },
+          e('i', { className: 'fas fa-check-circle', style: { fontSize: 32, marginBottom: 8, display: 'block', color: '#22c55e' } }),
+          e('div', { style: { fontWeight: 500 } }, 'No 404 errors recorded'),
+          e('div', { style: { fontSize: 12, marginTop: 4 } }, 'The SEO Room Connector plugin will log 404s as they occur.')
+        ) : e('div', { style: { ...cardStyle, padding: 0, overflow: 'hidden' } },
+          e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+            e('thead', null,
+              e('tr', null,
+                e('th', { style: thStyle }, 'URL'),
+                e('th', { style: { ...thStyle, width: 80 } }, 'Hits'),
+                e('th', { style: { ...thStyle, width: 100 } }, 'Last Seen'),
+                e('th', { style: thStyle }, 'Referrer'),
+                e('th', { style: { ...thStyle, width: 200, textAlign: 'right' } }, 'Actions')
+              )
+            ),
+            e('tbody', null,
+              fourOhFours.map((item, i) => e(React.Fragment, { key: item.id || i },
+                e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'var(--row-alt, #f8fafc)' } },
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.url }, item.url || '—'),
+                  e('td', { style: tdStyle },
+                    e('span', { style: badgeStyle('#fef2f2', '#ef4444') }, item.hit_count || 0)
+                  ),
+                  e('td', { style: { ...tdStyle, fontSize: 12, color: 'var(--text3, #94a3b8)' } }, relTime(item.last_seen)),
+                  e('td', { style: { ...tdStyle, ...urlCell, fontSize: 12, color: 'var(--text3, #94a3b8)' }, title: item.referrer }, item.referrer || '—'),
+                  e('td', { style: { ...tdStyle, textAlign: 'right' } },
+                    redirectingId === item.id ? null : e('button', {
+                      style: { ...btnStyle('#6366f1'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
+                      onClick: () => { setRedirectingId(item.id); setRedirectTarget(''); }
+                    }, e('i', { className: 'fas fa-arrow-right' }), ' Redirect'),
+                    redirectingId !== item.id && e('button', {
+                      style: { ...btnStyle('#ef4444'), padding: '5px 10px', fontSize: 12 },
+                      onClick: () => handle404Delete(item.id),
+                      disabled: deletingId === item.id
+                    }, deletingId === item.id ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }))
+                  )
+                ),
+                // Inline redirect form
+                redirectingId === item.id && e('tr', { style: { background: '#f0f0ff' } },
+                  e('td', { colSpan: 5, style: { padding: '10px 12px' } },
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                      e('span', { style: { fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' } }, 'Redirect to:'),
+                      e('input', {
+                        style: { ...inputStyle, flex: 1 },
+                        placeholder: 'https://example.com/correct-page',
+                        value: redirectTarget,
+                        onChange: (ev) => setRedirectTarget(ev.target.value),
+                        onKeyDown: (ev) => { if (ev.key === 'Enter') handle404Redirect(item.id); }
+                      }),
+                      e('button', { style: btnStyle('#22c55e'), onClick: () => handle404Redirect(item.id) },
+                        e('i', { className: 'fas fa-check' }), ' Create'
+                      ),
+                      e('button', { style: { ...btnStyle('#94a3b8'), marginLeft: 4 }, onClick: () => setRedirectingId(null) },
+                        e('i', { className: 'fas fa-times' })
+                      )
+                    )
+                  )
+                )
+              ))
+            )
           )
         )
+      );
+
+      // ---- Redirects Tab ----
+      const renderRedirectsTab = () => e('div', null,
+        // Stats row
+        e('div', { style: { display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' } },
+          statCard(redTotal, 'Total Redirects', '#6366f1'),
+          statCard(count301, '301 Permanent', '#22c55e'),
+          statCard(count302, '302 Temporary', '#f59e0b')
+        ),
+        // Add redirect button + form
+        e('div', { style: { marginBottom: 12 } },
+          !showAddForm && e('button', { style: btnStyle('#6366f1'), onClick: () => setShowAddForm(true) },
+            e('i', { className: 'fas fa-plus' }), ' Add Redirect'
+          ),
+          showAddForm && e('div', { style: { ...cardStyle, display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' } },
+            e('div', { style: { flex: 2, minWidth: 180 } },
+              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3, #94a3b8)', display: 'block', marginBottom: 4 } }, 'Source URL'),
+              e('input', { style: inputStyle, placeholder: '/old-page', value: addSource, onChange: (ev) => setAddSource(ev.target.value) })
+            ),
+            e('div', { style: { flex: 2, minWidth: 180 } },
+              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3, #94a3b8)', display: 'block', marginBottom: 4 } }, 'Target URL'),
+              e('input', { style: inputStyle, placeholder: '/new-page', value: addTarget, onChange: (ev) => setAddTarget(ev.target.value) })
+            ),
+            e('div', { style: { minWidth: 90 } },
+              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3, #94a3b8)', display: 'block', marginBottom: 4 } }, 'Type'),
+              e('select', { style: { ...inputStyle, cursor: 'pointer' }, value: addType, onChange: (ev) => setAddType(ev.target.value) },
+                e('option', { value: '301' }, '301'),
+                e('option', { value: '302' }, '302')
+              )
+            ),
+            e('div', { style: { display: 'flex', gap: 6 } },
+              e('button', { style: btnStyle('#22c55e'), onClick: handleAddRedirect, disabled: addSaving },
+                addSaving ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-check' }), ' Save'
+              ),
+              e('button', { style: btnStyle('#94a3b8'), onClick: () => { setShowAddForm(false); setAddSource(''); setAddTarget(''); setAddType('301'); } },
+                e('i', { className: 'fas fa-times' })
+              )
+            )
+          )
+        ),
+        // Table
+        redLoading ? e('div', { style: { textAlign: 'center', padding: 40 } },
+          e('i', { className: 'fas fa-spinner fa-spin', style: { fontSize: 24, color: '#6366f1' } })
+        ) : redirects.length === 0 ? e('div', { style: { ...cardStyle, textAlign: 'center', padding: 40, color: 'var(--text3, #94a3b8)' } },
+          e('i', { className: 'fas fa-directions', style: { fontSize: 32, marginBottom: 8, display: 'block', color: '#cbd5e1' } }),
+          e('div', { style: { fontWeight: 500 } }, 'No redirects configured'),
+          e('div', { style: { fontSize: 12, marginTop: 4 } }, 'Add redirects manually or create them from 404 entries.')
+        ) : e('div', { style: { ...cardStyle, padding: 0, overflow: 'hidden' } },
+          e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+            e('thead', null,
+              e('tr', null,
+                e('th', { style: thStyle }, 'Source URL'),
+                e('th', { style: thStyle }, 'Target URL'),
+                e('th', { style: { ...thStyle, width: 70 } }, 'Type'),
+                e('th', { style: { ...thStyle, width: 60 } }, 'Hits'),
+                e('th', { style: { ...thStyle, width: 100 } }, 'Created'),
+                e('th', { style: { ...thStyle, width: 160, textAlign: 'right' } }, 'Actions')
+              )
+            ),
+            e('tbody', null,
+              redirects.map((item, i) => editingId === item.id ?
+                // Edit row
+                e('tr', { key: item.id, style: { background: '#f0f0ff' } },
+                  e('td', { style: tdStyle },
+                    e('input', { style: inputStyle, value: editSource, onChange: (ev) => setEditSource(ev.target.value) })
+                  ),
+                  e('td', { style: tdStyle },
+                    e('input', { style: inputStyle, value: editTarget, onChange: (ev) => setEditTarget(ev.target.value) })
+                  ),
+                  e('td', { style: tdStyle },
+                    e('select', { style: { ...inputStyle, cursor: 'pointer' }, value: editType, onChange: (ev) => setEditType(ev.target.value) },
+                      e('option', { value: '301' }, '301'),
+                      e('option', { value: '302' }, '302')
+                    )
+                  ),
+                  e('td', { style: tdStyle }, item.hit_count || 0),
+                  e('td', { style: tdStyle }, ''),
+                  e('td', { style: { ...tdStyle, textAlign: 'right' } },
+                    e('button', { style: { ...btnStyle('#22c55e'), padding: '5px 10px', fontSize: 12, marginRight: 4 }, onClick: () => handleEditRedirect(item.id), disabled: editSaving },
+                      editSaving ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-check' })
+                    ),
+                    e('button', { style: { ...btnStyle('#94a3b8'), padding: '5px 10px', fontSize: 12 }, onClick: () => setEditingId(null) },
+                      e('i', { className: 'fas fa-times' })
+                    )
+                  )
+                ) :
+                // Display row
+                e('tr', { key: item.id, style: { background: i % 2 === 0 ? 'transparent' : 'var(--row-alt, #f8fafc)' } },
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.source_url }, item.source_url || '—'),
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url }, item.target_url || '—'),
+                  e('td', { style: tdStyle },
+                    e('span', { style: badgeStyle(
+                      String(item.redirect_type) === '301' ? '#dcfce7' : '#fef3c7',
+                      String(item.redirect_type) === '301' ? '#16a34a' : '#d97706'
+                    ) }, item.redirect_type)
+                  ),
+                  e('td', { style: tdStyle }, item.hit_count || 0),
+                  e('td', { style: { ...tdStyle, fontSize: 12, color: 'var(--text3, #94a3b8)' } }, relTime(item.created_at)),
+                  e('td', { style: { ...tdStyle, textAlign: 'right' } },
+                    e('button', {
+                      style: { ...btnStyle('#6366f1'), padding: '5px 10px', fontSize: 12, marginRight: 4 },
+                      onClick: () => { setEditingId(item.id); setEditSource(item.source_url || ''); setEditTarget(item.target_url || ''); setEditType(String(item.redirect_type || '301')); }
+                    }, e('i', { className: 'fas fa-edit' })),
+                    e('button', {
+                      style: { ...btnStyle('#ef4444'), padding: '5px 10px', fontSize: 12 },
+                      onClick: () => handleDeleteRedirect(item.id),
+                      disabled: redDeletingId === item.id
+                    }, redDeletingId === item.id ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }))
+                  )
+                )
+              )
+            )
+          )
+        )
+      );
+
+      // ---- Broken Links Tab ----
+      const statusBadge = (code) => {
+        const c = parseInt(code) || 0;
+        let bg = '#fef2f2', fg = '#ef4444';
+        if (c === 403) { bg = '#fef3c7'; fg = '#d97706'; }
+        else if (c >= 500) { bg = '#fef2f2'; fg = '#dc2626'; }
+        else if (c === 0) { bg = '#f1f5f9'; fg = '#64748b'; }
+        return e('span', { style: badgeStyle(bg, fg) }, c === 0 ? 'Timeout' : c);
+      };
+
+      const renderBrokenLinksTab = () => e('div', null,
+        // Action bar
+        e('div', { style: { display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' } },
+          e('button', { style: btnStyle('#6366f1'), onClick: handleRunScan, disabled: scanning },
+            scanning ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-search' }),
+            scanning ? ' Scanning...' : ' Run Link Check'
+          ),
+          brokenLinks.length > 0 && e('button', { style: btnStyle('#ef4444'), onClick: handleClearBroken, disabled: clearingBl },
+            clearingBl ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
+            ' Clear Results'
+          )
+        ),
+        // Stats row
+        e('div', { style: { display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' } },
+          statCard(blTotal, 'Total Broken', '#ef4444'),
+          statCard(blInternal, 'Internal Broken', '#f59e0b'),
+          statCard(blExternal, 'External Broken', '#6366f1')
+        ),
+        // Table
+        blLoading ? e('div', { style: { textAlign: 'center', padding: 40 } },
+          e('i', { className: 'fas fa-spinner fa-spin', style: { fontSize: 24, color: '#6366f1' } })
+        ) : brokenLinks.length === 0 ? e('div', { style: { ...cardStyle, textAlign: 'center', padding: 40, color: 'var(--text3, #94a3b8)' } },
+          e('i', { className: 'fas fa-link', style: { fontSize: 32, marginBottom: 8, display: 'block', color: '#cbd5e1' } }),
+          e('div', { style: { fontWeight: 500 } }, 'No broken links found'),
+          e('div', { style: { fontSize: 12, marginTop: 4 } }, 'Run a link check to scan your site for broken links.')
+        ) : e('div', { style: { ...cardStyle, padding: 0, overflow: 'hidden' } },
+          e('div', { style: { overflowX: 'auto' } },
+            e('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 700 } },
+              e('thead', null,
+                e('tr', null,
+                  e('th', { style: thStyle }, 'Source Page'),
+                  e('th', { style: thStyle }, 'Target URL'),
+                  e('th', { style: { ...thStyle, width: 80 } }, 'Status'),
+                  e('th', { style: thStyle }, 'Anchor Text'),
+                  e('th', { style: { ...thStyle, width: 90 } }, 'Type'),
+                  e('th', { style: { ...thStyle, width: 100 } }, 'Scanned')
+                )
+              ),
+              e('tbody', null,
+                brokenLinks.map((item, i) => e('tr', { key: item.id || i, style: { background: i % 2 === 0 ? 'transparent' : 'var(--row-alt, #f8fafc)' } },
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.source_url }, item.source_url || '—'),
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url }, item.target_url || '—'),
+                  e('td', { style: tdStyle }, statusBadge(item.status_code)),
+                  e('td', { style: { ...tdStyle, fontSize: 12, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: item.anchor_text }, item.anchor_text || '—'),
+                  e('td', { style: tdStyle },
+                    e('span', { style: badgeStyle(
+                      item.link_type === 'internal' ? '#dbeafe' : '#f3e8ff',
+                      item.link_type === 'internal' ? '#2563eb' : '#7c3aed'
+                    ) }, item.link_type || 'unknown')
+                  ),
+                  e('td', { style: { ...tdStyle, fontSize: 12, color: 'var(--text3, #94a3b8)' } }, relTime(item.scanned_at))
+                ))
+              )
+            )
+          )
+        )
+      );
+
+      // ---- Main render ----
+      return e('div', { style: { padding: 32 } },
+        // Header
+        e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 } },
+          e('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+            e('i', { className: 'fas fa-directions', style: { fontSize: 24, color: '#6366f1' } }),
+            e('div', null,
+              e('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, '404s & Redirects'),
+              e('p', { style: { margin: 0, fontSize: 13, color: 'var(--text3, #94a3b8)', marginTop: 2 } }, 'Monitor 404 errors, manage redirects, and find broken links across your site.')
+            )
+          )
+        ),
+        // Tab bar
+        e('div', { style: { display: 'flex', gap: 6, marginBottom: 20, background: 'var(--card-bg, #fff)', border: '1px solid var(--border, #e2e8f0)', borderRadius: 10, padding: 4, width: 'fit-content' } },
+          tabs.map(tab => e('button', {
+            key: tab.id,
+            onClick: () => setActiveTab(tab.id),
+            style: {
+              padding: '8px 16px',
+              borderRadius: 8,
+              border: 'none',
+              background: activeTab === tab.id ? '#6366f1' : 'transparent',
+              color: activeTab === tab.id ? '#fff' : 'var(--text2, #64748b)',
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all 0.15s ease'
+            }
+          },
+            e('i', { className: tab.icon, style: { fontSize: 12 } }),
+            tab.label
+          ))
+        ),
+        // Tab content
+        activeTab === '404s' && render404Tab(),
+        activeTab === 'redirects' && renderRedirectsTab(),
+        activeTab === 'broken' && renderBrokenLinksTab()
       );
     }
 
@@ -25010,7 +25513,7 @@ case 'action-plan':
             { id: 'onpage-audit', label: 'On-Page Audit & Fix', icon: 'fas fa-file-alt' },
             { id: 'indexing', label: 'Indexing Status', icon: 'fas fa-file-import' },
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
-            { id: 'redirects', label: 'Redirects', icon: 'fas fa-directions' },
+            { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
           ] },
         ]},
         { section: 'RANKINGS', items: [

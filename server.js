@@ -1761,6 +1761,160 @@ app.post('/api/projects/:id/plugin-verify', async (req, res) => {
   }
 });
 
+// ─── Plugin Proxy: 404s, Redirects, Broken Links ───────────────────
+// Helper to call WP plugin REST API
+async function callPluginApi(project, path, method = 'GET', body = null) {
+  const wpUrl = (project.wordpress_url || project.domain || '').replace(/\/$/, '');
+  if (!wpUrl) throw new Error('No WordPress URL configured');
+  const authHeaders = getWpAuthHeaders(project);
+  if (!authHeaders) throw new Error('No WP Application Password configured');
+  const opts = { method, headers: authHeaders, signal: AbortSignal.timeout(30000) };
+  if (body && method !== 'GET') opts.body = JSON.stringify(body);
+  const resp = await fetch(`${wpUrl}/wp-json/seoroom/v1${path}`, opts);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Plugin API ${resp.status}: ${text.substring(0, 200)}`);
+  }
+  return resp.json();
+}
+
+// GET /api/projects/:id/plugin/404s — fetch 404 log from WP plugin
+app.get('/api/projects/:id/plugin/404s', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/404s');
+    res.json(data);
+  } catch (e) {
+    console.error(`[plugin-404s] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/projects/:id/plugin/404s/:fid — delete a single 404 entry
+app.delete('/api/projects/:id/plugin/404s/:fid', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, `/404s/${req.params.fid}`, 'DELETE');
+    res.json(data);
+  } catch (e) {
+    console.error(`[plugin-404s] Delete error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/plugin/404s/clear — clear all 404 logs
+app.post('/api/projects/:id/plugin/404s/clear', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/404s/clear', 'POST');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/plugin/404s/:fid/redirect — create redirect from a 404
+app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, `/404s/${req.params.fid}/redirect`, 'POST', req.body);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/projects/:id/plugin/redirects — list all redirects
+app.get('/api/projects/:id/plugin/redirects', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/redirects');
+    res.json(data);
+  } catch (e) {
+    console.error(`[plugin-redirects] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/plugin/redirects — create a redirect
+app.post('/api/projects/:id/plugin/redirects', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/redirects', 'POST', req.body);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/projects/:id/plugin/redirects/:rid — update a redirect
+app.put('/api/projects/:id/plugin/redirects/:rid', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, `/redirects/${req.params.rid}`, 'PUT', req.body);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/projects/:id/plugin/redirects/:rid — delete a redirect
+app.delete('/api/projects/:id/plugin/redirects/:rid', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, `/redirects/${req.params.rid}`, 'DELETE');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/plugin/link-check — trigger broken link scan
+app.post('/api/projects/:id/plugin/link-check', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/link-check', 'POST', req.body || {});
+    res.json(data);
+  } catch (e) {
+    console.error(`[plugin-link-check] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/projects/:id/plugin/broken-links — list broken links
+app.get('/api/projects/:id/plugin/broken-links', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/broken-links');
+    res.json(data);
+  } catch (e) {
+    console.error(`[plugin-broken-links] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/plugin/broken-links/clear — clear broken links log
+app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/broken-links/clear', 'POST');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Haversine distance in km
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
