@@ -3500,7 +3500,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 10; // 10 pages × 2 calls = 20 concurrent — PageSpeed API handles it fine with API key
+        const BATCH_SIZE = 5; // 5 pages × 2 calls = 10 concurrent — safe for Google rate limits
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -3581,6 +3581,8 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           // Save progress so frontend can show counter
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
             [JSON.stringify({ progress: results.length, total: pages.length }), auditId]);
+          // Pause between batches to avoid Google rate limits
+          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 2000));
         }
 
         await pool.query(
