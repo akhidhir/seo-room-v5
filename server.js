@@ -3444,8 +3444,27 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
     // Run in background
     (async () => {
       try {
-        const pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
-        console.log(`[speed-audit] Discovered ${pages.length} pages for project ${req.params.projectId}`);
+        // Try connector cache first (plugin push data — Cloudflare safe)
+        let pages = [];
+        try {
+          const cache = await getConnectorCache(req.params.projectId);
+          if (cache && Array.isArray(cache.pages) && cache.pages.length > 0) {
+            pages = cache.pages.map(p => ({
+              page_id: String(p.id || p.slug || ''),
+              title: p.title || p.slug || '',
+              slug: p.slug || '',
+              url: p.url || '',
+            })).filter(p => p.url);
+            console.log(`[speed-audit] Using ${pages.length} pages from connector cache`);
+          }
+        } catch (cacheErr) {
+          console.log(`[speed-audit] Connector cache unavailable: ${cacheErr.message}`);
+        }
+        // Fallback to external discovery if no cache
+        if (pages.length === 0) {
+          pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+        }
+        console.log(`[speed-audit] Total ${pages.length} pages for project ${req.params.projectId}`);
 
         // Save total immediately so frontend can show counter
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
