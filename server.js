@@ -18307,17 +18307,25 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
-    // Low internal linking
-    const lowLinks = successPages.filter(p => p.internalLinks < 3);
-    if (lowLinks.length > 0) {
+    // Low internal linking — per-page findings
+    const lowLinks = successPages.filter(p => (p.internalLinks || 0) < 3);
+    for (const p of lowLinks.slice(0, 30)) {
+      const linkCount = p.internalLinks || 0;
       findings.push({
-        pillar: 'website', category: 'Content Quality',
-        title: `${lowLinks.length} page(s) with fewer than 3 internal links`,
-        description: `Pages: ${lowLinks.slice(0, 5).map(p => `${p.path} (${p.internalLinks} links)`).join(', ')}. Internal links distribute authority and help crawling.`,
-        recommendation: 'Add 3-5 relevant internal links to each page. Link to related services, location pages, and your homepage.',
-        severity: 'Medium',
-        current_value: `${lowLinks.length} pages with weak linking`, recommended_value: '3+ internal links per page'
+        pillar: 'website', category: 'Internal Links',
+        title: `${p.path} — ${linkCount === 0 ? 'no' : 'only ' + linkCount} internal link${linkCount !== 1 ? 's' : ''}`,
+        description: `This page has ${linkCount} outbound internal link${linkCount !== 1 ? 's' : ''} in its content. Internal links distribute page authority and help Google discover and crawl your pages.`,
+        recommendation: 'Add 3-5 relevant internal links to related services, location pages, or your homepage. Use descriptive anchor text with target keywords.',
+        severity: linkCount === 0 ? 'Critical' : 'Medium',
+        current_value: `${linkCount} internal links`, recommended_value: '3+ internal links'
       });
+    }
+    // Orphan pages (no inbound links from other pages)
+    const linkTargets = new Set();
+    for (const p of successPages) {
+      // Count how many times each path is linked to by other pages
+      // We only have counts, not actual URLs, so we can't detect orphans precisely from connector data
+      // But pages with 0 internal links are likely orphans
     }
 
     // Missing Open Graph

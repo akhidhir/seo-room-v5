@@ -6691,7 +6691,7 @@
         return list;
       }, [findings, filterSev, filterCat, filterStatus, searchQ, sortCol, sortDir]);
 
-      const catColors = { 'Site Health': '#ef4444', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4' };
+      const catColors = { 'Site Health': '#ef4444', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4', 'Internal Links': '#14b8a6' };
 
       // Link audit categories to their fix sub-pages (PDCA: audit detects → fix page resolves → re-audit verifies)
       const catFixPages = {
@@ -6929,7 +6929,7 @@
             {[
               { label: 'Pages Scanned', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
               { label: 'Missing Schema', value: findings.filter(f => (f.category || '').includes('Schema')).length, color: '#ef4444', icon: 'fa-code' },
-              { label: 'Missing Alt Text', value: summary.totalMissingAlt || findings.filter(f => (f.category || '').toLowerCase().includes('alt')).length || 0, color: '#f59e0b', icon: 'fa-image' },
+              { label: 'Weak Internal Links', value: summary.crawled ? (() => { const lp = findings.filter(f => (f.title || '').toLowerCase().includes('internal link')); return lp.length > 0 ? (lp[0].current_value || '').match(/\d+/)?.[0] || lp.length : 0; })() : 0, color: '#f59e0b', icon: 'fa-project-diagram' },
               { label: 'Issues Found', value: summary.totalFindings || findings.length, color: '#f97316', icon: 'fa-exclamation-triangle' },
             ].map((s, i) => (
               <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
