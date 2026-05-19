@@ -3652,7 +3652,7 @@ AVAILABLE FIX TYPES (choose from these ONLY):
 
 IMPORTANT RULES:
 - Only suggest fixes that the plugin can safely apply via WordPress hooks
-- Do NOT suggest fixes that BerqWP already handles (general image compression, WebP conversion, CSS/JS minification, page caching, CDN)
+- Do NOT suggest fixes that the SEO Room plugin already handles (JS defer, CSS/JS minification, lazy loading, WebP conversion, page caching, GZIP, browser cache headers, font-display:swap, preconnect, image dimensions)
 - Focus on: preconnect hints, LCP preloading, fetchpriority, font-display, deferring specific third-party scripts, image dimensions
 - Each fix must be specific — include actual URLs, domains, or patterns from the opportunity data
 - MAX 5 fixes per page
@@ -3678,7 +3678,7 @@ Return ONLY a JSON array of fixes:
       return res.status(500).json({ error: 'AI failed to generate valid fix instructions' });
     }
 
-    if (!fixes.length) return res.json({ success: true, fixes_applied: 0, message: 'No applicable fixes found — BerqWP likely handles the remaining issues' });
+    if (!fixes.length) return res.json({ success: true, fixes_applied: 0, message: 'No applicable fixes found — the SEO Room plugin handles the remaining issues automatically' });
 
     // Apply each fix via SEO Room Connector plugin API
     const applied = [];
