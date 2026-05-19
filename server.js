@@ -3192,18 +3192,34 @@ async function wpFetch(wpUrl, endpoint) {
 }
 
 // Helper: run Google PageSpeed Insights on a URL and extract image issues
-async function runPageSpeedAudit(url, strategy = 'mobile') {
+async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
   const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
   const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
   const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
-  const resp = await fetch(apiUrl);
-  if (!resp.ok) {
-    const text = await resp.text();
-    let msg = `HTTP ${resp.status}`;
-    try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
-    throw new Error(`PageSpeed error: ${msg}`);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(60000) });
+      if (!resp.ok) {
+        const text = await resp.text();
+        let msg = `HTTP ${resp.status}`;
+        try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
+        if (resp.status === 429 && attempt < retries) {
+          console.log(`[pagespeed] Rate limited on ${url}, waiting 10s (attempt ${attempt + 1})`);
+          await new Promise(r => setTimeout(r, 10000));
+          continue;
+        }
+        throw new Error(`PageSpeed error: ${msg}`);
+      }
+      return resp.json();
+    } catch (err) {
+      if (attempt < retries && (err.message.includes('timeout') || err.message.includes('Something went wrong'))) {
+        console.log(`[pagespeed] Retry ${attempt + 1} for ${url}: ${err.message}`);
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+      throw err;
+    }
   }
-  return resp.json();
 }
 
 // Helper: extract image data from Lighthouse results
@@ -3463,6 +3479,20 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         // Fallback to external discovery if no cache
         if (pages.length === 0) {
           pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+        }
+        // Cap at 50 pages — prioritize: homepage first, then pages (services/suburbs), then posts
+        if (pages.length > 50) {
+          pages.sort((a, b) => {
+            const aHome = (a.slug === '' || a.slug === 'home' || a.url.replace(/\/$/, '') === siteUrl.replace(/\/$/, '')) ? 0 : 1;
+            const bHome = (b.slug === '' || b.slug === 'home' || b.url.replace(/\/$/, '') === siteUrl.replace(/\/$/, '')) ? 0 : 1;
+            if (aHome !== bHome) return aHome - bHome;
+            // Pages before posts
+            const aType = (a.wpType === 'page') ? 0 : 1;
+            const bType = (b.wpType === 'page') ? 0 : 1;
+            return aType - bType;
+          });
+          pages = pages.slice(0, 50);
+          console.log(`[speed-audit] Capped to 50 pages (homepage + pages first)`);
         }
         console.log(`[speed-audit] Total ${pages.length} pages for project ${req.params.projectId}`);
 
