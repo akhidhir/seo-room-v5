@@ -6927,9 +6927,9 @@
           {/* Stats cards */}
           {summary && (<div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
             {[
-              { label: 'Pages Crawled', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
-              { label: 'Avg Word Count', value: summary.avgWordCount || '—', color: '#8b5cf6', icon: 'fa-file-word' },
-              { label: 'Avg Response', value: summary.avgResponseTime ? (summary.avgResponseTime / 1000).toFixed(1) + 's' : '—', color: summary.avgResponseTime > 2000 ? '#ef4444' : '#22c55e', icon: 'fa-clock' },
+              { label: 'Pages Scanned', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
+              { label: 'Missing Schema', value: findings.filter(f => (f.category || '').includes('Schema')).length, color: '#ef4444', icon: 'fa-code' },
+              { label: 'Missing Alt Text', value: summary.totalMissingAlt || findings.filter(f => (f.category || '').toLowerCase().includes('alt')).length || 0, color: '#f59e0b', icon: 'fa-image' },
               { label: 'Issues Found', value: summary.totalFindings || findings.length, color: '#f97316', icon: 'fa-exclamation-triangle' },
             ].map((s, i) => (
               <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
