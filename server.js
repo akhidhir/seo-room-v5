@@ -1510,7 +1510,7 @@ app.get('/api/projects', async (req, res) => {
       // Clients only see their assigned project
       result = await pool.query('SELECT * FROM projects WHERE id=$1', [req.auth.projectId]);
     } else {
-      result = await pool.query('SELECT * FROM projects WHERE user_id=$1 ORDER BY created_at DESC', [req.auth.userId]);
+      result = await pool.query('SELECT * FROM projects ORDER BY created_at DESC');
     }
     res.json({ projects: result.rows });
   } catch (e) {
