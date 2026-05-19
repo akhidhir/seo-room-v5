@@ -1742,30 +1742,20 @@ app.delete('/api/projects/:id', async (req, res) => {
   }
 });
 
-// ── Plugin Connection Code ──────────────────────────────────────────
-app.post('/api/projects/:id/generate-connection-code', async (req, res) => {
-  try {
-    const code = require('crypto').randomBytes(16).toString('hex');
-    await pool.query('UPDATE projects SET plugin_connection_code=$1 WHERE id=$2', [code, req.params.id]);
-    res.json({ code });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Plugin verify — called by WP plugin's Test Connection button (no auth — plugin doesn't have JWT)
+// ── Plugin Connection Verify ────────────────────────────────────────
+// Called by WP plugin's Test Connection button — uses CONNECTOR_PUSH_TOKEN env var
 app.post('/api/projects/:id/plugin-verify', async (req, res) => {
   try {
     const { code, site_url, plugin_version } = req.body || {};
+    const pushToken = process.env.CONNECTOR_PUSH_TOKEN;
     if (!code) return res.status(400).json({ ok: false, error: 'Missing connection code' });
-    const result = await pool.query('SELECT plugin_connection_code, domain FROM projects WHERE id=$1', [req.params.id]);
+    if (!pushToken) return res.status(500).json({ ok: false, error: 'CONNECTOR_PUSH_TOKEN not set on server' });
+    if (code !== pushToken) return res.status(403).json({ ok: false, error: 'Invalid connection code' });
+    const result = await pool.query('SELECT domain, business_name FROM projects WHERE id=$1', [req.params.id]);
     if (!result.rows.length) return res.status(404).json({ ok: false, error: 'Project not found' });
     const project = result.rows[0];
-    if (!project.plugin_connection_code) return res.status(400).json({ ok: false, error: 'No connection code generated for this project' });
-    if (project.plugin_connection_code !== code) return res.status(403).json({ ok: false, error: 'Invalid connection code' });
-    // Connection verified — optionally log site_url + version
     console.log(`[plugin-verify] Project ${req.params.id} verified. site=${site_url}, version=${plugin_version}`);
-    res.json({ ok: true, project_name: project.domain || 'Connected' });
+    res.json({ ok: true, project_name: project.business_name || project.domain || 'Connected' });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
