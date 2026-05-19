@@ -25255,13 +25255,13 @@ case 'action-plan':
               <div style={{ margin: '0 24px', padding: '14px 20px', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <i className="fas fa-exclamation-triangle" style={{ color: '#d97706', fontSize: 18, flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>SEO Room Connector Not Detected</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>SEO Room Plugin Not Detected</div>
                   <div style={{ fontSize: 13, color: '#92400e', marginTop: 2 }}>
                     {pluginWarning.reason === 'no_wordpress_url'
                       ? 'No WordPress URL configured. Set it in Project Settings → WordPress URL.'
                       : pluginWarning.reason === 'unreachable'
                       ? `WordPress site unreachable. Check the URL in Project Settings.`
-                      : 'The SEO Room Connector plugin is not installed on this WordPress site. It enables Yoast scores, CWV auto-fixes, schema injection, and cache purging.'}
+                      : 'The SEO Room plugin is not installed on this WordPress site. It enables schema injection, speed optimization, and CWV auto-fixes.'}
                   </div>
                 </div>
                 <button onClick={() => setPluginWarning(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 16, padding: 4 }}><i className="fas fa-times" /></button>

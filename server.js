@@ -5176,6 +5176,7 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
     const authHeaders = getWpAuthHeaders(project);
     // Check multiple endpoints — BerqWP firewall may block some
     const endpoints = [
+      `${wpUrl}/wp-json/seoroom-opt/v1/status`,
       `${wpUrl}/wp-json/seoroom/v1/yoast-scores`,
       `${wpUrl}/wp-json/seoroom/v1/purge-cache`,
       `${wpUrl}/wp-json/seoroom/v1/cwv-fixes`,
@@ -5191,8 +5192,9 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       console.log(`[plugin-status] /wp-json index: ${indexResp.status}`);
       if (indexResp.ok) {
         const indexData = await indexResp.json();
-        const hasNs = indexData.namespaces && indexData.namespaces.includes('seoroom/v1');
-        console.log(`[plugin-status] namespaces include seoroom/v1: ${hasNs}, all: ${(indexData.namespaces || []).filter(n => n.includes('seo')).join(', ')}`);
+        const nsList = indexData.namespaces || [];
+        const hasNs = nsList.includes('seoroom/v1') || nsList.includes('seoroom-opt/v1');
+        console.log(`[plugin-status] namespaces include seoroom: ${hasNs}, all: ${nsList.filter(n => n.includes('seo')).join(', ')}`);
         if (hasNs) {
           return res.json({ installed: true });
         }
