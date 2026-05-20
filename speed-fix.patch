@@ -1,0 +1,23 @@
+--- a/public/index.html
++++ b/public/index.html
+@@ -7356,6 +7356,9 @@
+             setSpeedLoading(true);
+             if (speedData.progress != null && speedData.total) setSpeedProgress({ current: speedData.progress, total: speedData.total });
+             startSpeedPoll();
++          } else if (speedData.status === 'failed') {
++            // Don't show stale failed error on load — user can just run again
++            setSpeedResults([]);
+           } else if (speedData.results) {
+             setSpeedResults(speedData.results);
++            if (speedData.warning) setSpeedError(speedData.warning);
+@@ -7762,8 +7765,8 @@
+             setSpeedLoading(true); setSpeedError('');
+             if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
+             pollForResults();
+           } else if (data.status === 'failed') {
+-            setSpeedError(data.error || 'Speed audit failed. Please run again.');
++            // Don't show scary red error on page load for stale failures — just show empty state
++            setSpeedResults([]);
+           } else if (data.results) {
+             setSpeedResults(data.results); setSpeedError('');
+             _speedCache[_spck] = data.results;
