@@ -7306,6 +7306,7 @@
       const [expandedSpeedPage, setExpandedSpeedPage] = useState(null);
       const [pageSpeedData, setPageSpeedData] = useState({});
       const [psLoading, setPsLoading] = useState(null);
+      const speedPollRef = React.useRef(null);
 
       const categories = [
         { key: 'speed', label: 'Page Speed & Core Web Vitals', icon: 'fas fa-tachometer-alt', color: '#ef4444' },
@@ -7318,10 +7319,32 @@
         { key: 'structure', label: 'Internal Link Structure', icon: 'fas fa-project-diagram', color: '#14b8a6' },
       ];
 
-      // Load previous findings on mount
+      // Load previous findings on mount, clean up poll on unmount
       useEffect(() => {
         if (project) loadExisting();
+        return () => { if (speedPollRef.current) { clearInterval(speedPollRef.current); speedPollRef.current = null; } };
       }, [project?.id]);
+
+      const startSpeedPoll = () => {
+        if (speedPollRef.current) clearInterval(speedPollRef.current);
+        speedPollRef.current = setInterval(async () => {
+          try {
+            const s = await api(`/speed-audit/${project.id}/status`);
+            if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
+            if (s.status === 'completed') {
+              clearInterval(speedPollRef.current); speedPollRef.current = null;
+              setSpeedResults(s.results || []);
+              const cwvMap = {};
+              (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+              setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+              setSpeedLoading(false); setSpeedProgress(null);
+            } else if (s.status === 'failed') {
+              clearInterval(speedPollRef.current); speedPollRef.current = null;
+              setSpeedError(s.error || 'Failed'); setSpeedLoading(false); setSpeedProgress(null);
+            }
+          } catch (e) { clearInterval(speedPollRef.current); speedPollRef.current = null; setSpeedLoading(false); setSpeedProgress(null); }
+        }, 5000);
+      };
 
       const loadExisting = async () => {
         const data = await api(`/projects/${project.id}/audit-findings`);
@@ -7332,22 +7355,7 @@
           if (speedData.status === 'running') {
             setSpeedLoading(true);
             if (speedData.progress != null && speedData.total) setSpeedProgress({ current: speedData.progress, total: speedData.total });
-            const poll = setInterval(async () => {
-              try {
-                const s = await api(`/speed-audit/${project.id}/status`);
-                if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
-                if (s.status === 'completed') {
-                  clearInterval(poll);
-                  setSpeedResults(s.results || []);
-                  const cwvMap = {};
-                  (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
-                  setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
-                  setSpeedLoading(false); setSpeedProgress(null);
-                } else if (s.status === 'failed') {
-                  clearInterval(poll); setSpeedError(s.error || 'Failed'); setSpeedLoading(false); setSpeedProgress(null);
-                }
-              } catch (e) { clearInterval(poll); setSpeedLoading(false); setSpeedProgress(null); }
-            }, 5000);
+            startSpeedPoll();
           } else if (speedData.results) {
             setSpeedResults(speedData.results);
             const cwvMap = {};
@@ -7371,27 +7379,7 @@
         setSpeedLoading(true); setSpeedError(''); setSpeedProgress(null);
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
-          if (data.status === 'running') {
-            const poll = setInterval(async () => {
-              try {
-                const s = await api(`/speed-audit/${project.id}/status`);
-                if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
-                if (s.status === 'completed') {
-                  clearInterval(poll);
-                  setSpeedResults(s.results || []);
-                  const cwvMap = {};
-                  (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
-                  setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
-                  setSpeedLoading(false); setSpeedProgress(null);
-                } else if (s.status === 'failed') {
-                  clearInterval(poll);
-                  setSpeedError(s.error || 'Speed audit failed');
-                  setSpeedLoading(false); setSpeedProgress(null);
-                }
-              } catch (e) { clearInterval(poll); setSpeedError(e.message); setSpeedLoading(false); setSpeedProgress(null); }
-            }, 5000);
-            return;
-          }
+          if (data.status === 'running') { startSpeedPoll(); return; }
           setSpeedResults(data.results || []);
           const cwvMap = {};
           (data.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
