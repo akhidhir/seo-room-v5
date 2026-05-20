@@ -7757,8 +7757,8 @@
 
       useEffect(() => {
         if (!project?.id) return;
-        if (_speedCache[_spck]?.length) { setSpeedResults(_speedCache[_spck]); loadExistingActions(); }
-        else loadExisting();
+        // Always check status — resume polling if audit is still running (e.g. after browsing away)
+        loadExisting();
         return () => { if (speedPollRef.current) { clearInterval(speedPollRef.current); speedPollRef.current = null; } };
       }, [project?.id]);
 

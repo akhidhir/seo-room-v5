@@ -3482,19 +3482,25 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         if (pages.length === 0) {
           pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
         }
-        // Cap at 50 pages — prioritize: homepage first, then pages (services/suburbs), then posts
+        // Sort: homepage → service pages → blog posts. Always sort, not just when >50.
+        const baseClean = siteUrl.replace(/\/$/, '');
+        // Detect blog posts by URL pattern: contains year-like segments, /blog/, /news/, /category/
+        const blogPattern = /\/(blog|news|category|tag|author|20\d{2})\//i;
+        pages.sort((a, b) => {
+          // Homepage first
+          const aHome = (a.slug === '' || a.slug === 'home' || a.url.replace(/\/$/, '') === baseClean) ? 0 : 2;
+          const bHome = (b.slug === '' || b.slug === 'home' || b.url.replace(/\/$/, '') === baseClean) ? 0 : 2;
+          if (aHome !== bHome) return aHome - bHome;
+          // Then service pages (non-blog) before blog posts
+          const aIsBlog = blogPattern.test(a.url) || a.wpType === 'post' ? 1 : 0;
+          const bIsBlog = blogPattern.test(b.url) || b.wpType === 'post' ? 1 : 0;
+          if (aIsBlog !== bIsBlog) return aIsBlog - bIsBlog;
+          // Alphabetical within same group
+          return (a.url || '').localeCompare(b.url || '');
+        });
         if (pages.length > 50) {
-          pages.sort((a, b) => {
-            const aHome = (a.slug === '' || a.slug === 'home' || a.url.replace(/\/$/, '') === siteUrl.replace(/\/$/, '')) ? 0 : 1;
-            const bHome = (b.slug === '' || b.slug === 'home' || b.url.replace(/\/$/, '') === siteUrl.replace(/\/$/, '')) ? 0 : 1;
-            if (aHome !== bHome) return aHome - bHome;
-            // Pages before posts
-            const aType = (a.wpType === 'page') ? 0 : 1;
-            const bType = (b.wpType === 'page') ? 0 : 1;
-            return aType - bType;
-          });
           pages = pages.slice(0, 50);
-          console.log(`[speed-audit] Capped to 50 pages (homepage + pages first)`);
+          console.log(`[speed-audit] Capped to 50 pages (homepage + services first)`);
         }
         console.log(`[speed-audit] Total ${pages.length} pages for project ${req.params.projectId}`);
 
