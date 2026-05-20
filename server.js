@@ -3472,6 +3472,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
               title: p.title || p.slug || '',
               slug: p.slug || '',
               url: p.url || '',
+              wpType: p.type || p.wpType || '',
             })).filter(p => p.url);
             console.log(`[speed-audit] Using ${pages.length} pages from connector cache`);
           }
@@ -3484,20 +3485,33 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         }
         // Sort: homepage → service pages → blog posts. Always sort, not just when >50.
         const baseClean = siteUrl.replace(/\/$/, '');
-        // Detect blog posts by URL pattern: contains year-like segments, /blog/, /news/, /category/
-        const blogPattern = /\/(blog|news|category|tag|author|20\d{2})\//i;
+        // Detect blog posts by URL pattern OR WordPress type
+        const blogUrlPattern = /\/(blog|news|category|tag|author|20\d{2})\//i;
+        // Blog title keywords — common patterns in blog post titles vs service pages
+        const blogTitlePattern = /\b(trends?|guide|tips?|how to|why|what is|discover|strategies|dominate|important|mistakes|secrets|ways to|things you|checklist|tutorial|review|vs\.?|versus|comparison|best \d|top \d|\d+ |\b20[12]\d\b)/i;
+        function isBlogPost(p) {
+          if (p.wpType === 'post') return true;
+          if (blogUrlPattern.test(p.url)) return true;
+          // Title-based detection as fallback (blog posts tend to have these patterns)
+          if (blogTitlePattern.test(p.title || '')) return true;
+          return false;
+        }
+        function isHome(p) {
+          return p.slug === '' || p.slug === 'home' || p.slug === '/' || p.url.replace(/\/$/, '') === baseClean;
+        }
+        // Tag each page for logging
+        pages.forEach(p => { p._isHome = isHome(p); p._isBlog = isBlogPost(p); });
+        console.log(`[speed-audit] Sort breakdown: ${pages.filter(p=>p._isHome).length} home, ${pages.filter(p=>!p._isHome && !p._isBlog).length} service, ${pages.filter(p=>p._isBlog).length} blog`);
         pages.sort((a, b) => {
-          // Homepage first
-          const aHome = (a.slug === '' || a.slug === 'home' || a.url.replace(/\/$/, '') === baseClean) ? 0 : 2;
-          const bHome = (b.slug === '' || b.slug === 'home' || b.url.replace(/\/$/, '') === baseClean) ? 0 : 2;
-          if (aHome !== bHome) return aHome - bHome;
-          // Then service pages (non-blog) before blog posts
-          const aIsBlog = blogPattern.test(a.url) || a.wpType === 'post' ? 1 : 0;
-          const bIsBlog = blogPattern.test(b.url) || b.wpType === 'post' ? 1 : 0;
-          if (aIsBlog !== bIsBlog) return aIsBlog - bIsBlog;
+          // Homepage first (priority 0), service pages (1), blog posts (2)
+          const aRank = a._isHome ? 0 : a._isBlog ? 2 : 1;
+          const bRank = b._isHome ? 0 : b._isBlog ? 2 : 1;
+          if (aRank !== bRank) return aRank - bRank;
           // Alphabetical within same group
           return (a.url || '').localeCompare(b.url || '');
         });
+        // Log first 10 for debug
+        console.log(`[speed-audit] Page order (first 10):`, pages.slice(0, 10).map(p => `${p._isHome?'HOME':p._isBlog?'BLOG':'SVC'} ${p.slug || p.url}`));
         if (pages.length > 50) {
           pages = pages.slice(0, 50);
           console.log(`[speed-audit] Capped to 50 pages (homepage + services first)`);
