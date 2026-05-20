@@ -3530,7 +3530,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 1; // 1 page at a time — mobile then desktop sequentially to avoid Google rate limits
+        const BATCH_SIZE = 2; // 2 pages at a time with sequential mobile→desktop per page
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -3581,17 +3581,18 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
 
         async function processPage(page) {
           try {
-            // Run mobile first, then desktop sequentially — avoids 2 concurrent Lighthouse instances per page
-            const mobileData = await runPageSpeedAudit(page.url, 'mobile');
-            const mobile = extractCwvAndOpps(mobileData);
-            // Brief pause between mobile and desktop
-            await new Promise(r => setTimeout(r, 2000));
+            // Run mobile + desktop in parallel (retries handle failures)
+            const [mobileData, desktopData] = await Promise.allSettled([
+              runPageSpeedAudit(page.url, 'mobile'),
+              runPageSpeedAudit(page.url, 'desktop'),
+            ]);
+            if (mobileData.status === 'rejected') throw new Error(mobileData.reason?.message || 'Mobile audit failed');
+            const mobile = extractCwvAndOpps(mobileData.value);
             let desktop = { score: 0, cwv: {}, opportunities: [] };
-            try {
-              const desktopData = await runPageSpeedAudit(page.url, 'desktop');
-              desktop = extractCwvAndOpps(desktopData);
-            } catch (deskErr) {
-              console.warn(`[speed-audit] Desktop failed for ${page.url}: ${deskErr.message} — using mobile only`);
+            if (desktopData.status === 'fulfilled') {
+              desktop = extractCwvAndOpps(desktopData.value);
+            } else {
+              console.warn(`[speed-audit] Desktop failed for ${page.url}: ${desktopData.reason?.message} — using mobile only`);
             }
 
             return {
