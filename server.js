@@ -18384,26 +18384,37 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
-    // ===== ALT TEXT (per-page with image URLs listed — On-Page Issues handled by dedicated On-Page Audit & Fix page) =====
+    // ===== ALT TEXT (per-image findings) =====
     for (const p of successPages) {
       if (p.imagesWithoutAlt > 0) {
         const altSlug = p.path.replace(/^\/|\/$/g, '') || 'homepage';
         const imgSrcs = p.imagesWithoutAltSrcs || [];
-        const imgList = imgSrcs.length > 0
-          ? imgSrcs.map(src => {
-              const fname = src.split('/').pop().split('?')[0];
-              return fname || src;
-            }).join(', ')
-          : `${p.imagesWithoutAlt} image(s)`;
-        findings.push({
-          pillar: 'website', category: 'Alt Text',
-          title: `${altSlug} — ${p.imagesWithoutAlt} missing alt`,
-          description: `Images without alt text on this page: ${imgList}. Alt text helps Google understand images and improves accessibility.`,
-          recommendation: 'Add descriptive alt text to each image. Include relevant keywords naturally. Use the Fix button to auto-generate alt text with AI.',
-          severity: p.imagesWithoutAlt > 5 ? 'Critical' : 'Medium',
-          current_value: `${p.imagesWithoutAlt} images without alt`,
-          recommended_value: 'All images have alt text'
-        });
+        if (imgSrcs.length > 0) {
+          // Per-image findings — one finding card per image
+          for (const src of imgSrcs) {
+            const fname = src.split('/').pop().split('?')[0] || src;
+            findings.push({
+              pillar: 'website', category: 'Alt Text',
+              title: `${altSlug} — missing alt: ${fname}`,
+              description: `Image "${fname}" on /${altSlug}/ has no alt text. Full URL: ${src}`,
+              recommendation: 'Add descriptive alt text to this image. Include relevant keywords naturally. Use the Fix button to auto-generate alt text with AI.',
+              severity: 'Medium',
+              current_value: src,
+              recommended_value: 'Descriptive alt text'
+            });
+          }
+        } else {
+          // Fallback: no image URLs available, create per-page finding
+          findings.push({
+            pillar: 'website', category: 'Alt Text',
+            title: `${altSlug} — ${p.imagesWithoutAlt} missing alt`,
+            description: `${p.imagesWithoutAlt} image(s) on this page have no alt text. Alt text helps Google understand images and improves accessibility.`,
+            recommendation: 'Add descriptive alt text to each image. Include relevant keywords naturally. Use the Fix button to auto-generate alt text with AI.',
+            severity: p.imagesWithoutAlt > 5 ? 'Critical' : 'Medium',
+            current_value: `${p.imagesWithoutAlt} images without alt`,
+            recommended_value: 'All images have alt text'
+          });
+        }
       }
     }
 
@@ -20331,24 +20342,37 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     if (!finding.rows.length) return res.status(404).json({ error: 'Finding not found' });
     const f = finding.rows[0];
 
-    // Extract page slug from title: "plumber-chermside — 6 missing alt"
-    const titleMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+    // Extract page slug from title — supports two formats:
+    // Per-image: "slug — missing alt: filename.jpg"
+    // Per-page (fallback): "slug — 6 missing alt"
+    const perImageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*missing\s*alt:\s*(.+)/i);
+    const perPageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+    const titleMatch = perImageMatch || perPageMatch;
     if (!titleMatch) return res.status(400).json({ error: 'Cannot parse page slug from finding title' });
     const pageSlug = titleMatch[1].trim();
+    const singleImageFile = perImageMatch ? perImageMatch[2].trim() : null;
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const pageUrl = pageSlug === 'homepage' ? `https://${domain}/` : `https://${domain}/${pageSlug}/`;
+    // For per-image findings, current_value stores the full image URL
+    const singleImageUrl = singleImageFile ? (f.current_value || '') : null;
 
-    console.log(`[alt-text-fix] Fixing "${f.title}" — page: ${pageUrl}`);
+    console.log(`[alt-text-fix] Fixing "${f.title}" — page: ${pageUrl}${singleImageUrl ? ` (single image: ${singleImageUrl})` : ''}`);
 
     // APPLY MODE with pre-approved alts: skip image analysis and AI generation entirely
     let allGenerated = [];
+    let missingAltUrls = [];
+
     if (isApply && generated_alts && generated_alts.length > 0) {
       allGenerated = generated_alts;
       console.log(`[alt-text-fix] Apply mode: using ${allGenerated.length} pre-approved alt texts`);
+    } else if (singleImageUrl) {
+      // Per-image finding: only fix this specific image
+      const imgUrl = singleImageUrl.startsWith('http') ? singleImageUrl : `https://${domain}${singleImageUrl.startsWith('/') ? '' : '/'}${singleImageUrl}`;
+      missingAltUrls = [imgUrl];
+      console.log(`[alt-text-fix] Single image mode: ${imgUrl}`);
     } else {
 
     // 1. Get images without alt — try push cache first, then WP REST, then live page
-    let missingAltUrls = [];
 
     // Source 1: Connector push cache (most reliable — rendered HTML from server-side)
     const cached = await getConnectorCache(projectId);
@@ -20944,9 +20968,12 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
       }
     }
 
-    // Alt text findings: extract page slug from title "slug — N missing alt"
+    // Alt text findings: extract page slug from title
+    // Per-image: "slug — missing alt: filename.jpg"  |  Per-page: "slug — N missing alt"
     if (targetUrls.length === 0 && (title.includes('missing alt') || cat.includes('alt text'))) {
-      const altSlugMatch = (finding.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+      const altPerImage = (finding.title || '').match(/^(.+?)\s*[—–-]\s*missing\s*alt:/i);
+      const altPerPage = (finding.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+      const altSlugMatch = altPerImage || altPerPage;
       if (altSlugMatch) {
         const altSlug = altSlugMatch[1].trim();
         const altUrl = altSlug === 'homepage' ? homeUrl : `https://${domain}/${altSlug}/`;
@@ -21143,15 +21170,18 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
       verified = results.some(r => r.hasOgTags);
       reason = verified ? 'Open Graph tags present' : 'Open Graph tags still missing';
     }
-    // Alt text findings — crawl page and count images without alt
+    // Alt text findings — crawl page and check images
     else if (title.includes('missing alt') || cat.toLowerCase().includes('alt text')) {
-      // Re-crawl target page(s) and count images without alt
+      // Determine if per-image or per-page finding
+      const isPerImage = /missing\s*alt:/i.test(finding.title || '');
+      const specificImgUrl = isPerImage ? (finding.current_value || '') : null;
+
       let totalImages = 0;
       let totalMissing = 0;
+      let specificImageFixed = false;
       const pageDetails = [];
       for (const r of results) {
         if (r.error) { pageDetails.push({ url: r.url, error: r.error }); continue; }
-        // Re-fetch to get image data (verifyPage doesn't collect it)
         try {
           const altResp = await fetch(r.url + (r.url.includes('?') ? '&' : '?') + 'nocache=' + Date.now(), {
             signal: AbortSignal.timeout(15000),
@@ -21166,22 +21196,40 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
             });
             totalImages += imgTags.length;
             totalMissing += noAlt.length;
+            // For per-image: check if the specific image now has alt text
+            if (specificImgUrl) {
+              const specificFname = specificImgUrl.split('/').pop().split('?')[0];
+              const stillMissing = noAlt.some(tag => {
+                const srcM = tag.match(/src=["']([^"']*?)["']/i);
+                return srcM && (srcM[1] === specificImgUrl || srcM[1].includes(specificFname));
+              });
+              specificImageFixed = !stillMissing;
+            }
             pageDetails.push({ url: r.url, images: imgTags.length, missingAlt: noAlt.length });
           }
         } catch (e) { pageDetails.push({ url: r.url, error: e.message }); }
       }
-      // Parse original count from title: "slug — 10 missing alt"
-      const origMatch = title.match(/(\d+)\s*missing\s*alt/i);
-      const origCount = origMatch ? parseInt(origMatch[1]) : 0;
-      verified = totalMissing === 0 || (origCount > 0 && totalMissing < origCount);
-      if (totalMissing === 0) {
-        reason = `All ${totalImages} images now have alt text`;
-      } else if (totalMissing < origCount) {
-        reason = `Improved: ${origCount} → ${totalMissing} images missing alt (${origCount - totalMissing} fixed)`;
+
+      if (isPerImage && specificImgUrl) {
+        // Per-image verification
+        verified = specificImageFixed;
+        const fname = specificImgUrl.split('/').pop().split('?')[0];
+        reason = verified ? `Image "${fname}" now has alt text` : `Image "${fname}" still missing alt text`;
+        details = { pages: pageDetails, image: specificImgUrl, fixed: specificImageFixed };
       } else {
-        reason = `Still ${totalMissing} image(s) without alt text (was ${origCount})`;
+        // Per-page verification (fallback)
+        const origMatch = title.match(/(\d+)\s*missing\s*alt/i);
+        const origCount = origMatch ? parseInt(origMatch[1]) : 0;
+        verified = totalMissing === 0 || (origCount > 0 && totalMissing < origCount);
+        if (totalMissing === 0) {
+          reason = `All ${totalImages} images now have alt text`;
+        } else if (totalMissing < origCount) {
+          reason = `Improved: ${origCount} → ${totalMissing} images missing alt (${origCount - totalMissing} fixed)`;
+        } else {
+          reason = `Still ${totalMissing} image(s) without alt text (was ${origCount})`;
+        }
+        details = { pages: pageDetails, totalImages, totalMissing, originalMissing: origCount };
       }
-      details = { pages: pageDetails, totalImages, totalMissing, originalMissing: origCount };
     }
     // Generic / unrecognized finding type — cannot auto-verify
     else {
