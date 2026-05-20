@@ -18235,7 +18235,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     console.log(`[website-audit] Homepage schemas: ${JSON.stringify(homeDebug?.schemas || 'NOT FOUND')}, schemaSources: ${JSON.stringify(homeDebug?.schemaSources?.slice(0, 5) || 'none')}`);
     const allSchemasSample = crawlResults.slice(0, 5).map(p => ({ path: p.path, schemas: p.schemas }));
     console.log(`[website-audit] First 5 pages schemas: ${JSON.stringify(allSchemasSample)}`);
-    const findings = [];
+    let findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
     // Filter out Cloudflare blocks from error pages (false positives — site works fine for real users)
     const errorPages = crawlResults.filter(p => {
