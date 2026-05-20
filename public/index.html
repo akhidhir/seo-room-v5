@@ -7358,6 +7358,13 @@
           if (speedData.status === 'running') {
             setSpeedLoading(true);
             if (speedData.progress != null && speedData.total) setSpeedProgress({ current: speedData.progress, total: speedData.total });
+            // Show partial results immediately (don't wait for next poll)
+            if (speedData.results && speedData.results.length > 0) {
+              setSpeedResults(speedData.results);
+              const cwvMap = {};
+              speedData.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+              setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+            }
             startSpeedPoll();
           } else if (speedData.status === 'failed') {
             // Don't show stale failed error on load — user can just run again
@@ -7768,6 +7775,11 @@
           if (data.status === 'running') {
             setSpeedLoading(true); setSpeedError('');
             if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
+            // Show partial results immediately (don't wait for next poll)
+            if (data.results && data.results.length > 0) {
+              setSpeedResults(data.results);
+              _speedCache[_spck] = data.results;
+            }
             pollForResults();
           } else if (data.status === 'failed') {
             // Don't show scary red error on page load for stale failures — just show empty state
