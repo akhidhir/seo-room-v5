@@ -7331,12 +7331,15 @@
           try {
             const s = await api(`/speed-audit/${project.id}/status`);
             if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
+            // Show partial results as they come in
+            if (s.results && s.results.length > 0) {
+              setSpeedResults(s.results);
+              const cwvMap = {};
+              s.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
+              setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
+            }
             if (s.status === 'completed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
-              setSpeedResults(s.results || []);
-              const cwvMap = {};
-              (s.results || []).forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
-              setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
               setSpeedLoading(false); setSpeedProgress(null);
             } else if (s.status === 'failed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
@@ -7796,13 +7799,17 @@
           try {
             const s = await api(`/speed-audit/${project.id}/status`);
             if (s.progress != null && s.total) setSpeedProgress({ current: s.progress, total: s.total });
+            // Show partial results as they come in — page by page
+            if (s.results && s.results.length > 0) {
+              setSpeedResults(s.results);
+              _speedCache[_spck] = s.results;
+            }
             if (s.status === 'completed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
-              setSpeedResults(s.results || []);
               setSpeedLoading(false); setSpeedProgress(null);
             } else if (s.status === 'failed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
-              setSpeedError(s.error || 'Speed audit failed');
+              if (!(s.results && s.results.length > 0)) setSpeedError(s.error || 'Speed audit failed');
               setSpeedLoading(false); setSpeedProgress(null);
             }
           } catch (e) { clearInterval(speedPollRef.current); speedPollRef.current = null; setSpeedError(e.message); setSpeedLoading(false); setSpeedProgress(null); }

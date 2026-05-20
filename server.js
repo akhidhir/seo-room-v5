@@ -3580,9 +3580,9 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           const batchResults = await Promise.all(batch.map(processPage));
           results.push(...batchResults);
           console.log(`[speed-audit] Progress: ${results.length}/${pages.length} pages`);
-          // Save progress so frontend can show counter
+          // Save partial results so frontend can show them incrementally
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
-            [JSON.stringify({ progress: results.length, total: pages.length }), auditId]);
+            [JSON.stringify({ progress: results.length, total: pages.length, results }), auditId]);
           // Pause between batches — Cloudflare blocks concurrent Lighthouse floods
           if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 5000));
         }
