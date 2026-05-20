@@ -17873,6 +17873,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       [projectId, INFO_TITLES]
     );
 
+    // Delete old per-page alt text findings (replaced by per-image findings)
+    // Old format: "slug — 6 missing alt"  New format: "slug — missing alt: filename.jpg"
+    await pool.query(
+      `DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website'
+       AND LOWER(category)='alt text' AND title ~ '^.+ — [0-9]+ missing alt$'`,
+      [projectId]
+    );
+
     // Load existing findings for merge AFTER cleanup (so deleted findings don't block new ones)
     const existingFindings = await pool.query(
       `SELECT id, title, status, category, severity FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]
