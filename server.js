@@ -18417,24 +18417,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // Check for LocalBusiness schema (including subtypes like ComputerRepairService, Plumber, etc.)
+    // Check for LocalBusiness schema (used by per-page homepage finding below, no separate general finding to avoid duplication)
     const hasLocalBusiness = successPages.some(p => p.schemas.some(s => typeof s === 'string' && isLocalBusinessType(s)));
-    if (!hasLocalBusiness && project.is_local_business) {
-      // Double-check: log what schemas WERE found so we can debug false positives
-      const allSchemaTypes = [...new Set(successPages.flatMap(p => p.schemas))];
-      const allSchemaSources = successPages.flatMap(p => p.schemaSources || []);
-      console.log(`[website-audit] LocalBusiness not found. All schemas found: [${allSchemaTypes.join(', ')}]. Sources: ${JSON.stringify(allSchemaSources.slice(0, 10))}`);
-      findings.push({
-        pillar: 'website', category: 'Schema & Data',
-        title: 'Missing LocalBusiness schema markup',
-        description: `No LocalBusiness structured data found on any of ${successPages.length} crawled pages. Checked both standalone JSON-LD and @graph blocks. This is critical for local SEO and Google Maps.`,
-        recommendation: 'Add LocalBusiness JSON-LD to your homepage with name, address, phone, hours, geo coordinates, and service area.',
-        severity: 'Critical',
-        current_value: `No LocalBusiness schema (found: ${allSchemaTypes.filter(s => s !== 'Invalid JSON-LD').join(', ') || 'none'})`,
-        recommended_value: 'LocalBusiness on homepage',
-        verification: { verified_at: new Date().toISOString(), method: 'crawl', pages_checked: successPages.length, schemas_found: allSchemaTypes, sources: allSchemaSources.slice(0, 20) }
-      });
-    }
 
     // FAQPage schema — per-page findings under Schema & Data
     for (const p of successPages) {
