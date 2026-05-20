@@ -7836,11 +7836,12 @@
       };
 
       const runSpeedAudit = async () => {
-        setSpeedLoading(true); setSpeedError(''); setSpeedResults([]); setSpeedProgress(null);
+        setSpeedLoading(true); setSpeedError(''); setSpeedProgress(null);
+        // Don't clear results — keep showing previous results until new ones arrive
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           if (data.status === 'running') { pollForResults(); return; }
-          setSpeedResults(data.results || []);
+          if (data.results?.length) { setSpeedResults(data.results); _speedCache[_spck] = data.results; }
           setSpeedLoading(false);
         } catch (err) { setSpeedError(err.message); setSpeedLoading(false); }
       };

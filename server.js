@@ -3194,19 +3194,19 @@ async function wpFetch(wpUrl, endpoint) {
 }
 
 // Helper: run Google PageSpeed Insights on a URL and extract image issues
-async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
+async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
   const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
   const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
   const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(90000) });
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(60000) });
       if (!resp.ok) {
         const text = await resp.text();
         let msg = `HTTP ${resp.status}`;
         try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
         if (attempt < retries) {
-          const delay = Math.min(5000 * Math.pow(2, attempt), 30000); // 5s, 10s, 20s, 30s
+          const delay = 3000 + attempt * 3000; // 3s, 6s — fast retries
           console.log(`[pagespeed] ${strategy} ${url}: ${msg} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
           await new Promise(r => setTimeout(r, delay));
           continue;
@@ -3215,21 +3215,20 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
       }
       const data = await resp.json();
       // Check for Lighthouse errors in the response body (API returns 200 but Lighthouse failed)
-      if (data.lighthouseResult?.runtimeError?.code === 'ERRORED_DOCUMENT_REQUEST' ||
-          data.lighthouseResult?.runtimeError?.code === 'UNKNOWN_ERROR') {
-        const errMsg = data.lighthouseResult.runtimeError.message || 'Unknown Lighthouse error';
+      const runtimeErr = data.lighthouseResult?.runtimeError;
+      if (runtimeErr && (runtimeErr.code === 'ERRORED_DOCUMENT_REQUEST' || runtimeErr.code === 'UNKNOWN_ERROR')) {
         if (attempt < retries) {
-          const delay = Math.min(8000 * Math.pow(2, attempt), 30000);
-          console.log(`[pagespeed] ${strategy} ${url}: Lighthouse ${data.lighthouseResult.runtimeError.code} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
+          const delay = 5000 + attempt * 5000; // 5s, 10s
+          console.log(`[pagespeed] ${strategy} ${url}: Lighthouse ${runtimeErr.code} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
-        throw new Error(`PageSpeed error: Lighthouse returned error: ${data.lighthouseResult.runtimeError.code}. ${errMsg}`);
+        throw new Error(`PageSpeed error: Lighthouse returned error: ${runtimeErr.code}. ${runtimeErr.message || ''}`);
       }
       return data;
     } catch (err) {
       if (attempt < retries) {
-        const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
+        const delay = 3000 + attempt * 3000;
         console.log(`[pagespeed] ${strategy} ${url}: ${err.message} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
         await new Promise(r => setTimeout(r, delay));
         continue;
@@ -3530,7 +3529,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 2; // 2 pages at a time with sequential mobile→desktop per page
+        const BATCH_SIZE = 3; // 3 pages at a time — parallel mobile+desktop per page
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -3624,8 +3623,8 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           // Save partial results so frontend can show them incrementally
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
             [JSON.stringify({ progress: results.length, total: pages.length, results }), auditId]);
-          // Pause between pages — give Google API breathing room
-          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 3000));
+          // Brief pause between batches
+          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 2000));
         }
 
         await pool.query(
@@ -3672,23 +3671,29 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
         audit.status = 'failed';
       }
     }
-    // If latest audit failed, try to return the last completed results as fallback
+    // If latest audit failed, return the best completed audit (most results)
     if (audit.status === 'failed') {
       const lastGood = await pool.query(
-        `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 3`,
         [req.params.projectId]
       );
-      if (lastGood.rows.length > 0) {
-        const goodData = typeof lastGood.rows[0].audit_data === 'string' ? JSON.parse(lastGood.rows[0].audit_data) : (lastGood.rows[0].audit_data || {});
+      // Pick the completed audit with the most results
+      let bestAudit = null, bestCount = 0;
+      for (const row of lastGood.rows) {
+        const d = typeof row.audit_data === 'string' ? JSON.parse(row.audit_data) : (row.audit_data || {});
+        const count = (d.results || []).filter(r => r.cwv && !r.error).length;
+        if (count > bestCount) { bestCount = count; bestAudit = { row, data: d }; }
+      }
+      if (bestAudit) {
         return res.json({
           status: 'completed',
-          auditId: lastGood.rows[0].id,
-          results: goodData.results || null,
-          total_pages: (goodData.results || []).length,
+          auditId: bestAudit.row.id,
+          results: bestAudit.data.results || null,
+          total_pages: (bestAudit.data.results || []).length,
           error: null,
-          warning: 'A recent audit failed (server restarted), showing last successful results.',
-          startedAt: lastGood.rows[0].started_at,
-          completedAt: lastGood.rows[0].completed_at,
+          warning: 'Showing best available results.',
+          startedAt: bestAudit.row.started_at,
+          completedAt: bestAudit.row.completed_at,
         });
       }
       // No previous completed audit — return the failure
