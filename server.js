@@ -3194,29 +3194,44 @@ async function wpFetch(wpUrl, endpoint) {
 }
 
 // Helper: run Google PageSpeed Insights on a URL and extract image issues
-async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
+async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
   const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
   const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
   const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(60000) });
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(90000) });
       if (!resp.ok) {
         const text = await resp.text();
         let msg = `HTTP ${resp.status}`;
         try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
-        if (resp.status === 429 && attempt < retries) {
-          console.log(`[pagespeed] Rate limited on ${url}, waiting 10s (attempt ${attempt + 1})`);
-          await new Promise(r => setTimeout(r, 10000));
+        if (attempt < retries) {
+          const delay = Math.min(5000 * Math.pow(2, attempt), 30000); // 5s, 10s, 20s, 30s
+          console.log(`[pagespeed] ${strategy} ${url}: ${msg} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
+          await new Promise(r => setTimeout(r, delay));
           continue;
         }
         throw new Error(`PageSpeed error: ${msg}`);
       }
-      return resp.json();
+      const data = await resp.json();
+      // Check for Lighthouse errors in the response body (API returns 200 but Lighthouse failed)
+      if (data.lighthouseResult?.runtimeError?.code === 'ERRORED_DOCUMENT_REQUEST' ||
+          data.lighthouseResult?.runtimeError?.code === 'UNKNOWN_ERROR') {
+        const errMsg = data.lighthouseResult.runtimeError.message || 'Unknown Lighthouse error';
+        if (attempt < retries) {
+          const delay = Math.min(8000 * Math.pow(2, attempt), 30000);
+          console.log(`[pagespeed] ${strategy} ${url}: Lighthouse ${data.lighthouseResult.runtimeError.code} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw new Error(`PageSpeed error: Lighthouse returned error: ${data.lighthouseResult.runtimeError.code}. ${errMsg}`);
+      }
+      return data;
     } catch (err) {
-      if (attempt < retries && (err.message.includes('timeout') || err.message.includes('Something went wrong'))) {
-        console.log(`[pagespeed] Retry ${attempt + 1} for ${url}: ${err.message}`);
-        await new Promise(r => setTimeout(r, 3000));
+      if (attempt < retries) {
+        const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
+        console.log(`[pagespeed] ${strategy} ${url}: ${err.message} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
+        await new Promise(r => setTimeout(r, delay));
         continue;
       }
       throw err;
@@ -3515,7 +3530,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 2; // 2 pages × 2 calls = 4 concurrent Lighthouse instances — avoids Cloudflare flood detection
+        const BATCH_SIZE = 1; // 1 page at a time — mobile then desktop sequentially to avoid Google rate limits
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -3566,12 +3581,18 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
 
         async function processPage(page) {
           try {
-            const [mobileData, desktopData] = await Promise.all([
-              runPageSpeedAudit(page.url, 'mobile'),
-              runPageSpeedAudit(page.url, 'desktop'),
-            ]);
+            // Run mobile first, then desktop sequentially — avoids 2 concurrent Lighthouse instances per page
+            const mobileData = await runPageSpeedAudit(page.url, 'mobile');
             const mobile = extractCwvAndOpps(mobileData);
-            const desktop = extractCwvAndOpps(desktopData);
+            // Brief pause between mobile and desktop
+            await new Promise(r => setTimeout(r, 2000));
+            let desktop = { score: 0, cwv: {}, opportunities: [] };
+            try {
+              const desktopData = await runPageSpeedAudit(page.url, 'desktop');
+              desktop = extractCwvAndOpps(desktopData);
+            } catch (deskErr) {
+              console.warn(`[speed-audit] Desktop failed for ${page.url}: ${deskErr.message} — using mobile only`);
+            }
 
             return {
               page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
@@ -3589,6 +3610,12 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         }
 
         for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+          // Check if this audit was cancelled (new audit started)
+          const statusCheck = await pool.query('SELECT status FROM audits WHERE id=$1', [auditId]);
+          if (!statusCheck.rows[0] || statusCheck.rows[0].status !== 'running') {
+            console.log(`[speed-audit] Audit ${auditId} was cancelled — stopping background job`);
+            return;
+          }
           const batch = pages.slice(i, i + BATCH_SIZE);
           const batchResults = await Promise.all(batch.map(processPage));
           results.push(...batchResults);
@@ -3596,8 +3623,8 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           // Save partial results so frontend can show them incrementally
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
             [JSON.stringify({ progress: results.length, total: pages.length, results }), auditId]);
-          // Pause between batches — Cloudflare blocks concurrent Lighthouse floods
-          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 5000));
+          // Pause between pages — give Google API breathing room
+          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 3000));
         }
 
         await pool.query(
@@ -3638,7 +3665,7 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
     // Auto-fail audits stuck running for more than 10 minutes (e.g. server restarted)
     if (audit.status === 'running' && audit.started_at) {
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
-      if (elapsed > 10 * 60 * 1000) {
+      if (elapsed > 30 * 60 * 1000) {
         await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
         // Fall through to failed handler below
         audit.status = 'failed';
@@ -4500,7 +4527,7 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
     // Auto-fail stuck running audits
     if (audit.status === 'running' && audit.started_at) {
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
-      if (elapsed > 10 * 60 * 1000) {
+      if (elapsed > 30 * 60 * 1000) {
         await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
         // Fall through to find last completed audit below
       } else {

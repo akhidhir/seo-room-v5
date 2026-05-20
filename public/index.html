@@ -10458,12 +10458,18 @@
           if (data?.results) {
             const successCount = data.results.filter(r => r.success).length;
             const failCount = data.results.filter(r => !r.success).length;
-            alert(`Applied fixes: ${successCount} succeeded${failCount > 0 ? `, ${failCount} failed` : ''}`);
-            setFixModal(null);
-            setSelected(new Set());
-            loadHistory();
-            // Re-run audit to refresh scores
-            runAudit();
+            const failErrors = data.results.filter(r => !r.success).map(r => r.error || 'Unknown error');
+            if (failCount > 0) {
+              alert(`Applied fixes: ${successCount} succeeded, ${failCount} failed\n\nErrors:\n${failErrors.join('\n')}`);
+            } else {
+              alert(`Applied fixes: ${successCount} succeeded`);
+            }
+            if (successCount > 0) {
+              setFixModal(null);
+              setSelected(new Set());
+              loadHistory();
+              runAudit();
+            }
           }
         } catch (e) {
           alert('Error applying fixes: ' + e.message);
