@@ -7343,7 +7343,9 @@
               setSpeedLoading(false); setSpeedProgress(null);
             } else if (s.status === 'failed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
-              setSpeedError(s.error || 'Failed'); setSpeedLoading(false); setSpeedProgress(null);
+              // Only show error if we have no results at all
+              if (!(s.results && s.results.length > 0)) setSpeedError(s.error || 'Failed');
+              setSpeedLoading(false); setSpeedProgress(null);
             }
           } catch (e) { clearInterval(speedPollRef.current); speedPollRef.current = null; setSpeedLoading(false); setSpeedProgress(null); }
         }, 5000);
@@ -7815,10 +7817,11 @@
             if (s.results && s.results.length > 0) {
               setSpeedResults(s.results);
               _speedCache[_spck] = s.results;
+              setSpeedError(''); // Clear any stale error when we have results
             }
             if (s.status === 'completed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
-              setSpeedLoading(false); setSpeedProgress(null);
+              setSpeedLoading(false); setSpeedProgress(null); setSpeedError('');
             } else if (s.status === 'failed') {
               clearInterval(speedPollRef.current); speedPollRef.current = null;
               if (!(s.results && s.results.length > 0)) setSpeedError(s.error || 'Speed audit failed');
@@ -7829,7 +7832,7 @@
       };
 
       const runSpeedAudit = async () => {
-        setSpeedLoading(true); setSpeedError(''); setSpeedProgress(null);
+        setSpeedLoading(true); setSpeedError(''); setSpeedResults([]); setSpeedProgress(null);
         try {
           const data = await api(`/speed-audit/${project.id}/run`, { method: 'POST' });
           if (data.status === 'running') { pollForResults(); return; }
