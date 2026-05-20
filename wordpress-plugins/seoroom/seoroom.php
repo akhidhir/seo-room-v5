@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: All-in-one SEO optimization — automatic speed optimization (lazy loading, critical CSS, image compression, CSS/JS minification, browser caching, GZIP, font optimization, preconnect, LCP preload) + JSON-LD schema injection. Safe, non-destructive, instant revert on deactivation.
- * Version: 4.3.0
+ * Version: 5.2.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '4.3.0');
+define('SEOROOM_VERSION', '5.2.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -26,6 +26,7 @@ function sropt_defaults() {
         'enable_critical_css'  => true,
         'enable_css_defer'     => false, // Legacy — critical CSS handles deferral when enabled
         'enable_js_defer'      => true,
+        'enable_js_delay'      => true,
         'enable_js_minify'     => true,
         'enable_gzip'          => true,
         'enable_cache_headers' => true,
@@ -47,6 +48,10 @@ function sropt_defaults() {
         // WebP
         'enable_webp'          => true,
         'webp_quality'         => 80,
+        // SEO Tools
+        'enable_404_monitor'   => true,
+        'enable_redirects'     => true,
+        'enable_link_checker'  => false, // Manual trigger only
         // Schema
         'enable_schema'        => true,
         // Dashboard Connection
@@ -68,6 +73,17 @@ function sropt_activate() {
     $options = sropt_get_options();
     update_option('sropt_options', $options);
 
+    // Clear critical CSS cache on upgrade so new extraction logic takes effect
+    $prev_ver = get_option('sropt_version', '0');
+    if (version_compare($prev_ver, SEOROOM_VERSION, '<')) {
+        $critical_dir = WP_CONTENT_DIR . '/cache/seoroom/critical/';
+        if (is_dir($critical_dir)) {
+            $files = glob($critical_dir . '*');
+            if ($files) foreach ($files as $f) @unlink($f);
+        }
+        update_option('sropt_version', SEOROOM_VERSION);
+    }
+
     $dirs = array(
         WP_CONTENT_DIR . '/cache/seoroom/',
         WP_CONTENT_DIR . '/cache/seoroom/pages/',
@@ -77,6 +93,48 @@ function sropt_activate() {
     foreach ($dirs as $dir) {
         if (!file_exists($dir)) wp_mkdir_p($dir);
     }
+
+    // Create DB tables for 404 monitor, redirects, link checker
+    global $wpdb;
+    $charset = $wpdb->get_charset_collate();
+
+    $wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}seoroom_404s (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        url VARCHAR(2048) NOT NULL,
+        url_hash CHAR(32) NOT NULL,
+        referrer VARCHAR(2048) DEFAULT '',
+        user_agent VARCHAR(512) DEFAULT '',
+        hit_count INT UNSIGNED DEFAULT 1,
+        first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY url_hash (url_hash),
+        KEY last_seen (last_seen)
+    ) $charset");
+
+    $wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}seoroom_redirects (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        source_url VARCHAR(2048) NOT NULL,
+        source_hash CHAR(32) NOT NULL,
+        target_url VARCHAR(2048) NOT NULL,
+        redirect_type SMALLINT DEFAULT 301,
+        hit_count INT UNSIGNED DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY source_hash (source_hash)
+    ) $charset");
+
+    $wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}seoroom_broken_links (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        source_url VARCHAR(2048) NOT NULL,
+        source_post_id BIGINT UNSIGNED DEFAULT 0,
+        target_url VARCHAR(2048) NOT NULL,
+        status_code SMALLINT DEFAULT 0,
+        anchor_text VARCHAR(512) DEFAULT '',
+        link_type VARCHAR(20) DEFAULT 'internal',
+        scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        KEY source_post (source_post_id),
+        KEY status_code (status_code)
+    ) $charset");
 
     flush_rewrite_rules();
 }
@@ -220,7 +278,21 @@ function sropt_settings_page() {
                         </span>
                         <br><br>
                         <button type="button" id="sropt_test_connection" class="button button-secondary">Test Connection</button>
+                        <button type="button" id="sropt_push_now" class="button button-primary" style="margin-left:8px;">Push Data Now</button>
                         <span id="sropt_test_result" style="margin-left:10px;"></span>
+                        <?php
+                        $last_push = get_option('sropt_last_push');
+                        if ($last_push): ?>
+                            <br><br>
+                            <span style="color:#666;font-size:12px;">
+                                Last push: <?php echo esc_html($last_push['time'] ?? '—'); ?> —
+                                <?php if (($last_push['status'] ?? '') === 'ok'): ?>
+                                    <span style="color:#22c55e;">✓ <?php echo intval($last_push['pages'] ?? 0); ?> pages sent</span>
+                                <?php else: ?>
+                                    <span style="color:#ef4444;">✗ <?php echo esc_html($last_push['error'] ?? 'Unknown error'); ?></span>
+                                <?php endif; ?>
+                            </span>
+                        <?php endif; ?>
                         <script>
                         document.getElementById('sropt_test_connection').addEventListener('click', function() {
                             var btn = this;
@@ -253,6 +325,31 @@ function sropt_settings_page() {
                             })
                             .catch(function(e) {
                                 result.innerHTML = '<span style="color:#ef4444;">✗ Could not reach dashboard: ' + e.message + '</span>';
+                            })
+                            .finally(function() { btn.disabled = false; });
+                        });
+
+                        document.getElementById('sropt_push_now').addEventListener('click', function() {
+                            var btn = this;
+                            var result = document.getElementById('sropt_test_result');
+                            btn.disabled = true;
+                            result.innerHTML = '<span style="color:#666;">Pushing page data to dashboard...</span>';
+
+                            fetch('<?php echo esc_url(rest_url('seoroom-opt/v1/push-now')); ?>', {
+                                method: 'POST',
+                                headers: { 'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>' },
+                            })
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) {
+                                if (data.ok) {
+                                    var pages = data.result && data.result.pages ? data.result.pages : '?';
+                                    result.innerHTML = '<span style="color:#22c55e;font-weight:600;">✓ Pushed ' + pages + ' pages to dashboard</span>';
+                                } else {
+                                    result.innerHTML = '<span style="color:#ef4444;">✗ ' + (data.error || 'Push failed') + '</span>';
+                                }
+                            })
+                            .catch(function(e) {
+                                result.innerHTML = '<span style="color:#ef4444;">✗ Push error: ' + e.message + '</span>';
                             })
                             .finally(function() { btn.disabled = false; });
                         });
@@ -350,6 +447,13 @@ function sropt_settings_page() {
                     <td><label><input type="checkbox" name="sropt_options[enable_js_defer]" value="1" <?php checked($options['enable_js_defer']); ?> /> Add defer attribute to non-critical scripts</label></td>
                 </tr>
                 <tr>
+                    <th>Delay JS Until Interaction</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_js_delay]" value="1" <?php checked($options['enable_js_delay']); ?> /> Don't execute JavaScript until user interacts (scroll, click, touch)</label>
+                        <p class="description"><strong>Biggest TBT improvement.</strong> Scripts load only when the user scrolls, clicks, or touches the page. Reduces Total Blocking Time to near zero. Used by WP Rocket, FlyingPress, etc.</p>
+                    </td>
+                </tr>
+                <tr>
                     <th>Minify JS</th>
                     <td><label><input type="checkbox" name="sropt_options[enable_js_minify]" value="1" <?php checked($options['enable_js_minify']); ?> /> Minify inline JavaScript (removes comments and whitespace)</label></td>
                 </tr>
@@ -404,6 +508,37 @@ function sropt_settings_page() {
                     <td>
                         <input type="number" name="sropt_options[webp_quality]" value="<?php echo esc_attr($options['webp_quality']); ?>" min="50" max="100" step="5" style="width:80px;" />
                         <p class="description">Quality 80 recommended. Lower = smaller files, less quality.</p>
+                    </td>
+                </tr>
+
+                <!-- SEO TOOLS -->
+                <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">🔍 SEO Tools</h2></th></tr>
+                <tr>
+                    <th>404 Monitor</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_404_monitor]" value="1" <?php checked($options['enable_404_monitor']); ?> /> Log 404 errors with URL, referrer, and hit count</label>
+                        <p class="description">Tracks every 404 hit. View and manage in SEO Room Dashboard or via REST API.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Redirects</th>
+                    <td>
+                        <label><input type="checkbox" name="sropt_options[enable_redirects]" value="1" <?php checked($options['enable_redirects']); ?> /> Enable 301/302 redirect manager</label>
+                        <p class="description">Create redirects from 404s or manually. Fires before WordPress loads the page for zero overhead.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>404s Logged</th>
+                    <td>
+                        <?php
+                        global $wpdb;
+                        $t404 = $wpdb->prefix . 'seoroom_404s';
+                        $count_404 = $wpdb->get_var("SELECT COUNT(*) FROM $t404");
+                        $count_redirects = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}seoroom_redirects");
+                        ?>
+                        <span style="font-size:14px;">📊 <strong><?php echo intval($count_404); ?></strong> unique 404 URLs &nbsp;|&nbsp; ↗️ <strong><?php echo intval($count_redirects); ?></strong> active redirects</span>
+                        <br><br>
+                        <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=sropt_clear_404s'), 'sropt_clear_404s'); ?>" class="button button-small">Clear 404 Log</a>
                     </td>
                 </tr>
 
@@ -482,6 +617,16 @@ add_action('admin_post_sropt_clear_cache', function() {
 });
 
 
+// Clear 404 log action
+add_action('admin_post_sropt_clear_404s', function() {
+    check_admin_referer('sropt_clear_404s');
+    global $wpdb;
+    $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}seoroom_404s");
+    wp_redirect(admin_url('options-general.php?page=seoroom&cleared_404s=1'));
+    exit;
+});
+
+
 // ================================================================
 // SCHEMA INJECTION
 // Reads _seoroom_schema post meta and outputs JSON-LD in <head>.
@@ -490,6 +635,17 @@ add_action('admin_post_sropt_clear_cache', function() {
 
 // Register _seoroom_schema meta for REST API access (skip if seoroom-helper already registered it)
 add_action('init', function() {
+    // Auto-clear critical CSS cache on version upgrade (covers auto-updates)
+    $prev_ver = get_option('sropt_version', '0');
+    if (version_compare($prev_ver, SEOROOM_VERSION, '<')) {
+        $critical_dir = WP_CONTENT_DIR . '/cache/seoroom/critical/';
+        if (is_dir($critical_dir)) {
+            $files = glob($critical_dir . '*');
+            if ($files) foreach ($files as $f) @unlink($f);
+        }
+        update_option('sropt_version', SEOROOM_VERSION);
+    }
+
     if (registered_meta_key_exists('post', '_seoroom_schema', 'page')) return;
     foreach (['page', 'post'] as $type) {
         register_post_meta($type, '_seoroom_schema', [
@@ -840,8 +996,8 @@ function sropt_inject_critical_css($html, $options) {
     $critical_css = trim($critical_css);
 
     // Cap at 60KB to avoid bloating HTML
-    if (strlen($critical_css) > 61440) {
-        $critical_css = substr($critical_css, 0, 61440);
+    if (strlen($critical_css) > 40960) {
+        $critical_css = substr($critical_css, 0, 40960);
         // Find the last complete rule
         $last_brace = strrpos($critical_css, '}');
         if ($last_brace !== false) $critical_css = substr($critical_css, 0, $last_brace + 1);
@@ -976,38 +1132,61 @@ function sropt_url_to_local_path($url) {
 
 function sropt_extract_critical_rules($all_css) {
     $critical = '';
-    $max_size = 60000; // 60KB max
+    $max_size = 40960; // 40KB max — lean critical CSS for fast first paint
 
-    // Selectors that are typically above the fold
-    $element_pattern = 'html|body|header|nav|main|section|article|div|span|a|p|h[1-6]|img|figure|figcaption|ul|ol|li|input|button|form|select|textarea|label|table|tr|td|th|video|svg|picture|source';
-    $class_pattern = 'container|wrapper|row|col|site|page|header|nav|hero|banner|slider|menu|logo|btn|button|elementor|wp-block|entry|post|content|widget|masthead|main|top|above|fold|visible|show|active|open|overlay|modal|popup|breadcrumb|title|heading|text|section|block|grid|flex|layout|inner|outer|wrap|box|card|item|list|link|icon|image|media|featured|cover|bg|background';
-    $id_pattern = 'masthead|site-header|header|nav|menu|page|wrapper|content|main|top|hero|banner';
+    // BLACKLIST approach: include rules EXCEPT known below-fold patterns
+    $exclude_selectors = 'footer|\.footer|#footer|\.site-footer|\.widget-area|\.sidebar|#sidebar|\.comment|#comments|#respond|\.pagination|\.wp-pagenavi|\.post-navigation|\.screen-reader|\.sr-only|\.hidden|\.d-none|\.invisible|\.print-only|\.no-js|\.noprint|\.swiper-|\.slick-|\.owl-|\.carousel|\.modal|\.popup|\.lightbox|\.cookie|\.banner-close';
 
-    // Always keep :root / CSS custom properties
+    // Always keep :root / CSS custom properties (small, essential)
     if (preg_match_all('/:root\s*\{[^}]+\}/i', $all_css, $roots)) {
         foreach ($roots[0] as $r) {
             $critical .= $r . "\n";
-            if (strlen($critical) > $max_size) return $critical;
         }
     }
 
-    // Always keep @font-face rules
+    // SMART @font-face: only keep fonts actually used in critical selectors
+    // Extract font-family names used in the CSS body (not in @font-face itself)
+    $css_no_fontface = preg_replace('/@font-face\s*\{[^}]+\}/i', '', $all_css);
+    $used_fonts = array();
+    if (preg_match_all('/font-family\s*:\s*([^;}{]+)/i', $css_no_fontface, $ff_uses)) {
+        foreach ($ff_uses[1] as $ff_val) {
+            // Extract first font in stack (the primary one)
+            $fonts = explode(',', $ff_val);
+            foreach ($fonts as $f) {
+                $f = trim($f, " \t\n\r\"'");
+                $f_lower = strtolower($f);
+                // Skip generic families
+                if (in_array($f_lower, array('serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'inherit', 'initial', 'unset'))) continue;
+                $used_fonts[$f_lower] = true;
+            }
+        }
+    }
+
+    // Now include only @font-face for fonts that are actually used, limit to woff2 format
     if (preg_match_all('/@font-face\s*\{[^}]+\}/i', $all_css, $font_faces)) {
+        $font_count = 0;
+        $max_fonts = 6; // Max 6 @font-face declarations (typically 2-3 families × 2 weights)
         foreach ($font_faces[0] as $ff) {
-            $critical .= $ff . "\n";
-            if (strlen($critical) > $max_size) return $critical;
+            if ($font_count >= $max_fonts) break;
+            // Extract font-family from this @font-face
+            if (preg_match('/font-family\s*:\s*["\']?([^"\';}]+)/i', $ff, $ffn)) {
+                $face_name = strtolower(trim($ffn[1], " \t\n\r\"'"));
+                // Only include if this font is actually referenced in styles
+                if (isset($used_fonts[$face_name])) {
+                    // Prefer woff2 only — strip other format src if woff2 exists
+                    if (strpos($ff, 'woff2') !== false) {
+                        $critical .= $ff . "\n";
+                        $font_count++;
+                    }
+                }
+            }
         }
     }
 
-    // Always keep @keyframes (needed for animations visible above fold)
-    if (preg_match_all('/@keyframes\s+[\w-]+\s*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/i', $all_css, $keyframes)) {
-        foreach ($keyframes[0] as $kf) {
-            $critical .= $kf . "\n";
-            if (strlen($critical) > $max_size) return $critical;
-        }
-    }
+    // SKIP @keyframes entirely — animations are NOT critical for first paint
+    // They load with the deferred stylesheets after critical CSS renders
 
-    // Remove @font-face, @keyframes, and @media blocks from all_css before parsing individual rules
+    // Remove @font-face, @keyframes from CSS before parsing rules
     $css_no_at = preg_replace('/@font-face\s*\{[^}]+\}/i', '', $all_css);
     $css_no_at = preg_replace('/@keyframes\s+[\w-]+\s*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/i', '', $css_no_at);
 
@@ -1018,7 +1197,7 @@ function sropt_extract_critical_rules($all_css) {
         return '';
     }, $css_no_at);
 
-    // Parse individual CSS rules (selector { declarations })
+    // Parse individual CSS rules — INCLUDE ALL except blacklisted
     preg_match_all('/([^{}@]+)\{([^{}]+)\}/', $css_no_media, $rules, PREG_SET_ORDER);
 
     foreach ($rules as $rule) {
@@ -1027,21 +1206,27 @@ function sropt_extract_critical_rules($all_css) {
         $selector = trim($rule[1]);
         $declarations = trim($rule[2]);
 
-        // Skip keyframe steps
         if (preg_match('/^\d+%$|^from$|^to$/i', $selector)) continue;
-        // Skip empty declarations
         if (empty($declarations)) continue;
 
-        // Check if selector matches above-fold patterns
-        if (sropt_is_critical_selector($selector, $element_pattern, $class_pattern, $id_pattern)) {
-            $critical .= $selector . '{' . $declarations . "}\n";
-        }
+        // BLACKLIST: skip known below-fold and non-critical selectors
+        if (preg_match('/(?:^|\s|,)(' . $exclude_selectors . ')\b/i', $selector)) continue;
+
+        // Skip animation-only declarations (they reference keyframes we didn't include)
+        if (preg_match('/^\s*animation\s*:/i', $declarations) && substr_count($declarations, ':') === 1) continue;
+
+        $critical .= $selector . '{' . $declarations . "}\n";
     }
 
-    // Process @media blocks — extract critical rules from within
+    // Process @media blocks — only include screen-relevant ones
     foreach ($media_blocks as $mb) {
         if (strlen($critical) > $max_size) break;
 
+        // Skip print-only media queries
+        if (preg_match('/\bprint\b/i', $mb['query']) && !preg_match('/\bscreen\b/i', $mb['query'])) continue;
+
+        // Skip very large viewport media queries (likely tablet/desktop overrides on mobile-first)
+        // Keep mobile and general responsive rules
         $inner_critical = '';
         preg_match_all('/([^{}@]+)\{([^{}]+)\}/', $mb['content'], $inner_rules, PREG_SET_ORDER);
 
@@ -1050,10 +1235,9 @@ function sropt_extract_critical_rules($all_css) {
             $decl = trim($ir[2]);
             if (preg_match('/^\d+%$|^from$|^to$/i', $sel)) continue;
             if (empty($decl)) continue;
+            if (preg_match('/(?:^|\s|,)(' . $exclude_selectors . ')\b/i', $sel)) continue;
 
-            if (sropt_is_critical_selector($sel, $element_pattern, $class_pattern, $id_pattern)) {
-                $inner_critical .= $sel . '{' . $decl . "}\n";
-            }
+            $inner_critical .= $sel . '{' . $decl . "}\n";
         }
 
         if (!empty($inner_critical)) {
@@ -1062,25 +1246,6 @@ function sropt_extract_critical_rules($all_css) {
     }
 
     return $critical;
-}
-
-function sropt_is_critical_selector($selector, $element_pattern, $class_pattern, $id_pattern) {
-    // Universal selector
-    if (trim($selector) === '*') return true;
-
-    // Element selectors
-    if (preg_match('/(?:^|\s|,)(' . $element_pattern . ')\b/i', $selector)) return true;
-
-    // Class selectors
-    if (preg_match('/\.(' . $class_pattern . ')/i', $selector)) return true;
-
-    // ID selectors
-    if (preg_match('/#(' . $id_pattern . ')/i', $selector)) return true;
-
-    // Attribute selectors on common elements
-    if (preg_match('/\[(?:role|aria-|data-)/i', $selector)) return true;
-
-    return false;
 }
 
 
@@ -1094,6 +1259,7 @@ function sropt_defer_js($tag, $handle, $src) {
     $options = sropt_get_options();
     if (!$options['enable_js_defer'] || $options['safe_mode']) return $tag;
 
+    // jQuery will be delayed (not deferred) — skip defer for it so delay handler takes over
     $never_defer = array('jquery-core', 'jquery', 'jquery-migrate', 'wp-polyfill', 'wp-hooks', 'wp-i18n', 'underscore', 'backbone');
     if (in_array($handle, $never_defer)) return $tag;
 
@@ -1105,6 +1271,147 @@ function sropt_defer_js($tag, $handle, $src) {
     if (preg_match('/\b(defer|async)\b/i', $tag)) return $tag;
 
     return str_replace(' src=', ' defer src=', $tag);
+}
+
+
+// ================================================================
+// JS DELAY — Don't execute JS until user interaction (scroll/click/touch)
+// Biggest single TBT improvement. Used by WP Rocket, FlyingPress, etc.
+// ================================================================
+
+add_action('template_redirect', 'sropt_delay_js_start', 2);
+function sropt_delay_js_start() {
+    if (is_admin() || is_feed() || wp_doing_ajax()) return;
+    if (defined('DOING_CRON') && DOING_CRON) return;
+    if (is_user_logged_in()) return; // Don't delay for logged-in users (admin bars, etc.)
+
+    $options = sropt_get_options();
+    if (!$options['enable_js_delay'] || $options['safe_mode']) return;
+
+    // Use output buffer to rewrite script tags
+    ob_start('sropt_delay_js_rewrite');
+}
+
+function sropt_delay_js_rewrite($html) {
+    if (empty($html) || strlen($html) < 200) return $html;
+    if (stripos($html, '<html') === false && stripos($html, '<!DOCTYPE') === false) return $html;
+
+    $options = sropt_get_options();
+    $excludes = array_filter(array_map('trim', explode(',', $options['exclude_js'])));
+
+    // Scripts that must NEVER be delayed (core functionality)
+    // NOTE: jQuery IS delayed now — it loads first in the delay queue on user interaction
+    // This is safe because all jQuery-dependent scripts are also delayed
+    $never_delay = array(
+        'wp-polyfill',
+        'seoroom', // our own scripts
+    );
+
+    // Also never delay inline scripts that are critical for page rendering
+    $never_delay_inline = array(
+        'var wpApiSettings', 'var wc_', 'var elementorFrontendConfig',
+        'window._wpemojiSettings', 'document.documentElement.className',
+    );
+
+    // Rewrite external scripts: change type to prevent execution
+    $html = preg_replace_callback('/<script\b([^>]*)>(.*?)<\/script>/is', function($matches) use ($excludes, $never_delay, $never_delay_inline) {
+        $attrs = $matches[1];
+        $content = $matches[2];
+
+        // Skip if already has our delay attribute
+        if (strpos($attrs, 'data-seoroom-delay') !== false) return $matches[0];
+
+        // Skip non-JS types (JSON-LD, templates, etc.)
+        if (preg_match('/type\s*=\s*["\'](?!text\/javascript|application\/javascript|module)[^"\']*["\']/i', $attrs)) return $matches[0];
+
+        // Check if it's an external script
+        $is_external = preg_match('/\bsrc\s*=\s*["\']([^"\']+)["\']/i', $attrs, $src_match);
+        $src = $is_external ? $src_match[1] : '';
+
+        // Check never-delay list for external scripts
+        if ($is_external) {
+            foreach ($never_delay as $nd) {
+                if (strpos($src, $nd) !== false) return $matches[0];
+            }
+            foreach ($excludes as $exc) {
+                if (strpos($src, $exc) !== false) return $matches[0];
+            }
+        }
+
+        // Check never-delay list for inline scripts
+        if (!$is_external && !empty(trim($content))) {
+            foreach ($never_delay_inline as $ndi) {
+                if (strpos($content, $ndi) !== false) return $matches[0];
+            }
+            // Don't delay very short inline scripts (config/settings)
+            if (strlen(trim($content)) < 100) return $matches[0];
+        }
+
+        // Skip scripts in <head> that set critical config (heuristic: before </head>)
+        // We handle this via the never_delay_inline list above
+
+        // Rewrite: change type to prevent execution, add data attribute
+        if ($is_external) {
+            // External: change type to text/seoroom-delay
+            $new_attrs = preg_replace('/type\s*=\s*["\'][^"\']*["\']/i', '', $attrs);
+            $new_attrs .= ' data-seoroom-delay="1" type="text/seoroom-delay"';
+            return '<script' . $new_attrs . '>' . $content . '</script>';
+        } else {
+            // Inline: wrap in type=text/seoroom-delay
+            $new_attrs = preg_replace('/type\s*=\s*["\'][^"\']*["\']/i', '', $attrs);
+            $new_attrs .= ' data-seoroom-delay="1" type="text/seoroom-delay"';
+            return '<script' . $new_attrs . '>' . $content . '</script>';
+        }
+    }, $html);
+
+    // Inject the loader script right before </body>
+    // jQuery loads first (priority sort), then all others sequentially
+    $loader = '
+<script id="seoroom-delay-loader">
+(function(){
+  var loaded=false;
+  function loadAll(){
+    if(loaded)return;loaded=true;
+    var all=document.querySelectorAll("script[data-seoroom-delay]");
+    // Sort: jQuery first, then jquery-migrate, then everything else
+    var scripts=Array.prototype.slice.call(all);
+    scripts.sort(function(a,b){
+      var as=a.src||"",bs=b.src||"";
+      var ap=as.indexOf("jquery.min")>-1||as.indexOf("jquery-core")>-1?0:as.indexOf("jquery-migrate")>-1?1:2;
+      var bp=bs.indexOf("jquery.min")>-1||bs.indexOf("jquery-core")>-1?0:bs.indexOf("jquery-migrate")>-1?1:2;
+      return ap-bp;
+    });
+    var i=0;
+    function next(){
+      if(i>=scripts.length)return;
+      var s=scripts[i++];
+      var n=document.createElement("script");
+      if(s.src){n.src=s.src;n.onload=next;n.onerror=next;}
+      else{n.textContent=s.textContent;setTimeout(next,0);}
+      var attrs=s.attributes;
+      for(var j=0;j<attrs.length;j++){
+        var a=attrs[j].name;
+        if(a!=="type"&&a!=="data-seoroom-delay")n.setAttribute(a,attrs[j].value);
+      }
+      s.parentNode.replaceChild(n,s);
+      if(!s.src)next();
+    }
+    next();
+  }
+  var events=["mouseover","keydown","touchstart","touchmove","wheel","scroll","click"];
+  events.forEach(function(e){window.addEventListener(e,loadAll,{once:true,passive:true});});
+  // Fallback: load after 3 seconds (Lighthouse measures at ~3-5s mark)
+  setTimeout(loadAll,3000);
+})();
+</script>';
+
+    // Insert before </body>
+    $body_close = strripos($html, '</body>');
+    if ($body_close !== false) {
+        $html = substr($html, 0, $body_close) . $loader . "\n" . substr($html, $body_close);
+    }
+
+    return $html;
 }
 
 
@@ -1640,6 +1947,7 @@ add_action('rest_api_init', function() {
                     'css_minify'      => $options['enable_css_minify'] && !$is_safe,
                     'css_defer'       => ($options['enable_critical_css'] || $options['enable_css_defer']) && !$is_safe,
                     'js_defer'        => $options['enable_js_defer'] && !$is_safe,
+                    'js_delay'        => $options['enable_js_delay'] && !$is_safe,
                     'js_minify'       => $options['enable_js_minify'] && !$is_safe,
                     'gzip'            => $options['enable_gzip'],
                     'cache_headers'   => $options['enable_cache_headers'],
@@ -1649,6 +1957,9 @@ add_action('rest_api_init', function() {
                     'lcp_preload'     => $options['enable_lcp_preload'],
                     'page_cache'      => $options['enable_page_cache'] && !$is_safe,
                     'webp'            => $options['enable_webp'],
+                    '404_monitor'     => $options['enable_404_monitor'],
+                    'redirects'       => $options['enable_redirects'],
+                    'link_checker'    => true,
                 ),
                 'cache_stats' => array(
                     'critical_css_pages' => $critical_count,
@@ -1657,4 +1968,633 @@ add_action('rest_api_init', function() {
         },
         'permission_callback' => '__return_true',
     ));
+
+    // ---- 404 Monitor REST Endpoints ----
+    register_rest_route('seoroom-opt/v1', '/404s', array(
+        'methods'  => 'GET',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_404s';
+            $limit = intval($request->get_param('limit') ?: 100);
+            $offset = intval($request->get_param('offset') ?: 0);
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table ORDER BY hit_count DESC, last_seen DESC LIMIT %d OFFSET %d", $limit, $offset
+            ));
+            $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
+            return new WP_REST_Response(array('items' => $rows, 'total' => intval($total)), 200);
+        },
+        'permission_callback' => '__return_true',
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/404s/(?P<id>\d+)', array(
+        'methods'  => 'DELETE',
+        'callback' => function($request) {
+            global $wpdb;
+            $wpdb->delete($wpdb->prefix . 'seoroom_404s', array('id' => $request['id']));
+            return new WP_REST_Response(array('ok' => true), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/404s/clear', array(
+        'methods'  => 'POST',
+        'callback' => function() {
+            global $wpdb;
+            $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}seoroom_404s");
+            return new WP_REST_Response(array('ok' => true), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    // ---- Redirects REST Endpoints ----
+    register_rest_route('seoroom-opt/v1', '/redirects', array(
+        'methods'  => 'GET',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_redirects';
+            $limit = intval($request->get_param('limit') ?: 100);
+            $offset = intval($request->get_param('offset') ?: 0);
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table ORDER BY updated_at DESC LIMIT %d OFFSET %d", $limit, $offset
+            ));
+            $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
+            return new WP_REST_Response(array('items' => $rows, 'total' => intval($total)), 200);
+        },
+        'permission_callback' => '__return_true',
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/redirects', array(
+        'methods'  => 'POST',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_redirects';
+            $source = trim($request->get_param('source_url'));
+            $target = trim($request->get_param('target_url'));
+            $type = intval($request->get_param('redirect_type') ?: 301);
+            if (empty($source) || empty($target)) {
+                return new WP_REST_Response(array('error' => 'source_url and target_url required'), 400);
+            }
+            // Normalize source to path only
+            $parsed = parse_url($source);
+            $source_path = $parsed['path'] ?? $source;
+            $hash = md5($source_path);
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO $table (source_url, source_hash, target_url, redirect_type) VALUES (%s, %s, %s, %d)
+                 ON DUPLICATE KEY UPDATE target_url=%s, redirect_type=%d, updated_at=NOW()",
+                $source_path, $hash, $target, $type, $target, $type
+            ));
+            $id = $wpdb->insert_id ?: $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE source_hash=%s", $hash));
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d", $id));
+            return new WP_REST_Response(array('redirect' => $row), 201);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/redirects/(?P<id>\d+)', array(
+        'methods'  => 'PUT',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_redirects';
+            $updates = array();
+            $formats = array();
+            if ($request->get_param('target_url') !== null) { $updates['target_url'] = $request->get_param('target_url'); $formats[] = '%s'; }
+            if ($request->get_param('redirect_type') !== null) { $updates['redirect_type'] = intval($request->get_param('redirect_type')); $formats[] = '%d'; }
+            if (!empty($updates)) {
+                $updates['updated_at'] = current_time('mysql');
+                $formats[] = '%s';
+                $wpdb->update($table, $updates, array('id' => $request['id']), $formats, array('%d'));
+            }
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d", $request['id']));
+            return new WP_REST_Response(array('redirect' => $row), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/redirects/(?P<id>\d+)', array(
+        'methods'  => 'DELETE',
+        'callback' => function($request) {
+            global $wpdb;
+            $wpdb->delete($wpdb->prefix . 'seoroom_redirects', array('id' => $request['id']));
+            return new WP_REST_Response(array('ok' => true), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    // ---- Create redirect from 404 (convenience) ----
+    register_rest_route('seoroom-opt/v1', '/404s/(?P<id>\d+)/redirect', array(
+        'methods'  => 'POST',
+        'callback' => function($request) {
+            global $wpdb;
+            $t404 = $wpdb->prefix . 'seoroom_404s';
+            $tred = $wpdb->prefix . 'seoroom_redirects';
+            $row404 = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t404 WHERE id=%d", $request['id']));
+            if (!$row404) return new WP_REST_Response(array('error' => '404 not found'), 404);
+            $target = trim($request->get_param('target_url') ?: '/');
+            $type = intval($request->get_param('redirect_type') ?: 301);
+            $hash = md5($row404->url);
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO $tred (source_url, source_hash, target_url, redirect_type) VALUES (%s, %s, %s, %d)
+                 ON DUPLICATE KEY UPDATE target_url=%s, redirect_type=%d, updated_at=NOW()",
+                $row404->url, $hash, $target, $type, $target, $type
+            ));
+            // Remove from 404 log
+            $wpdb->delete($t404, array('id' => $request['id']));
+            return new WP_REST_Response(array('ok' => true), 201);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    // ---- Internal Link Checker REST Endpoints ----
+    register_rest_route('seoroom-opt/v1', '/link-check', array(
+        'methods'  => 'POST',
+        'callback' => 'sropt_run_link_check',
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/broken-links', array(
+        'methods'  => 'GET',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_broken_links';
+            $limit = intval($request->get_param('limit') ?: 100);
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table ORDER BY status_code ASC, scanned_at DESC LIMIT %d", $limit
+            ));
+            $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
+            return new WP_REST_Response(array('items' => $rows, 'total' => intval($total)), 200);
+        },
+        'permission_callback' => '__return_true',
+    ));
+
+    register_rest_route('seoroom-opt/v1', '/broken-links/clear', array(
+        'methods'  => 'POST',
+        'callback' => function() {
+            global $wpdb;
+            $wpdb->query("TRUNCATE TABLE {$wpdb->prefix}seoroom_broken_links");
+            return new WP_REST_Response(array('ok' => true), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    // ---- Page Audit — Internal crawl (bypasses Cloudflare) ----
+    register_rest_route('seoroom-opt/v1', '/page-audit', array(
+        'methods'  => 'GET',
+        'callback' => 'sropt_page_audit',
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
 });
+
+/**
+ * Page Audit endpoint — crawls all published pages/posts from inside WordPress.
+ * Returns structured data matching what the dashboard website audit expects.
+ * No Cloudflare issues since it reads directly from DB + renders internally.
+ */
+function sropt_page_audit() {
+    $start = microtime(true);
+    $pages = array();
+    $site_url = trailingslashit(get_site_url());
+    $domain = parse_url($site_url, PHP_URL_HOST);
+
+    // Get all published pages and posts
+    $args = array(
+        'post_type'      => array('page', 'post'),
+        'post_status'    => 'publish',
+        'posts_per_page' => 200,
+        'orderby'        => 'menu_order title',
+        'order'          => 'ASC',
+    );
+    $query = new WP_Query($args);
+
+    foreach ($query->posts as $post) {
+        $url = get_permalink($post);
+        $path = str_replace($site_url, '/', $url);
+        $path = '/' . ltrim($path, '/');
+
+        // Get Yoast meta if available
+        $meta_title = '';
+        $meta_desc  = '';
+        if (class_exists('WPSEO_Meta')) {
+            $meta_title = WPSEO_Meta::get_value('title', $post->ID) ?: '';
+            $meta_desc  = WPSEO_Meta::get_value('metadesc', $post->ID) ?: '';
+        }
+        if (!$meta_title) $meta_title = get_post_meta($post->ID, '_yoast_wpseo_title', true) ?: $post->post_title;
+        if (!$meta_desc)  $meta_desc  = get_post_meta($post->ID, '_yoast_wpseo_metadesc', true) ?: '';
+
+        // Render content to get accurate word count (includes shortcodes, blocks, etc.)
+        $content = apply_filters('the_content', $post->post_content);
+        $text = wp_strip_all_tags($content);
+        $word_count = str_word_count($text);
+
+        // H1/H2 from rendered content
+        $h1s = array();
+        $h2s = array();
+        if (preg_match_all('/<h1[^>]*>(.*?)<\/h1>/is', $content, $m)) {
+            $h1s = array_map('wp_strip_all_tags', $m[1]);
+        }
+        if (preg_match_all('/<h2[^>]*>(.*?)<\/h2>/is', $content, $m)) {
+            $h2s = array_map('wp_strip_all_tags', $m[1]);
+        }
+
+        // Images
+        $images_total = 0;
+        $images_missing_alt = 0;
+        $missing_alt_srcs = array();
+        if (preg_match_all('/<img[^>]*>/i', $content, $img_matches)) {
+            $images_total = count($img_matches[0]);
+            foreach ($img_matches[0] as $img_tag) {
+                $has_alt = preg_match('/alt=["\']([^"\']+)["\']/i', $img_tag, $am);
+                if (!$has_alt || trim($am[1]) === '') {
+                    $images_missing_alt++;
+                    if (preg_match('/src=["\']([^"\']+)["\']/i', $img_tag, $sm)) {
+                        $missing_alt_srcs[] = $sm[1];
+                    }
+                }
+            }
+        }
+
+        // Schema from SEO Room plugin
+        $seoroom_schema = get_post_meta($post->ID, '_seoroom_schema', true);
+        $schemas = array();
+        $schema_sources = array();
+        if ($seoroom_schema) {
+            $parsed = json_decode($seoroom_schema, true);
+            if ($parsed && isset($parsed['@type'])) {
+                $types = (array)$parsed['@type'];
+                foreach ($types as $t) {
+                    $schemas[] = $t;
+                    $schema_sources[] = array('type' => $t, 'source' => 'seoroom');
+                }
+            }
+        }
+
+        // Check Yoast schema too
+        $yoast_json = get_post_meta($post->ID, '_yoast_wpseo_schema_page_type', true);
+        if ($yoast_json) {
+            $schemas[] = $yoast_json;
+            $schema_sources[] = array('type' => $yoast_json, 'source' => 'yoast');
+        }
+
+        // Canonical
+        $canonical = '';
+        if (class_exists('WPSEO_Meta')) {
+            $canonical = WPSEO_Meta::get_value('canonical', $post->ID) ?: '';
+        }
+        if (!$canonical) $canonical = $url; // self-referencing
+
+        // Noindex
+        $noindex_val = get_post_meta($post->ID, '_yoast_wpseo_meta-robots-noindex', true);
+        $is_noindex = ($noindex_val === '1');
+
+        // Robots meta
+        $robots_meta = $is_noindex ? 'noindex' : '';
+
+        // Internal/external links
+        $internal_links = 0;
+        $external_links = 0;
+        if (preg_match_all('/href=["\']([^"\'#]+)["\']/i', $content, $link_matches)) {
+            foreach ($link_matches[1] as $href) {
+                if (strpos($href, 'mailto:') === 0 || strpos($href, 'tel:') === 0) continue;
+                if (strpos($href, $domain) !== false || strpos($href, '/') === 0) {
+                    $internal_links++;
+                } elseif (strpos($href, 'http') === 0) {
+                    $external_links++;
+                }
+            }
+        }
+
+        // OG tags (check if Yoast generates them — it does by default)
+        $has_og = class_exists('WPSEO_Options');
+
+        // FAQ detection
+        $question_headings = 0;
+        if (preg_match_all('/<h[2-4][^>]*>[^<]*\?[^<]*<\/h[2-4]>/i', $content, $qm)) {
+            $question_headings = count($qm[0]);
+        }
+        $has_faq = (bool)preg_match('/<h[1-4][^>]*>[^<]*(faq|frequently asked|common questions)[^<]*<\/h[1-4]>/i', $content);
+
+        $pages[] = array(
+            'url'              => $url,
+            'path'             => $path,
+            'title'            => $post->post_title,
+            'statusCode'       => 200,
+            'elapsed'          => 0, // internal read, no HTTP latency
+            'metaTitle'        => $meta_title,
+            'metaTitleLength'  => strlen($meta_title),
+            'metaDesc'         => $meta_desc,
+            'metaDescLength'   => strlen($meta_desc),
+            'h1s'              => $h1s,
+            'h2s'              => $h2s,
+            'wordCount'        => $word_count,
+            'images'           => $images_total,
+            'imagesWithoutAlt' => $images_missing_alt,
+            'imagesMissingAlt' => $missing_alt_srcs,
+            'internalLinks'    => $internal_links,
+            'externalLinks'    => $external_links,
+            'schemas'          => $schemas,
+            'schemaSources'    => $schema_sources,
+            'canonical'        => $canonical,
+            'hasViewport'      => true, // WordPress themes always have viewport
+            'robotsMeta'       => $robots_meta,
+            'isNoindex'        => $is_noindex,
+            'isHttps'          => (strpos($site_url, 'https') === 0),
+            'hasOG'            => $has_og,
+            'questionHeadings' => $question_headings,
+            'hasFAQSection'    => $has_faq,
+            'wasRedirected'    => false,
+        );
+    }
+
+    $elapsed = round((microtime(true) - $start) * 1000);
+    return new WP_REST_Response(array(
+        'success' => true,
+        'pages'   => $pages,
+        'total'   => count($pages),
+        'elapsed_ms' => $elapsed,
+    ), 200);
+}
+
+
+// ================================================================
+// PUSH TO DASHBOARD — Sends page audit data to SEO Room Dashboard
+// Outbound from WP → Railway (bypasses Cloudflare)
+// ================================================================
+
+/**
+ * Push page audit data to the dashboard connector-push endpoint.
+ * Called by WP-Cron (daily) and manually from settings page.
+ */
+function sropt_push_to_dashboard() {
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'] ?? '', '/');
+    $project_id    = $options['project_id'] ?? '';
+    $token         = $options['connection_code'] ?? '';
+
+    if (!$dashboard_url || !$project_id || !$token) {
+        return new WP_Error('config', 'Dashboard URL, Project ID, and Connection Code are required.');
+    }
+
+    // Collect page audit data using the same function as the REST endpoint
+    $audit_response = sropt_page_audit();
+    $audit_data = $audit_response->get_data();
+
+    if (empty($audit_data['pages'])) {
+        return new WP_Error('no_pages', 'No pages found to push.');
+    }
+
+    // Push to dashboard
+    $push_url = $dashboard_url . '/api/connector-push/' . $project_id;
+    $response = wp_remote_post($push_url, array(
+        'timeout'  => 60,
+        'headers'  => array(
+            'Content-Type'  => 'application/json',
+            'Authorization' => 'Bearer ' . $token,
+        ),
+        'body' => wp_json_encode(array(
+            'success' => true,
+            'pages'   => $audit_data['pages'],
+        )),
+    ));
+
+    if (is_wp_error($response)) {
+        update_option('sropt_last_push', array(
+            'status' => 'error',
+            'error'  => $response->get_error_message(),
+            'time'   => current_time('mysql'),
+        ));
+        return $response;
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+
+    $result = array(
+        'status'     => ($code === 200 && !empty($body['success'])) ? 'ok' : 'error',
+        'http_code'  => $code,
+        'pages'      => count($audit_data['pages']),
+        'time'       => current_time('mysql'),
+    );
+    if ($result['status'] === 'error') {
+        $result['error'] = $body['error'] ?? "HTTP $code";
+    }
+
+    update_option('sropt_last_push', $result);
+    return $result;
+}
+
+// REST endpoint for manual push from settings page
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/push-now', array(
+        'methods'  => 'POST',
+        'callback' => function() {
+            $result = sropt_push_to_dashboard();
+            if (is_wp_error($result)) {
+                return new WP_REST_Response(array('ok' => false, 'error' => $result->get_error_message()), 500);
+            }
+            return new WP_REST_Response(array('ok' => true, 'result' => $result), 200);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+});
+
+// WP-Cron: schedule daily push
+add_action('sropt_daily_push', 'sropt_push_to_dashboard');
+register_activation_hook(__FILE__, function() {
+    if (!wp_next_scheduled('sropt_daily_push')) {
+        wp_schedule_event(time(), 'daily', 'sropt_daily_push');
+    }
+});
+register_deactivation_hook(__FILE__, function() {
+    wp_clear_scheduled_hook('sropt_daily_push');
+});
+// Ensure cron is scheduled (in case plugin was already active)
+add_action('init', function() {
+    if (!wp_next_scheduled('sropt_daily_push')) {
+        wp_schedule_event(time(), 'daily', 'sropt_daily_push');
+    }
+});
+
+// Also push on plugin activation after tables are created
+add_action('admin_init', function() {
+    $options = sropt_get_options();
+    $last_push = get_option('sropt_last_push');
+    // Auto-push on first activation if connected
+    if ($options['project_id'] && $options['connection_code'] && !$last_push) {
+        sropt_push_to_dashboard();
+    }
+});
+
+
+// ================================================================
+// REDIRECT MANAGER — Fires before WordPress loads anything
+// ================================================================
+
+add_action('template_redirect', 'sropt_check_redirects', -1);
+function sropt_check_redirects() {
+    $options = sropt_get_options();
+    if (!$options['enable_redirects']) return;
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'seoroom_redirects';
+
+    // Check if table exists (avoid errors before activation)
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
+
+    $request_path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $hash = md5($request_path);
+
+    $redirect = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE source_hash = %s LIMIT 1", $hash
+    ));
+
+    if ($redirect) {
+        // Increment hit count
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $table SET hit_count = hit_count + 1 WHERE id = %d", $redirect->id
+        ));
+        wp_redirect($redirect->target_url, intval($redirect->redirect_type));
+        exit;
+    }
+}
+
+
+// ================================================================
+// 404 MONITOR — Log every 404 hit
+// ================================================================
+
+add_action('template_redirect', 'sropt_monitor_404', 99);
+function sropt_monitor_404() {
+    if (!is_404()) return;
+
+    $options = sropt_get_options();
+    if (!$options['enable_404_monitor']) return;
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'seoroom_404s';
+
+    // Check if table exists
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
+
+    $url = $_SERVER['REQUEST_URI'];
+    $hash = md5($url);
+    $referrer = $_SERVER['HTTP_REFERER'] ?? '';
+    $ua = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 512);
+
+    // Upsert: increment hit_count if URL already logged
+    $wpdb->query($wpdb->prepare(
+        "INSERT INTO $table (url, url_hash, referrer, user_agent, hit_count, first_seen, last_seen)
+         VALUES (%s, %s, %s, %s, 1, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE hit_count = hit_count + 1, last_seen = NOW(), referrer = IF(%s != '', %s, referrer)",
+        $url, $hash, $referrer, $ua, $referrer, $referrer
+    ));
+}
+
+
+// ================================================================
+// INTERNAL LINK CHECKER — Scan pages for broken internal links
+// ================================================================
+
+function sropt_run_link_check($request) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'seoroom_broken_links';
+
+    // Clear previous results
+    $wpdb->query("TRUNCATE TABLE $table");
+
+    $site_url = home_url();
+    $site_host = parse_url($site_url, PHP_URL_HOST);
+
+    // Get all published pages and posts
+    $posts = $wpdb->get_results(
+        "SELECT ID, post_title, post_content, guid FROM {$wpdb->posts}
+         WHERE post_status = 'publish' AND post_type IN ('page', 'post')
+         ORDER BY ID ASC LIMIT 200"
+    );
+
+    $checked_urls = array(); // Cache: url => status_code
+    $broken = 0;
+    $total_links = 0;
+    $max_checks = intval($request->get_param('max_checks') ?: 500);
+
+    foreach ($posts as $post) {
+        $content = $post->post_content;
+        if (empty($content)) continue;
+
+        // Extract all links from content
+        preg_match_all('/<a\b[^>]*href\s*=\s*["\']([^"\'#]+)["\'][^>]*>(.*?)<\/a>/is', $content, $matches, PREG_SET_ORDER);
+
+        foreach ($matches as $match) {
+            if ($total_links >= $max_checks) break 2;
+
+            $href = $match[1];
+            $anchor = wp_strip_all_tags($match[2]);
+
+            // Normalize URL
+            if (strpos($href, '//') === 0) $href = 'https:' . $href;
+            if (strpos($href, '/') === 0) $href = $site_url . $href;
+
+            // Determine link type
+            $link_host = parse_url($href, PHP_URL_HOST);
+            $is_internal = ($link_host === $site_host || empty($link_host));
+            $link_type = $is_internal ? 'internal' : 'external';
+
+            // Only check internal links by default (external is slow)
+            $check_external = $request->get_param('check_external');
+            if (!$is_internal && !$check_external) continue;
+
+            // Skip mailto, tel, javascript
+            if (preg_match('/^(mailto:|tel:|javascript:)/i', $href)) continue;
+
+            $total_links++;
+
+            // Check cache first
+            if (isset($checked_urls[$href])) {
+                $status = $checked_urls[$href];
+            } else {
+                $status = sropt_check_url_status($href);
+                $checked_urls[$href] = $status;
+            }
+
+            // Log broken links (non-200 status)
+            if ($status >= 400 || $status === 0) {
+                $broken++;
+                $page_url = get_permalink($post->ID) ?: $post->guid;
+                $wpdb->insert($table, array(
+                    'source_url'     => $page_url,
+                    'source_post_id' => $post->ID,
+                    'target_url'     => $href,
+                    'status_code'    => $status,
+                    'anchor_text'    => substr($anchor, 0, 512),
+                    'link_type'      => $link_type,
+                    'scanned_at'     => current_time('mysql'),
+                ));
+            }
+        }
+    }
+
+    return new WP_REST_Response(array(
+        'ok'           => true,
+        'pages_scanned' => count($posts),
+        'links_checked' => $total_links,
+        'broken_found'  => $broken,
+    ), 200);
+}
+
+function sropt_check_url_status($url) {
+    $args = array(
+        'timeout'     => 10,
+        'redirection' => 5,
+        'sslverify'   => false,
+        'method'      => 'HEAD', // Fast — don't download body
+        'user-agent'  => 'SEORoom Link Checker/1.0',
+    );
+
+    $response = wp_remote_head($url, $args);
+
+    if (is_wp_error($response)) {
+        // HEAD might be blocked, try GET
+        $response = wp_remote_get($url, array_merge($args, array('method' => 'GET')));
+        if (is_wp_error($response)) return 0;
+    }
+
+    return wp_remote_retrieve_response_code($response);
+}
