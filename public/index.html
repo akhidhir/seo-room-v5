@@ -7369,8 +7369,8 @@
             }
             startSpeedPoll();
           } else if (speedData.status === 'failed') {
-            // Don't show stale failed error on load — user can just run again
-            setSpeedResults([]);
+            // Don't show stale failed error — preserve cached results if we have them
+            // (server already tries to return last good results as 'completed')
           } else if (speedData.results) {
             setSpeedResults(speedData.results);
             if (speedData.warning) setSpeedError(speedData.warning);
@@ -7774,6 +7774,7 @@
       const loadExisting = async () => {
         try {
           const data = await api(`/speed-audit/${project.id}/status`);
+          console.log('[SpeedAudit] loadExisting status:', data.status, 'results:', data.results?.length || 0, 'progress:', data.progress, '/', data.total);
           if (data.status === 'running') {
             setSpeedLoading(true); setSpeedError('');
             if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
@@ -7784,15 +7785,18 @@
             }
             pollForResults();
           } else if (data.status === 'failed') {
-            // Don't show scary red error on page load for stale failures — just show empty state
-            setSpeedResults([]);
+            // Don't show scary red error on page load for stale failures
+            // But preserve any cached results we already have
+            if (_speedCache[_spck]?.length) {
+              setSpeedResults(_speedCache[_spck]);
+            }
           } else if (data.results) {
             setSpeedResults(data.results); setSpeedError('');
             _speedCache[_spck] = data.results;
             loadExistingActions();
             if (data.warning) setSpeedError(data.warning);
           }
-        } catch (e) { /* no previous speed audit */ }
+        } catch (e) { console.log('[SpeedAudit] loadExisting error:', e.message); }
       };
 
       const [existingCwvTitles, setExistingCwvTitles] = useState(new Set());
