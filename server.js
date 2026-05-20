@@ -18663,6 +18663,21 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     // Per-page findings have slugs in the title — detect them
     const isPerPageTitle = (title) => /schema on [a-z0-9]/.test((title || '').toLowerCase());
 
+    // Pre-dedup: remove findings with duplicate topics in the same batch
+    // This prevents two code paths from creating findings about the same issue
+    const seenTopicFindings = new Set();
+    const seenTitles = new Set();
+    findings = findings.filter(f => {
+      // Exact title dedup
+      if (seenTitles.has(f.title)) return false;
+      seenTitles.add(f.title);
+      // Topic dedup: if a topic was already covered by another finding, skip
+      const topics = getTopics(f.title);
+      if (topics.length > 0 && topics.every(t => seenTopicFindings.has(t)) && !f._forceStatus) return false;
+      topics.forEach(t => seenTopicFindings.add(t));
+      return true;
+    });
+
     // MERGE findings: update existing, add new, keep unmatched existing (don't delete them)
     const newTitles = new Set(findings.map(f => f.title));
     const savedFindings = [];
