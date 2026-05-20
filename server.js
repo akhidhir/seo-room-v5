@@ -18224,6 +18224,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         hasFAQSection: p.hasFAQSection || false,
         wordCount: p.wordCount || p.word_count || 0,
         elapsed: p.elapsed || p.response_time || 0,
+        imagesWithoutAltSrcs: p.imagesWithoutAltSrcs || p.imagesMissingAlt || [],
       }));
     }
     console.log(`[website-audit] ${usedConnector ? 'Connector' : 'Crawled'} ${crawlResults.length} pages`);
