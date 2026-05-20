@@ -7356,8 +7356,12 @@
             setSpeedLoading(true);
             if (speedData.progress != null && speedData.total) setSpeedProgress({ current: speedData.progress, total: speedData.total });
             startSpeedPoll();
+          } else if (speedData.status === 'failed') {
+            // Don't show stale failed error on load — user can just run again
+            setSpeedResults([]);
           } else if (speedData.results) {
             setSpeedResults(speedData.results);
+            if (speedData.warning) setSpeedError(speedData.warning);
             const cwvMap = {};
             speedData.results.forEach(r => { if (r.cwv) cwvMap[r.page_id] = r.cwv; });
             setPageSpeedData(prev => ({ ...prev, ...cwvMap }));
@@ -7763,11 +7767,13 @@
             if (data.progress != null && data.total) setSpeedProgress({ current: data.progress, total: data.total });
             pollForResults();
           } else if (data.status === 'failed') {
-            setSpeedError(data.error || 'Speed audit failed. Please run again.');
+            // Don't show scary red error on page load for stale failures — just show empty state
+            setSpeedResults([]);
           } else if (data.results) {
             setSpeedResults(data.results); setSpeedError('');
             _speedCache[_spck] = data.results;
             loadExistingActions();
+            if (data.warning) setSpeedError(data.warning);
           }
         } catch (e) { /* no previous speed audit */ }
       };
