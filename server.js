@@ -20475,10 +20475,13 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       }
     }
 
-    if (missingAltUrls.length === 0) {
-      // Check if it's because Cloudflare blocked everything
-      return res.json({ success: false, message: 'No missing alt images found. If Cloudflare is blocking, install the SEO Room Connector plugin and push data first.' });
-    }
+    } // end else (per-page image discovery)
+
+    if (allGenerated.length === 0) {
+      // Not in apply mode — need to discover + generate
+      if (missingAltUrls.length === 0) {
+        return res.json({ success: false, message: 'No missing alt images found. If Cloudflare is blocking, install the SEO Room Connector plugin and push data first.' });
+      }
 
     // Deduplicate
     const missingAlt = [...new Set(missingAltUrls)].map(src => ({ src }));
@@ -20548,7 +20551,7 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     }
 
     console.log(`[alt-text-fix] Generated ${allGenerated.length} alt texts`);
-    } // end else (not apply-with-preapproved)
+    } // end if (allGenerated.length === 0) — discovery + AI generation
 
     // PREVIEW MODE: return generated alt texts for review (don't write to WordPress yet)
     if (!isApply) {
