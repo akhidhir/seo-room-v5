@@ -531,7 +531,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
-    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 20`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
