@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 7.1.0
+ * Version: 8.1.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '7.0.0');
+define('SEOROOM_VERSION', '8.1.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -696,6 +696,23 @@ add_action('init', function() {
             'type'          => 'string',
             'auth_callback' => function() { return current_user_can('edit_posts'); },
         ]);
+
+        // Register Yoast meta fields for REST API writes (On-Page Fix)
+        $yoast_fields = [
+            '_yoast_wpseo_title',
+            '_yoast_wpseo_metadesc',
+            '_yoast_wpseo_focuskw',
+            '_yoast_wpseo_canonical',
+            '_yoast_wpseo_meta-robots-noindex',
+        ];
+        foreach ($yoast_fields as $field) {
+            register_post_meta($type, $field, [
+                'show_in_rest'  => true,
+                'single'        => true,
+                'type'          => 'string',
+                'auth_callback' => function() { return current_user_can('edit_posts'); },
+            ]);
+        }
     }
 }, 20);
 
@@ -883,18 +900,12 @@ function sropt_compress_thumbnails($metadata, $attachment_id) {
 // HTML OUTPUT BUFFER — Critical CSS, CSS/JS minification, font-swap, preconnect
 // ================================================================
 
-add_action('template_redirect', 'sropt_start_buffer', 1);
+// Speed optimization output buffer DISABLED — BerqWP handles all speed optimizations.
+// Plugin focuses on: schema injection, 404 monitor, redirects, broken links, dashboard connector.
+// add_action('template_redirect', 'sropt_start_buffer', 1);
 function sropt_start_buffer() {
-    if (is_admin() || is_feed() || wp_doing_ajax()) return;
-    if (defined('DOING_CRON') && DOING_CRON) return;
-
-    $options = sropt_get_options();
-    $is_safe = $options['safe_mode'];
-
-    $needs_buffer = (!$is_safe && ($options['enable_css_minify'] || $options['enable_js_minify'] || $options['enable_critical_css'] || $options['enable_unused_css']))
-        || $options['enable_font_swap'] || $options['enable_preconnect'] || $options['enable_dns_prefetch'];
-
-    if ($needs_buffer) ob_start('sropt_process_html');
+    // Disabled — BerqWP conflicts with output buffer HTML rewriting
+    return;
 }
 
 function sropt_process_html($html) {
@@ -1000,6 +1011,9 @@ function sropt_process_html($html) {
             }
         }
     }
+
+    // LCP preload injection (runs on fully rendered HTML)
+    $html = sropt_lcp_buffer_handler($html);
 
     return $html;
 }
@@ -1715,11 +1729,11 @@ function sropt_defer_js($tag, $handle, $src) {
 // Biggest single TBT improvement. Used by WP Rocket, FlyingPress, etc.
 // ================================================================
 
-add_action('template_redirect', 'sropt_delay_js_start', 2);
+// JS delay DISABLED — BerqWP handles JS optimization.
+// add_action('template_redirect', 'sropt_delay_js_start', 2);
 function sropt_delay_js_start() {
-    if (is_admin() || is_feed() || wp_doing_ajax()) return;
-    if (defined('DOING_CRON') && DOING_CRON) return;
-    if (is_user_logged_in()) return; // Don't delay for logged-in users (admin bars, etc.)
+    // Disabled — BerqWP handles JS delay/defer
+    return;
 
     $options = sropt_get_options();
     if (!$options['enable_js_delay'] || $options['safe_mode']) return;
@@ -2001,8 +2015,15 @@ add_action('admin_init', function() {
 
 
 // ================================================================
-// PRELOAD LCP IMAGE — Auto-detect hero/banner image
+// PRELOAD LCP IMAGE — Rendered HTML detection (universal)
 // ================================================================
+// Instead of guessing at wp_head time, we inject the preload tag via
+// the output buffer AFTER the full HTML is rendered. This catches:
+//   - Elementor background images (inline style or data-settings)
+//   - Theme page-header backgrounds (Onum, Astra, etc.)
+//   - Featured images, hero <img> tags
+//   - Any CSS background-image in the above-fold area
+// The wp_head hook is kept as an early hint for simple cases.
 
 add_action('wp_head', 'sropt_preload_hints', 1);
 function sropt_preload_hints() {
@@ -2013,42 +2034,322 @@ function sropt_preload_hints() {
     $preload_url = '';
 
     if (is_singular()) {
-        // 1. Try post thumbnail (featured image) — most common LCP candidate
-        if (has_post_thumbnail()) {
-            $thumb_id = get_post_thumbnail_id();
-            $thumb_url = wp_get_attachment_image_url($thumb_id, 'large');
-            if ($thumb_url) $preload_url = $thumb_url;
+        $post = get_post();
+
+        // 1. Check Elementor data for hero background image
+        if (!$preload_url && $post) {
+            $elementor_data = get_post_meta($post->ID, '_elementor_data', true);
+            if ($elementor_data && is_string($elementor_data)) {
+                $data = json_decode($elementor_data, true);
+                if (is_array($data)) {
+                    $checked = 0;
+                    foreach ($data as $element) {
+                        if ($checked >= 3) break;
+                        $bg_url = sropt_find_elementor_bg($element, 0);
+                        if ($bg_url) { $preload_url = $bg_url; break; }
+                        $checked++;
+                    }
+                }
+            }
         }
 
-        // 2. If no thumbnail, try first image in content
-        if (!$preload_url) {
-            $post = get_post();
-            if ($post && !empty($post->post_content)) {
-                if (preg_match('/<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\'][^>]*>/i', $post->post_content, $img_match)) {
-                    $preload_url = $img_match[1];
-                }
+        // 2. Try post thumbnail (featured image)
+        if (!$preload_url && has_post_thumbnail()) {
+            $thumb_id = get_post_thumbnail_id();
+            $thumb_url = wp_get_attachment_image_url($thumb_id, 'full');
+            if ($thumb_url) $preload_url = $thumb_url;
+        }
+    }
+
+    // Store early-detected URL for the output buffer to use/override
+    $GLOBALS['sropt_lcp_early'] = $preload_url;
+
+    // Check if the output buffer will run (it handles the real detection)
+    $options2 = sropt_get_options();
+    $is_safe = $options2['safe_mode'];
+    $buffer_active = (!$is_safe && ($options2['enable_css_minify'] || $options2['enable_js_minify'] || $options2['enable_critical_css'] || $options2['enable_unused_css']))
+        || $options2['enable_font_swap'] || $options2['enable_preconnect'] || $options2['enable_dns_prefetch'];
+
+    // Only emit from wp_head if the output buffer WON'T run (safe mode, no options)
+    // When buffer runs, it will inject the preload after seeing the full HTML
+    if (!$buffer_active && $preload_url) {
+        $type = '';
+        if (preg_match('/\.webp(\?|$)/i', $preload_url)) $type = ' type="image/webp"';
+        elseif (preg_match('/\.png(\?|$)/i', $preload_url)) $type = ' type="image/png"';
+        echo '<link rel="preload" as="image" href="' . esc_url($preload_url) . '"' . $type . ' fetchpriority="high">' . "\n";
+    }
+}
+
+/**
+ * Output buffer handler: scan rendered HTML for the actual LCP image.
+ * Runs AFTER the full page is rendered so we can see theme headers,
+ * inline styles, and all images.
+ */
+function sropt_lcp_buffer_handler($html) {
+    // LCP handler disabled — the regex-based HTML rewriting causes layout shifts
+    // and performance regressions on sites with BerqWP. The wp_head hook
+    // (sropt_lcp_preload_head) handles simple preload cases instead.
+    return $html;
+
+    if (is_admin() || empty($html)) return $html;
+    $options = sropt_get_options();
+    if (!$options['enable_lcp_preload']) return $html;
+
+    $debug_info = array('handler' => 'running');
+
+    // Don't skip even if BerqWP has a preload — BerqWP may preload the wrong image
+    // and still lazy-load the hero background via lazy-berqwpbg class.
+    // We check later to avoid duplicate preload tags.
+    $has_existing_preload = preg_match('/<link[^>]*rel=["\']preload["\'][^>]*fetchpriority=["\']high["\']/i', $html);
+
+    $preload_url = '';
+
+    // Strategy 1: Find background-image in page-header/hero/banner sections
+    // Use a simpler, more robust approach: first find the hero element, then extract URL from it
+    $hero_element = '';
+    if (preg_match('/<(?:div|section|header)\b[^>]*class="[^"]*(?:page-header|hero|banner|masthead)[^"]*"[^>]*>/i', $html, $hero_match)) {
+        $hero_element = $hero_match[0];
+        $debug_info['hero_found'] = substr($hero_element, 0, 80);
+        // Extract background-image URL from the hero element's style attribute
+        // Handle: url("..."), url('...'), url(...), url(&quot;...&quot;)
+        if (preg_match('/background-image:\s*url\((?:&quot;|["\'])?([^"\')\s&>]+)/i', $hero_element, $url_match)) {
+            $url = $url_match[1];
+            $debug_info['hero_url'] = substr($url, 0, 60);
+            if (preg_match('/\.(jpg|jpeg|png|webp|avif)/i', $url)) {
+                $preload_url = $url;
+                $debug_info['strategy'] = 1;
+            }
+        } else {
+            $debug_info['hero_no_bg'] = true;
+        }
+    }
+
+    // Also check Elementor sections
+    if (!$preload_url) {
+        if (preg_match('/<(?:div|section)\b[^>]*class="[^"]*elementor-(?:section|top-section|element)[^"]*"[^>]*style="[^"]*background-image:\s*url\((?:&quot;|["\'])?([^"\')\s&>]+)/i', $html, $el_match)) {
+            $url = $el_match[1];
+            if (preg_match('/\.(jpg|jpeg|png|webp|avif)/i', $url)) {
+                $preload_url = $url;
+                $debug_info['strategy'] = '1e';
             }
         }
     }
 
-    // 3. Try custom logo (works for homepage and archive pages)
-    if (!$preload_url && function_exists('get_custom_logo')) {
-        $custom_logo_id = get_theme_mod('custom_logo');
-        if ($custom_logo_id) {
-            $logo_url = wp_get_attachment_image_url($custom_logo_id, 'full');
-            if ($logo_url) $preload_url = $logo_url;
+    // Strategy 2: Find theme CSS background in <style> tags for page-header
+    if (!$preload_url) {
+        $q = '(?:&quot;|["\'])';
+        if (preg_match('/\.page-header\s*\{[^}]*background(?:-image)?\s*:[^}]*url\(' . $q . '?([^"\')\s&]+)' . $q . '?\)/i', $html, $m)) {
+            if (preg_match('/\.(jpg|jpeg|png|webp|avif)/i', $m[1])) {
+                $preload_url = $m[1];
+            }
         }
     }
 
+    // Strategy 3: Use the early-detected URL (Elementor data or featured image)
+    if (!$preload_url && !empty($GLOBALS['sropt_lcp_early'])) {
+        $preload_url = $GLOBALS['sropt_lcp_early'];
+    }
+
+    // Strategy 4: First large <img> in the top portion of HTML (first 5000 chars after <body>)
+    if (!$preload_url) {
+        $body_pos = stripos($html, '<body');
+        $top_html = $body_pos !== false ? substr($html, $body_pos, 5000) : substr($html, 0, 8000);
+        if (preg_match_all('/<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\'][^>]*>/i', $top_html, $img_matches)) {
+            foreach ($img_matches[1] as $src) {
+                // Skip tiny/icon images by filename pattern
+                if (preg_match('/(\d+)x(\d+)/', $src, $dims)) {
+                    if (intval($dims[1]) < 400 && intval($dims[2]) < 400) continue;
+                }
+                if (preg_match('/(gravatar|avatar|icon|logo|pixel|tracking|badge|button|spinner)/i', $src)) continue;
+                $preload_url = $src;
+                break;
+            }
+        }
+    }
+
+    // === CRITICAL: Strip BerqWP lazy-bg classes from hero/LCP elements ===
+    // BerqWP adds lazy-berqwpbg (and similar) to background-image elements,
+    // lazy-loading them via JS. This adds ~600ms resource load delay to LCP.
+    // Strip these classes from page-header/hero/banner containers ALWAYS,
+    // regardless of whether we found a preload_url.
+    $lazy_bg_classes = 'lazy-berqwpbg|lazy-bg|lazyload-bg';
+    $hero_selectors = 'page-header|single-page-header|hero|banner|masthead';
+    $html = preg_replace_callback(
+        '/<(div|section|header)\b([^>]*class="[^"]*(?:' . $hero_selectors . ')[^"]*"[^>]*)>/i',
+        function($m) use ($lazy_bg_classes) {
+            $tag = $m[1];
+            $attrs = $m[2];
+            // Strip lazy-bg class names
+            $attrs = preg_replace('/\b(' . $lazy_bg_classes . ')\b/i', '', $attrs);
+            // Clean up double spaces in class attr
+            $attrs = preg_replace('/class="([^"]*)"/i', '', $attrs, -1, $count, 0);
+            // Re-extract and clean class value
+            if (preg_match('/class="([^"]*)"/i', $m[2], $cls)) {
+                $clean = preg_replace('/\b(' . $lazy_bg_classes . ')\b/i', '', $cls[1]);
+                $clean = preg_replace('/\s+/', ' ', trim($clean));
+                $attrs = preg_replace('/class="[^"]*"/i', 'class="' . $clean . '"', $m[2]);
+            }
+            return '<' . $tag . $attrs . '>';
+        },
+        $html
+    );
+
+    // Also strip lazy-berqwpbg from ANY element that has the LCP background-image URL
     if ($preload_url) {
-        // Determine image type for better preload hint
+        $escaped_bg = preg_quote($preload_url, '/');
+        $html = preg_replace_callback(
+            '/<(div|section|header)\b([^>]*style="[^"]*' . $escaped_bg . '[^"]*"[^>]*)>/i',
+            function($m) use ($lazy_bg_classes) {
+                $tag = $m[1];
+                $attrs = $m[2];
+                if (preg_match('/class="([^"]*)"/i', $attrs, $cls)) {
+                    $clean = preg_replace('/\b(' . $lazy_bg_classes . ')\b/i', '', $cls[1]);
+                    $clean = preg_replace('/\s+/', ' ', trim($clean));
+                    $attrs = preg_replace('/class="[^"]*"/i', 'class="' . $clean . '"', $attrs);
+                }
+                return '<' . $tag . $attrs . '>';
+            },
+            $html
+        );
+    }
+
+    // === LCP BOOST: modify HTML for faster LCP ===
+    if ($preload_url) {
+        // Add preconnect to BerqWP CDN if the LCP URL is from their CDN
+        $preconnect = '';
+        if (preg_match('#https?://([^/]+\.cdn\.digitaloceanspaces\.com)#i', $preload_url, $cdn_m)) {
+            $cdn_origin = 'https://' . $cdn_m[1];
+            // Only add if not already present
+            if (stripos($html, $cdn_origin) === false || !preg_match('/<link[^>]*rel=["\']preconnect["\'][^>]*' . preg_quote($cdn_m[1], '/') . '/i', $html)) {
+                $preconnect = '<link rel="preconnect" href="' . $cdn_origin . '" crossorigin>' . "\n";
+            }
+        }
+
         $type = '';
         if (preg_match('/\.webp(\?|$)/i', $preload_url)) $type = ' type="image/webp"';
         elseif (preg_match('/\.png(\?|$)/i', $preload_url)) $type = ' type="image/png"';
         elseif (preg_match('/\.svg(\?|$)/i', $preload_url)) $type = ' type="image/svg+xml"';
 
-        echo '<link rel="preload" as="image" href="' . esc_url($preload_url) . '"' . $type . ' fetchpriority="high">' . "\n";
+        // Only add preload if BerqWP doesn't already have one for this URL
+        $skip_preload = false;
+        if ($has_existing_preload) {
+            $escaped_check = preg_quote($preload_url, '/');
+            if (preg_match('/<link[^>]*rel=["\']preload["\'][^>]*href=["\'][^"\']*' . $escaped_check . '/i', $html)) {
+                $skip_preload = true; // BerqWP already preloads this exact URL
+            }
+        }
+
+        if (!$skip_preload) {
+            $tag = '<link rel="preload" as="image" href="' . esc_url($preload_url) . '"' . $type . ' fetchpriority="high">' . "\n";
+        } else {
+            $tag = '';
+        }
+
+        // Insert preconnect + preload after <meta charset> or at start of <head>
+        $inject = $preconnect . $tag;
+        if ($inject) {
+            if (preg_match('/<meta[^>]*charset[^>]*>/i', $html, $meta_match, PREG_OFFSET_CAPTURE)) {
+                $pos = $meta_match[0][1] + strlen($meta_match[0][0]);
+                $html = substr($html, 0, $pos) . "\n" . $inject . substr($html, $pos);
+            } elseif (($head_pos = stripos($html, '<head>')) !== false) {
+                $html = substr($html, 0, $head_pos + 6) . "\n" . $inject . substr($html, $head_pos + 6);
+            }
+        }
+
+        // A) Add fetchpriority="high" to the actual LCP <img> element (if LCP is an image tag)
+        //    Also remove loading="lazy" which kills LCP
+        $escaped_url = preg_quote($preload_url, '/');
+        if (preg_match('/<img\b[^>]*src=["\']' . $escaped_url . '["\'][^>]*>/i', $html, $img_match, PREG_OFFSET_CAPTURE)) {
+            $img_tag = $img_match[0][0];
+            $img_pos = $img_match[0][1];
+            $new_tag = $img_tag;
+            $new_tag = preg_replace('/\s*loading\s*=\s*["\']lazy["\']/i', '', $new_tag);
+            if (!preg_match('/fetchpriority/i', $new_tag)) {
+                $new_tag = preg_replace('/<img\b/i', '<img fetchpriority="high"', $new_tag);
+            }
+            if (!preg_match('/loading\s*=/i', $new_tag)) {
+                $new_tag = preg_replace('/<img\b/i', '<img loading="eager"', $new_tag);
+            }
+            if ($new_tag !== $img_tag) {
+                $html = substr($html, 0, $img_pos) . $new_tag . substr($html, $img_pos + strlen($img_tag));
+            }
+        }
+
+        // B) Inject hidden <img> for background-image LCP elements
+        //    If the LCP is a CSS background-image (not an <img> tag), inject a hidden
+        //    <img> right after <body> with fetchpriority="high". The browser discovers
+        //    it immediately, starts loading, and it's cached by the time the
+        //    background-image renders. Zero visual/layout impact.
+        // Check if LCP is a background-image (not an <img> tag)
+        $is_bg_lcp = !empty($hero_element) || preg_match('/\.page-header\s*\{[^}]*background(?:-image)?\s*:[^}]*url\(/i', $html);
+        if ($is_bg_lcp) {
+            $hidden_img = '<img src="' . esc_url($preload_url) . '" fetchpriority="high" loading="eager" aria-hidden="true" alt="" style="position:absolute;width:0;height:0;overflow:hidden;clip:rect(0,0,0,0);pointer-events:none">';
+            // Insert right after the opening <body...> tag
+            if (preg_match('/<body\b[^>]*>/i', $html, $body_match, PREG_OFFSET_CAPTURE)) {
+                $body_end = $body_match[0][1] + strlen($body_match[0][0]);
+                $html = substr($html, 0, $body_end) . "\n" . $hidden_img . "\n" . substr($html, $body_end);
+            }
+        }
+
+        // C) For ALL above-fold images (first 2 after <body>): remove lazy, add eager
+        $body_start = stripos($html, '<body');
+        if ($body_start !== false) {
+            $above_fold = substr($html, $body_start, 6000);
+            $af_count = 0;
+            $above_fold = preg_replace_callback('/<img\b([^>]*)>/i', function($m) use (&$af_count) {
+                $af_count++;
+                if ($af_count > 2) return $m[0];
+                $attrs = $m[1];
+                $attrs = preg_replace('/\s*loading\s*=\s*["\']lazy["\']/i', '', $attrs);
+                if (!preg_match('/loading\s*=/i', $attrs)) {
+                    $attrs = ' loading="eager"' . $attrs;
+                }
+                if ($af_count === 1 && !preg_match('/fetchpriority/i', $attrs)) {
+                    $attrs = ' fetchpriority="high"' . $attrs;
+                }
+                return '<img' . $attrs . '>';
+            }, $above_fold);
+            $html = substr($html, 0, $body_start) . $above_fold . substr($html, $body_start + 6000);
+        }
     }
+
+    // Debug comment (remove after testing)
+    $debug_info['preload_url'] = $preload_url ? substr($preload_url, -30) : 'none';
+    $html = str_replace('</head>', '<meta name="sropt-lcp-debug" content="' . esc_attr(json_encode($debug_info)) . '">' . "\n" . '</head>', $html);
+
+    return $html;
+}
+
+// Note: sropt_lcp_buffer_handler is called from sropt_process_html (output buffer).
+// When the buffer isn't active (safe mode), the wp_head hook handles simple cases.
+
+/**
+ * Recursively search Elementor element data for a background image URL.
+ */
+function sropt_find_elementor_bg($element, $depth) {
+    if ($depth > 2 || !is_array($element)) return '';
+    $settings = isset($element['settings']) ? $element['settings'] : array();
+
+    if (!empty($settings['background_image']['url'])) {
+        $url = $settings['background_image']['url'];
+        if (preg_match('/\.(jpg|jpeg|png|webp|avif)/i', $url)) return $url;
+    }
+
+    if (!empty($settings['background_slideshow_gallery']) && is_array($settings['background_slideshow_gallery'])) {
+        $first = $settings['background_slideshow_gallery'][0];
+        if (!empty($first['url']) && preg_match('/\.(jpg|jpeg|png|webp|avif)/i', $first['url'])) return $first['url'];
+    }
+
+    if (!empty($element['elements']) && is_array($element['elements'])) {
+        $checked = 0;
+        foreach ($element['elements'] as $child) {
+            if ($checked >= 3) break;
+            $url = sropt_find_elementor_bg($child, $depth + 1);
+            if ($url) return $url;
+            $checked++;
+        }
+    }
+    return '';
 }
 
 
@@ -2969,6 +3270,47 @@ function sropt_monitor_404() {
     if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
 
     $url = $_SERVER['REQUEST_URI'];
+
+    // --- Filter out bot probes & junk URLs ---
+    // Only log URLs that look like real page paths on this site.
+    // Skip: file probes, WP admin/login, dotfiles, PHP files, common scanner paths
+    $junk_patterns = array(
+        '/wp-login',
+        '/wp-admin',
+        '/xmlrpc',
+        '/.env',
+        '/.git',
+        '/.well-known',
+        '/wp-includes/',
+        '/wp-content/debug',
+        '/wp-config',
+        '/readme.html',
+        '/license.txt',
+        '/wp-cron',
+        '/wp-json/wp/v2/users',  // user enumeration probes
+        '/admin/',
+        '/administrator/',
+        '/phpmyadmin',
+        '/cgi-bin/',
+        '/.htaccess',
+        '/.htpasswd',
+        '/eval-stdin',
+        '/vendor/',
+        '/node_modules/',
+    );
+    $junk_extensions = array('.php', '.asp', '.aspx', '.jsp', '.cgi', '.sql', '.bak', '.zip', '.tar', '.gz', '.rar', '.log', '.ini', '.sh', '.py', '.rb', '.pl', '.exe', '.dll');
+    $url_lower = strtolower($url);
+    foreach ($junk_patterns as $pattern) {
+        if (strpos($url_lower, $pattern) !== false) return;
+    }
+    $url_path = strtok($url_lower, '?');
+    foreach ($junk_extensions as $ext) {
+        if (substr($url_path, -strlen($ext)) === $ext) return;
+    }
+    // Skip URLs with suspicious query params (scanner fingerprints)
+    if (preg_match('/[<>\{\}]|eval\(|base64|SELECT\s|UNION\s|DROP\s/i', $url)) return;
+    // --- End filter ---
+
     $hash = md5($url);
     $referrer = $_SERVER['HTTP_REFERER'] ?? '';
     $ua = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 512);
