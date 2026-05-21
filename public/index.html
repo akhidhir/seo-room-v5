@@ -7889,6 +7889,9 @@
           filtered = filtered.filter(r => {
             const cwv = r.cwv || {};
             if (metricFilter === 'score') return (cwv.score || 0) < 90;
+            if (metricFilter === 'good') return (cwv.score || 0) >= 90;
+            if (metricFilter === 'needsWork') { const s = cwv.score || 0; return s >= 50 && s < 90; }
+            if (metricFilter === 'poor') return (cwv.score || 0) < 50;
             if (metricFilter === 'lcp') { const v = parseFloat(cwv.lcp); return !isNaN(v) && v > 2.5; }
             if (metricFilter === 'fcp') { const v = parseFloat(cwv.fcp); return !isNaN(v) && v > 1.8; }
             if (metricFilter === 'cls') { const v = parseFloat(cwv.cls); return !isNaN(v) && v > 0.1; }
@@ -8112,13 +8115,13 @@
           {stats && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 28 }}>
               {[
-                { label: 'Avg Mobile', value: avgScore, color: scoreColor(avgScore) },
-                { label: 'Avg Desktop', value: avgDesktopScore || '—', color: avgDesktopScore ? scoreColor(avgDesktopScore) : 'var(--text3)' },
-                { label: 'Good (90+)', value: stats.good, color: '#22c55e' },
-                { label: 'Needs Work (50-89)', value: stats.needsWork, color: '#f59e0b' },
-                { label: 'Poor (<50)', value: stats.poor, color: '#ef4444' },
+                { label: 'Avg Mobile', value: avgScore, color: scoreColor(avgScore), filter: null },
+                { label: 'Avg Desktop', value: avgDesktopScore || '—', color: avgDesktopScore ? scoreColor(avgDesktopScore) : 'var(--text3)', filter: null },
+                { label: 'Good (90+)', value: stats.good, color: '#22c55e', filter: 'good' },
+                { label: 'Needs Work (50-89)', value: stats.needsWork, color: '#f59e0b', filter: 'needsWork' },
+                { label: 'Poor (<50)', value: stats.poor, color: '#ef4444', filter: 'poor' },
               ].map(s => (
-                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: '1px solid var(--border)' }}>
+                <div key={s.label} onClick={() => s.filter && setMetricFilter(metricFilter === s.filter ? null : s.filter)} style={{ background: 'var(--card)', borderRadius: 12, padding: 20, textAlign: 'center', border: metricFilter === s.filter ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: s.filter ? 'pointer' : 'default', transition: 'border 0.2s' }}>
                   <div style={{ fontSize: 34, fontWeight: 800, color: s.color }}>{s.value}</div>
                   <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 6, fontWeight: 500 }}>{s.label}</div>
                 </div>
