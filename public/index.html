@@ -21832,13 +21832,17 @@
         setGenCombos([]);
         setGenChecked({});
         // Pre-fill suburbs from service areas
-        const resp = await api(`/projects/${project.id}/service-areas`);
-        const areas = resp.service_areas || resp;
-        const areasArr = Array.isArray(areas) ? areas : [];
-        setGenAreas(areasArr);
-        const filtered = areasArr.filter(a => (a.distance || 0) <= maxDistance && !cityNames.has(a.name.toLowerCase()));
-        if (filtered.length > 0 && !genSuburbsText.trim()) {
-          setGenSuburbsText(filtered.sort((a, b) => (a.distance || 99) - (b.distance || 99)).map(a => a.name).join('\n'));
+        try {
+          const resp = await api(`/projects/${project.id}/service-areas`);
+          const areas = resp.service_areas || resp;
+          const areasArr = Array.isArray(areas) ? areas : [];
+          setGenAreas(areasArr);
+          const filtered = areasArr.filter(a => (a.distance || 0) <= maxDistance && !cityNames.has(a.name.toLowerCase()));
+          if (filtered.length > 0 && !genSuburbsText.trim()) {
+            setGenSuburbsText(filtered.sort((a, b) => (a.distance || 99) - (b.distance || 99)).map(a => a.name).join('\n'));
+          }
+        } catch (e) {
+          console.error('[openGenerator] service-areas fetch failed:', e);
         }
         setShowGenerator(true);
       };
