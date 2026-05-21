@@ -26821,8 +26821,8 @@ case 'action-plan':
                 )
               ) : navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
-                  {(() => { const sColor = { 'AUDIT': '#f97316', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
+                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
+                  {(() => { const sColor = { 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
                     const isActive = activeTab === item.id
