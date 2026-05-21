@@ -23396,7 +23396,7 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY added_at DESC', [projectId]);
-    res.json({ ok: true, added, total: rows.length, limit, keywords: rows });
+    res.json({ ok: true, added, total: rows.length, keywords: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
