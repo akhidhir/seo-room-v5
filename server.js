@@ -23375,18 +23375,20 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
   const { keywords, location_code, location } = req.body; // keywords: string[], location: string (suburb/city for Maps), location_code: number
   if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
   try {
-    // Enforce grid_scan_limit
-    const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
-    const limit = projR.rows[0]?.grid_scan_limit || 50;
-    const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
-    const current = parseInt(currentCount.rows[0].count);
-    const available = limit - current;
-    if (available <= 0) return res.status(400).json({ error: `Keyword limit reached (${limit}). Upgrade your plan or remove existing keywords.`, limit, current });
+    // Enforce grid_scan_limit (only for Maps keywords with location, SERP keywords are unlimited)
+    const isMapKeyword = location && location.trim().length > 0;
+    if (isMapKeyword) {
+      const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
+      const limit = projR.rows[0]?.grid_scan_limit || 50;
+      const currentCount = await pool.query("SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1 AND location != ''", [projectId]);
+      const current = parseInt(currentCount.rows[0].count);
+      const available = limit - current;
+      if (available <= 0) return res.status(400).json({ error: `Maps keyword limit reached (${limit}). Upgrade your plan or remove existing keywords.`, limit, current });
+    }
 
     let added = 0;
     for (const kw of keywords) {
       if (!kw || typeof kw !== 'string') continue;
-      if (current + added >= limit) break;
       await pool.query(
         `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
         [projectId, kw.trim(), location || '', location_code || 2036]

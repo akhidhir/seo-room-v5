@@ -20694,12 +20694,13 @@
       const importFromMaps = async () => {
         const mapsKws = merged.filter(kw => kw.location);
         if (mapsKws.length === 0) return alert('No Maps keywords to import. Add keywords in Maps Rankings first.');
-        const uniqueServices = [...new Set(mapsKws.map(k => k.keyword.toLowerCase().trim()))];
+        // Combine keyword + location for SERP (e.g. "content marketing perth")
+        const combos = [...new Set(mapsKws.map(k => (k.keyword + ' ' + k.location).toLowerCase().trim()))];
         const existingSerp = new Set(merged.filter(kw => !kw.location).map(k => k.keyword.toLowerCase().trim()));
-        const toImport = uniqueServices.filter(s => !existingSerp.has(s));
+        const toImport = combos.filter(s => !existingSerp.has(s));
         if (toImport.length === 0) return alert('All Maps keywords are already tracked in SERP.');
         const preview = toImport.slice(0, 10).join(', ') + (toImport.length > 10 ? '... and ' + (toImport.length - 10) + ' more' : '');
-        if (!confirm('Import ' + toImport.length + ' unique service keywords from Maps to SERP?\n\n' + preview)) return;
+        if (!confirm('Import ' + toImport.length + ' keywords from Maps to SERP?\n\n' + preview)) return;
         setImportingMaps(true);
         try {
           const resp = await api('/projects/' + project.id + '/rank-tracking/keywords', {
