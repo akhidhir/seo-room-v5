@@ -23086,7 +23086,7 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
   try {
     // Enforce grid_scan_limit
     const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
-    const limit = projR.rows[0]?.grid_scan_limit || 20;
+    const limit = projR.rows[0]?.grid_scan_limit || 50;
     const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
     const current = parseInt(currentCount.rows[0].count);
 
@@ -23377,7 +23377,7 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
   try {
     // Enforce grid_scan_limit
     const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
-    const limit = projR.rows[0]?.grid_scan_limit || 20;
+    const limit = projR.rows[0]?.grid_scan_limit || 50;
     const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
     const current = parseInt(currentCount.rows[0].count);
     const available = limit - current;
