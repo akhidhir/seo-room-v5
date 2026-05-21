@@ -24,7 +24,7 @@
       --border: #2a2d3a;
       --text: #e4e4e7;
       --text2: #a1a1aa;
-      --text3: #52525b;
+      --text3: #71717a;
       --accent: #6366f1;
       --accent-hover: #818cf8;
       --success: #22c55e;
@@ -10638,16 +10638,6 @@
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Page{selected.size !== 1 ? 's' : ''}
                 </button>
               )}
-              {pages.length > 0 && !fixAllState?.phase && (
-                <>
-                  <button className="btn" onClick={handleSuggestKeywords} style={{ fontSize: 12, padding: '6px 12px', background: 'rgba(245,158,11,0.15)', border: '1px solid #f59e0b', color: '#f59e0b' }}>
-                    <i className="fas fa-key" style={{ marginRight: 4 }} />Suggest Keywords
-                  </button>
-                  <button className="btn" onClick={handleFixAll} style={{ fontSize: 12, padding: '6px 12px', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', border: 'none' }}>
-                    <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix All
-                  </button>
-                </>
-              )}
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Audit</>}
               </button>
@@ -10782,7 +10772,7 @@
                             <div style={{ fontWeight: 600 }}>
                               {page.title}
                             </div>
-                            <a href={page.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--text3)', textDecoration: 'none' }} onMouseEnter={e => e.target.style.color='var(--accent)'} onMouseLeave={e => e.target.style.color='var(--text3)'}>{page.url}</a>
+                            <a href={page.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', opacity: 0.7, textDecoration: 'none' }} onMouseEnter={e => e.target.style.opacity='1'} onMouseLeave={e => e.target.style.opacity='0.7'}>{page.url}</a>
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             <i className={seo.icon} style={{ color: seo.color, fontSize: 12 }} />
@@ -10888,13 +10878,13 @@
                                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                                       <thead>
                                         <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}></th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>KEYWORD</th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>VOLUME</th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>DIFFICULTY</th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>GSC IMP</th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>SOURCE</th>
-                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>SCORE</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text2)', fontWeight: 700, fontSize: 10 }}></th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: '#a78bfa', fontWeight: 700, fontSize: 10 }}>KEYWORD</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: '#22c55e', fontWeight: 700, fontSize: 10 }}>VOLUME</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: '#f59e0b', fontWeight: 700, fontSize: 10 }}>DIFFICULTY</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: '#3b82f6', fontWeight: 700, fontSize: 10 }}>GSC IMP</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: '#8b5cf6', fontWeight: 700, fontSize: 10 }}>SOURCE</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: '#06b6d4', fontWeight: 700, fontSize: 10 }}>SCORE</th>
                                         </tr>
                                       </thead>
                                       <tbody>
