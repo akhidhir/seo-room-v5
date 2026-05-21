@@ -9580,7 +9580,7 @@
       const autoRedirectAll = async () => {
         const matchedItems = fourOhFours.filter(f => {
           const key = f.url || f.url_path || '';
-          return suggestions[key] && suggestions[key].score >= 50;
+          return suggestions[key] && suggestions[key].score >= 25;
         });
         if (!matchedItems.length) return;
         setAutoRedirecting(true);
@@ -9600,7 +9600,9 @@
         }
         setAutoRedirecting(false);
         setAutoProgress(null);
-        load404s(); // Refresh list
+        await load404s(); // Refresh list
+        // Re-suggest for remaining 404s
+        setTimeout(() => suggestRedirects(), 500);
       };
 
       const handleAddRedirect = async () => {
@@ -9713,7 +9715,7 @@
               style: btnStyle('#22c55e'), onClick: autoRedirectAll, disabled: autoRedirecting
             },
               autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-bolt' }),
-              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 50).length} Matches`
+              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 25).length} Matches`
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
               `${Object.values(suggestions).filter(Boolean).length}/${fourOhFours.length} matched`
@@ -9826,13 +9828,15 @@
             e('i', { className: 'fas fa-plus' }), ' Add Redirect'
           ),
           showAddForm && e('div', { style: { ...cardStyle } },
-            e('div', { style: { marginBottom: 12 } },
-              e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Source URL'),
-              e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14 }, placeholder: '/old-page', value: addSource, onChange: (ev) => setAddSource(ev.target.value) })
-            ),
-            e('div', { style: { marginBottom: 12 } },
-              e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Target URL'),
-              e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14 }, placeholder: '/new-page', value: addTarget, onChange: (ev) => setAddTarget(ev.target.value) })
+            e('div', { style: { display: 'flex', gap: 12, marginBottom: 12 } },
+              e('div', { style: { flex: 1 } },
+                e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Source URL'),
+                e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14, width: '100%' }, placeholder: '/old-page', value: addSource, onChange: (ev) => setAddSource(ev.target.value) })
+              ),
+              e('div', { style: { flex: 1 } },
+                e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Target URL'),
+                e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14, width: '100%' }, placeholder: '/new-page', value: addTarget, onChange: (ev) => setAddTarget(ev.target.value) })
+              )
             ),
             e('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 12 } },
               e('div', { style: { minWidth: 100 } },
