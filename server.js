@@ -26788,7 +26788,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     // 6. Reviews stats
-    const reviewStats = rc?.reviews_stats || null;
+    let reviewStats = rc?.reviews_stats || {};
 
     // ============ CROSS-REFERENCE: LOCATIONS ============
     // SOURCE OF TRUTH: Website pages (location pages discovered from sitemap)
@@ -26960,6 +26960,16 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           }
         }
       } catch (e) { console.log(`[local-intel] Seed file fallback failed: ${e.message}`); }
+    }
+
+    // Recalculate review stats from actual loaded reviews (DB/seed may have stale reply_rate)
+    if (allReviews.length > 0 && reviewStats) {
+      const repliedCount = allReviews.filter(r => r.reply || r.review_reply?.comment || r.response).length;
+      reviewStats.total_reviews = Math.max(reviewStats.total_reviews || 0, allReviews.length);
+      reviewStats.replied_count = repliedCount;
+      reviewStats.unreplied_count = allReviews.length - repliedCount;
+      reviewStats.reply_rate = Math.round((repliedCount / allReviews.length) * 1000) / 10;
+      console.log(`[local-intel] Recalculated reply_rate: ${reviewStats.reply_rate}% (${repliedCount}/${allReviews.length})`);
     }
 
     // Scan review text + reply text for suburb mentions

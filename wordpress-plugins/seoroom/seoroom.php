@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.2.0
+ * Version: 8.2.1
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -3456,8 +3456,9 @@ function sropt_run_link_check($request) {
             $check_external = $request->get_param('check_external');
             if (!$is_internal && !$check_external) continue;
 
-            // Skip mailto, tel, javascript
+            // Skip mailto, tel, javascript, and malformed URLs
             if (preg_match('/^(mailto:|tel:|javascript:)/i', $href)) continue;
+            if (preg_match('/^https?:\/\/?$/i', $href)) continue; // bare https:// with no host
 
             $total_links++;
 
