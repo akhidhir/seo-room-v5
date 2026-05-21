@@ -10168,8 +10168,8 @@
           {/* ═══ HEADER ═══ */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 8, background: 'rgba(99,102,241,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <i className="fas fa-handshake" style={{ color: '#818cf8', fontSize: 18 }} />
+              <div style={{ width: 40, height: 40, borderRadius: 8, background: 'rgba(20,184,166,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <i className="fas fa-handshake" style={{ color: '#14b8a6', fontSize: 18 }} />
               </div>
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Players Handshake</h2>
@@ -10183,12 +10183,18 @@
                   {data.status === 'completed' && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontWeight: 600 }}>Completed</span>}
                 </div>
               )}
+              <button style={{ width: 36, height: 36, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <i className="far fa-calendar-alt" style={{ fontSize: 14 }} />
+              </button>
               <button onClick={runHandshake} disabled={loading} style={{
                 padding: '9px 20px', borderRadius: 6, border: 'none', fontWeight: 600, fontSize: 13, cursor: loading ? 'default' : 'pointer',
                 background: loading ? '#4b5563' : '#14b8a6', color: '#fff',
                 display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap'
               }}>
                 {loading ? <><span className="spinner" style={{ width: 14, height: 14 }}></span>{stage}</> : <><i className="fas fa-play" style={{ fontSize: 10 }} /> Run Handshake</>}
+              </button>
+              <button style={{ width: 36, height: 36, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <i className="fas fa-ellipsis-h" style={{ fontSize: 14 }} />
               </button>
             </div>
           </div>
@@ -10278,7 +10284,7 @@
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
                     {/* Competitor Snapshot */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Competitor Snapshot</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Competitor Snapshot <i className="fas fa-info-circle" style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }} /></div>
                       <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
                         <div>
                           <div style={{ fontSize: 26, fontWeight: 700, color: '#14b8a6' }}>{comps.length + 1}</div>
@@ -10298,43 +10304,56 @@
 
                     {/* Reviews Gap */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Reviews Gap</div>
-                      <div style={{ fontSize: 30, fontWeight: 700, color: reviewGap < 0 ? '#ef4444' : '#22c55e', lineHeight: 1 }}>{reviewGap > 0 ? '+' : ''}{reviewGap}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
-                      {/* Mini bar comparison */}
-                      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <div style={{ flex: pct(ourReviews, maxReviews), height: 4, background: reviewGap < 0 ? '#ef4444' : '#22c55e', borderRadius: 2, minWidth: 4 }} />
-                        <div style={{ flex: pct(avgCompReviews, maxReviews), height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, minWidth: 4 }} />
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Reviews Gap <i className="fas fa-info-circle" style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }} /></div>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: 30, fontWeight: 700, color: reviewGap < 0 ? '#ef4444' : '#22c55e', lineHeight: 1 }}>{reviewGap > 0 ? '+' : ''}{reviewGap}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
+                        </div>
+                        {/* Mini sparkline */}
+                        <svg width="60" height="32" viewBox="0 0 60 32" style={{ opacity: 0.7 }}>
+                          <polyline points={comps.map((c, i) => `${i * (60 / Math.max(comps.length - 1, 1))},${32 - pct((c.gbp || {}).reviews || c.reviews || 0, maxReviews) * 0.32}`).join(' ')}
+                            fill="none" stroke={reviewGap < 0 ? '#ef4444' : '#22c55e'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {num(ourReviews)} reviews<br/>Avg: {num(avgCompReviews)} reviews</div>
                     </div>
 
                     {/* Content Advantage */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Content Advantage</div>
-                      <div style={{ fontSize: 30, fontWeight: 700, color: contentAdvPct >= 0 ? '#22c55e' : '#ef4444', lineHeight: 1 }}>
-                        {contentAdvPct > 0 ? '+' : ''}{contentAdvPct}%
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
-                      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <div style={{ flex: pct(ourWords, maxWords), height: 4, background: contentAdvPct >= 0 ? '#22c55e' : '#f59e0b', borderRadius: 2, minWidth: 4 }} />
-                        <div style={{ flex: pct(avgCompWords, maxWords), height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, minWidth: 4 }} />
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Content Advantage <i className="fas fa-info-circle" style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }} /></div>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: 30, fontWeight: 700, color: contentAdvPct >= 0 ? '#22c55e' : '#ef4444', lineHeight: 1 }}>
+                            {contentAdvPct > 0 ? '+' : ''}{contentAdvPct}%
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
+                        </div>
+                        {/* Mini bar chart */}
+                        <svg width="60" height="32" viewBox="0 0 60 32" style={{ opacity: 0.7 }}>
+                          {allPlayers.slice(0, 5).map((pl, i) => {
+                            const wds = (pl.technical || {}).word_count || 0;
+                            const h = maxWords > 0 ? Math.max(2, (wds / maxWords) * 28) : 2;
+                            const clr = pl._isUs ? '#22c55e' : 'rgba(34,197,94,0.3)';
+                            return <rect key={i} x={i * 12 + 1} y={32 - h} width={9} height={h} rx={2} fill={clr} />;
+                          })}
+                        </svg>
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {num(ourWords)} words<br/>Avg: {num(avgCompWords)} words</div>
                     </div>
 
                     {/* GBP Completeness */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>GBP Completeness</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>GBP Completeness <i className="fas fa-info-circle" style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }} /></div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div style={{ fontSize: 30, fontWeight: 700, color: ourGbpPct >= 80 ? '#22c55e' : ourGbpPct >= 50 ? '#f59e0b' : '#ef4444', lineHeight: 1 }}>{ourGbpPct}%</div>
-                        {/* Mini ring */}
-                        <svg width="38" height="38" viewBox="0 0 38 38">
-                          <circle cx="19" cy="19" r="15" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
-                          <circle cx="19" cy="19" r="15" fill="none"
+                        {/* Ring chart */}
+                        <svg width="48" height="48" viewBox="0 0 48 48">
+                          <circle cx="24" cy="24" r="18" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5" />
+                          <circle cx="24" cy="24" r="18" fill="none"
                             stroke={ourGbpPct >= 80 ? '#22c55e' : ourGbpPct >= 50 ? '#f59e0b' : '#ef4444'}
-                            strokeWidth="4" strokeDasharray={`${ourGbpPct * 0.942} 100`}
-                            strokeLinecap="round" transform="rotate(-90 19 19)" />
+                            strokeWidth="5" strokeDasharray={`${ourGbpPct * 1.131} 113.1`}
+                            strokeLinecap="round" transform="rotate(-90 24 24)" />
                         </svg>
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {ourGbpPct}% complete<br/>Avg: {avgCompGbpPct}% complete</div>
@@ -10361,6 +10380,7 @@
                           <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, fontWeight: 700, flexShrink: 0,
                             background: impBg, color: '#fff'
                           }}>{(a.expected_impact || '').charAt(0).toUpperCase() + (a.expected_impact || '').slice(1)}</span>
+                          <i className="fas fa-chevron-right" style={{ fontSize: 10, color: 'var(--text3)', opacity: 0.4, flexShrink: 0 }} />
                         </div>
                       );
                     })}
@@ -10375,7 +10395,11 @@
                 {/* ═══ COMPARISON TABLE ═══ */}
                 <div style={{ marginBottom: 24 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>How You Compare</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 6 }}>How You Compare <i className="fas fa-info-circle" style={{ fontSize: 12, color: 'var(--text3)', opacity: 0.5 }} /></div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>All Categories <i className="fas fa-chevron-down" style={{ fontSize: 9 }} /></button>
+                      <button style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}><i className="fas fa-columns" style={{ fontSize: 11 }} /> Columns</button>
+                    </div>
                   </div>
                   <div style={{ overflowX: 'auto', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -10434,15 +10458,22 @@
                                 {(g.rating || p.rating) && <span style={{ color: '#f59e0b', fontSize: 11, marginLeft: 2 }}>★</span>}
                               </td>
                               {/* Reviews */}
-                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: isUs && reviewGap < 0 ? '#ef4444' : '#22c55e' }}>{v(g.reviews || p.reviews)}</td>
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: isUs ? 'var(--text)' : ((g.reviews || p.reviews || 0) > ourReviews ? '#ef4444' : 'var(--text)') }}>{v(g.reviews || p.reviews)}</td>
                               {/* Photos */}
-                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', color: isUs ? '#14b8a6' : 'var(--text)' }}>{v(g.photos_count)}</td>
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: isUs ? 'var(--text)' : ((g.photos_count || 0) > (ourGbp.photos_count || 0) ? '#ef4444' : 'var(--text)') }}>{v(g.photos_count)}</td>
                               {/* GBP Completeness - progress bar */}
                               <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
                                 <Bar value={gPct} max={100} color={gPct >= 80 ? '#22c55e' : gPct >= 50 ? '#f59e0b' : '#ef4444'} />
                               </td>
                               {/* Content Depth */}
-                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text)' }}>{wc > 0 ? num(wc) : '—'}</td>
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', minWidth: 42 }}>{wc > 0 ? num(wc) : '—'}</span>
+                                  {wc > 0 && <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', minWidth: 40 }}>
+                                    <div style={{ width: pct(wc, maxWords) + '%', height: '100%', background: '#22c55e', borderRadius: 3, transition: 'width 0.3s' }} />
+                                  </div>}
+                                </div>
+                              </td>
                               {/* Schema Coverage - progress bar + expandable */}
                               <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: schemaTypes.length > 0 ? 'pointer' : 'default' }}
@@ -10457,16 +10488,26 @@
                                 )}
                               </td>
                               {/* Speed */}
-                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: speedColor(p.speed) }}>{v(p.speed)}</td>
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: speedColor(p.speed), minWidth: 28 }}>{v(p.speed)}</span>
+                                  {p.speed > 0 && <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', minWidth: 30 }}>
+                                    <div style={{ width: pct(p.speed, 100) + '%', height: '100%', background: speedColor(p.speed), borderRadius: 3, transition: 'width 0.3s' }} />
+                                  </div>}
+                                </div>
+                              </td>
                               {/* Grid Dominance */}
-                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
-                                {isUs ? (
-                                  p.grid_performance?.avg_solv != null ? (
-                                    <span style={{ fontWeight: 600, color: '#14b8a6' }}>{p.grid_performance.avg_solv}%</span>
-                                  ) : <span style={{ color: 'var(--text3)' }}>0%</span>
-                                ) : (
-                                  <span style={{ fontWeight: 600, color: (p.dominance || 0) > 20 ? '#ef4444' : (p.dominance || 0) > 10 ? '#f59e0b' : 'var(--text3)' }}>{p.dominance || 0}%</span>
-                                )}
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
+                                {(() => {
+                                  const domVal = isUs ? (p.grid_performance?.avg_solv || 0) : (p.dominance || 0);
+                                  const domColor = isUs ? '#14b8a6' : domVal > 20 ? '#ef4444' : domVal > 10 ? '#f59e0b' : '#3b82f6';
+                                  return (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+                                      <span style={{ fontSize: 13, fontWeight: 600, color: domColor }}>{domVal}%</span>
+                                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: domColor, flexShrink: 0 }} />
+                                    </div>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           );
@@ -10481,7 +10522,7 @@
                   {/* Strengths */}
                   <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px' }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#22c55e' }}>●</span> Strengths to Protect
+                      <span style={{ fontSize: 16 }}>🛡️</span> Strengths to Protect
                     </div>
                     {(strat.our_strengths || []).length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No strengths identified.</div>}
                     {(strat.our_strengths || []).map((s, i) => {
@@ -10501,7 +10542,7 @@
                   {/* Gaps */}
                   <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px' }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#ef4444' }}>▲</span> Gaps Holding Rankings Back
+                      <span style={{ fontSize: 16 }}>⚠️</span> Gaps Holding Rankings Back
                     </div>
                     {(strat.our_weaknesses || []).length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No gaps identified.</div>}
                     {(strat.our_weaknesses || []).map((w, i) => {
@@ -10536,6 +10577,9 @@
                           ))}
                         </div>
                       </div>
+                      <button style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <i className="fas fa-download" style={{ fontSize: 11 }} /> Export
+                      </button>
                     </div>
                     <div style={{ overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -10549,11 +10593,12 @@
                             <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Recommended Fix</th>
                             <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 80 }}>Owner</th>
                             <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 100 }}>Status</th>
+                            <th style={{ width: 36, borderBottom: '1px solid var(--border)' }}></th>
                           </tr>
                         </thead>
                         <tbody>
                           {gapEntries.length === 0 && (
-                            <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>No gaps in this category.</td></tr>
+                            <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>No gaps in this category.</td></tr>
                           )}
                           {gapEntries.map(([key, gap]) => {
                             const cat = classifyGap(key);
@@ -10578,13 +10623,19 @@
                                 </td>
                                 <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 12 }}>{evidence}</td>
                                 <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 12, lineHeight: 1.4 }}>{fixText}</td>
-                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
-                                  <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(99,102,241,0.15)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#818cf8' }}>AK</div>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+                                    <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#818cf8', flexShrink: 0 }}>AK</div>
+                                    <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>Ayad K.</span>
+                                  </div>
                                 </td>
-                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
-                                  <span style={{ fontSize: 11, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <span style={{ fontSize: 11, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 4 }}>
                                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--text3)' }} />Not started
                                   </span>
+                                </td>
+                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <button style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: '2px 4px' }}>⋯</button>
                                 </td>
                               </tr>
                             );
