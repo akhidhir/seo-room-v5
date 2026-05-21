@@ -4860,17 +4860,26 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
         // ========== STEP 1: Build "Our Player" profile ==========
         await updateStage('Understanding our player...');
 
-        // Get GBP data from SerpAPI
+        // Get GBP data from SerpAPI (search by business name + location)
         let ourGbp = null;
-        const gbpPlaceId = project.gbp_location_id;
-        if (gbpPlaceId) {
+        if (businessName) {
           try {
-            const serpData = await serpApiSearch({
+            const searchData = await serpApiSearch({
               engine: 'google_maps',
-              place_id: gbpPlaceId,
-              type: 'place',
+              q: `${businessName} ${location}`,
+              type: 'search',
             });
-            const p = serpData.place_results || serpData;
+            const match = (searchData.local_results || []).find(r =>
+              (r.title || '').toLowerCase().includes(businessName.toLowerCase().split(' ')[0])
+            );
+            let p = match || {};
+            // Try to get full details if we found a match with data_id
+            if (match?.data_id) {
+              try {
+                const detailData = await serpApiSearch({ engine: 'google_maps', data_id: match.data_id, type: 'place' });
+                p = detailData.place_results || detailData || match;
+              } catch {}
+            }
             ourGbp = {
               title: p.title || businessName,
               rating: p.rating,
@@ -4891,7 +4900,7 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
 
         // Get grid scan competitors (aggregated across all keywords)
         const gridRes = await pool.query(
-          `SELECT keyword, competitors, arp, atrp, solv, found_in, data_points FROM grid_scans
+          `SELECT keyword, competitors, grid_points, arp, atrp, solv, found_in, data_points FROM grid_scans
            WHERE project_id=$1 AND competitors IS NOT NULL
            ORDER BY scanned_at DESC LIMIT 20`,
           [projectId]
@@ -4901,10 +4910,15 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
         const compMap = {};
         for (const row of gridRes.rows) {
           const comp = typeof row.competitors === 'string' ? JSON.parse(row.competitors) : row.competitors;
-          const topComps = comp?.top || [];
-          for (const c of topComps) {
+          const topComps = comp?.top || comp || [];
+          const compArr = Array.isArray(topComps) ? topComps : [];
+          for (const c of compArr) {
             const name = (c.name || c.title || '').trim();
-            if (!name || name.toLowerCase() === businessName.toLowerCase()) continue;
+            if (!name) continue;
+            // Skip our business (fuzzy match)
+            const nameLower = name.toLowerCase();
+            const bizLower = businessName.toLowerCase();
+            if (nameLower === bizLower || nameLower.includes(bizLower) || bizLower.includes(nameLower)) continue;
             if (!compMap[name]) {
               compMap[name] = { name, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, dominance: 0, keywords_dominated: [] };
             }
@@ -4915,12 +4929,54 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
             if (c.website && !compMap[name].website) compMap[name].website = c.website;
             compMap[name].keywords_dominated.push(row.keyword);
           }
+          // Also extract from grid_points top3 for richer data
+          const points = typeof row.grid_points === 'string' ? JSON.parse(row.grid_points || '[]') : (row.grid_points || []);
+          for (const pt of (Array.isArray(points) ? points : [])) {
+            for (const t of (pt.top3 || [])) {
+              const name = (t.title || '').trim();
+              if (!name) continue;
+              const nameLower = name.toLowerCase();
+              const bizLower = businessName.toLowerCase();
+              if (nameLower === bizLower || nameLower.includes(bizLower) || bizLower.includes(nameLower)) continue;
+              if (!compMap[name]) {
+                compMap[name] = { name, rating: t.rating, reviews: t.reviews, type: t.type, website: t.website, appearances: 0, dominance: 0, keywords_dominated: [] };
+              }
+              compMap[name].appearances++;
+              if (t.rating && t.rating > (compMap[name].rating || 0)) compMap[name].rating = t.rating;
+              if (t.reviews && t.reviews > (compMap[name].reviews || 0)) compMap[name].reviews = t.reviews;
+            }
+          }
         }
-        const topCompetitors = Object.values(compMap)
+
+        let topCompetitors = Object.values(compMap)
           .sort((a, b) => b.appearances - a.appearances)
           .slice(0, 5);
 
-        console.log(`[handshake] Found ${topCompetitors.length} top competitors`);
+        // Fallback: if no grid data, search SerpAPI Maps directly for competitors
+        if (topCompetitors.length === 0 && (project.industry || businessName)) {
+          console.log('[handshake] No grid data, falling back to direct Maps search');
+          await updateStage('Searching for competitors...');
+          try {
+            const q = project.industry ? `${project.industry} ${location}` : `${businessName} ${location}`;
+            const searchData = await serpApiSearch({ engine: 'google_maps', q, type: 'search' });
+            const results = (searchData.local_results || []).slice(0, 10);
+            for (const r of results) {
+              const name = (r.title || '').trim();
+              if (!name) continue;
+              const nameLower = name.toLowerCase();
+              const bizLower = businessName.toLowerCase();
+              if (nameLower === bizLower || nameLower.includes(bizLower) || bizLower.includes(nameLower)) continue;
+              topCompetitors.push({
+                name, rating: r.rating, reviews: r.reviews, type: r.type, website: r.website,
+                appearances: 1, dominance: 0, keywords_dominated: ['direct search'],
+                data_id: r.data_id,
+              });
+            }
+            topCompetitors = topCompetitors.slice(0, 5);
+          } catch (e) { console.log('[handshake] Fallback search error:', e.message); }
+        }
+
+        console.log(`[handshake] Found ${topCompetitors.length} top competitors: ${topCompetitors.map(c => c.name).join(', ')}`);
 
         // Get our website technical signals
         await updateStage('Analyzing our website...');
@@ -4973,12 +5029,12 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
               (r.title || '').toLowerCase().includes(comp.name.toLowerCase().split(' ')[0])
             );
             if (match) {
-              // Get detailed Place info
-              if (match.place_id) {
+              // Get detailed Place info via data_id
+              if (match.data_id) {
                 try {
                   const placeData = await serpApiSearch({
                     engine: 'google_maps',
-                    place_id: match.place_id,
+                    data_id: match.data_id,
                     type: 'place',
                   });
                   const p = placeData.place_results || placeData;
@@ -5131,17 +5187,58 @@ Return ONLY valid JSON.`;
 
         const aiResponse = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 8000,
+          max_tokens: 12000,
+          temperature: 0,
           messages: [{ role: 'user', content: aiPrompt }]
         });
 
         let strategy = {};
         try {
-          const text = (aiResponse.content[0]?.text || '{}').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-          strategy = JSON.parse(text);
+          let rawText = aiResponse.content[0]?.text || '{}';
+          // Strip markdown code fences
+          rawText = rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+          // Find actual JSON: first { to last }
+          const firstBrace = rawText.indexOf('{');
+          const lastBrace = rawText.lastIndexOf('}');
+          if (firstBrace !== -1 && lastBrace > firstBrace) {
+            rawText = rawText.substring(firstBrace, lastBrace + 1);
+          }
+          strategy = JSON.parse(rawText);
         } catch (e) {
           console.error('[handshake] Failed to parse AI response:', e.message);
-          strategy = { executive_summary: 'Analysis completed but strategy parsing failed. Raw data available below.', proposed_strategy: [] };
+          const rawPreview = (aiResponse.content[0]?.text || '').substring(0, 500);
+          console.error('[handshake] Raw AI response preview:', rawPreview);
+          // Build data-driven fallback strategy from real data
+          const avgCompReviews = competitorProfiles.length > 0 ? Math.round(competitorProfiles.reduce((s, c) => s + (c.gbp?.reviews || c.reviews || 0), 0) / competitorProfiles.length) : 0;
+          const ourReviews = ourGbp?.reviews || 0;
+          const reviewGap = avgCompReviews - ourReviews;
+          strategy = {
+            executive_summary: `${businessName} competes against ${competitorProfiles.length} active local players. ${reviewGap > 0 ? `Review gap of ${reviewGap} reviews vs competitors average.` : 'Review count is competitive.'} ${ourSpeed ? `Website speed score: ${ourSpeed}/100.` : ''}`,
+            our_strengths: [
+              ourGbp?.rating ? `GBP rating of ${ourGbp.rating} stars` : null,
+              ourTechnical.has_schema ? 'Has structured data (schema markup)' : null,
+              ourTechnical.page_count ? `${ourTechnical.page_count} indexed pages` : null,
+              ourSpeed && ourSpeed >= 70 ? `Good mobile speed (${ourSpeed}/100)` : null,
+            ].filter(Boolean).slice(0, 5),
+            our_weaknesses: [
+              reviewGap > 20 ? `${reviewGap} fewer reviews than competitor average (${ourReviews} vs ${avgCompReviews})` : null,
+              !ourTechnical.has_faq_schema ? 'Missing FAQ schema markup' : null,
+              ourSpeed && ourSpeed < 50 ? `Poor mobile speed (${ourSpeed}/100)` : null,
+              ourGbp?.photos_count < 10 ? `Only ${ourGbp?.photos_count || 0} GBP photos` : null,
+            ].filter(Boolean).slice(0, 5),
+            competitor_insights: competitorProfiles.slice(0, 3).map(c => ({
+              name: c.name,
+              key_advantage: `${c.gbp?.reviews || c.reviews || '?'} reviews, ${c.gbp?.rating || c.rating || '?'} rating${c.dominance ? `, ${c.dominance}% grid dominance` : ''}`,
+              what_we_can_learn: c.gbp?.reviews > ourReviews ? 'Prioritize review acquisition' : 'Maintain competitive review count',
+            })),
+            gap_matrix: {
+              reviews: { us: ourReviews, avg_competitor: avgCompReviews, gap: reviewGap > 0 ? `${reviewGap} reviews behind` : 'Competitive', priority: reviewGap > 50 ? 'critical' : reviewGap > 20 ? 'high' : 'medium' },
+            },
+            proposed_strategy: [
+              reviewGap > 10 ? { action: `Launch review campaign targeting ${reviewGap} review gap`, why: `Competitors average ${avgCompReviews} reviews vs our ${ourReviews}`, expected_impact: 'high', effort: 'moderate', timeframe: '2-3 months' } : null,
+              !ourTechnical.has_faq_schema ? { action: 'Add FAQ schema to service pages', why: 'Competitors with FAQ schema have richer search snippets', expected_impact: 'medium', effort: 'easy', timeframe: '1-2 weeks' } : null,
+            ].filter(Boolean),
+          };
         }
 
         // Save completed analysis
