@@ -88,6 +88,16 @@ Sandbox can't git push. The workflow is:
 ### COPYWRITER
 - Content Queue, Drafts, Approved, Published — ALL FAKE DATA. Needs real implementation.
 
+### PLAYERS HANDSHAKE (Competitive Intelligence)
+- **Players Handshake** 🔄 REDESIGNING — Competitive intelligence page. Runs handshake analysis: builds "Our Player" profile (SerpAPI Maps + grid scan data), fetches competitor details (SerpAPI Place Details + homepage crawl + PageSpeed), generates AI strategy (Claude Haiku).
+  - **Backend**: `POST /api/projects/:projectId/handshake/run` — background processing, poll via `GET /handshake/latest`. Stores in `audits` table with `pillar='handshake'`.
+  - **Data shape**:
+    - `data.our_player`: `{name, domain, location, industry, service_areas, gbp: {title, rating, reviews, type, types, address, phone, website, description, hours, photos_count, service_options, categories}, technical: {page_count, has_schema, schema_types, has_faq_schema, meta_title, meta_desc, word_count, internal_links, h1_count}, speed, grid_performance: {keywords_scanned, avg_arp, avg_solv}}`
+    - `data.competitors[]`: `{name, rating, reviews, type, website, appearances, dominance, keywords_dominated, gbp: {...same}, technical: {...same minus page_count/internal_links}, speed}`
+    - `data.strategy`: `{executive_summary, our_strengths[], our_weaknesses[], competitor_insights: [{name, key_advantage, what_we_can_learn}], gap_matrix: {key: {us, avg_competitor, gap, priority}}, proposed_strategy: [{action, why, expected_impact, effort, timeframe}]}`
+  - **Frontend**: `PlayersHandshakePage` component in `public/index.html`. Currently being redesigned to match professional dark-mode SaaS mockup. Target: 4 KPI tiles + Next Best Actions sidebar, comparison table with progress bars, strengths/gaps panels, gap matrix work table. Teal (#14b8a6) accent.
+  - **Design principles**: Quiet, professional, dense but clean, strong hierarchy, no card clutter, 8px border-radius max.
+
 ### REPORTS
 - **Maps Rankings** ✅ WORKING — Full Local Falcon replacement. AI-powered keyword generator (Haiku suggests service+suburb combos with DataForSEO volume estimation). **SerpAPI Grid Scan**: configurable NxN grid (3×3, 5×5, 7×7) at configurable radius (5-30km). Generates GPS grid around business, calls SerpAPI `google_maps` from each point, calculates ARP/ATRP/SOLV/coverage. **Grid Heatmap**: visual NxN grid with color-coded positions per keyword. **Competitor Gap Analysis**: captures top 3 at each grid point, shows You vs Threats cards with rating/reviews/dominance comparison, review gap bar, and prioritized "What To Do" actions. Bulk select/delete. CSV import/export.
 - **SERP Rankings** — SerpAPI-based keyword tracking
@@ -234,28 +244,23 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Local Intel Reviews & Posts fix** — RC API direct calls return 405 (all 6 URL patterns). Fixed by: fetching real data via RC MCP tools, bundling into `data/local_intel_seed.json` (74 reviews + 28 posts across 4 projects). Server reads seed file as fallback, caches to `reviews_cache` DB table on first load (30-day TTL). REVIEWS and POSTS columns now show accurate green counts.
-- **Seed file approach** — `data/local_intel_seed.json` keyed by GBP location ID. Contains real review text (comment + reply) and post summaries. Used for service-name text matching in Local Intel KPI grid.
-- **Simplified review fetching** — Removed 120-line 6-URL RC API attempt block. Now: check DB cache → fallback to seed file. Clean, fast, reliable.
-- **Posts seed fallback** — Added after RC posts API attempt. Same pattern as reviews.
-- **posts_cache table** — New DB table for future use.
+- **Players Handshake redesign (IN PROGRESS)** — Redesigning `PlayersHandshakePage` component to match professional dark-mode SaaS mockup. Being handed to Codex for implementation. Target design: 4 KPI tiles + Next Best Actions sidebar, comparison table with progress bars, strengths/gaps panels, gap matrix work table. Teal (#14b8a6) primary accent.
+- **Handshake AI parsing fix** — Increased max_tokens 8000→12000, added JSON extraction (markdown fence stripping, first-{-to-last-} fallback), data-driven fallback strategy if AI fails.
+- **PageSpeed ECONNRESET fix** — Added retries with exponential backoff for PageSpeed API calls.
+- **PageSpeed page font size** — Increased readability of PageSpeed scores page.
 
 ### Previous Session
-- **Action Plan Calendar** — Month/Week/Day views with navigation. Week view shows date range header ("May 11 — May 17, 2026"). Auto-distribute endpoint assigns tasks across months.
-- **Rule-based Technical Audit Engine** — No AI cost. Crawls 15 pages, checks 15+ technical SEO factors, saves findings to DB.
-- **Fix buttons on Website Audit** — Green "Fix" for auto-fixable issues (schema, canonical, noindex, mixed content, H1), "Review" for manual. In review detail: "Fix Now" with live feedback.
-- **Technical fix endpoint** — `/projects/:id/technical-fix` handles 7 fix types via WP REST API. Schema uses `_seoroom_schema` meta field (works with Elementor).
-- **SEO Room Schema plugin** — Tiny WP plugin replacing seoroom-helper. Outputs JSON-LD from post meta in `<head>`. Universal page builder support.
-- **Rankings-first architecture** — Audits are diagnostic only. Rankings (Maps + SERP) drive Action Plan priorities.
-- **List view table fix** — Removed `tableLayout: 'fixed'` that caused vertical text in ACTION column. Normalized font sizes.
+- **Local Intel Reviews & Posts fix** — RC API direct calls return 405. Fixed with bundled seed file (`data/local_intel_seed.json`), DB cache with 30-day TTL.
+- **Seed file approach** — `data/local_intel_seed.json` keyed by GBP location ID. Real review/post text for service-name matching.
+- **posts_cache table** — New DB table.
 
 ### Two Sessions Ago
-- **Preview (Design-Safe) button** — always shows green on all pages.
-- **Project switch reload** — clears cached audit reports, remounts components.
-- **Import Current Copy** — force-refreshes, tries WP REST + live HTML.
-- **Homepage page_id resolution** — 3 methods (WP settings, slug search, link matching).
-- **GBP audit accuracy** — SerpAPI Place Details for exact data.
-- **Action Plan filters** — always shows all 4 types.
+- **Action Plan Calendar** — Month/Week/Day views with navigation. Auto-distribute endpoint.
+- **Rule-based Technical Audit Engine** — No AI cost. 15+ technical SEO checks.
+- **Fix buttons on Website Audit** — Green "Fix" for auto-fixable, "Review" for manual.
+- **Technical fix endpoint** — 7 fix types via WP REST API.
+- **SEO Room Schema plugin** — Replaces seoroom-helper.
+- **Rankings-first architecture** — Audits diagnostic only, rankings drive Action Plan.
 
 ## Google Local Business Ranking — Official Documentation (Last checked: May 2026, check every 3 months)
 
