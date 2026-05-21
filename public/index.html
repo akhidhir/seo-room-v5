@@ -9825,28 +9825,30 @@
           !showAddForm && e('button', { style: btnStyle('#6366f1'), onClick: () => setShowAddForm(true) },
             e('i', { className: 'fas fa-plus' }), ' Add Redirect'
           ),
-          showAddForm && e('div', { style: { ...cardStyle, display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' } },
-            e('div', { style: { flex: 2, minWidth: 180 } },
-              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 4 } }, 'Source URL'),
-              e('input', { style: inputStyle, placeholder: '/old-page', value: addSource, onChange: (ev) => setAddSource(ev.target.value) })
+          showAddForm && e('div', { style: { ...cardStyle } },
+            e('div', { style: { marginBottom: 12 } },
+              e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Source URL'),
+              e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14 }, placeholder: '/old-page', value: addSource, onChange: (ev) => setAddSource(ev.target.value) })
             ),
-            e('div', { style: { flex: 2, minWidth: 180 } },
-              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 4 } }, 'Target URL'),
-              e('input', { style: inputStyle, placeholder: '/new-page', value: addTarget, onChange: (ev) => setAddTarget(ev.target.value) })
+            e('div', { style: { marginBottom: 12 } },
+              e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Target URL'),
+              e('input', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14 }, placeholder: '/new-page', value: addTarget, onChange: (ev) => setAddTarget(ev.target.value) })
             ),
-            e('div', { style: { minWidth: 90 } },
-              e('label', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 4 } }, 'Type'),
-              e('select', { style: { ...inputStyle, cursor: 'pointer' }, value: addType, onChange: (ev) => setAddType(ev.target.value) },
-                e('option', { value: '301' }, '301'),
-                e('option', { value: '302' }, '302')
-              )
-            ),
-            e('div', { style: { display: 'flex', gap: 6 } },
-              e('button', { style: btnStyle('#22c55e'), onClick: handleAddRedirect, disabled: addSaving },
-                addSaving ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-check' }), ' Save'
+            e('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 12 } },
+              e('div', { style: { minWidth: 100 } },
+                e('label', { style: { fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', display: 'block', marginBottom: 6 } }, 'Type'),
+                e('select', { style: { ...inputStyle, padding: '10px 14px', fontSize: 14, cursor: 'pointer' }, value: addType, onChange: (ev) => setAddType(ev.target.value) },
+                  e('option', { value: '301' }, '301'),
+                  e('option', { value: '302' }, '302')
+                )
               ),
-              e('button', { style: btnStyle('#94a3b8'), onClick: () => { setShowAddForm(false); setAddSource(''); setAddTarget(''); setAddType('301'); } },
-                e('i', { className: 'fas fa-times' })
+              e('div', { style: { display: 'flex', gap: 8 } },
+                e('button', { style: { ...btnStyle('#22c55e'), padding: '10px 18px', fontSize: 14 }, onClick: handleAddRedirect, disabled: addSaving },
+                  addSaving ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-check' }), ' Save'
+                ),
+                e('button', { style: { ...btnStyle('#94a3b8'), padding: '10px 18px', fontSize: 14 }, onClick: () => { setShowAddForm(false); setAddSource(''); setAddTarget(''); setAddType('301'); } },
+                  e('i', { className: 'fas fa-times' }), ' Cancel'
+                )
               )
             )
           )
