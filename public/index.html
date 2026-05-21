@@ -10048,7 +10048,7 @@
       const [expandedComp, setExpandedComp] = useState(null);
       const [gapFilter, setGapFilter] = useState('all');
       const [sortCol, setSortCol] = useState(null);
-      const [sortDir, setSortDir] = useState('asc');
+      const [sortDir, setSortDir] = useState('desc');
       const [expandedSchema, setExpandedSchema] = useState(null);
       const pollRef = useRef(null);
 
@@ -10094,40 +10094,60 @@
       const impColors = { high: '#22c55e', medium: '#f59e0b', low: '#6b7280' };
       const effColors = { easy: '#22c55e', moderate: '#f59e0b', hard: '#ef4444' };
 
-      /* Helpers */
-      const val = (v) => v != null && v !== '' ? v : '—';
+      /* ── Helpers ── */
+      const v = (x) => x != null && x !== '' ? x : '—';
       const speedColor = (s) => !s ? 'var(--text3)' : s >= 80 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
-      const schemaSummary = (types) => {
-        if (!types || !types.length) return 'None';
-        if (types.length <= 2) return types.join(', ');
-        return `${types.length} types`;
+      const num = (x) => typeof x === 'number' ? x.toLocaleString() : x;
+      const pct = (cur, max) => max > 0 ? Math.min(100, Math.round((cur / max) * 100)) : 0;
+
+      /* Mini progress bar component */
+      const Bar = ({ value, max, color }) => {
+        const w = pct(value, max);
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', minWidth: 32 }}>{w}%</span>
+            <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', minWidth: 50 }}>
+              <div style={{ width: w + '%', height: '100%', background: color || '#22c55e', borderRadius: 3, transition: 'width 0.3s' }} />
+            </div>
+          </div>
+        );
       };
 
-      /* KPI computation helpers */
-      const computeKPIs = (our, comps) => {
-        const ourGbp = our.gbp || {};
-        const ourReviews = ourGbp.reviews || our.reviews || 0;
-        const avgCompReviews = comps.length ? Math.round(comps.reduce((s, c) => s + ((c.gbp || {}).reviews || c.reviews || 0), 0) / comps.length) : 0;
-        const reviewGap = avgCompReviews - ourReviews;
-
-        const ourSchemaCount = ((our.technical || {}).schema_types || []).length;
-        const avgCompSchema = comps.length ? (comps.reduce((s, c) => s + (((c.technical || {}).schema_types || []).length), 0) / comps.length) : 0;
-        const contentAdv = ourSchemaCount - Math.round(avgCompSchema);
-
-        const gbpFields = ['title', 'rating', 'reviews', 'categories', 'phone', 'address', 'website', 'hours', 'description'];
-        const ourComplete = gbpFields.filter(f => {
-          const v = ourGbp[f]; return v != null && v !== '' && !(Array.isArray(v) && v.length === 0);
-        }).length;
-        const gbpPct = Math.round((ourComplete / gbpFields.length) * 100);
-
-        return { reviewGap, avgCompReviews, ourReviews, contentAdv, ourSchemaCount, gbpPct };
+      /* Impact dots (filled/unfilled) */
+      const ImpactDots = ({ level }) => {
+        const map = { critical: 5, high: 4, medium: 3, low: 2 };
+        const filled = map[(level || '').toLowerCase()] || 2;
+        return (
+          <div style={{ display: 'flex', gap: 3 }}>
+            {[1,2,3,4,5].map(i => (
+              <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: i <= filled ? (filled >= 4 ? '#ef4444' : filled >= 3 ? '#f59e0b' : '#6b7280') : 'rgba(255,255,255,0.1)' }} />
+            ))}
+          </div>
+        );
       };
+
+      /* GBP completeness calculator */
+      const gbpComplete = (gbp) => {
+        if (!gbp) return 0;
+        const fields = [
+          gbp.title, gbp.rating, gbp.reviews, gbp.phone, gbp.address,
+          gbp.website, gbp.description, gbp.hours,
+          (gbp.categories && gbp.categories.length > 0) ? true : null,
+          (gbp.photos_count && gbp.photos_count > 0) ? true : null,
+          gbp.service_options ? true : null,
+        ];
+        const filled = fields.filter(f => f != null && f !== '' && f !== false).length;
+        return Math.round((filled / fields.length) * 100);
+      };
+
+      /* Schema coverage % relative to max across all players */
+      const schemaPct = (types, maxTypes) => maxTypes > 0 ? Math.round(((types || []).length / maxTypes) * 100) : 0;
 
       /* Gap filter classifier */
       const classifyGap = (key) => {
         const k = key.toLowerCase();
         if (k.includes('gbp') || k.includes('review') || k.includes('photo') || k.includes('profile') || k.includes('categor') || k.includes('directory') || k.includes('citation')) return 'gbp';
-        if (k.includes('content') || k.includes('schema') || k.includes('page') || k.includes('blog') || k.includes('copy')) return 'content';
+        if (k.includes('content') || k.includes('schema') || k.includes('page') || k.includes('blog') || k.includes('copy') || k.includes('faq')) return 'content';
         if (k.includes('speed') || k.includes('technical') || k.includes('core') || k.includes('mobile') || k.includes('https') || k.includes('sitemap')) return 'technical';
         return 'other';
       };
@@ -10135,40 +10155,55 @@
       /* Table sort */
       const handleSort = (col) => {
         if (sortCol === col) { setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); }
-        else { setSortCol(col); setSortDir('asc'); }
+        else { setSortCol(col); setSortDir('desc'); }
       };
-
-      const hs = { borderRadius: 6, fontSize: 14, lineHeight: 1.5 }; /* shared style token */
+      const SortIcon = ({ col }) => (
+        <span style={{ fontSize: 9, marginLeft: 3, opacity: sortCol === col ? 1 : 0.3 }}>
+          {sortCol === col ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      );
 
       return (
-        <div style={{ padding: 28 }}>
-          {/* ── HEADER ── */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28, flexWrap: 'wrap', gap: 12 }}>
-            <div>
-              <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Players Handshake</h2>
-              <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 4 }}>Compare your local SEO position against the players winning the map.</div>
-              {data && data.ran_at && (
-                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Last run: {new Date(data.ran_at).toLocaleString()}</div>
-              )}
+        <div style={{ padding: '24px 28px' }}>
+          {/* ═══ HEADER ═══ */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 8, background: 'rgba(99,102,241,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <i className="fas fa-handshake" style={{ color: '#818cf8', fontSize: 18 }} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Players Handshake</h2>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>Compare your site against key local competitors and turn gaps into action.</div>
+              </div>
             </div>
-            <button onClick={runHandshake} disabled={loading} style={{
-              padding: '10px 22px', borderRadius: 6, border: 'none', fontWeight: 600, fontSize: 14, cursor: loading ? 'default' : 'pointer',
-              background: loading ? '#4b5563' : '#6366f1', color: '#fff',
-              display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap'
-            }}>
-              {loading ? <><span className="spinner" style={{ width: 16, height: 16 }}></span>{stage}</> : <><i className="fas fa-play" style={{ fontSize: 11 }} /> Run Handshake</>}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {data && data.ran_at && (
+                <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  Last run: {new Date(data.ran_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}, {new Date(data.ran_at).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })}
+                  {data.status === 'completed' && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontWeight: 600 }}>Completed</span>}
+                </div>
+              )}
+              <button onClick={runHandshake} disabled={loading} style={{
+                padding: '9px 20px', borderRadius: 6, border: 'none', fontWeight: 600, fontSize: 13, cursor: loading ? 'default' : 'pointer',
+                background: loading ? '#4b5563' : '#14b8a6', color: '#fff',
+                display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap'
+              }}>
+                {loading ? <><span className="spinner" style={{ width: 14, height: 14 }}></span>{stage}</> : <><i className="fas fa-play" style={{ fontSize: 10 }} /> Run Handshake</>}
+              </button>
+            </div>
           </div>
 
-          {error && <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 6, padding: '10px 14px', marginBottom: 20, color: '#ef4444', fontSize: 14 }}>{error}</div>}
+          {error && <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, padding: '10px 14px', marginBottom: 20, color: '#ef4444', fontSize: 13 }}>{error}</div>}
 
           {initialLoad && <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginBottom: 12, display: 'inline-block' }}></span><div style={{ fontSize: 14 }}>Loading...</div></div>}
 
           {!initialLoad && !data && !loading && (
             <div style={{ textAlign: 'center', padding: 80, color: 'var(--text3)' }}>
-              <i className="fas fa-handshake" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.15 }} />
-              <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>Ready to meet the competition?</div>
-              <div style={{ fontSize: 14, maxWidth: 480, margin: '0 auto', lineHeight: 1.7, color: 'var(--text2)' }}>
+              <div style={{ width: 64, height: 64, borderRadius: 16, background: 'rgba(99,102,241,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <i className="fas fa-handshake" style={{ fontSize: 28, opacity: 0.3 }} />
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>Ready to meet the competition?</div>
+              <div style={{ fontSize: 14, maxWidth: 460, margin: '0 auto', lineHeight: 1.7, color: 'var(--text2)' }}>
                 Analyzes your business against top competitors from Google Maps — GBP profiles, websites, schema, speed, and reviews — then builds a data-driven strategy.
               </div>
               <div style={{ fontSize: 13, marginTop: 14, color: 'var(--text3)' }}>Requires grid scan data (run Maps Rankings first)</div>
@@ -10180,19 +10215,42 @@
             const comps = data.competitors || [];
             const strat = data.strategy || {};
             const gaps = strat.gap_matrix || {};
-            const kpis = computeKPIs(our, comps);
+            const ourGbp = our.gbp || {};
+            const ourTech = our.technical || {};
             const topActions = (strat.proposed_strategy || []).slice(0, 3);
 
-            /* Build table rows */
+            /* KPI computations */
+            const ourReviews = ourGbp.reviews || our.reviews || 0;
+            const avgCompReviews = comps.length ? Math.round(comps.reduce((s, c) => s + ((c.gbp || {}).reviews || c.reviews || 0), 0) / comps.length) : 0;
+            const reviewGap = ourReviews - avgCompReviews;
+
+            const ourWords = ourTech.word_count || 0;
+            const avgCompWords = comps.length ? Math.round(comps.reduce((s, c) => s + ((c.technical || {}).word_count || 0), 0) / comps.length) : 0;
+            const contentAdvPct = avgCompWords > 0 ? Math.round(((ourWords - avgCompWords) / avgCompWords) * 100) : 0;
+
+            const ourGbpPct = gbpComplete(ourGbp);
+            const avgCompGbpPct = comps.length ? Math.round(comps.reduce((s, c) => s + gbpComplete(c.gbp), 0) / comps.length) : 0;
+
+            const keyFactors = Object.keys(gaps).length || 0;
+            const opportunity = keyFactors >= 5 ? 'High' : keyFactors >= 3 ? 'Medium' : 'Low';
+            const oppColor = opportunity === 'High' ? '#f59e0b' : opportunity === 'Medium' ? '#3b82f6' : '#22c55e';
+
+            /* Comparison table data */
             const allPlayers = [{ ...our, _isUs: true }, ...comps.map((c, i) => ({ ...c, _rank: i + 1 }))];
+            const maxSchemaTypes = Math.max(...allPlayers.map(p => ((p.technical || {}).schema_types || []).length), 1);
+            const maxWords = Math.max(...allPlayers.map(p => (p.technical || {}).word_count || 0), 1);
+            const maxReviews = Math.max(...allPlayers.map(p => (p.gbp || {}).reviews || p.reviews || 0), 1);
+
             const getMetric = (p, col) => {
               const g = p.gbp || {}; const t = p.technical || {};
               if (col === 'rating') return g.rating || p.rating || 0;
               if (col === 'reviews') return g.reviews || p.reviews || 0;
               if (col === 'photos') return g.photos_count || 0;
-              if (col === 'speed') return p.speed || 0;
+              if (col === 'gbpComplete') return gbpComplete(g);
+              if (col === 'contentDepth') return t.word_count || 0;
               if (col === 'schema') return (t.schema_types || []).length;
-              if (col === 'dominance') return p.dominance || 0;
+              if (col === 'speed') return p.speed || 0;
+              if (col === 'dominance') return p._isUs ? (p.grid_performance?.avg_solv || 0) : (p.dominance || 0);
               return 0;
             };
             let sortedPlayers = [...allPlayers];
@@ -10203,81 +10261,145 @@
               });
             }
 
-            /* Gap matrix filtering */
+            /* Gap matrix */
             const gapEntries = Object.entries(gaps).filter(([key]) => gapFilter === 'all' || classifyGap(key) === gapFilter);
+
+            /* Evidence extractors for strengths/weaknesses */
+            const extractEvidence = (text) => {
+              const numMatch = text.match(/(\d[\d,.]*\s*(?:reviews?|stars?|photos?|pages?|links?|words?|types?|suburbs?|schema|%|vs|avg)[\w\s]*)/i);
+              return numMatch ? numMatch[1].trim() : null;
+            };
 
             return (
               <>
-                {/* ── DECISION-FIRST OVERVIEW ── */}
-                {/* Competitor Snapshot */}
-                {strat.executive_summary && (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '14px 18px', marginBottom: 20, fontSize: 14, lineHeight: 1.7, color: 'var(--text2)' }}>
-                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>Snapshot: </span>
-                    {strat.executive_summary.length > 250 ? strat.executive_summary.slice(0, 250) + '...' : strat.executive_summary}
-                  </div>
-                )}
-
-                {/* KPI Tiles + Next Best Actions */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
-                  {/* KPI Tiles */}
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    <div style={{ flex: 1, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 14px', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 700, color: kpis.reviewGap > 0 ? '#ef4444' : '#22c55e' }}>{kpis.reviewGap > 0 ? '-' : '+'}{Math.abs(kpis.reviewGap)}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4, letterSpacing: 0.3 }}>Reviews Gap</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>You: {kpis.ourReviews} / Avg: {kpis.avgCompReviews}</div>
-                    </div>
-                    <div style={{ flex: 1, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 14px', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 700, color: kpis.contentAdv >= 0 ? '#22c55e' : '#f59e0b' }}>{kpis.contentAdv >= 0 ? '+' : ''}{kpis.contentAdv}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4, letterSpacing: 0.3 }}>Schema Advantage</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{kpis.ourSchemaCount} types detected</div>
-                    </div>
-                    <div style={{ flex: 1, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 14px', textAlign: 'center' }}>
-                      <div style={{ fontSize: 28, fontWeight: 700, color: kpis.gbpPct >= 80 ? '#22c55e' : kpis.gbpPct >= 50 ? '#f59e0b' : '#ef4444' }}>{kpis.gbpPct}%</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 4, letterSpacing: 0.3 }}>GBP Complete</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Profile fields filled</div>
-                    </div>
-                  </div>
-
-                  {/* Next Best Actions */}
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.3 }}>
-                      <i className="fas fa-bolt" style={{ color: '#f59e0b', marginRight: 6 }} />Next Best Actions
-                    </div>
-                    {topActions.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No actions generated yet.</div>}
-                    {topActions.map((a, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderBottom: i < topActions.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                        <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#818cf8', flexShrink: 0, marginTop: 1 }}>{i+1}</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>{a.action}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.4, marginTop: 2 }}>{a.why}</div>
+                {/* ═══ KPI TILES + NEXT BEST ACTIONS ═══ */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, marginBottom: 24 }}>
+                  {/* 4 KPI tiles in a row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+                    {/* Competitor Snapshot */}
+                    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Competitor Snapshot</div>
+                      <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+                        <div>
+                          <div style={{ fontSize: 26, fontWeight: 700, color: '#14b8a6' }}>{comps.length + 1}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Sites compared</div>
                         </div>
-                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 700, flexShrink: 0,
-                          background: (impColors[a.expected_impact] || '#6b7280') + '18',
-                          color: impColors[a.expected_impact] || '#6b7280'
-                        }}>{(a.expected_impact || '').toUpperCase()}</span>
+                        <div>
+                          <div style={{ fontSize: 26, fontWeight: 700, color: '#818cf8' }}>{keyFactors}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Key factors</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: oppColor, marginTop: 6 }}>{opportunity}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Opportunity</div>
+                        </div>
                       </div>
-                    ))}
+                      <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4 }}>Based on local search signals across GBP, content & technical.</div>
+                    </div>
+
+                    {/* Reviews Gap */}
+                    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Reviews Gap</div>
+                      <div style={{ fontSize: 30, fontWeight: 700, color: reviewGap < 0 ? '#ef4444' : '#22c55e', lineHeight: 1 }}>{reviewGap > 0 ? '+' : ''}{reviewGap}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
+                      {/* Mini bar comparison */}
+                      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <div style={{ flex: pct(ourReviews, maxReviews), height: 4, background: reviewGap < 0 ? '#ef4444' : '#22c55e', borderRadius: 2, minWidth: 4 }} />
+                        <div style={{ flex: pct(avgCompReviews, maxReviews), height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, minWidth: 4 }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {num(ourReviews)} reviews<br/>Avg: {num(avgCompReviews)} reviews</div>
+                    </div>
+
+                    {/* Content Advantage */}
+                    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Content Advantage</div>
+                      <div style={{ fontSize: 30, fontWeight: 700, color: contentAdvPct >= 0 ? '#22c55e' : '#ef4444', lineHeight: 1 }}>
+                        {contentAdvPct > 0 ? '+' : ''}{contentAdvPct}%
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>vs competitor avg.</div>
+                      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <div style={{ flex: pct(ourWords, maxWords), height: 4, background: contentAdvPct >= 0 ? '#22c55e' : '#f59e0b', borderRadius: 2, minWidth: 4 }} />
+                        <div style={{ flex: pct(avgCompWords, maxWords), height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, minWidth: 4 }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {num(ourWords)} words<br/>Avg: {num(avgCompWords)} words</div>
+                    </div>
+
+                    {/* GBP Completeness */}
+                    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>GBP Completeness</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ fontSize: 30, fontWeight: 700, color: ourGbpPct >= 80 ? '#22c55e' : ourGbpPct >= 50 ? '#f59e0b' : '#ef4444', lineHeight: 1 }}>{ourGbpPct}%</div>
+                        {/* Mini ring */}
+                        <svg width="38" height="38" viewBox="0 0 38 38">
+                          <circle cx="19" cy="19" r="15" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
+                          <circle cx="19" cy="19" r="15" fill="none"
+                            stroke={ourGbpPct >= 80 ? '#22c55e' : ourGbpPct >= 50 ? '#f59e0b' : '#ef4444'}
+                            strokeWidth="4" strokeDasharray={`${ourGbpPct * 0.942} 100`}
+                            strokeLinecap="round" transform="rotate(-90 19 19)" />
+                        </svg>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>You: {ourGbpPct}% complete<br/>Avg: {avgCompGbpPct}% complete</div>
+                    </div>
+                  </div>
+
+                  {/* Next Best Actions panel */}
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>Next Best Actions</div>
+                    {topActions.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: '12px 0' }}>Run the handshake to generate actions.</div>}
+                    {topActions.map((a, i) => {
+                      const impBg = a.expected_impact === 'high' ? '#ef4444' : a.expected_impact === 'medium' ? '#f59e0b' : '#6b7280';
+                      return (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 0', borderBottom: i < topActions.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                            <i className={`fas ${i === 0 ? 'fa-camera' : i === 1 ? 'fa-file-alt' : 'fa-code'}`} style={{ fontSize: 11, color: '#818cf8' }} />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>{a.action}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, lineHeight: 1.3 }}>
+                              Impact: {(a.expected_impact || '—').charAt(0).toUpperCase() + (a.expected_impact || '').slice(1)} · Effort: {(a.effort || '—').charAt(0).toUpperCase() + (a.effort || '').slice(1)}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, fontWeight: 700, flexShrink: 0,
+                            background: impBg, color: '#fff'
+                          }}>{(a.expected_impact || '').charAt(0).toUpperCase() + (a.expected_impact || '').slice(1)}</span>
+                        </div>
+                      );
+                    })}
+                    {(strat.proposed_strategy || []).length > 3 && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: '#14b8a6', fontWeight: 600, cursor: 'pointer' }}>
+                        View all actions →
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* ── COMPARISON TABLE ── */}
-                <div style={{ marginBottom: 28 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 12 }}>How You Compare</div>
-                  <div style={{ overflowX: 'auto', borderRadius: 6, border: '1px solid var(--border)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                {/* ═══ COMPARISON TABLE ═══ */}
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>How You Compare</div>
+                  </div>
+                  <div style={{ overflowX: 'auto', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                       <thead>
-                        <tr style={{ background: 'var(--card)' }}>
-                          <th style={{ textAlign: 'left', padding: '12px 14px', fontWeight: 600, color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', minWidth: 160 }}>Player</th>
+                        <tr>
                           {[
-                            { key: 'rating', label: 'Rating' },
-                            { key: 'reviews', label: 'Reviews' },
-                            { key: 'photos', label: 'Photos' },
-                            { key: 'speed', label: 'Speed' },
-                            { key: 'schema', label: 'Schema' },
-                            { key: 'dominance', label: 'Grid %' }
-                          ].map(col => (
-                            <th key={col.key} onClick={() => handleSort(col.key)} style={{ textAlign: 'center', padding: '12px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
-                              {col.label} {sortCol === col.key && <span style={{ fontSize: 10 }}>{sortDir === 'asc' ? '▲' : '▼'}</span>}
+                            { key: null, label: 'Site', align: 'left', w: 180 },
+                            { key: 'rating', label: 'Rating', align: 'center', w: 80 },
+                            { key: 'reviews', label: 'Reviews', align: 'center', w: 80 },
+                            { key: 'photos', label: 'Photos', align: 'center', w: 70 },
+                            { key: 'gbpComplete', label: 'GBP Completeness', align: 'left', w: 140 },
+                            { key: 'contentDepth', label: 'Content Depth', align: 'center', w: 110 },
+                            { key: 'schema', label: 'Schema Coverage', align: 'left', w: 140 },
+                            { key: 'speed', label: 'Speed', align: 'center', w: 70 },
+                            { key: 'dominance', label: 'Grid Dominance', align: 'center', w: 110 },
+                          ].map((col, ci) => (
+                            <th key={ci} onClick={col.key ? () => handleSort(col.key) : undefined}
+                              style={{
+                                textAlign: col.align, padding: '11px 10px', fontWeight: 600, color: 'var(--text3)',
+                                fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3,
+                                borderBottom: '1px solid var(--border)', cursor: col.key ? 'pointer' : 'default',
+                                whiteSpace: 'nowrap', userSelect: 'none', minWidth: col.w,
+                              }}>
+                              {col.label}{col.key && <SortIcon col={col.key} />}
                             </th>
                           ))}
                         </tr>
@@ -10287,45 +10409,63 @@
                           const g = p.gbp || {}; const t = p.technical || {};
                           const isUs = p._isUs;
                           const schemaTypes = t.schema_types || [];
+                          const gPct = gbpComplete(g);
+                          const sPct = schemaPct(schemaTypes, maxSchemaTypes);
+                          const wc = t.word_count || 0;
                           return (
                             <tr key={i} style={{
-                              background: isUs ? 'rgba(99,102,241,0.06)' : (i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)'),
-                              borderLeft: isUs ? '3px solid #6366f1' : '3px solid transparent'
+                              background: isUs ? 'rgba(20,184,166,0.06)' : 'transparent',
+                              borderLeft: isUs ? '3px solid #14b8a6' : '3px solid transparent',
                             }}>
-                              <td style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: isUs ? 700 : 500, color: isUs ? '#a78bfa' : 'var(--text)', fontSize: 14 }}>
+                              {/* Site */}
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
                                 {isUs ? (
-                                  <span><i className="fas fa-star" style={{ color: '#6366f1', fontSize: 10, marginRight: 6 }} />{p.name || g.title || 'Our Business'}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#14b8a6', color: '#fff', fontWeight: 700 }}>You</span>
+                                    <span style={{ fontWeight: 700, color: '#14b8a6' }}>{p.name || g.title || 'Our Business'}</span>
+                                  </div>
                                 ) : (
-                                  <span style={{ color: 'var(--text2)' }}>{p.name || g.title || `Competitor ${p._rank}`}</span>
+                                  <span style={{ color: 'var(--text)' }}>{p.name || g.title || `Competitor ${p._rank}`}</span>
                                 )}
                               </td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: '#f59e0b', fontSize: 14 }}>{val(g.rating || p.rating)}</td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: '#22c55e', fontSize: 14 }}>{val(g.reviews || p.reviews)}</td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text)', fontSize: 14 }}>{val(g.photos_count)}</td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)' }}>
-                                <span style={{ fontWeight: 600, color: speedColor(p.speed), fontSize: 14 }}>{val(p.speed)}</span>
+                              {/* Rating */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
+                                <span style={{ fontWeight: 600, color: '#f59e0b' }}>{v(g.rating || p.rating)}</span>
+                                {(g.rating || p.rating) && <span style={{ color: '#f59e0b', fontSize: 11, marginLeft: 2 }}>★</span>}
                               </td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
-                                <span
-                                  style={{ fontSize: 13, color: '#a78bfa', cursor: schemaTypes.length > 2 ? 'pointer' : 'default', borderBottom: schemaTypes.length > 2 ? '1px dashed rgba(167,139,250,0.4)' : 'none' }}
-                                  onClick={() => schemaTypes.length > 2 && setExpandedSchema(expandedSchema === i ? null : i)}
-                                  title={schemaTypes.join(', ')}
-                                >{schemaSummary(schemaTypes)}</span>
-                                {expandedSchema === i && schemaTypes.length > 2 && (
-                                  <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', zIndex: 10, fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
-                                    {schemaTypes.map((st, si) => <div key={si} style={{ padding: '2px 0' }}>{st}</div>)}
+                              {/* Reviews */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: isUs && reviewGap < 0 ? '#ef4444' : '#22c55e' }}>{v(g.reviews || p.reviews)}</td>
+                              {/* Photos */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', color: isUs ? '#14b8a6' : 'var(--text)' }}>{v(g.photos_count)}</td>
+                              {/* GBP Completeness - progress bar */}
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
+                                <Bar value={gPct} max={100} color={gPct >= 80 ? '#22c55e' : gPct >= 50 ? '#f59e0b' : '#ef4444'} />
+                              </td>
+                              {/* Content Depth */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text)' }}>{wc > 0 ? num(wc) : '—'}</td>
+                              {/* Schema Coverage - progress bar + expandable */}
+                              <td style={{ padding: '11px 10px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: schemaTypes.length > 0 ? 'pointer' : 'default' }}
+                                  onClick={() => schemaTypes.length > 0 && setExpandedSchema(expandedSchema === `${i}` ? null : `${i}`)}>
+                                  <Bar value={sPct} max={100} color='#a78bfa' />
+                                  {schemaTypes.length > 0 && <i className="fas fa-info-circle" style={{ fontSize: 10, color: 'var(--text3)' }} />}
+                                </div>
+                                {expandedSchema === `${i}` && schemaTypes.length > 0 && (
+                                  <div style={{ position: 'absolute', top: '100%', left: 10, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', zIndex: 20, fontSize: 12, color: 'var(--text2)', boxShadow: '0 4px 16px rgba(0,0,0,0.4)', whiteSpace: 'nowrap' }}>
+                                    {schemaTypes.map((st, si) => <div key={si} style={{ padding: '2px 0' }}><span style={{ color: '#a78bfa', marginRight: 6 }}>•</span>{st}</div>)}
                                   </div>
                                 )}
                               </td>
-                              <td style={{ textAlign: 'center', padding: '12px 10px', borderBottom: '1px solid var(--border)' }}>
+                              {/* Speed */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: speedColor(p.speed) }}>{v(p.speed)}</td>
+                              {/* Grid Dominance */}
+                              <td style={{ textAlign: 'center', padding: '11px 10px', borderBottom: '1px solid var(--border)' }}>
                                 {isUs ? (
-                                  p.grid_performance ? (
-                                    <span style={{ fontSize: 13, color: '#14b8a6' }}>{p.grid_performance.avg_solv || '—'}% top3</span>
-                                  ) : <span style={{ color: 'var(--text3)' }}>—</span>
+                                  p.grid_performance?.avg_solv != null ? (
+                                    <span style={{ fontWeight: 600, color: '#14b8a6' }}>{p.grid_performance.avg_solv}%</span>
+                                  ) : <span style={{ color: 'var(--text3)' }}>0%</span>
                                 ) : (
-                                  p.dominance != null ? (
-                                    <span style={{ fontWeight: 600, fontSize: 14, color: p.dominance > 30 ? '#ef4444' : p.dominance > 15 ? '#f59e0b' : '#22c55e' }}>{p.dominance}%</span>
-                                  ) : <span style={{ color: 'var(--text3)' }}>—</span>
+                                  <span style={{ fontWeight: 600, color: (p.dominance || 0) > 20 ? '#ef4444' : (p.dominance || 0) > 10 ? '#f59e0b' : 'var(--text3)' }}>{p.dominance || 0}%</span>
                                 )}
                               </td>
                             </tr>
@@ -10336,107 +10476,148 @@
                   </div>
                 </div>
 
-                {/* ── STRENGTHS & GAPS ── */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 18px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 10, letterSpacing: 0.3 }}>
-                      <i className="fas fa-shield-alt" style={{ marginRight: 6, fontSize: 12 }} />Strengths to Protect
+                {/* ═══ STRENGTHS & GAPS ═══ */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+                  {/* Strengths */}
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px' }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: '#22c55e' }}>●</span> Strengths to Protect
                     </div>
                     {(strat.our_strengths || []).length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No strengths identified.</div>}
-                    {(strat.our_strengths || []).map((s, i) => (
-                      <div key={i} style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)', padding: '7px 0', borderBottom: i < (strat.our_strengths || []).length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                        <span style={{ color: '#22c55e', fontWeight: 700, flexShrink: 0, marginTop: 1 }}>✓</span>
-                        <span>{s}</span>
-                      </div>
-                    ))}
+                    {(strat.our_strengths || []).map((s, i) => {
+                      const ev = extractEvidence(s);
+                      const mainText = ev ? s.replace(ev, '').replace(/[()—–-]*\s*$/, '').replace(/\s*[()—–-]*\s*$/, '').trim() : s;
+                      return (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '8px 0', borderBottom: i < (strat.our_strengths || []).length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flex: 1 }}>
+                            <span style={{ color: '#22c55e', fontWeight: 700, flexShrink: 0, marginTop: 1, fontSize: 13 }}>✓</span>
+                            <span style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{mainText || s}</span>
+                          </div>
+                          {ev && <span style={{ fontSize: 12, color: '#22c55e', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{ev}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 18px' }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 10, letterSpacing: 0.3 }}>
-                      <i className="fas fa-exclamation-triangle" style={{ marginRight: 6, fontSize: 12 }} />Gaps Holding Rankings Back
+                  {/* Gaps */}
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px' }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: '#ef4444' }}>▲</span> Gaps Holding Rankings Back
                     </div>
                     {(strat.our_weaknesses || []).length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No gaps identified.</div>}
-                    {(strat.our_weaknesses || []).map((w, i) => (
-                      <div key={i} style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text)', padding: '7px 0', borderBottom: i < (strat.our_weaknesses || []).length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                        <span style={{ color: '#ef4444', fontWeight: 700, flexShrink: 0, marginTop: 1 }}>✗</span>
-                        <span>{w}</span>
-                      </div>
-                    ))}
+                    {(strat.our_weaknesses || []).map((w, i) => {
+                      const ev = extractEvidence(w);
+                      const mainText = ev ? w.replace(ev, '').replace(/[()—–-]*\s*$/, '').replace(/\s*[()—–-]*\s*$/, '').trim() : w;
+                      return (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '8px 0', borderBottom: i < (strat.our_weaknesses || []).length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flex: 1 }}>
+                            <span style={{ color: '#ef4444', fontWeight: 700, flexShrink: 0, marginTop: 1, fontSize: 13 }}>✗</span>
+                            <span style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{mainText || w}</span>
+                          </div>
+                          {ev && <span style={{ fontSize: 12, color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{ev}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
-                {/* ── GAP MATRIX WORK TABLE ── */}
+                {/* ═══ GAP MATRIX WORK TABLE ═══ */}
                 {Object.keys(gaps).length > 0 && (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 18px', marginBottom: 28 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Gap Matrix</div>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        {['all', 'gbp', 'content', 'technical'].map(f => (
-                          <button key={f} onClick={() => setGapFilter(f)} style={{
-                            padding: '4px 12px', borderRadius: 4, border: '1px solid ' + (gapFilter === f ? '#6366f1' : 'var(--border)'),
-                            background: gapFilter === f ? 'rgba(99,102,241,0.15)' : 'transparent',
-                            color: gapFilter === f ? '#818cf8' : 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', textTransform: 'capitalize'
-                          }}>{f}</button>
-                        ))}
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px', marginBottom: 24 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}><i className="fas fa-th" style={{ marginRight: 6, fontSize: 13, color: 'var(--text3)' }} />Gap Matrix</div>
+                        <div style={{ display: 'flex', gap: 2, background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 2 }}>
+                          {['all', 'gbp', 'content', 'technical'].map(f => (
+                            <button key={f} onClick={() => setGapFilter(f)} style={{
+                              padding: '5px 14px', borderRadius: 4, border: 'none',
+                              background: gapFilter === f ? '#14b8a6' : 'transparent',
+                              color: gapFilter === f ? '#fff' : 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', textTransform: 'capitalize'
+                            }}>{f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}</button>
+                          ))}
+                        </div>
                       </div>
                     </div>
                     <div style={{ overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                         <thead>
                           <tr>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', minWidth: 140 }}>Gap</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', minWidth: 100 }}>Us</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', minWidth: 100 }}>Competitors</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Evidence</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 80 }}>Priority</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 70 }}>Priority</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 90 }}>Category</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Gap</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 70 }}>Impact</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', minWidth: 120 }}>Evidence</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Recommended Fix</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 80 }}>Owner</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 100 }}>Status</th>
                           </tr>
                         </thead>
                         <tbody>
                           {gapEntries.length === 0 && (
-                            <tr><td colSpan={5} style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>No gaps in this category.</td></tr>
+                            <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--text3)', fontSize: 13 }}>No gaps in this category.</td></tr>
                           )}
-                          {gapEntries.map(([key, gap]) => (
-                            <tr key={key}>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text)', textTransform: 'capitalize', fontSize: 14 }}>{key.replace(/_/g, ' ')}</td>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: '#818cf8', fontWeight: 600, fontSize: 13 }}>{typeof gap.us === 'object' ? JSON.stringify(gap.us) : val(gap.us)}</td>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: '#f87171', fontWeight: 600, fontSize: 13 }}>{typeof gap.avg_competitor === 'object' ? JSON.stringify(gap.avg_competitor) : val(gap.avg_competitor)}</td>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 13, lineHeight: 1.5 }}>{gap.gap || '—'}</td>
-                              <td style={{ textAlign: 'center', padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
-                                <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, fontWeight: 700,
-                                  background: (priColors[gap.priority] || '#6b7280') + '18',
-                                  color: priColors[gap.priority] || '#6b7280'
-                                }}>{(gap.priority || '—').toUpperCase()}</span>
-                              </td>
-                            </tr>
-                          ))}
+                          {gapEntries.map(([key, gap]) => {
+                            const cat = classifyGap(key);
+                            const catLabel = cat === 'gbp' ? 'GBP' : cat.charAt(0).toUpperCase() + cat.slice(1);
+                            const usVal = typeof gap.us === 'object' ? JSON.stringify(gap.us) : gap.us;
+                            const themVal = typeof gap.avg_competitor === 'object' ? JSON.stringify(gap.avg_competitor) : gap.avg_competitor;
+                            const evidence = `${usVal || '—'} vs ${themVal || '—'} avg`;
+                            /* Derive a recommended fix from the gap description */
+                            const fixText = gap.gap || '—';
+                            return (
+                              <tr key={key}>
+                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, fontWeight: 700,
+                                    background: priColors[gap.priority] || '#6b7280',
+                                    color: '#fff'
+                                  }}>{(gap.priority || '—').charAt(0).toUpperCase() + (gap.priority || '').slice(1)}</span>
+                                </td>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase' }}>{catLabel}</td>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text)', textTransform: 'capitalize', fontSize: 13 }}>{key.replace(/_/g, ' ')}</td>
+                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <ImpactDots level={gap.priority} />
+                                </td>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 12 }}>{evidence}</td>
+                                <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 12, lineHeight: 1.4 }}>{fixText}</td>
+                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(99,102,241,0.15)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#818cf8' }}>AK</div>
+                                </td>
+                                <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
+                                  <span style={{ fontSize: 11, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--text3)' }} />Not started
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
                   </div>
                 )}
 
-                {/* ── COMPETITOR INSIGHTS (collapsed) ── */}
+                {/* ═══ COMPETITOR INTEL (collapsed) ═══ */}
                 {(strat.competitor_insights || []).length > 0 && (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 18px', marginBottom: 28 }}>
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px', marginBottom: 24 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.3 }}>
                       <i className="fas fa-users" style={{ marginRight: 6, fontSize: 12 }} />Competitor Intel
                     </div>
                     {strat.competitor_insights.map((ci, i) => (
-                      <div key={i} style={{ borderRadius: 6, marginBottom: i < strat.competitor_insights.length - 1 ? 8 : 0, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', cursor: 'pointer', background: expandedComp === i ? 'rgba(99,102,241,0.04)' : 'transparent' }}
+                      <div key={i} style={{ borderRadius: 6, marginBottom: i < strat.competitor_insights.length - 1 ? 6 : 0, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', cursor: 'pointer', background: expandedComp === i ? 'rgba(20,184,166,0.04)' : 'transparent' }}
                           onClick={() => setExpandedComp(expandedComp === i ? null : i)}>
-                          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{ci.name}</span>
-                          <i className={`fas fa-chevron-${expandedComp === i ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{ci.name}</span>
+                          <i className={`fas fa-chevron-${expandedComp === i ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 10 }} />
                         </div>
                         {expandedComp === i && (
                           <div style={{ padding: '0 14px 12px', borderTop: '1px solid var(--border)' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
                               <div>
-                                <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, marginBottom: 4 }}>Their Advantage</div>
-                                <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{ci.key_advantage}</div>
+                                <div style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginBottom: 4, textTransform: 'uppercase' }}>Their Advantage</div>
+                                <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{ci.key_advantage}</div>
                               </div>
                               <div>
-                                <div style={{ fontSize: 12, color: '#14b8a6', fontWeight: 600, marginBottom: 4 }}>What We Can Learn</div>
-                                <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{ci.what_we_can_learn}</div>
+                                <div style={{ fontSize: 11, color: '#14b8a6', fontWeight: 600, marginBottom: 4, textTransform: 'uppercase' }}>What We Can Learn</div>
+                                <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{ci.what_we_can_learn}</div>
                               </div>
                             </div>
                           </div>
@@ -10446,43 +10627,41 @@
                   </div>
                 )}
 
-                {/* ── FULL PROPOSED STRATEGY ── */}
-                {(strat.proposed_strategy || []).length > 0 && (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '16px 18px' }}>
+                {/* ═══ FULL STRATEGY TABLE ═══ */}
+                {(strat.proposed_strategy || []).length > 3 && (
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 18px' }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.3 }}>
                       <i className="fas fa-chess" style={{ marginRight: 6, fontSize: 12, color: '#22c55e' }} />Full Strategy ({strat.proposed_strategy.length} actions)
                     </div>
                     <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                         <thead>
                           <tr>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 30 }}>#</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Action</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)' }}>Why</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 80 }}>Impact</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 80 }}>Effort</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid var(--border)', width: 90 }}>Timeframe</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)', width: 30 }}>#</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Action</th>
+                            <th style={{ textAlign: 'left', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Why</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)', width: 80 }}>Impact</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)', width: 80 }}>Effort</th>
+                            <th style={{ textAlign: 'center', padding: '10px 10px', fontWeight: 600, color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase', borderBottom: '1px solid var(--border)', width: 90 }}>Timeframe</th>
                           </tr>
                         </thead>
                         <tbody>
                           {strat.proposed_strategy.map((s, i) => (
                             <tr key={i}>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontWeight: 600, fontSize: 13 }}>{i+1}</td>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text)', fontWeight: 600, fontSize: 14 }}>{s.action}</td>
-                              <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 13, lineHeight: 1.5 }}>{s.why}</td>
-                              <td style={{ textAlign: 'center', padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
+                              <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontWeight: 600 }}>{i+1}</td>
+                              <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text)', fontWeight: 600 }}>{s.action}</td>
+                              <td style={{ padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text2)', fontSize: 12, lineHeight: 1.5 }}>{s.why}</td>
+                              <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
                                 <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 700,
-                                  background: (impColors[s.expected_impact] || '#6b7280') + '18',
-                                  color: impColors[s.expected_impact] || '#6b7280'
-                                }}>{(s.expected_impact || '').toUpperCase()}</span>
+                                  background: impColors[s.expected_impact] || '#6b7280', color: '#fff'
+                                }}>{(s.expected_impact || '').charAt(0).toUpperCase() + (s.expected_impact || '').slice(1)}</span>
                               </td>
-                              <td style={{ textAlign: 'center', padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
+                              <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)' }}>
                                 <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, fontWeight: 700,
-                                  background: (effColors[s.effort] || '#6b7280') + '18',
-                                  color: effColors[s.effort] || '#6b7280'
-                                }}>{(s.effort || '').toUpperCase()}</span>
+                                  background: (effColors[s.effort] || '#6b7280') + '30', color: effColors[s.effort] || '#6b7280'
+                                }}>{(s.effort || '').charAt(0).toUpperCase() + (s.effort || '').slice(1)}</span>
                               </td>
-                              <td style={{ textAlign: 'center', padding: '10px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12 }}>{s.timeframe || '—'}</td>
+                              <td style={{ textAlign: 'center', padding: '10px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12 }}>{s.timeframe || '—'}</td>
                             </tr>
                           ))}
                         </tbody>
