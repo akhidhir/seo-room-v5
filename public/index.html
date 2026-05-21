@@ -10849,10 +10849,31 @@
                         </tr>
                         {isExpanded && (
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td colSpan={8} style={{ padding: 0 }}>
+                            <td colSpan={9} style={{ padding: 0 }}>
                               <div style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                                {/* View Page link */}
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                                {/* View Page link + Suggest Keyword */}
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginBottom: 8 }}>
+                                  {!page.focusKeyword && (
+                                    <button onClick={async (e) => {
+                                      e.stopPropagation();
+                                      const btn = e.currentTarget;
+                                      btn.disabled = true;
+                                      btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;margin-right:4px"></span>Suggesting...';
+                                      try {
+                                        const data = await api('/projects/' + project.id + '/onpage-audit/suggest', { method: 'POST', body: { pages: [page] } });
+                                        if (data.suggestions && data.suggestions[0]?.suggested_keyword) {
+                                          const kw = data.suggestions[0].suggested_keyword;
+                                          await api('/projects/' + project.id + '/onpage-audit/update-keyword', { method: 'POST', body: { page_id: page.id, keyword: kw } });
+                                          setPages(prev => prev.map(p => p.id === page.id ? Object.assign({}, p, { focusKeyword: kw }) : p));
+                                          loadHistory();
+                                        }
+                                      } catch (err) { console.error(err); }
+                                      btn.disabled = false;
+                                      btn.innerHTML = '<i class="fas fa-key" style="margin-right:4px;font-size:9px"></i>Suggest Keyword';
+                                    }} style={{ fontSize: 11, padding: '4px 10px', background: 'rgba(245,158,11,0.15)', border: '1px solid #f59e0b', color: '#f59e0b', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      <i className="fas fa-key" style={{ fontSize: 9 }} />Suggest Keyword
+                                    </button>
+                                  )}
                                   <a href={page.url} target="_blank" rel="noopener noreferrer"
                                     style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
                                     <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />View Page
