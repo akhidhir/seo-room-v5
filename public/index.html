@@ -10278,9 +10278,8 @@
 
             return (
               <>
-                {/* ═══ KPI TILES + NEXT BEST ACTIONS ═══ */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, marginBottom: 24, alignItems: 'start' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+                {/* ═══ KPI TILES ═══ */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
                     {/* Competitor Snapshot */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '16px 14px' }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 12 }}>Competitor Snapshot <i className="fas fa-info-circle" style={{ fontSize: 10, opacity: 0.5, marginLeft: 2 }} /></div>
@@ -10359,37 +10358,6 @@
                     </div>
                 </div>
 
-                  {/* Next Best Actions sidebar */}
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>Next Best Actions</div>
-                    {topActions.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: '12px 0' }}>Run the handshake to generate actions.</div>}
-                    {topActions.map((a, i) => {
-                      const impBg = a.expected_impact === 'high' ? '#ef4444' : a.expected_impact === 'medium' ? '#f59e0b' : '#6b7280';
-                      return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 0', borderBottom: i < topActions.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                          <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                            <i className={`fas ${i === 0 ? 'fa-camera' : i === 1 ? 'fa-file-alt' : 'fa-code'}`} style={{ fontSize: 11, color: '#818cf8' }} />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>{a.action}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, lineHeight: 1.3 }}>
-                              Impact: {(a.expected_impact || '—').charAt(0).toUpperCase() + (a.expected_impact || '').slice(1)} · Effort: {(a.effort || '—').charAt(0).toUpperCase() + (a.effort || '').slice(1)}
-                            </div>
-                          </div>
-                          <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, fontWeight: 700, flexShrink: 0,
-                            background: impBg, color: '#fff'
-                          }}>{(a.expected_impact || '').charAt(0).toUpperCase() + (a.expected_impact || '').slice(1)}</span>
-                          <i className="fas fa-chevron-right" style={{ fontSize: 10, color: 'var(--text3)', opacity: 0.4, flexShrink: 0 }} />
-                        </div>
-                      );
-                    })}
-                    {(strat.proposed_strategy || []).length > 3 && (
-                      <div style={{ marginTop: 10, fontSize: 12, color: '#14b8a6', fontWeight: 600, cursor: 'pointer' }}>
-                        View all actions →
-                      </div>
-                    )}
-                  </div>
-                </div>
 
                 {/* ═══ COMPARISON TABLE ═══ */}
                 <div style={{ marginBottom: 24 }}>
