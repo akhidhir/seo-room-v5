@@ -9480,7 +9480,7 @@
       const [clearingBl, setClearingBl] = useState(false);
 
       const domainBase = `https://${(project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
-      const fullUrl = (path) => path ? `${domainBase}${path}` : '—';
+      const fullUrl = (path) => !path ? '—' : path.startsWith('http') ? path : `${domainBase}${path}`;
 
       const relTime = (d) => {
         if (!d) return '—';
@@ -9998,8 +9998,8 @@
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.source_url) },
                     e('a', { href: fullUrl(item.source_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.source_url))
                   ),
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url) },
-                    e('a', { href: item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url))
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.target_url) },
+                    e('a', { href: fullUrl(item.target_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.target_url))
                   ),
                   e('td', { style: tdStyle }, statusBadge(item.status_code)),
                   e('td', { style: { ...tdStyle, fontSize: 12, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: item.anchor_text }, item.anchor_text || '—'),
