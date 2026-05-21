@@ -10113,6 +10113,8 @@
       const [statFilter, setStatFilter] = useState(null); // null | 'green' | 'orange' | 'red' | 'missingMeta' | 'noFocus'
       const [editingKeyword, setEditingKeyword] = useState({});
       const [savingKeyword, setSavingKeyword] = useState(null);
+      const [fixAllState, setFixAllState] = useState(null); // null | { phase, current, total, currentTitle, suggestions, applied, errors }
+      const [verifiedPages, setVerifiedPages] = useState({}); // { pageId: 'verified' | 'failed' | 'changed' }
 
       const cancelEditKeyword = (pageId) => {
         setEditingKeyword(prev => {
@@ -10159,7 +10161,15 @@
       const loadHistory = async () => {
         try {
           const data = await api(`/projects/${project.id}/wp-changes`);
-          if (data?.changes) setChangeHistory(data.changes);
+          if (data?.changes) {
+            setChangeHistory(data.changes);
+            // Build verified pages map — pages with changes that haven't been rolled back
+            const vp = {};
+            data.changes.forEach(ch => {
+              if (!ch.rolled_back_at) vp[ch.page_id] = 'changed';
+            });
+            setVerifiedPages(prev => ({ ...prev, ...vp }));
+          }
         } catch (e) { /* no history */ }
       };
 
@@ -10290,6 +10300,113 @@
         const targetPages = pages.filter(p => selected.has(p.id));
         if (targetPages.length === 0) return;
         openFixModal(targetPages);
+      };
+
+      // ---- Fix All: AI suggest + apply for ALL fixable pages ----
+      const handleFixAll = async () => {
+        const fixable = pages.filter(hasProblems);
+        if (fixable.length === 0) return;
+        if (!confirm(`This will AI-suggest and auto-apply meta fixes (title, description, focus keyword) for ${fixable.length} pages. Proceed?`)) return;
+
+        setFixAllState({ phase: 'suggesting', current: 0, total: fixable.length, currentTitle: '', suggestions: [], applied: 0, errors: 0 });
+        const BATCH = 5;
+        const allSuggestions = [];
+
+        // Phase 1: Get AI suggestions in batches
+        for (let i = 0; i < fixable.length; i += BATCH) {
+          const batch = fixable.slice(i, i + BATCH);
+          setFixAllState(prev => ({ ...prev, current: i + batch.length, currentTitle: batch[0].title }));
+          try {
+            const data = await api('/projects/' + project.id + '/onpage-audit/suggest', { method: 'POST', body: { pages: batch } });
+            if (data.suggestions) allSuggestions.push(...data.suggestions);
+          } catch (e) { console.error('Fix All suggest batch error:', e); }
+        }
+
+        if (allSuggestions.length === 0) {
+          setFixAllState(prev => ({ ...prev, phase: 'done', errors: fixable.length }));
+          return;
+        }
+
+        // Phase 2: Apply fixes in batches
+        setFixAllState(prev => ({ ...prev, phase: 'applying', current: 0, total: allSuggestions.length, suggestions: allSuggestions }));
+        let applied = 0, errors = 0;
+        const APPLY_BATCH = 3;
+        for (let i = 0; i < allSuggestions.length; i += APPLY_BATCH) {
+          const batch = allSuggestions.slice(i, i + APPLY_BATCH);
+          const fixes = batch.map(s => {
+            const pg = fixable.find(p => String(p.id) === String(s.id));
+            return { id: s.id, url: pg?.url || '', title: pg?.title || '', new_meta_title: s.suggested_title, new_meta_desc: s.suggested_desc, new_focus_keyword: s.suggested_keyword };
+          });
+          setFixAllState(prev => ({ ...prev, current: i + batch.length, currentTitle: fixes[0]?.title || '' }));
+          try {
+            const res = await api('/projects/' + project.id + '/onpage-audit/fix', { method: 'POST', body: { fixes } });
+            if (res.results) {
+              const ok = res.results.filter(r => r.success && !r.skipped).length;
+              const err = res.results.filter(r => !r.success).length;
+              applied += ok;
+              errors += err;
+              // Update verified status
+              res.results.forEach(r => {
+                if (r.success && !r.skipped) setVerifiedPages(prev => ({ ...prev, [r.id]: 'verified' }));
+                else if (!r.success) setVerifiedPages(prev => ({ ...prev, [r.id]: 'failed' }));
+              });
+            }
+          } catch (e) { errors += batch.length; console.error('Fix All apply batch error:', e); }
+        }
+
+        // Phase 3: Done — update pages with new values
+        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors }));
+        // Update local page data with applied suggestions
+        setPages(prev => prev.map(p => {
+          const s = allSuggestions.find(sg => String(sg.id) === String(p.id));
+          if (!s) return p;
+          return Object.assign({}, p, {
+            metaTitle: s.suggested_title || p.metaTitle,
+            metaDesc: s.suggested_desc || p.metaDesc,
+            focusKeyword: s.suggested_keyword || p.focusKeyword,
+          });
+        }));
+        loadHistory();
+      };
+
+      // ---- Suggest Keywords Only: for pages missing focus keyword ----
+      const handleSuggestKeywords = async () => {
+        const noKw = pages.filter(p => !p.focusKeyword);
+        if (noKw.length === 0) { alert('All pages already have focus keywords'); return; }
+        if (!confirm(`Suggest focus keywords for ${noKw.length} pages missing them? This uses AI but does NOT change meta titles/descriptions.`)) return;
+
+        setFixAllState({ phase: 'keywords', current: 0, total: noKw.length, currentTitle: '', suggestions: [], applied: 0, errors: 0 });
+        const BATCH = 5;
+        const allSuggestions = [];
+
+        for (let i = 0; i < noKw.length; i += BATCH) {
+          const batch = noKw.slice(i, i + BATCH);
+          setFixAllState(prev => ({ ...prev, current: i + batch.length, currentTitle: batch[0].title }));
+          try {
+            const data = await api('/projects/' + project.id + '/onpage-audit/suggest', { method: 'POST', body: { pages: batch } });
+            if (data.suggestions) allSuggestions.push(...data.suggestions);
+          } catch (e) { console.error('Suggest keywords batch error:', e); }
+        }
+
+        // Apply only the keywords (not title/desc)
+        setFixAllState(prev => ({ ...prev, phase: 'applying-kw', current: 0, total: allSuggestions.length }));
+        let applied = 0, errors = 0;
+        for (let i = 0; i < allSuggestions.length; i++) {
+          const s = allSuggestions[i];
+          if (!s.suggested_keyword) continue;
+          const pg = noKw.find(p => String(p.id) === String(s.id));
+          setFixAllState(prev => ({ ...prev, current: i + 1, currentTitle: pg?.title || '' }));
+          try {
+            await api('/projects/' + project.id + '/onpage-audit/update-keyword', {
+              method: 'POST', body: { page_id: s.id, keyword: s.suggested_keyword }
+            });
+            applied++;
+            setPages(prev => prev.map(p => String(p.id) === String(s.id) ? Object.assign({}, p, { focusKeyword: s.suggested_keyword }) : p));
+          } catch (e) { errors++; }
+        }
+
+        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors }));
+        loadHistory();
       };
 
       const [addingLinks, setAddingLinks] = React.useState(null); // 'outbound-123' or 'inbound-123'
@@ -10519,6 +10636,16 @@
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Page{selected.size !== 1 ? 's' : ''}
                 </button>
               )}
+              {pages.length > 0 && !fixAllState?.phase && (
+                <>
+                  <button className="btn" onClick={handleSuggestKeywords} style={{ fontSize: 12, padding: '6px 12px', background: 'rgba(245,158,11,0.15)', border: '1px solid #f59e0b', color: '#f59e0b' }}>
+                    <i className="fas fa-key" style={{ marginRight: 4 }} />Suggest Keywords
+                  </button>
+                  <button className="btn" onClick={handleFixAll} style={{ fontSize: 12, padding: '6px 12px', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff', border: 'none' }}>
+                    <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix All
+                  </button>
+                </>
+              )}
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Audit</>}
               </button>
@@ -10534,6 +10661,41 @@
           )}
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {/* Fix All / Suggest Keywords progress banner */}
+          {fixAllState && (
+            <div style={{ padding: 16, background: fixAllState.phase === 'done' ? 'rgba(34,197,94,0.1)' : 'rgba(99,102,241,0.1)', border: `1px solid ${fixAllState.phase === 'done' ? 'rgba(34,197,94,0.3)' : 'rgba(99,102,241,0.3)'}`, borderRadius: 10, marginBottom: 16 }}>
+              {fixAllState.phase === 'done' ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <i className="fas fa-check-circle" style={{ color: '#22c55e', marginRight: 8 }} />
+                    <span style={{ fontWeight: 600, color: '#22c55e' }}>
+                      {fixAllState.applied} page{fixAllState.applied !== 1 ? 's' : ''} fixed
+                    </span>
+                    {fixAllState.errors > 0 && <span style={{ color: '#ef4444', marginLeft: 8 }}>{fixAllState.errors} error{fixAllState.errors !== 1 ? 's' : ''}</span>}
+                  </div>
+                  <button onClick={() => setFixAllState(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}><i className="fas fa-times" /></button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span className="spinner" style={{ width: 14, height: 14 }}></span>
+                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                      {fixAllState.phase === 'suggesting' && 'Getting AI suggestions...'}
+                      {fixAllState.phase === 'applying' && 'Applying fixes to WordPress...'}
+                      {fixAllState.phase === 'keywords' && 'Generating focus keywords...'}
+                      {fixAllState.phase === 'applying-kw' && 'Saving keywords to WordPress...'}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>{fixAllState.current}/{fixAllState.total}</span>
+                  </div>
+                  {fixAllState.currentTitle && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>{fixAllState.currentTitle}</div>}
+                  <div style={{ height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${(fixAllState.current / fixAllState.total) * 100}%`, background: 'var(--accent)', borderRadius: 2, transition: 'width 0.3s' }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {overallStats && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
@@ -10590,6 +10752,7 @@
                       { key: 'words', label: 'Words', align: 'center', width: 65 },
                       { key: 'links', label: 'Out / In', align: 'center', width: 70 },
                       { key: 'issues', label: 'Issues', align: 'center', width: 75 },
+                      { key: 'status', label: 'Status', align: 'center', width: 65 },
                     ].map(col => (
                       <th key={col.key} onClick={() => toggleSort(col.key)} style={{ padding: '10px 10px', textAlign: col.align, fontWeight: 600, color: sortBy === col.key ? 'var(--accent)' : 'var(--text2)', width: col.width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
                         {col.label}
@@ -10614,9 +10777,8 @@
                             {isFixable && <input type="checkbox" checked={selected.has(page.id)} onChange={(e) => toggleSelect(page.id, e)} style={{ cursor: 'pointer' }} />}
                           </td>
                           <td style={{ padding: '10px 10px' }}>
-                            <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ fontWeight: 600 }}>
                               {page.title}
-                              {hasHistory && <i className="fas fa-history" style={{ color: '#f59e0b', fontSize: 10 }} title="Has changes — rollback available" />}
                             </div>
                             <a href={page.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--text3)', textDecoration: 'none' }} onMouseEnter={e => e.target.style.color='var(--accent)'} onMouseLeave={e => e.target.style.color='var(--text3)'}>{page.url}</a>
                           </td>
@@ -10659,6 +10821,17 @@
                             {problems > 0 && <span style={{ color: '#ef4444', fontWeight: 600, marginRight: 4 }}>{problems}<i className="fas fa-times-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
                             {warnings > 0 && <span style={{ color: '#f59e0b', fontWeight: 600 }}>{warnings}<i className="fas fa-exclamation-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
                             {problems === 0 && warnings === 0 && <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" /></span>}
+                          </td>
+                          <td style={{ padding: '10px 10px', textAlign: 'center' }}>
+                            {verifiedPages[page.id] === 'verified' ? (
+                              <span title="Verified — changes confirmed on WordPress" style={{ color: '#22c55e', fontSize: 11 }}><i className="fas fa-check-double" /></span>
+                            ) : verifiedPages[page.id] === 'failed' ? (
+                              <span title="Failed — changes did not apply" style={{ color: '#ef4444', fontSize: 11 }}><i className="fas fa-times-circle" /></span>
+                            ) : verifiedPages[page.id] === 'changed' ? (
+                              <span title="Changed — applied to WordPress" style={{ color: '#f59e0b', fontSize: 11 }}><i className="fas fa-check-circle" /></span>
+                            ) : hasHistory ? (
+                              <span title="Has previous changes" style={{ color: 'var(--text3)', fontSize: 11 }}><i className="fas fa-history" /></span>
+                            ) : null}
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                             {isFixable ? (
