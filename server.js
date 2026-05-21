@@ -1818,6 +1818,107 @@ app.post('/api/projects/:id/plugin/404s/clear', async (req, res) => {
   }
 });
 
+// POST /api/projects/:id/plugin/404s/suggest-redirects — match 404 URLs to existing pages
+app.post('/api/projects/:id/plugin/404s/suggest-redirects', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { urls } = req.body; // array of 404 URL paths
+    if (!urls || !urls.length) return res.status(400).json({ error: 'No URLs to match' });
+
+    const wpUrl = (project.wordpress_url || project.domain || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    const baseUrl = `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
+
+    // Fetch all published pages + posts from WP REST API
+    let allPages = [];
+    for (const type of ['pages', 'posts']) {
+      let page = 1;
+      while (page <= 10) { // cap at 10 pages (100 per page = 1000 total)
+        try {
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,title,link,type`, {
+            headers: authHeaders, signal: AbortSignal.timeout(15000)
+          });
+          if (!resp.ok) break;
+          const items = await resp.json();
+          if (!items.length) break;
+          allPages.push(...items.map(p => ({
+            slug: p.slug,
+            title: p.title?.rendered || '',
+            url: p.link || `${baseUrl}/${p.slug}/`,
+            path: `/${p.slug}/`,
+            type: p.type
+          })));
+          page++;
+        } catch { break; }
+      }
+    }
+    console.log(`[suggest-redirects] Found ${allPages.length} published pages/posts`);
+
+    // Helper: extract words from a URL path
+    const extractWords = (urlPath) => {
+      return (urlPath || '').replace(/^\/|\/$/g, '').split(/[-_\/]/).filter(w => w.length > 2 && !/^\d+$/.test(w));
+    };
+
+    // Helper: calculate word overlap score
+    const wordOverlap = (words1, words2) => {
+      if (!words1.length || !words2.length) return 0;
+      const set2 = new Set(words2.map(w => w.toLowerCase()));
+      const matches = words1.filter(w => set2.has(w.toLowerCase())).length;
+      return matches / Math.max(words1.length, words2.length);
+    };
+
+    // Match each 404 URL to best page
+    const suggestions = {};
+    for (const url404 of urls) {
+      const path404 = url404.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
+      const slug404 = path404.split('/').filter(Boolean).pop() || '';
+      const words404 = extractWords(path404);
+
+      let bestMatch = null;
+      let bestScore = 0;
+
+      for (const page of allPages) {
+        let score = 0;
+        const pageSlug = page.slug || '';
+        const pageWords = extractWords(page.path);
+
+        // Exact slug match = highest score
+        if (slug404 === pageSlug) { score = 1.0; }
+        // Slug contains or is contained
+        else if (slug404.includes(pageSlug) || pageSlug.includes(slug404)) {
+          score = 0.7 + (0.2 * Math.min(slug404.length, pageSlug.length) / Math.max(slug404.length, pageSlug.length));
+        }
+        // Word overlap scoring
+        else {
+          score = wordOverlap(words404, pageWords) * 0.8;
+        }
+
+        // Boost if title words match 404 words
+        const titleWords = (page.title || '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        const titleOverlap = wordOverlap(words404, titleWords);
+        score += titleOverlap * 0.2;
+
+        if (score > bestScore && score >= 0.15) {
+          bestScore = score;
+          bestMatch = { url: page.url, path: page.path, title: page.title, score: Math.round(score * 100), type: page.type };
+        }
+      }
+
+      suggestions[url404] = bestMatch;
+    }
+
+    // Count matches
+    const matched = Object.values(suggestions).filter(Boolean).length;
+    console.log(`[suggest-redirects] Matched ${matched}/${urls.length} URLs`);
+
+    res.json({ suggestions, total: urls.length, matched });
+  } catch (e) {
+    console.error(`[suggest-redirects] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/projects/:id/plugin/404s/:fid/redirect — create redirect from a 404
 app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
   try {

@@ -9464,6 +9464,11 @@
       const [editType, setEditType] = useState('301');
       const [editSaving, setEditSaving] = useState(false);
       const [redDeletingId, setRedDeletingId] = useState(null);
+      // Redirect suggestions state
+      const [suggestions, setSuggestions] = useState({});
+      const [suggestLoading, setSuggestLoading] = useState(false);
+      const [autoRedirecting, setAutoRedirecting] = useState(false);
+      const [autoProgress, setAutoProgress] = useState(null);
       // Broken links state
       const [brokenLinks, setBrokenLinks] = useState([]);
       const [blTotal, setBlTotal] = useState(0);
@@ -9557,6 +9562,45 @@
           setFourTotal(0);
         } catch (err) { console.error(err); }
         setClearingAll(false);
+      };
+
+      const suggestRedirects = async () => {
+        if (!fourOhFours.length) return;
+        setSuggestLoading(true);
+        try {
+          const urls = fourOhFours.map(f => f.url || f.url_path || '');
+          const data = await api(`/projects/${project.id}/plugin/404s/suggest-redirects`, {
+            method: 'POST', body: { urls }
+          });
+          setSuggestions(data.suggestions || {});
+        } catch (err) { console.error('Suggest error:', err); }
+        setSuggestLoading(false);
+      };
+
+      const autoRedirectAll = async () => {
+        const matchedItems = fourOhFours.filter(f => {
+          const key = f.url || f.url_path || '';
+          return suggestions[key] && suggestions[key].score >= 50;
+        });
+        if (!matchedItems.length) return;
+        setAutoRedirecting(true);
+        setAutoProgress({ done: 0, total: matchedItems.length });
+        let done = 0;
+        for (const item of matchedItems) {
+          const key = item.url || item.url_path || '';
+          const target = suggestions[key]?.url;
+          if (!target) continue;
+          try {
+            await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, {
+              method: 'POST', body: { target_url: target }
+            });
+            done++;
+            setAutoProgress({ done, total: matchedItems.length });
+          } catch (err) { console.error('Auto-redirect error:', item.id, err); }
+        }
+        setAutoRedirecting(false);
+        setAutoProgress(null);
+        load404s(); // Refresh list
       };
 
       const handleAddRedirect = async () => {
@@ -9658,11 +9702,26 @@
           statCard(unique404Urls, 'Unique URLs', '#6366f1'),
           statCard(last24h, 'Last 24h Hits', '#f59e0b')
         ),
-        // Clear all button
-        fourOhFours.length > 0 && e('div', { style: { marginBottom: 12, textAlign: 'right' } },
+        // Action buttons
+        fourOhFours.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+          e('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            e('button', { style: btnStyle('#8b5cf6'), onClick: suggestRedirects, disabled: suggestLoading },
+              suggestLoading ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-magic' }),
+              suggestLoading ? ' Matching pages...' : ' Suggest Redirects'
+            ),
+            Object.values(suggestions).filter(Boolean).length > 0 && e('button', {
+              style: btnStyle('#22c55e'), onClick: autoRedirectAll, disabled: autoRedirecting
+            },
+              autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-bolt' }),
+              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 50).length} Matches`
+            ),
+            Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
+              `${Object.values(suggestions).filter(Boolean).length}/${fourOhFours.length} matched`
+            )
+          ),
           e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
             clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
-            clearingAll ? ' Clearing...' : ' Clear All 404s'
+            clearingAll ? ' Clearing...' : ' Clear All'
           )
         ),
         // Table
@@ -9693,17 +9752,39 @@
                   e('td', { style: { ...tdStyle, fontSize: 12, color: 'var(--text3)' } }, relTime(item.last_seen)),
                   e('td', { style: { ...tdStyle, ...urlCell, fontSize: 12, color: 'var(--text3)' }, title: item.referrer }, item.referrer || '—'),
                   e('td', { style: { ...tdStyle, textAlign: 'right' } },
-                    redirectingId === item.id ? null : e('button', {
-                      style: { ...btnStyle('#6366f1'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
-                      onClick: () => { setRedirectingId(item.id); setRedirectTarget(''); }
-                    }, e('i', { className: 'fas fa-arrow-right' }), ' Redirect'),
-                    redirectingId !== item.id && e('button', {
-                      style: { ...btnStyle('#ef4444'), padding: '5px 10px', fontSize: 12 },
-                      onClick: () => handle404Delete(item.id),
-                      disabled: deletingId === item.id
-                    }, deletingId === item.id ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }))
+                    (() => {
+                      const key = item.url || item.url_path || '';
+                      const sug = suggestions[key];
+                      return e(React.Fragment, null,
+                        redirectingId === item.id ? null : e(React.Fragment, null,
+                          sug && e('span', { style: { ...badgeStyle(sug.score >= 70 ? 'rgba(34,197,94,0.15)' : sug.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)', sug.score >= 70 ? '#22c55e' : sug.score >= 40 ? '#f59e0b' : '#6b7280'), marginRight: 6, fontSize: 10 } }, `${sug.score}%`),
+                          e('button', {
+                            style: { ...btnStyle(sug ? '#22c55e' : '#6366f1'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
+                            onClick: () => { setRedirectingId(item.id); setRedirectTarget(sug ? sug.url : ''); }
+                          }, e('i', { className: sug ? 'fas fa-check' : 'fas fa-arrow-right' }), sug ? ' Apply' : ' Redirect'),
+                          e('button', {
+                            style: { ...btnStyle('#ef4444'), padding: '5px 10px', fontSize: 12 },
+                            onClick: () => handle404Delete(item.id),
+                            disabled: deletingId === item.id
+                          }, deletingId === item.id ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }))
+                        )
+                      );
+                    })()
                   )
                 ),
+                // Suggestion preview row
+                (() => {
+                  const key = item.url || item.url_path || '';
+                  const sug = suggestions[key];
+                  return sug && redirectingId !== item.id ? e('tr', { style: { background: 'rgba(34,197,94,0.04)' } },
+                    e('td', { colSpan: 5, style: { padding: '4px 12px', fontSize: 12 } },
+                      e('span', { style: { color: 'var(--text3)' } }, '→ '),
+                      e('span', { style: { color: '#22c55e' } }, sug.path || sug.url),
+                      e('span', { style: { color: 'var(--text3)', marginLeft: 8 } }, sug.title),
+                      e('span', { style: { ...badgeStyle(sug.score >= 70 ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', sug.score >= 70 ? '#22c55e' : '#f59e0b'), marginLeft: 8, fontSize: 10 } }, `${sug.score}% match`)
+                    )
+                  ) : null;
+                })(),
                 // Inline redirect form
                 redirectingId === item.id && e('tr', { style: { background: 'rgba(99,102,241,0.08)' } },
                   e('td', { colSpan: 5, style: { padding: '10px 12px' } },
