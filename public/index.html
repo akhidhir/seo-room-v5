@@ -9747,7 +9747,9 @@
             e('tbody', null,
               fourOhFours.map((item, i) => e(React.Fragment, { key: item.id || i },
                 e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.url }, item.url || '—'),
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.url },
+                    e('a', { href: `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.url || '—')
+                  ),
                   e('td', { style: tdStyle },
                     e('span', { style: badgeStyle('rgba(239,68,68,0.15)', '#ef4444') }, item.hit_count || 0)
                   ),
