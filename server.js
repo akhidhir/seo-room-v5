@@ -4621,7 +4621,7 @@ app.post('/api/projects/:projectId/indexing/analyze', async (req, res) => {
 
       const aiResponse = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 4000,
+        max_tokens: 8000,
         messages: [{
           role: 'user',
           content: `You are an SEO expert analyzing Google Search Console URL Inspection API data. The website is "${project.domain}" (${project.business_name || project.name}).
@@ -4632,7 +4632,7 @@ ${batchSummary}
 
 For EACH page, provide a specific diagnosis based on the actual data — NOT generic advice. Reference the real data points (e.g., "Last crawled 45 days ago with 0 referring URLs suggests low internal linking" or "Google chose a different canonical URL which means...").
 
-Return a JSON object where each key is the page path, and each value has:
+Return a JSON array with exactly ${batch.length} objects, one per page in the same order. Each object has:
 - "why": A 1-2 sentence specific explanation of why THIS page is not indexed, citing the actual data
 - "steps": An array of 3-5 specific actionable fix steps for THIS page (not generic — reference the page URL, data points, etc.)
 - "priority": "critical" | "high" | "medium" | "low" based on how fixable this is
@@ -4645,49 +4645,60 @@ IMPORTANT:
 - If fetch state shows errors, that's the primary issue
 - Don't say "may" or "might" — use the data to make definitive statements
 
-Return ONLY valid JSON, no markdown.`
+Return ONLY a valid JSON array, no markdown, no wrapping.`
         }]
       });
 
-      const text = aiResponse.content[0]?.text || '{}';
-      let parsed = {};
+      const text = aiResponse.content[0]?.text || '[]';
+      let parsedArr = [];
       try {
-        // Try to parse, handling potential markdown wrapping
         const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        parsed = JSON.parse(cleaned);
+        const parsed = JSON.parse(cleaned);
+        // Handle both array and object responses
+        if (Array.isArray(parsed)) {
+          parsedArr = parsed;
+        } else if (typeof parsed === 'object') {
+          // Fallback: if Haiku returned an object, try to match keys to pages
+          const keys = Object.keys(parsed);
+          parsedArr = batch.map((p, bi) => {
+            const key = p.path || p.url;
+            if (parsed[key]) return parsed[key];
+            const matchKey = keys.find(k => key.includes(k) || k.includes(key));
+            if (matchKey) return parsed[matchKey];
+            if (keys[bi]) return parsed[keys[bi]];
+            return null;
+          });
+        }
       } catch (parseErr) {
         console.error('[indexing-analyze] Failed to parse AI response for batch', i, parseErr.message);
-        // Assign generic fallback for this batch
-        batch.forEach(p => {
-          const key = p.path || p.url;
-          parsed[key] = {
-            why: `${p.coverageState || 'Not indexed'}. AI analysis parsing failed — review data manually.`,
-            steps: ['Check Google Search Console for this specific URL', 'Review the page content and internal links', 'Request indexing via GSC'],
-            priority: 'medium',
-            auto_fixable: false
-          };
-        });
+        console.error('[indexing-analyze] Raw response:', text.substring(0, 500));
       }
 
-      // Map results back to page paths
-      batch.forEach(p => {
+      // Map results back to page paths by index
+      batch.forEach((p, bi) => {
         const key = p.path || p.url;
-        // Try exact match first, then partial match
-        if (parsed[key]) {
-          allAnalysis[key] = parsed[key];
+        if (parsedArr[bi] && parsedArr[bi].why) {
+          allAnalysis[key] = parsedArr[bi];
         } else {
-          // Try matching by path substring
-          const matchKey = Object.keys(parsed).find(k => key.includes(k) || k.includes(key));
-          if (matchKey) {
-            allAnalysis[key] = parsed[matchKey];
-          } else {
-            allAnalysis[key] = {
-              why: `${p.coverageState || 'Not indexed'}. Fetch: ${p.pageFetchState || 'Unknown'}. Last crawl: ${p.lastCrawlTime ? new Date(p.lastCrawlTime).toLocaleDateString() : 'Never'}.`,
-              steps: ['Investigate in Google Search Console', 'Check internal linking to this page', 'Request re-indexing'],
-              priority: 'medium',
-              auto_fixable: false
-            };
-          }
+          // Build a data-driven fallback using the real API fields
+          const daysSince = p.lastCrawlTime ? Math.round((Date.now() - new Date(p.lastCrawlTime).getTime()) / (1000*60*60*24)) : null;
+          const parts = [];
+          parts.push(p.coverageState || 'Not indexed');
+          if (p.pageFetchState && p.pageFetchState !== 'SUCCESSFUL') parts.push(`Fetch: ${p.pageFetchState}`);
+          if (daysSince !== null) parts.push(`Last crawled ${daysSince} days ago`);
+          else parts.push('Never crawled');
+          if ((p.referringUrls || []).length === 0) parts.push('0 referring URLs (poor internal linking)');
+          allAnalysis[key] = {
+            why: parts.join('. ') + '.',
+            steps: [
+              `Check ${p.path || p.url} in Google Search Console URL Inspection tool`,
+              (p.referringUrls || []).length === 0 ? 'Add 3-5 internal links from high-traffic pages to this URL' : 'Review and improve internal linking',
+              daysSince && daysSince > 30 ? 'Content has not been crawled recently — update and republish' : 'Improve content quality (500+ unique words)',
+              'Request indexing via GSC after changes'
+            ],
+            priority: p.pageFetchState && p.pageFetchState !== 'SUCCESSFUL' ? 'critical' : 'medium',
+            auto_fixable: false
+          };
         }
       });
     }
