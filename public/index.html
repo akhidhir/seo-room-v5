@@ -10038,6 +10038,250 @@
       );
     }
 
+    // ============ PLAYERS HANDSHAKE PAGE ============
+    function PlayersHandshakePage({ project }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [stage, setStage] = useState('');
+      const [error, setError] = useState('');
+      const [initialLoad, setInitialLoad] = useState(true);
+      const [expandedComp, setExpandedComp] = useState(null);
+      const pollRef = useRef(null);
+
+      useEffect(() => {
+        if (!project?.id) return;
+        (async () => {
+          try {
+            const d = await api(`/projects/${project.id}/handshake/latest`);
+            if (d.status === 'completed') { setData(d); }
+            else if (d.status === 'running') { setLoading(true); setStage(d.stage || 'Processing...'); startPolling(); }
+          } catch {}
+          setInitialLoad(false);
+        })();
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+      }, [project?.id]);
+
+      const startPolling = () => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+          try {
+            const d = await api(`/projects/${project.id}/handshake/latest`);
+            if (d.status === 'completed') {
+              clearInterval(pollRef.current); pollRef.current = null;
+              setData(d); setLoading(false); setStage('');
+            } else if (d.status === 'running') { setStage(d.stage || 'Processing...'); }
+            else if (d.status === 'failed') {
+              clearInterval(pollRef.current); pollRef.current = null;
+              setLoading(false); setError(d.error || 'Analysis failed');
+            }
+          } catch {}
+        }, 3000);
+      };
+
+      const runHandshake = async () => {
+        setLoading(true); setError(''); setStage('Starting...');
+        try {
+          await api(`/projects/${project.id}/handshake/run`, { method: 'POST' });
+          startPolling();
+        } catch (err) { setError(err.message); setLoading(false); }
+      };
+
+      const priColors = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#6b7280' };
+      const impColors = { high: '#22c55e', medium: '#f59e0b', low: '#6b7280' };
+      const effColors = { easy: '#22c55e', moderate: '#f59e0b', hard: '#ef4444' };
+
+      const PlayerCard = ({ player, isUs, rank }) => {
+        const gbp = player.gbp || {};
+        const tech = player.technical || {};
+        return (
+          <div style={{ background: 'var(--card)', border: `2px solid ${isUs ? '#6366f1' : 'var(--border)'}`, borderRadius: 14, padding: 20, flex: 1, minWidth: 260, position: 'relative' }}>
+            {isUs && <div style={{ position: 'absolute', top: -12, left: 16, background: '#6366f1', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: 1 }}>Our Player</div>}
+            {!isUs && rank && <div style={{ position: 'absolute', top: -12, left: 16, background: 'var(--border)', color: 'var(--text)', fontSize: 10, fontWeight: 700, padding: '3px 12px', borderRadius: 20 }}>#{rank}</div>}
+            <div style={{ fontSize: 16, fontWeight: 700, color: isUs ? '#a78bfa' : 'var(--text)', marginBottom: 8, marginTop: 4 }}>{player.name || gbp.title || '—'}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
+              <div><span style={{ color: 'var(--text3)' }}>Rating</span> <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: 16 }}>{gbp.rating || player.rating || '—'}</span> <span style={{ color: 'var(--text3)' }}>⭐</span></div>
+              <div><span style={{ color: 'var(--text3)' }}>Reviews</span> <span style={{ color: '#22c55e', fontWeight: 700, fontSize: 16 }}>{gbp.reviews || player.reviews || '—'}</span></div>
+              <div><span style={{ color: 'var(--text3)' }}>Photos</span> <span style={{ color: '#3b82f6', fontWeight: 700 }}>{gbp.photos_count || '—'}</span></div>
+              <div><span style={{ color: 'var(--text3)' }}>Speed</span> <span style={{ color: (player.speed || 0) >= 80 ? '#22c55e' : (player.speed || 0) >= 50 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>{player.speed || '—'}</span></div>
+              <div style={{ gridColumn: '1/3' }}><span style={{ color: 'var(--text3)' }}>Schema</span> <span style={{ color: '#a78bfa', fontSize: 11 }}>{(tech.schema_types || []).join(', ') || 'None'}</span></div>
+              <div style={{ gridColumn: '1/3' }}><span style={{ color: 'var(--text3)' }}>Categories</span> <span style={{ color: '#8b5cf6', fontSize: 11 }}>{(gbp.categories || []).slice(0, 3).join(', ') || '—'}</span></div>
+              {!isUs && player.dominance != null && (
+                <div style={{ gridColumn: '1/3' }}><span style={{ color: 'var(--text3)' }}>Grid Dominance</span> <span style={{ color: '#ef4444', fontWeight: 700 }}>{player.dominance}%</span></div>
+              )}
+              {isUs && player.grid_performance && (
+                <>
+                  <div><span style={{ color: 'var(--text3)' }}>Avg Pos</span> <span style={{ fontWeight: 700, color: '#f59e0b' }}>{player.grid_performance.avg_arp || '—'}</span></div>
+                  <div><span style={{ color: 'var(--text3)' }}>Top 3%</span> <span style={{ fontWeight: 700, color: '#22c55e' }}>{player.grid_performance.avg_solv || '—'}%</span></div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <div style={{ padding: 24 }}>
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <i className="fas fa-handshake" style={{ color: '#a78bfa' }} /> Players Handshake
+              </h2>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Understand your business, meet your competitors, build your strategy</div>
+            </div>
+            <button onClick={runHandshake} disabled={loading} style={{
+              padding: '10px 20px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 14, cursor: loading ? 'default' : 'pointer',
+              background: loading ? '#6b7280' : 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: '#fff',
+              display: 'flex', alignItems: 'center', gap: 8, boxShadow: loading ? 'none' : '0 4px 15px rgba(99,102,241,0.3)'
+            }}>
+              {loading ? <><span className="spinner" style={{ width: 16, height: 16 }}></span>{stage}</> : <><i className="fas fa-handshake" /> Run Handshake</>}
+            </button>
+          </div>
+
+          {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: 12, marginBottom: 16, color: '#ef4444', fontSize: 13 }}>{error}</div>}
+
+          {initialLoad && <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginBottom: 12, display: 'inline-block' }}></span><div>Loading...</div></div>}
+
+          {!initialLoad && !data && !loading && (
+            <div style={{ textAlign: 'center', padding: 80, color: 'var(--text3)' }}>
+              <i className="fas fa-handshake" style={{ fontSize: 56, marginBottom: 16, display: 'block', opacity: 0.2 }} />
+              <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>Ready to meet the competition?</div>
+              <div style={{ fontSize: 14, maxWidth: 500, margin: '0 auto', lineHeight: 1.7 }}>
+                Players Handshake analyzes your business against your top competitors from Google Maps. It checks their GBP profiles, websites, schema, speed, and reviews — then builds a data-driven strategy to outrank them.
+              </div>
+              <div style={{ fontSize: 12, marginTop: 12, color: 'var(--text3)' }}>Requires: Grid scan data (run Maps Rankings first)</div>
+            </div>
+          )}
+
+          {data && (() => {
+            const our = data.our_player || {};
+            const comps = data.competitors || [];
+            const strat = data.strategy || {};
+            const gaps = strat.gap_matrix || {};
+            return (
+              <>
+                {/* Executive Summary */}
+                {strat.executive_summary && (
+                  <div style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.08))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 14, padding: 20, marginBottom: 24 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 }}><i className="fas fa-quote-left" style={{ marginRight: 6 }} />Executive Summary</div>
+                    <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text)' }}>{strat.executive_summary}</div>
+                  </div>
+                )}
+
+                {/* Player Cards */}
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.5 }}>The Players</div>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+                  <PlayerCard player={our} isUs={true} />
+                  {comps.map((c, i) => <PlayerCard key={i} player={c} isUs={false} rank={i+1} />)}
+                </div>
+
+                {/* Strengths & Weaknesses */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.5 }}><i className="fas fa-shield-alt" style={{ marginRight: 6 }} />Our Strengths</div>
+                    {(strat.our_strengths || []).map((s, i) => (
+                      <div key={i} style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)', padding: '6px 0', borderBottom: i < (strat.our_strengths || []).length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <span style={{ color: '#22c55e', marginRight: 8 }}>✓</span>{s}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 0.5 }}><i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />Our Weaknesses</div>
+                    {(strat.our_weaknesses || []).map((w, i) => (
+                      <div key={i} style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)', padding: '6px 0', borderBottom: i < (strat.our_weaknesses || []).length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <span style={{ color: '#ef4444', marginRight: 8 }}>✗</span>{w}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Gap Matrix */}
+                {Object.keys(gaps).length > 0 && (
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20, marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', marginBottom: 16, letterSpacing: 0.5 }}><i className="fas fa-th" style={{ marginRight: 6 }} />Gap Matrix</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280, 1fr))', gap: 12 }}>
+                      {Object.entries(gaps).map(([key, gap]) => (
+                        <div key={key} style={{ background: 'var(--bg)', borderRadius: 10, padding: 14, border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700,
+                              background: (priColors[gap.priority] || '#6b7280') + '20',
+                              color: priColors[gap.priority] || '#6b7280'
+                            }}>{(gap.priority || '').toUpperCase()}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 6 }}>
+                            <span><span style={{ color: '#6366f1', fontWeight: 700 }}>Us:</span> <span style={{ color: 'var(--text)' }}>{typeof gap.us === 'object' ? JSON.stringify(gap.us) : gap.us}</span></span>
+                            <span><span style={{ color: '#ef4444', fontWeight: 700 }}>Them:</span> <span style={{ color: 'var(--text)' }}>{typeof gap.avg_competitor === 'object' ? JSON.stringify(gap.avg_competitor) : gap.avg_competitor}</span></span>
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>{gap.gap}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Competitor Insights */}
+                {(strat.competitor_insights || []).length > 0 && (
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20, marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', marginBottom: 16, letterSpacing: 0.5 }}><i className="fas fa-users" style={{ marginRight: 6 }} />What We Learned From Each Player</div>
+                    {strat.competitor_insights.map((ci, i) => (
+                      <div key={i} style={{ background: 'var(--bg)', borderRadius: 10, padding: 14, marginBottom: i < strat.competitor_insights.length - 1 ? 12 : 0, border: '1px solid var(--border)', cursor: 'pointer' }}
+                        onClick={() => setExpandedComp(expandedComp === i ? null : i)}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: '#a78bfa' }}>{ci.name}</span>
+                          <i className={`fas fa-chevron-${expandedComp === i ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />
+                        </div>
+                        {expandedComp === i && (
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, marginBottom: 4 }}>Their Advantage:</div>
+                            <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.6, marginBottom: 8 }}>{ci.key_advantage}</div>
+                            <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600, marginBottom: 4 }}>What We Can Learn:</div>
+                            <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{ci.what_we_can_learn}</div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Proposed Strategy */}
+                {(strat.proposed_strategy || []).length > 0 && (
+                  <div style={{ background: 'var(--card)', border: '2px solid rgba(34,197,94,0.3)', borderRadius: 14, padding: 20 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 16, letterSpacing: 0.5 }}><i className="fas fa-chess" style={{ marginRight: 6 }} />Proposed Strategy</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {strat.proposed_strategy.map((s, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '32px 1fr auto', gap: 12, alignItems: 'start', background: 'var(--bg)', borderRadius: 10, padding: 14, border: '1px solid var(--border)' }}>
+                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#22c55e' }}>{i+1}</div>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{s.action}</div>
+                            <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>{s.why}</div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700,
+                              background: (impColors[s.expected_impact] || '#6b7280') + '20',
+                              color: impColors[s.expected_impact] || '#6b7280'
+                            }}>{(s.expected_impact || '').toUpperCase()} IMPACT</span>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700,
+                              background: (effColors[s.effort] || '#6b7280') + '20',
+                              color: effColors[s.effort] || '#6b7280'
+                            }}>{(s.effort || '').toUpperCase()}</span>
+                            <span style={{ fontSize: 10, color: 'var(--text3)' }}>{s.timeframe}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Timestamp */}
+                {data.ran_at && <div style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text3)' }}>Analysis completed {new Date(data.ran_at).toLocaleString()}</div>}
+              </>
+            );
+          })()}
+        </div>
+      );
+    }
+
     function UserBehaviourPage({ project }) {
       const [metrics, setMetrics] = useState([]);
       const [loading, setLoading] = useState(true);
@@ -25897,6 +26141,8 @@
             return <UserBehaviourPage project={project} />;
           case 'redirects':
             return <RedirectsPage project={project} />;
+          case 'handshake':
+            return <PlayersHandshakePage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
           case 'nw-project':
@@ -25980,6 +26226,9 @@ case 'action-plan':
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
             { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
           ] },
+        ]},
+        { section: 'STRATEGY', items: [
+          { id: 'handshake', label: 'Players Handshake', icon: 'fas fa-handshake', localOnly: true },
         ]},
         { section: 'RANKINGS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },

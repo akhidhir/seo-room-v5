@@ -4827,6 +4827,373 @@ Return ONLY a valid JSON array, no markdown, no wrapping.`
   }
 });
 
+// ==================== PLAYERS HANDSHAKE ====================
+
+// Run Players Handshake analysis
+app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const baseUrl = `https://${domain}`;
+    const businessName = project.business_name || project.name || '';
+    const location = project.location || '';
+
+    // Create audit record
+    const auditRes = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at) VALUES ($1, 'handshake', 'running', $2::jsonb, NOW()) RETURNING id`,
+      [parseInt(projectId), JSON.stringify({ stage: 'Starting...' })]
+    );
+    const auditId = auditRes.rows[0].id;
+    res.json({ auditId, status: 'running' });
+
+    // Background processing
+    (async () => {
+      try {
+        const updateStage = async (stage) => {
+          await pool.query(`UPDATE audits SET audit_data = audit_data || $1::jsonb WHERE id=$2`,
+            [JSON.stringify({ stage }), auditId]);
+        };
+
+        // ========== STEP 1: Build "Our Player" profile ==========
+        await updateStage('Understanding our player...');
+
+        // Get GBP data from SerpAPI
+        let ourGbp = null;
+        const gbpPlaceId = project.gbp_location_id;
+        if (gbpPlaceId) {
+          try {
+            const serpData = await serpApiSearch({
+              engine: 'google_maps',
+              place_id: gbpPlaceId,
+              type: 'place',
+            });
+            const p = serpData.place_results || serpData;
+            ourGbp = {
+              title: p.title || businessName,
+              rating: p.rating,
+              reviews: p.reviews,
+              type: p.type || '',
+              types: p.types || [],
+              address: p.address,
+              phone: p.phone,
+              website: p.website,
+              description: p.description || '',
+              hours: p.operating_hours || p.hours || null,
+              photos_count: (p.photos || []).length,
+              service_options: p.service_options || {},
+              categories: [p.type, ...(p.types || [])].filter(Boolean),
+            };
+          } catch (e) { console.log('[handshake] GBP Place Details error:', e.message); }
+        }
+
+        // Get grid scan competitors (aggregated across all keywords)
+        const gridRes = await pool.query(
+          `SELECT keyword, competitors, arp, atrp, solv, found_in, data_points FROM grid_scans
+           WHERE project_id=$1 AND competitors IS NOT NULL
+           ORDER BY scanned_at DESC LIMIT 20`,
+          [projectId]
+        );
+
+        // Aggregate top competitors across all grid scans
+        const compMap = {};
+        for (const row of gridRes.rows) {
+          const comp = typeof row.competitors === 'string' ? JSON.parse(row.competitors) : row.competitors;
+          const topComps = comp?.top || [];
+          for (const c of topComps) {
+            const name = (c.name || c.title || '').trim();
+            if (!name || name.toLowerCase() === businessName.toLowerCase()) continue;
+            if (!compMap[name]) {
+              compMap[name] = { name, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, dominance: 0, keywords_dominated: [] };
+            }
+            compMap[name].appearances += (c.appearances || 1);
+            compMap[name].dominance = Math.max(compMap[name].dominance, c.dominance || 0);
+            if (c.rating && c.rating > (compMap[name].rating || 0)) compMap[name].rating = c.rating;
+            if (c.reviews && c.reviews > (compMap[name].reviews || 0)) compMap[name].reviews = c.reviews;
+            if (c.website && !compMap[name].website) compMap[name].website = c.website;
+            compMap[name].keywords_dominated.push(row.keyword);
+          }
+        }
+        const topCompetitors = Object.values(compMap)
+          .sort((a, b) => b.appearances - a.appearances)
+          .slice(0, 5);
+
+        console.log(`[handshake] Found ${topCompetitors.length} top competitors`);
+
+        // Get our website technical signals
+        await updateStage('Analyzing our website...');
+        let ourTechnical = {};
+        try {
+          const authHeaders = getWpAuthHeaders(project);
+          const pages = await discoverPages(baseUrl, project.wordpress_url, authHeaders);
+          ourTechnical.page_count = pages.length;
+
+          // Check homepage
+          const homeResp = await fetch(baseUrl, { signal: AbortSignal.timeout(10000) });
+          const homeHtml = await homeResp.text();
+          ourTechnical.has_schema = /application\/ld\+json/i.test(homeHtml);
+          ourTechnical.schema_types = (homeHtml.match(/"@type"\s*:\s*"([^"]+)"/g) || []).map(m => m.match(/"([^"]+)"$/)[1]);
+          ourTechnical.has_faq_schema = homeHtml.includes('"FAQPage"');
+          ourTechnical.meta_title = (homeHtml.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '';
+          ourTechnical.meta_desc = (homeHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i) || [])[1] || '';
+          ourTechnical.word_count = homeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().split(/\s+/).length;
+          ourTechnical.internal_links = (homeHtml.match(new RegExp(`href=["'][^"']*${domain.replace('.', '\\.')}[^"']*["']`, 'gi')) || []).length;
+          ourTechnical.h1_count = (homeHtml.match(/<h1[^>]*>/gi) || []).length;
+        } catch (e) { console.log('[handshake] Our technical analysis error:', e.message); }
+
+        // Get our PageSpeed score
+        let ourSpeed = null;
+        try {
+          const psResp = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeedTest?url=${encodeURIComponent(baseUrl)}&strategy=mobile&key=${PAGESPEED_API_KEY || ''}`, { signal: AbortSignal.timeout(30000) });
+          if (psResp.ok) {
+            const psData = await psResp.json();
+            ourSpeed = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+          }
+        } catch (e) { console.log('[handshake] Our speed check error:', e.message); }
+
+        // ========== STEP 2: Handshake each competitor ==========
+        await updateStage(`Handshaking ${topCompetitors.length} competitors...`);
+        const competitorProfiles = [];
+
+        for (let ci = 0; ci < topCompetitors.length; ci++) {
+          const comp = topCompetitors[ci];
+          await updateStage(`Handshaking ${comp.name} (${ci+1}/${topCompetitors.length})...`);
+          const profile = { ...comp, gbp: null, technical: {}, speed: null };
+
+          // Get competitor GBP profile via SerpAPI Maps search
+          try {
+            const searchData = await serpApiSearch({
+              engine: 'google_maps',
+              q: `${comp.name} ${location}`,
+              type: 'search',
+            });
+            const match = (searchData.local_results || []).find(r =>
+              (r.title || '').toLowerCase().includes(comp.name.toLowerCase().split(' ')[0])
+            );
+            if (match) {
+              // Get detailed Place info
+              if (match.place_id) {
+                try {
+                  const placeData = await serpApiSearch({
+                    engine: 'google_maps',
+                    place_id: match.place_id,
+                    type: 'place',
+                  });
+                  const p = placeData.place_results || placeData;
+                  profile.gbp = {
+                    title: p.title || comp.name,
+                    rating: p.rating || comp.rating,
+                    reviews: p.reviews || comp.reviews,
+                    type: p.type || comp.type,
+                    types: p.types || [],
+                    address: p.address,
+                    phone: p.phone,
+                    website: p.website || comp.website,
+                    description: p.description || '',
+                    hours: p.operating_hours || p.hours || null,
+                    photos_count: (p.photos || []).length,
+                    service_options: p.service_options || {},
+                    categories: [p.type, ...(p.types || [])].filter(Boolean),
+                  };
+                } catch (e) { console.log(`[handshake] Place Details error for ${comp.name}:`, e.message); }
+              }
+              if (!profile.gbp) {
+                profile.gbp = {
+                  title: match.title || comp.name,
+                  rating: match.rating || comp.rating,
+                  reviews: match.reviews || comp.reviews,
+                  type: match.type || comp.type,
+                  types: [],
+                  address: match.address,
+                  phone: match.phone,
+                  website: match.website || comp.website,
+                  description: '',
+                  photos_count: (match.thumbnail ? 1 : 0),
+                  categories: [match.type].filter(Boolean),
+                };
+              }
+            }
+          } catch (e) { console.log(`[handshake] Maps search error for ${comp.name}:`, e.message); }
+
+          // Crawl competitor homepage for technical signals
+          const compUrl = profile.gbp?.website || comp.website;
+          if (compUrl) {
+            try {
+              const resp = await fetch(compUrl.startsWith('http') ? compUrl : `https://${compUrl}`, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
+              const html = await resp.text();
+              profile.technical = {
+                has_schema: /application\/ld\+json/i.test(html),
+                schema_types: (html.match(/"@type"\s*:\s*"([^"]+)"/g) || []).map(m => m.match(/"([^"]+)"$/)?.[1]).filter(Boolean),
+                has_faq_schema: html.includes('"FAQPage"'),
+                meta_title: (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '',
+                meta_desc: (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i) || [])[1] || '',
+                word_count: html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().split(/\s+/).length,
+                h1_count: (html.match(/<h1[^>]*>/gi) || []).length,
+              };
+
+              // Quick PageSpeed check
+              try {
+                const psResp = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeedTest?url=${encodeURIComponent(compUrl)}&strategy=mobile&key=${PAGESPEED_API_KEY || ''}`, { signal: AbortSignal.timeout(30000) });
+                if (psResp.ok) {
+                  const psData = await psResp.json();
+                  profile.speed = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+                }
+              } catch {}
+            } catch (e) { console.log(`[handshake] Crawl error for ${comp.name}:`, e.message); }
+          }
+
+          competitorProfiles.push(profile);
+        }
+
+        // ========== STEP 3: AI Strategy Generation ==========
+        await updateStage('Generating strategy...');
+
+        const ourProfile = {
+          name: businessName,
+          domain,
+          location,
+          industry: project.industry || '',
+          service_areas: project.service_areas || [],
+          gbp: ourGbp,
+          technical: ourTechnical,
+          speed: ourSpeed,
+          grid_performance: {
+            keywords_scanned: gridRes.rows.length,
+            avg_arp: gridRes.rows.length > 0 ? Math.round(gridRes.rows.reduce((s, r) => s + (r.arp || 0), 0) / gridRes.rows.length * 10) / 10 : null,
+            avg_solv: gridRes.rows.length > 0 ? Math.round(gridRes.rows.reduce((s, r) => s + (r.solv || 0), 0) / gridRes.rows.length * 10) / 10 : null,
+          }
+        };
+
+        const aiPrompt = `You are a senior local SEO strategist. I'm analyzing a business ("Our Player") against their top competitors ("Other Players") who rank higher on Google Maps and SERP.
+
+## OUR PLAYER
+Name: ${ourProfile.name}
+Domain: ${ourProfile.domain}
+Location: ${ourProfile.location}
+Industry: ${ourProfile.industry}
+Service Areas: ${JSON.stringify(ourProfile.service_areas)}
+GBP Rating: ${ourGbp?.rating || 'Unknown'} (${ourGbp?.reviews || 0} reviews)
+GBP Categories: ${JSON.stringify(ourGbp?.categories || [])}
+GBP Description: ${ourGbp?.description ? 'Yes (' + ourGbp.description.length + ' chars)' : 'Missing'}
+GBP Photos: ${ourGbp?.photos_count || 0}
+GBP Hours: ${ourGbp?.hours ? 'Set' : 'Not set'}
+Website Pages: ${ourTechnical.page_count || 'Unknown'}
+Schema Types: ${JSON.stringify(ourTechnical.schema_types || [])}
+FAQ Schema: ${ourTechnical.has_faq_schema ? 'Yes' : 'No'}
+Homepage Word Count: ${ourTechnical.word_count || 'Unknown'}
+Homepage Internal Links: ${ourTechnical.internal_links || 'Unknown'}
+PageSpeed Score: ${ourSpeed || 'Unknown'}/100
+Grid Scan Avg Position: ${ourProfile.grid_performance.avg_arp || 'N/A'}
+Grid Scan Avg Top 3%: ${ourProfile.grid_performance.avg_solv || 'N/A'}%
+
+## COMPETITORS (ranked by dominance)
+${competitorProfiles.map((c, i) => `
+### Competitor ${i+1}: ${c.name}
+GBP Rating: ${c.gbp?.rating || c.rating || '?'} (${c.gbp?.reviews || c.reviews || '?'} reviews)
+GBP Categories: ${JSON.stringify(c.gbp?.categories || [])}
+GBP Description: ${c.gbp?.description ? 'Yes (' + c.gbp.description.length + ' chars)' : 'Missing'}
+GBP Photos: ${c.gbp?.photos_count || '?'}
+Website: ${c.gbp?.website || c.website || 'None'}
+Schema Types: ${JSON.stringify(c.technical?.schema_types || [])}
+FAQ Schema: ${c.technical?.has_faq_schema ? 'Yes' : 'No'}
+Homepage Word Count: ${c.technical?.word_count || '?'}
+PageSpeed: ${c.speed || '?'}/100
+Grid Dominance: ${c.dominance}% of grid points in top 3
+Keywords Dominated: ${[...new Set(c.keywords_dominated)].join(', ')}
+`).join('')}
+
+Based on this REAL DATA, provide your analysis as JSON with these fields:
+
+{
+  "executive_summary": "2-3 sentence overview of our competitive position",
+  "our_strengths": ["3-5 specific strengths citing real data"],
+  "our_weaknesses": ["3-5 specific weaknesses citing real data"],
+  "competitor_insights": [
+    {"name": "Competitor Name", "key_advantage": "What they do better and how (with data)", "what_we_can_learn": "Specific actionable takeaway"}
+  ],
+  "gap_matrix": {
+    "reviews": {"us": number, "avg_competitor": number, "gap": "description", "priority": "critical|high|medium|low"},
+    "photos": {"us": number, "avg_competitor": number, "gap": "description", "priority": "..."},
+    "schema": {"us": "types", "avg_competitor": "types", "gap": "description", "priority": "..."},
+    "content": {"us": "word count", "avg_competitor": "avg word count", "gap": "description", "priority": "..."},
+    "speed": {"us": number, "avg_competitor": number, "gap": "description", "priority": "..."},
+    "categories": {"us": "list", "avg_competitor": "common types", "gap": "description", "priority": "..."}
+  },
+  "proposed_strategy": [
+    {"action": "Specific action", "why": "Data-driven reason", "expected_impact": "high|medium|low", "effort": "easy|moderate|hard", "timeframe": "1-2 weeks|1 month|2-3 months"}
+  ]
+}
+
+Be SPECIFIC — reference actual numbers, not generic advice. If a competitor has 200 reviews and we have 50, say that. If they have FAQPage schema and we don't, say that.
+Return ONLY valid JSON.`;
+
+        const aiResponse = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: aiPrompt }]
+        });
+
+        let strategy = {};
+        try {
+          const text = (aiResponse.content[0]?.text || '{}').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+          strategy = JSON.parse(text);
+        } catch (e) {
+          console.error('[handshake] Failed to parse AI response:', e.message);
+          strategy = { executive_summary: 'Analysis completed but strategy parsing failed. Raw data available below.', proposed_strategy: [] };
+        }
+
+        // Save completed analysis
+        const auditData = {
+          stage: 'Complete',
+          our_player: ourProfile,
+          competitors: competitorProfiles,
+          strategy,
+          ran_at: new Date().toISOString(),
+        };
+
+        await pool.query(
+          `UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify(auditData), auditId]
+        );
+        console.log(`[handshake] Complete. ${competitorProfiles.length} competitors analyzed.`);
+
+      } catch (bgErr) {
+        console.error('[handshake] Background error:', bgErr.message);
+        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+          [JSON.stringify({ error: bgErr.message }), auditId]).catch(() => {});
+      }
+    })();
+  } catch (e) {
+    console.error('[handshake] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest handshake results
+app.get('/api/projects/:projectId/handshake/latest', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY started_at DESC LIMIT 1`,
+      [req.params.projectId]
+    );
+    if (result.rows.length === 0) return res.json({ status: 'none' });
+    const audit = result.rows[0];
+    if (audit.status === 'running') {
+      const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+      return res.json({ status: 'running', stage: data.stage || 'Processing...' });
+    }
+    if (audit.status === 'completed') {
+      const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
+      return res.json({ status: 'completed', ...data, completed_at: audit.completed_at });
+    }
+    res.json({ status: audit.status, error: audit.audit_data?.error });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== RATING CAPTAIN SYNC ====================
 
 // Accept Rating Captain data and generate internal GBP audit findings
