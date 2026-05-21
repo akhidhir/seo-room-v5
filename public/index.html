@@ -8395,6 +8395,8 @@
         setLastChecked(data.completed_at ? new Date(data.completed_at) : new Date());
         setLoading(false); setProgress(null);
         _indexingCache[_ixck] = { results: r, stats: st, completedAt: data.completed_at };
+        // Load saved AI analysis if exists
+        if (data.ai_analysis) setAiAnalysis(data.ai_analysis);
         // Refresh budget after scan completes
         api('/indexing/budget').then(b => { if (b.limit) setBudget(b); }).catch(() => {});
       };
@@ -8484,6 +8486,22 @@
       const [expandedRow, setExpandedRow] = useState(null);
       const [actionItems, setActionItems] = useState({});
       const [addingAction, setAddingAction] = useState(null);
+      const [aiAnalysis, setAiAnalysis] = useState({});
+      const [analyzingAI, setAnalyzingAI] = useState(false);
+
+      const runAIAnalysis = async () => {
+        const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL');
+        if (!notIndexed.length) return;
+        setAnalyzingAI(true);
+        try {
+          const data = await api(`/projects/${project.id}/indexing/analyze`, {
+            method: 'POST',
+            body: { pages: notIndexed }
+          });
+          if (data.analysis) setAiAnalysis(data.analysis);
+        } catch (err) { setError('AI analysis failed: ' + err.message); }
+        setAnalyzingAI(false);
+      };
 
       // Detect fix type + assignee for indexing issues
       const getIndexingFixType = (page) => {
@@ -8522,6 +8540,8 @@
       const addIndexingAction = async (page, idx) => {
         setAddingAction(idx);
         const fix = getIndexingFixType(page);
+        const pageKey = page.path || page.url;
+        const aiData = aiAnalysis[pageKey];
         try {
           const resp = await api(`/projects/${project.id}/action-items`, {
             method: 'POST',
@@ -8529,10 +8549,10 @@
               pillar: 'website',
               category: 'indexing',
               title: `Fix indexing: ${page.path}`,
-              description: `${page.coverageState || 'Not indexed'} — ${fix.steps.join('; ')}`,
-              severity: /crawled/i.test(page.coverageState || '') ? 'medium' : 'critical',
+              description: aiData ? `${aiData.why} — Steps: ${aiData.steps.join('; ')}` : `${page.coverageState || 'Not indexed'} — ${fix.steps.join('; ')}`,
+              severity: aiData?.priority || (/crawled/i.test(page.coverageState || '') ? 'medium' : 'critical'),
               status: 'pending',
-              execution_type: fix.type,
+              execution_type: aiData?.auto_fixable ? 'automated' : fix.type,
             }
           });
           const item = resp.action_item || {};
@@ -8582,6 +8602,17 @@
               <button className="btn btn-primary" onClick={runCheck} disabled={loading || (budget && budget.remaining <= 0)} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />{results.length > 0 ? 'Re-check' : 'Check Indexing'}</>}
               </button>
+              {results.length > 0 && stats.notIndexed > 0 && (
+                <button onClick={runAIAnalysis} disabled={analyzingAI} style={{
+                  fontSize: 13, padding: '8px 16px', borderRadius: 8, border: 'none', cursor: analyzingAI ? 'default' : 'pointer', fontWeight: 600, color: '#fff',
+                  background: analyzingAI ? '#6b7280' : Object.keys(aiAnalysis).length > 0 ? '#059669' : '#8b5cf6',
+                  display: 'flex', alignItems: 'center', gap: 6
+                }}>
+                  {analyzingAI ? <><span className="spinner" style={{ width: 14, height: 14 }}></span>Analyzing {stats.notIndexed} pages...</>
+                    : Object.keys(aiAnalysis).length > 0 ? <><i className="fas fa-check" /> AI Analyzed</>
+                    : <><i className="fas fa-brain" /> Analyze with AI</>}
+                </button>
+              )}
             </div>
           </div>
 
@@ -8709,25 +8740,40 @@
                     </div>
                     <div>{isNotIndexed && <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 11 }} />}</div>
                   </div>
-                  {isExpanded && (
+                  {isExpanded && (() => {
+                    const pageKey = r.path || r.url;
+                    const aiData = aiAnalysis[pageKey];
+                    const priorityColors = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#6b7280' };
+                    return (
                     <div style={{ padding: '12px 16px 16px', background: 'rgba(239,68,68,0.03)', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
                         <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12 }}>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Why not indexed</div>
-                          <div style={{ fontSize: 13 }}>
-                            {isCrawled ? 'Google crawled this page but decided the content is not valuable enough to index. Common causes: thin content (<300 words), duplicate content, low internal links, or poor content quality.'
-                              : isDiscovered ? 'Google knows this page exists but hasn\'t fully crawled it yet. This means the page has low priority — not enough internal links or authority signals.'
-                              : r.coverageState || 'Unknown reason.'}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <div style={{ fontSize: 11, color: aiData ? '#a78bfa' : 'var(--text3)', textTransform: 'uppercase', fontWeight: 700 }}>
+                              {aiData ? <><i className="fas fa-brain" style={{ marginRight: 4 }} />AI Diagnosis</> : 'Why not indexed'}
+                            </div>
+                            {aiData && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700,
+                              background: (priorityColors[aiData.priority] || '#6b7280') + '20',
+                              color: priorityColors[aiData.priority] || '#6b7280'
+                            }}>{(aiData.priority || 'medium').toUpperCase()}</span>}
+                          </div>
+                          <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}>
+                            {aiData ? aiData.why
+                              : isCrawled ? 'Google crawled this page but decided not to index it. Click "Analyze with AI" for a page-specific diagnosis using real Google data.'
+                              : isDiscovered ? 'Google knows this page exists but hasn\'t crawled it. Click "Analyze with AI" for a page-specific diagnosis.'
+                              : r.coverageState || 'Unknown reason. Click "Analyze with AI" for details.'}
                           </div>
                         </div>
                         <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12 }}>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Details</div>
-                          <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <span><strong>Status:</strong> {r.coverageState}</span>
-                            <span><strong>Last Crawl:</strong> {r.lastCrawlTime ? new Date(r.lastCrawlTime).toLocaleDateString() : 'Never'}</span>
-                            <span><strong>Crawled As:</strong> {r.crawledAs || '—'}</span>
-                            <span><strong>Robots:</strong> {r.robotsTxtState || '—'}</span>
-                            <span><strong>Indexing:</strong> {r.indexingState || '—'}</span>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, textTransform: 'uppercase', fontWeight: 700 }}>Google API Data</div>
+                          <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--text)' }}>
+                            <span><span style={{ color: 'var(--text3)' }}>Status:</span> <span style={{ color: '#ef4444' }}>{r.coverageState}</span></span>
+                            <span><span style={{ color: 'var(--text3)' }}>Last Crawl:</span> {r.lastCrawlTime ? <><span style={{ color: '#f59e0b' }}>{new Date(r.lastCrawlTime).toLocaleDateString()}</span> <span style={{ color: 'var(--text3)', fontSize: 11 }}>({Math.round((Date.now() - new Date(r.lastCrawlTime).getTime()) / (1000*60*60*24))}d ago)</span></> : <span style={{ color: '#ef4444' }}>Never</span>}</span>
+                            <span><span style={{ color: 'var(--text3)' }}>Fetch:</span> <span style={{ color: r.pageFetchState === 'SUCCESSFUL' ? '#22c55e' : '#f59e0b' }}>{r.pageFetchState || '—'}</span></span>
+                            <span><span style={{ color: 'var(--text3)' }}>Robots:</span> <span style={{ color: r.robotsTxtState === 'ALLOWED' ? '#22c55e' : '#ef4444' }}>{r.robotsTxtState || '—'}</span></span>
+                            <span><span style={{ color: 'var(--text3)' }}>Crawled As:</span> {r.crawledAs || '—'}</span>
+                            {r.googleCanonical && r.googleCanonical !== r.url && <span><span style={{ color: 'var(--text3)' }}>Google Canonical:</span> <span style={{ color: '#f59e0b', fontSize: 11 }}>{r.googleCanonical}</span></span>}
+                            <span><span style={{ color: 'var(--text3)' }}>Referring URLs:</span> <span style={{ color: (r.referringUrls || []).length === 0 ? '#ef4444' : '#22c55e' }}>{(r.referringUrls || []).length}</span></span>
                           </div>
                         </div>
                       </div>
@@ -8742,17 +8788,20 @@
                         return (
                           <>
                             {/* Steps + Assignee + Action in one block */}
-                            <div style={{ background: 'rgba(34,197,94,0.08)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid rgba(34,197,94,0.2)' }}>
+                            <div style={{ background: aiData ? 'rgba(167,139,250,0.08)' : 'rgba(34,197,94,0.08)', borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${aiData ? 'rgba(167,139,250,0.2)' : 'rgba(34,197,94,0.2)'}` }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                                <div style={{ fontSize: 11, color: '#22c55e', textTransform: 'uppercase', fontWeight: 700 }}>
-                                  <i className="fas fa-lightbulb" style={{ marginRight: 4 }} />How to fix
+                                <div style={{ fontSize: 11, color: aiData ? '#a78bfa' : '#22c55e', textTransform: 'uppercase', fontWeight: 700 }}>
+                                  <i className={aiData ? 'fas fa-brain' : 'fas fa-lightbulb'} style={{ marginRight: 4 }} />{aiData ? 'AI Fix Steps' : 'How to fix'}
                                 </div>
-                                <div style={{ fontSize: 12, color: fix.color, fontWeight: 600 }}>
-                                  <i className={fix.assigneeIcon} style={{ marginRight: 5, fontSize: 11 }} />{fix.assignee}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  {aiData?.auto_fixable && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 700, background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>AUTO-FIXABLE</span>}
+                                  <span style={{ fontSize: 12, color: fix.color, fontWeight: 600 }}>
+                                    <i className={fix.icon} style={{ marginRight: 5, fontSize: 11 }} />{fix.label}
+                                  </span>
                                 </div>
                               </div>
-                              <ol style={{ fontSize: 13, margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {fix.steps.map((step, si) => <li key={si}>{step}</li>)}
+                              <ol style={{ fontSize: 13, margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--text)' }}>
+                                {(aiData?.steps || fix.steps).map((step, si) => <li key={si}>{step}</li>)}
                               </ol>
                             </div>
                             {/* Action controls */}
@@ -8763,7 +8812,7 @@
                                     <i className="fas fa-undo" />
                                   </button>
                                   <div style={{ fontSize: 12, color: ai.color || '#6b7280', fontWeight: 600 }}>
-                                    <i className={ai.assigneeIcon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{ai.assignee}
+                                    <i className={ai.icon || 'fas fa-user'} style={{ marginRight: 5, fontSize: 11 }} />{ai.label}
                                   </div>
                                   <select value={st} onChange={e => updateIndexingStatus(idx, e.target.value)} style={{
                                     fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 5,
@@ -8792,7 +8841,8 @@
                         );
                       })()}
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
                 );
               })}

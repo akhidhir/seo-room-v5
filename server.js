@@ -4571,6 +4571,150 @@ app.get('/api/indexing/budget', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// AI-powered indexing analysis — sends real Google data to Haiku for page-specific diagnosis
+app.post('/api/projects/:projectId/indexing/analyze', async (req, res) => {
+  const { projectId } = req.params;
+  const { pages } = req.body; // array of not-indexed page objects from indexing results
+  if (!pages || !pages.length) return res.status(400).json({ error: 'No pages to analyze' });
+
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Build page data summaries for Haiku
+    const pagesSummary = pages.map((p, i) => {
+      const daysSinceCrawl = p.lastCrawlTime ? Math.round((Date.now() - new Date(p.lastCrawlTime).getTime()) / (1000*60*60*24)) : null;
+      return `Page ${i+1}: ${p.path || p.url}
+  Status: ${p.coverageState || 'Unknown'}
+  Verdict: ${p.verdict || 'Unknown'}
+  Fetch State: ${p.pageFetchState || 'Unknown'}
+  Robots.txt: ${p.robotsTxtState || 'Unknown'}
+  Indexing State: ${p.indexingState || 'Unknown'}
+  Last Crawl: ${p.lastCrawlTime ? new Date(p.lastCrawlTime).toISOString().split('T')[0] : 'Never'} (${daysSinceCrawl !== null ? daysSinceCrawl + ' days ago' : 'never crawled'})
+  Crawled As: ${p.crawledAs || 'Unknown'}
+  Google Canonical: ${p.googleCanonical || 'Not set'}
+  User Canonical: ${p.userCanonical || 'Not set'}
+  Referring URLs: ${(p.referringUrls || []).length > 0 ? p.referringUrls.join(', ') : 'None found'}`;
+    }).join('\n\n');
+
+    // Batch into groups of 25 pages per Haiku call
+    const BATCH_SIZE = 25;
+    const allAnalysis = {};
+
+    for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+      const batch = pages.slice(i, i + BATCH_SIZE);
+      const batchSummary = batch.map((p, bi) => {
+        const idx = i + bi;
+        const daysSinceCrawl = p.lastCrawlTime ? Math.round((Date.now() - new Date(p.lastCrawlTime).getTime()) / (1000*60*60*24)) : null;
+        return `Page ${idx+1} [${p.path || p.url}]:
+  Status: ${p.coverageState || 'Unknown'}
+  Fetch: ${p.pageFetchState || 'Unknown'}
+  Robots: ${p.robotsTxtState || 'Unknown'}
+  Indexing: ${p.indexingState || 'Unknown'}
+  Last Crawl: ${daysSinceCrawl !== null ? daysSinceCrawl + ' days ago' : 'Never'}
+  Crawled As: ${p.crawledAs || 'Unknown'}
+  Google Canonical: ${p.googleCanonical || 'None'}
+  User Canonical: ${p.userCanonical || 'None'}
+  Referring URLs: ${(p.referringUrls || []).length} found${(p.referringUrls || []).length > 0 ? ' (' + p.referringUrls.slice(0,3).join(', ') + ')' : ''}`;
+      }).join('\n\n');
+
+      const aiResponse = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 4000,
+        messages: [{
+          role: 'user',
+          content: `You are an SEO expert analyzing Google Search Console URL Inspection API data. The website is "${project.domain}" (${project.business_name || project.name}).
+
+Here are ${batch.length} pages that are NOT indexed in Google. For each page, I'm giving you the REAL data from Google's URL Inspection API.
+
+${batchSummary}
+
+For EACH page, provide a specific diagnosis based on the actual data — NOT generic advice. Reference the real data points (e.g., "Last crawled 45 days ago with 0 referring URLs suggests low internal linking" or "Google chose a different canonical URL which means...").
+
+Return a JSON object where each key is the page path, and each value has:
+- "why": A 1-2 sentence specific explanation of why THIS page is not indexed, citing the actual data
+- "steps": An array of 3-5 specific actionable fix steps for THIS page (not generic — reference the page URL, data points, etc.)
+- "priority": "critical" | "high" | "medium" | "low" based on how fixable this is
+- "auto_fixable": true if this can be fixed programmatically (noindex removal, canonical fix, content update via WP), false if manual intervention needed
+
+IMPORTANT:
+- If canonical mismatch exists, mention the exact URLs
+- If last crawl was long ago, mention the exact timeframe
+- If referring URLs are 0, that's a key signal — mention it
+- If fetch state shows errors, that's the primary issue
+- Don't say "may" or "might" — use the data to make definitive statements
+
+Return ONLY valid JSON, no markdown.`
+        }]
+      });
+
+      const text = aiResponse.content[0]?.text || '{}';
+      let parsed = {};
+      try {
+        // Try to parse, handling potential markdown wrapping
+        const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        parsed = JSON.parse(cleaned);
+      } catch (parseErr) {
+        console.error('[indexing-analyze] Failed to parse AI response for batch', i, parseErr.message);
+        // Assign generic fallback for this batch
+        batch.forEach(p => {
+          const key = p.path || p.url;
+          parsed[key] = {
+            why: `${p.coverageState || 'Not indexed'}. AI analysis parsing failed — review data manually.`,
+            steps: ['Check Google Search Console for this specific URL', 'Review the page content and internal links', 'Request indexing via GSC'],
+            priority: 'medium',
+            auto_fixable: false
+          };
+        });
+      }
+
+      // Map results back to page paths
+      batch.forEach(p => {
+        const key = p.path || p.url;
+        // Try exact match first, then partial match
+        if (parsed[key]) {
+          allAnalysis[key] = parsed[key];
+        } else {
+          // Try matching by path substring
+          const matchKey = Object.keys(parsed).find(k => key.includes(k) || k.includes(key));
+          if (matchKey) {
+            allAnalysis[key] = parsed[matchKey];
+          } else {
+            allAnalysis[key] = {
+              why: `${p.coverageState || 'Not indexed'}. Fetch: ${p.pageFetchState || 'Unknown'}. Last crawl: ${p.lastCrawlTime ? new Date(p.lastCrawlTime).toLocaleDateString() : 'Never'}.`,
+              steps: ['Investigate in Google Search Console', 'Check internal linking to this page', 'Request re-indexing'],
+              priority: 'medium',
+              auto_fixable: false
+            };
+          }
+        }
+      });
+    }
+
+    // Save analysis to the latest indexing audit
+    try {
+      const latestAudit = await pool.query(
+        `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='indexing' AND status='completed' ORDER BY started_at DESC LIMIT 1`,
+        [projectId]
+      );
+      if (latestAudit.rows.length > 0) {
+        const auditData = typeof latestAudit.rows[0].audit_data === 'string'
+          ? JSON.parse(latestAudit.rows[0].audit_data) : (latestAudit.rows[0].audit_data || {});
+        auditData.ai_analysis = allAnalysis;
+        await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`, [JSON.stringify(auditData), latestAudit.rows[0].id]);
+      }
+    } catch (saveErr) {
+      console.error('[indexing-analyze] Failed to save analysis to audit:', saveErr.message);
+    }
+
+    res.json({ analysis: allAnalysis, pages_analyzed: Object.keys(allAnalysis).length });
+  } catch (e) {
+    console.error('[indexing-analyze] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== RATING CAPTAIN SYNC ====================
 
 // Accept Rating Captain data and generate internal GBP audit findings

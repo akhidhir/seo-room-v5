@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.1.0
+ * Version: 8.2.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.1.0');
+define('SEOROOM_VERSION', '8.2.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3265,63 +3265,142 @@ function sropt_monitor_404() {
 
     global $wpdb;
     $table = $wpdb->prefix . 'seoroom_404s';
-
-    // Check if table exists
     if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
 
     $url = $_SERVER['REQUEST_URI'];
-
-    // --- Filter out bot probes & junk URLs ---
-    // Only log URLs that look like real page paths on this site.
-    // Skip: file probes, WP admin/login, dotfiles, PHP files, common scanner paths
-    $junk_patterns = array(
-        '/wp-login',
-        '/wp-admin',
-        '/xmlrpc',
-        '/.env',
-        '/.git',
-        '/.well-known',
-        '/wp-includes/',
-        '/wp-content/debug',
-        '/wp-config',
-        '/readme.html',
-        '/license.txt',
-        '/wp-cron',
-        '/wp-json/wp/v2/users',  // user enumeration probes
-        '/admin/',
-        '/administrator/',
-        '/phpmyadmin',
-        '/cgi-bin/',
-        '/.htaccess',
-        '/.htpasswd',
-        '/eval-stdin',
-        '/vendor/',
-        '/node_modules/',
-    );
-    $junk_extensions = array('.php', '.asp', '.aspx', '.jsp', '.cgi', '.sql', '.bak', '.zip', '.tar', '.gz', '.rar', '.log', '.ini', '.sh', '.py', '.rb', '.pl', '.exe', '.dll');
     $url_lower = strtolower($url);
-    foreach ($junk_patterns as $pattern) {
-        if (strpos($url_lower, $pattern) !== false) return;
-    }
     $url_path = strtok($url_lower, '?');
-    foreach ($junk_extensions as $ext) {
-        if (substr($url_path, -strlen($ext)) === $ext) return;
-    }
-    // Skip URLs with suspicious query params (scanner fingerprints)
-    if (preg_match('/[<>\{\}]|eval\(|base64|SELECT\s|UNION\s|DROP\s/i', $url)) return;
-    // --- End filter ---
 
-    $hash = md5($url);
+    // ---- STRICT FILTER: only log real page-like URLs ----
+    // Skip anything with a file extension (images, scripts, styles, media, cache files, etc.)
+    if (preg_match('/\.\w{1,10}$/', $url_path)) return;
+    // Skip WordPress internals
+    $skip_prefixes = array('/wp-login', '/wp-admin', '/wp-includes/', '/wp-content/', '/wp-json/', '/wp-cron', '/xmlrpc', '/feed/', '/trackback/');
+    foreach ($skip_prefixes as $prefix) {
+        if (strpos($url_lower, $prefix) !== false) return;
+    }
+    // Skip dotfiles, admin paths, scanner probes
+    if (preg_match('#/\.|/admin|/cgi-bin|/phpmyadmin|/vendor/|/node_modules/#i', $url_lower)) return;
+    // Skip URLs with protocol-like prefixes used as paths (e.g. /tel:, /mailto:)
+    if (preg_match('#^/(tel|mailto|javascript|data):#i', $url_path)) return;
+    // Skip suspicious query strings
+    if (preg_match('/[<>\{\}]|eval\(|base64|SELECT\s|UNION\s|DROP\s/i', $url)) return;
+    // ---- END FILTER ----
+
     $referrer = $_SERVER['HTTP_REFERER'] ?? '';
     $ua = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 512);
 
-    // Upsert: increment hit_count if URL already logged
+    // ---- AUTO-REDIRECT: try to match to an existing page ----
+    $matched_url = sropt_find_matching_page($url_path);
+    if ($matched_url) {
+        // Auto-create a 301 redirect
+        $red_table = $wpdb->prefix . 'seoroom_redirects';
+        $source_path = parse_url($url, PHP_URL_PATH);
+        $source_hash = md5($source_path);
+        // Only create if redirect doesn't already exist
+        $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $red_table WHERE source_hash = %s", $source_hash));
+        if (!$exists) {
+            $wpdb->insert($red_table, array(
+                'source_url'    => $source_path,
+                'source_hash'   => $source_hash,
+                'target_url'    => $matched_url,
+                'redirect_type' => 301,
+                'hit_count'     => 0,
+                'created_at'    => current_time('mysql'),
+                'updated_at'    => current_time('mysql'),
+            ));
+        }
+        // Redirect immediately
+        wp_redirect($matched_url, 301);
+        exit;
+    }
+
+    // No match found — log the 404 for manual review
+    $hash = md5($url);
     $wpdb->query($wpdb->prepare(
         "INSERT INTO $table (url, url_hash, referrer, user_agent, hit_count, first_seen, last_seen)
          VALUES (%s, %s, %s, %s, 1, NOW(), NOW())
          ON DUPLICATE KEY UPDATE hit_count = hit_count + 1, last_seen = NOW(), referrer = IF(%s != '', %s, referrer)",
         $url, $hash, $referrer, $ua, $referrer, $referrer
     ));
+}
+
+/**
+ * Find a matching published page/post for a 404 URL using slug similarity.
+ * Returns the matched permalink or false.
+ */
+function sropt_find_matching_page($url_path) {
+    global $wpdb;
+
+    // Extract slug parts from the 404 URL
+    $path = trim($url_path, '/');
+    if (empty($path)) return false;
+
+    $segments = explode('/', $path);
+    $last_slug = end($segments);  // Most specific part (e.g., "seo-audit-perth")
+    $slug_words = explode('-', $last_slug);
+    if (count($slug_words) < 1) return false;
+
+    // Strategy 1: Exact slug match (handles moved pages, e.g., /old-parent/page-slug → /page-slug)
+    $exact = $wpdb->get_row($wpdb->prepare(
+        "SELECT ID, post_name, post_type FROM {$wpdb->posts}
+         WHERE post_name = %s AND post_status = 'publish' AND post_type IN ('page', 'post')
+         LIMIT 1",
+        $last_slug
+    ));
+    if ($exact) {
+        return get_permalink($exact->ID);
+    }
+
+    // Strategy 2: Partial slug match — find pages containing the key words
+    // Build a LIKE query for pages whose slug shares words with the 404 slug
+    // Only try if slug has 2+ words (avoid matching single common words like "services")
+    if (count($slug_words) >= 2) {
+        $like_clauses = array();
+        $like_values = array();
+        foreach ($slug_words as $word) {
+            if (strlen($word) < 3) continue;  // Skip short words (and, the, of, etc.)
+            $like_clauses[] = "post_name LIKE %s";
+            $like_values[] = '%' . $wpdb->esc_like($word) . '%';
+        }
+        if (count($like_clauses) >= 2) {
+            $sql = "SELECT ID, post_name FROM {$wpdb->posts}
+                    WHERE post_status = 'publish' AND post_type IN ('page', 'post')
+                    AND " . implode(' AND ', $like_clauses) . "
+                    LIMIT 5";
+            $candidates = $wpdb->get_results($wpdb->prepare($sql, ...$like_values));
+            if ($candidates && count($candidates) === 1) {
+                // Only auto-redirect if there's exactly one confident match
+                return get_permalink($candidates[0]->ID);
+            }
+            // If multiple matches, pick the one with highest slug similarity
+            if ($candidates && count($candidates) > 1) {
+                $best = null;
+                $best_score = 0;
+                foreach ($candidates as $c) {
+                    similar_text($last_slug, $c->post_name, $score);
+                    if ($score > $best_score) {
+                        $best_score = $score;
+                        $best = $c;
+                    }
+                }
+                if ($best && $best_score >= 60) {
+                    return get_permalink($best->ID);
+                }
+            }
+        }
+    }
+
+    // Strategy 3: For parent/child URL structures, try matching the full path
+    if (count($segments) > 1) {
+        $full_slug = implode('/', $segments);
+        $page = get_page_by_path($full_slug, OBJECT, array('page', 'post'));
+        if ($page && $page->post_status === 'publish') {
+            return get_permalink($page->ID);
+        }
+    }
+
+    return false;
 }
 
 
