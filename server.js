@@ -7030,10 +7030,174 @@ async function readWpYoastMeta(wpBase, pageId, authHeaders) {
   return null;
 }
 
+// ---- Keyword Research: GSC + DataForSEO + AI ----
+app.post('/api/projects/:projectId/onpage-audit/research-keywords', async (req, res) => {
+  const { projectId } = req.params;
+  const { page_url, page_title, h1, content_snippet } = req.body;
+  if (!page_url) return res.status(400).json({ error: 'page_url required' });
+
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+
+    const candidates = new Map(); // keyword → { source, impressions, clicks, position }
+
+    // ---- Source 1: GSC queries for this specific page URL ----
+    let gscToken = null;
+    try { gscToken = await getGscAccessToken(project.user_id || 1); } catch (e) { /* no GSC */ }
+    if (gscToken && project.gsc_property) {
+      const now = Date.now();
+      const startDate = new Date(now - 90 * 86400000).toISOString().split('T')[0];
+      const endDate = new Date(now).toISOString().split('T')[0];
+
+      // Get queries filtered to this page
+      const pageFilter = page_url.startsWith('http') ? page_url : (project.domain?.replace(/\/$/, '') || '') + page_url;
+      try {
+        const gscResp = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + gscToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            startDate, endDate,
+            dimensions: ['query'],
+            dimensionFilterGroups: [{ filters: [{ dimension: 'page', operator: 'equals', expression: pageFilter }] }],
+            rowLimit: 30,
+            orderBy: [{ fieldName: 'impressions', sortOrder: 'DESCENDING' }]
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (gscResp.ok) {
+          const gscData = await gscResp.json();
+          (gscData.rows || []).forEach(r => {
+            const q = r.keys[0].toLowerCase().trim();
+            if (q.length >= 3 && q.split(' ').length <= 6) {
+              candidates.set(q, {
+                source: 'gsc', impressions: r.impressions, clicks: r.clicks,
+                position: parseFloat(r.position.toFixed(1)), ctr: parseFloat((r.ctr * 100).toFixed(1))
+              });
+            }
+          });
+        }
+      } catch (e) { console.log('[research-kw] GSC query error:', e.message); }
+    }
+
+    // ---- Source 2: AI-extracted candidates from page content ----
+    if (page_title || h1 || content_snippet) {
+      try {
+        const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+        const aiResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 500,
+          messages: [{
+            role: 'user',
+            content: `Extract 5-10 candidate focus keywords from this page. Return ONLY a JSON array of strings, no explanation.
+
+Business: ${project.business_name || project.name} | Industry: ${project.industry || 'general'} | Location: ${project.location || ''}
+Page title: ${page_title || ''}
+H1: ${h1 || ''}
+Content: ${(content_snippet || '').substring(0, 800)}
+
+Rules:
+- Keywords should be 2-4 words, what someone would search on Google
+- Focus on the page topic + business industry + location
+- Include both broad and specific long-tail variations
+- Return JSON array only: ["keyword 1", "keyword 2", ...]`
+          }]
+        });
+        const text = aiResp.content[0].text.trim();
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) {
+          const aiKws = JSON.parse(match[0]);
+          aiKws.forEach(kw => {
+            const k = kw.toLowerCase().trim();
+            if (!candidates.has(k) && k.length >= 3) {
+              candidates.set(k, { source: 'ai', impressions: 0, clicks: 0, position: 0, ctr: 0 });
+            }
+          });
+        }
+      } catch (e) { console.log('[research-kw] AI extraction error:', e.message); }
+    }
+
+    if (candidates.size === 0) {
+      return res.json({ keywords: [], message: 'No keyword candidates found' });
+    }
+
+    // ---- Source 3: DataForSEO volume + difficulty ----
+    const kwList = Array.from(candidates.keys());
+    let volumeData = {};
+    let difficultyData = {};
+
+    if (DATAFORSEO_AUTH) {
+      const dfsHeaders = { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH };
+      const location = project.location || 'Australia';
+      // Map location to DataForSEO location code
+      const locCode = location.toLowerCase().includes('australia') || location.toLowerCase().includes('perth') || location.toLowerCase().includes('sydney') || location.toLowerCase().includes('melbourne') ? 2036 : 2840; // 2036=AU, 2840=US
+
+      // Batch search volume
+      try {
+        const volResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST', headers: dfsHeaders,
+          body: JSON.stringify([{ keywords: kwList.slice(0, 50), location_code: locCode, language_code: 'en' }]),
+          signal: AbortSignal.timeout(20000),
+        });
+        if (volResp.ok) {
+          const volData = await volResp.json();
+          const results = volData?.tasks?.[0]?.result || [];
+          results.forEach(r => {
+            if (r.keyword) volumeData[r.keyword.toLowerCase()] = { volume: r.search_volume || 0, cpc: r.cpc || 0, competition: r.competition || 0 };
+          });
+        }
+      } catch (e) { console.log('[research-kw] DataForSEO volume error:', e.message); }
+
+      // Batch keyword difficulty
+      try {
+        const diffResp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_difficulty/live', {
+          method: 'POST', headers: dfsHeaders,
+          body: JSON.stringify([{ keywords: kwList.slice(0, 50), location_code: locCode, language_code: 'en' }]),
+          signal: AbortSignal.timeout(20000),
+        });
+        if (diffResp.ok) {
+          const diffData = await diffResp.json();
+          const results = diffData?.tasks?.[0]?.result || [];
+          results.forEach(r => {
+            if (r.keyword) difficultyData[r.keyword.toLowerCase()] = r.keyword_difficulty || 0;
+          });
+        }
+      } catch (e) { console.log('[research-kw] DataForSEO difficulty error:', e.message); }
+    }
+
+    // ---- Score and rank ----
+    const scored = kwList.map(kw => {
+      const c = candidates.get(kw);
+      const vol = volumeData[kw]?.volume || 0;
+      const diff = difficultyData[kw] || 50; // default 50 if unknown
+      const cpc = volumeData[kw]?.cpc || 0;
+      const gscBoost = c.source === 'gsc' ? 1.5 : 1;
+      const impressionBoost = Math.min(c.impressions / 100, 2); // up to 2x for high-impression GSC keywords
+      const score = Math.round((vol > 0 ? vol : (c.impressions * 2)) * (1 - diff / 100) * gscBoost * (1 + impressionBoost));
+
+      return {
+        keyword: kw, source: c.source,
+        volume: vol, difficulty: diff, cpc,
+        gsc_impressions: c.impressions, gsc_clicks: c.clicks,
+        gsc_position: c.position, gsc_ctr: c.ctr,
+        score
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+
+    res.json({ keywords: scored.slice(0, 10) });
+  } catch (err) {
+    console.error('[research-kw] Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // AI-generate suggested meta fixes for a page
 app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
   const { projectId } = req.params;
-  const { pages } = req.body; // array of { id, title, url, metaTitle, metaDesc, focusKeyword, h1, wordCount, issues }
+  const { pages, target_keywords } = req.body; // pages: array, target_keywords: optional { pageId: "keyword" }
   if (!pages || !pages.length) return res.status(400).json({ error: 'No pages provided' });
 
   try {
@@ -7042,14 +7206,21 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
     const project = projRes.rows[0];
 
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-    const pagesData = pages.map(p => ({
-      id: p.id, title: p.title, url: p.url,
-      current_meta_title: p.metaTitle || '(empty)',
-      current_meta_description: p.metaDesc || '(empty)',
-      current_focus_keyword: p.focusKeyword || '(not set)',
-      h1: p.h1, word_count: p.wordCount,
-      problems: (p.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').map(i => i.text)
-    }));
+    const tkw = target_keywords || {}; // { pageId: "pre-researched keyword" }
+    const pagesData = pages.map(p => {
+      const obj = {
+        id: p.id, title: p.title, url: p.url,
+        current_meta_title: p.metaTitle || '(empty)',
+        current_meta_description: p.metaDesc || '(empty)',
+        current_focus_keyword: p.focusKeyword || '(not set)',
+        h1: p.h1, word_count: p.wordCount,
+        problems: (p.issues || []).filter(i => i.type === 'problem' || i.type === 'warning').map(i => i.text)
+      };
+      if (tkw[p.id]) obj.target_keyword = tkw[p.id];
+      return obj;
+    });
+
+    const hasTargetKeywords = pagesData.some(p => p.target_keyword);
 
     // Batch pages in groups of 5 to avoid Haiku timeout/token issues
     const BATCH_SIZE = 5;
@@ -7057,6 +7228,10 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
     for (let i = 0; i < pagesData.length; i += BATCH_SIZE) {
       const batch = pagesData.slice(i, i + BATCH_SIZE);
       console.log(`[onpage-suggest] Processing batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(pagesData.length/BATCH_SIZE)} (${batch.length} pages)`);
+
+      const keywordRule = hasTargetKeywords
+        ? `- Focus keyword: If a page has a "target_keyword" field, USE THAT EXACT KEYWORD — do NOT change it. Build the title and description around it. If no target_keyword, choose the most relevant keyword for the page.`
+        : `- Focus keyword: choose the MOST RELEVANT keyword for each page BASED ON THE BUSINESS TYPE above. If the current focus keyword doesn't match the business (e.g. "seo agency" on a plumbing website), REPLACE it with a proper keyword matching the business industry and page content.`;
 
       const resp = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
@@ -7075,13 +7250,13 @@ For each page, return a JSON array with objects:
   "id": <page_id>,
   "suggested_title": "<optimized meta title, 50-60 chars, include primary keyword near start>",
   "suggested_desc": "<optimized meta description, 120-155 chars, compelling with CTA>",
-  "suggested_keyword": "<best focus keyword for this page based on content and business>"
+  "suggested_keyword": "<the focus keyword used>"
 }
 
 Rules:
 - Meta title: 50-60 characters, keyword near the front, include brand name at end with | separator
 - Meta description: 120-155 characters, include keyword naturally, add call-to-action
-- Focus keyword: choose the MOST RELEVANT keyword for each page BASED ON THE BUSINESS TYPE above. If the current focus keyword doesn't match the business (e.g. "seo agency" on a plumbing website), REPLACE it with a proper keyword matching the business industry and page content.
+${keywordRule}
 - CRITICAL: The suggested_keyword MUST appear as an EXACT substring inside the suggested_title (case-insensitive). For example if keyword is "Perth SEO agency" then the title must contain those exact words in that order. Do NOT add filler words like "for", "in", "and" between keyword words in the title unless they are part of the keyword itself.
 - This is a managed SEO dashboard. The business info above is the CLIENT's business. Always optimize for THEIR industry, not for SEO/marketing keywords.
 - If current values are already good, return them unchanged

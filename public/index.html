@@ -10115,6 +10115,8 @@
       const [savingKeyword, setSavingKeyword] = useState(null);
       const [fixAllState, setFixAllState] = useState(null); // null | { phase, current, total, currentTitle, suggestions, applied, errors }
       const [verifiedPages, setVerifiedPages] = useState({}); // { pageId: 'verified' | 'failed' | 'changed' }
+      const [kwResearch, setKwResearch] = useState(null); // null | { pageId, loading, keywords: [], selected }
+      const [kwGenerating, setKwGenerating] = useState(false);
 
       const cancelEditKeyword = (pageId) => {
         setEditingKeyword(prev => {
@@ -10851,34 +10853,103 @@
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
                             <td colSpan={9} style={{ padding: 0 }}>
                               <div style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                                {/* View Page link + Suggest Keyword */}
+                                {/* View Page link + Research Keywords */}
                                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginBottom: 8 }}>
-                                  {!page.focusKeyword && (
-                                    <button onClick={async (e) => {
-                                      e.stopPropagation();
-                                      const btn = e.currentTarget;
-                                      btn.disabled = true;
-                                      btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;margin-right:4px"></span>Suggesting...';
-                                      try {
-                                        const data = await api('/projects/' + project.id + '/onpage-audit/suggest', { method: 'POST', body: { pages: [page] } });
-                                        if (data.suggestions && data.suggestions[0]?.suggested_keyword) {
-                                          const kw = data.suggestions[0].suggested_keyword;
-                                          await api('/projects/' + project.id + '/onpage-audit/update-keyword', { method: 'POST', body: { page_id: page.id, keyword: kw } });
-                                          setPages(prev => prev.map(p => p.id === page.id ? Object.assign({}, p, { focusKeyword: kw }) : p));
-                                          loadHistory();
-                                        }
-                                      } catch (err) { console.error(err); }
-                                      btn.disabled = false;
-                                      btn.innerHTML = '<i class="fas fa-key" style="margin-right:4px;font-size:9px"></i>Suggest Keyword';
-                                    }} style={{ fontSize: 11, padding: '4px 10px', background: 'rgba(245,158,11,0.15)', border: '1px solid #f59e0b', color: '#f59e0b', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                      <i className="fas fa-key" style={{ fontSize: 9 }} />Suggest Keyword
-                                    </button>
-                                  )}
+                                  <button onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setKwResearch({ pageId: page.id, loading: true, keywords: [], selected: null });
+                                    try {
+                                      const data = await api('/projects/' + project.id + '/onpage-audit/research-keywords', {
+                                        method: 'POST', body: { page_url: page.url, page_title: page.title, h1: page.h1, content_snippet: page.metaTitle + ' ' + page.metaDesc }
+                                      });
+                                      setKwResearch(prev => prev?.pageId === page.id ? { ...prev, loading: false, keywords: data.keywords || [] } : prev);
+                                    } catch (err) {
+                                      console.error(err);
+                                      setKwResearch(prev => prev?.pageId === page.id ? { ...prev, loading: false } : prev);
+                                    }
+                                  }} disabled={kwResearch?.pageId === page.id && kwResearch.loading}
+                                    style={{ fontSize: 11, padding: '4px 10px', background: 'rgba(245,158,11,0.15)', border: '1px solid #f59e0b', color: '#f59e0b', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    {kwResearch?.pageId === page.id && kwResearch.loading
+                                      ? <><span className="spinner" style={{ width: 10, height: 10 }}></span>Researching...</>
+                                      : <><i className="fas fa-search" style={{ fontSize: 9 }} />Research Keywords</>}
+                                  </button>
                                   <a href={page.url} target="_blank" rel="noopener noreferrer"
                                     style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
                                     <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />View Page
                                   </a>
                                 </div>
+                                {/* Keyword Research Results */}
+                                {kwResearch?.pageId === page.id && !kwResearch.loading && kwResearch.keywords.length > 0 && (
+                                  <div style={{ marginBottom: 16, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)' }}><i className="fas fa-key" style={{ marginRight: 6 }} />Keyword Candidates — pick one, then Fix</span>
+                                      <button onClick={() => setKwResearch(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 11 }}><i className="fas fa-times" /></button>
+                                    </div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                      <thead>
+                                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}></th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>KEYWORD</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>VOLUME</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>DIFFICULTY</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>GSC IMP</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>SOURCE</th>
+                                          <th style={{ padding: '6px 10px', textAlign: 'center', color: 'var(--text3)', fontWeight: 600, fontSize: 10 }}>SCORE</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {kwResearch.keywords.map((kw, ki) => (
+                                          <tr key={ki} onClick={() => setKwResearch(prev => ({ ...prev, selected: kw.keyword }))}
+                                            style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', background: kwResearch.selected === kw.keyword ? 'rgba(99,102,241,0.12)' : ki === 0 && !kwResearch.selected ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                                              <input type="radio" name={'kw-' + page.id} checked={kwResearch.selected === kw.keyword || (ki === 0 && !kwResearch.selected)} onChange={() => setKwResearch(prev => ({ ...prev, selected: kw.keyword }))} style={{ cursor: 'pointer' }} />
+                                            </td>
+                                            <td style={{ padding: '6px 10px', fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center', color: kw.volume > 100 ? '#22c55e' : kw.volume > 0 ? '#f59e0b' : 'var(--text3)' }}>{kw.volume || '—'}</td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                                              <span style={{ color: kw.difficulty < 30 ? '#22c55e' : kw.difficulty < 60 ? '#f59e0b' : '#ef4444', fontWeight: 600 }}>{kw.difficulty}</span>
+                                            </td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center', color: kw.gsc_impressions > 0 ? '#3b82f6' : 'var(--text3)' }}>{kw.gsc_impressions || '—'}</td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                                              <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: kw.source === 'gsc' ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)', color: kw.source === 'gsc' ? '#3b82f6' : '#a855f7' }}>{kw.source === 'gsc' ? 'GSC' : 'AI'}</span>
+                                            </td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 700, color: 'var(--text)' }}>{kw.score}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    <div style={{ padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center' }}>
+                                      <button onClick={async () => {
+                                        const selectedKw = kwResearch.selected || kwResearch.keywords[0]?.keyword;
+                                        if (!selectedKw) return;
+                                        setKwGenerating(true);
+                                        try {
+                                          const data = await api('/projects/' + project.id + '/onpage-audit/suggest', {
+                                            method: 'POST', body: { pages: [page], target_keywords: { [page.id]: selectedKw } }
+                                          });
+                                          if (data.suggestions?.[0]) {
+                                            openFixModal([Object.assign({}, page, { focusKeyword: selectedKw })], false);
+                                            // Override the modal suggestions with the keyword-driven ones
+                                            setTimeout(() => {
+                                              setFixModal(prev => prev ? { ...prev, suggestions: data.suggestions, loading: false } : prev);
+                                            }, 100);
+                                          }
+                                        } catch (err) { alert('Error: ' + err.message); }
+                                        setKwGenerating(false);
+                                        setKwResearch(null);
+                                      }} disabled={kwGenerating}
+                                        className="btn btn-primary" style={{ fontSize: 11, padding: '5px 12px' }}>
+                                        {kwGenerating ? <><span className="spinner" style={{ width: 10, height: 10 }}></span>Generating...</> : <><i className="fas fa-magic" style={{ marginRight: 4 }} />Generate Title & Desc</>}
+                                      </button>
+                                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>for "{kwResearch.selected || kwResearch.keywords[0]?.keyword}"</span>
+                                    </div>
+                                  </div>
+                                )}
+                                {kwResearch?.pageId === page.id && !kwResearch.loading && kwResearch.keywords.length === 0 && (
+                                  <div style={{ marginBottom: 12, padding: 10, background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 8, fontSize: 12, color: '#f59e0b' }}>
+                                    No keyword data found. Make sure GSC is connected and DataForSEO credentials are configured.
+                                  </div>
+                                )}
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
                                   <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, border: '1px solid var(--border)' }}>
                                     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>Meta Title ({page.metaTitleLen} chars)</div>
