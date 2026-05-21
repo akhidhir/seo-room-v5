@@ -9479,6 +9479,9 @@
       const [scanning, setScanning] = useState(false);
       const [clearingBl, setClearingBl] = useState(false);
 
+      const domainBase = `https://${(project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
+      const fullUrl = (path) => path ? `${domainBase}${path}` : '—';
+
       const relTime = (d) => {
         if (!d) return '—';
         const ms = Date.now() - new Date(d).getTime();
@@ -9750,8 +9753,8 @@
             e('tbody', null,
               fourOhFours.map((item, i) => e(React.Fragment, { key: item.id || i },
                 e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.url },
-                    e('a', { href: `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.url || '—')
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
+                    e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url))
                   ),
                   e('td', { style: tdStyle },
                     e('span', { style: badgeStyle('rgba(239,68,68,0.15)', '#ef4444') }, item.hit_count || 0)
@@ -9910,11 +9913,11 @@
                 ) :
                 // Display row
                 e('tr', { key: item.id, style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.source_url },
-                    e('a', { href: `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.source_url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.source_url || '—')
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.source_url) },
+                    e('a', { href: fullUrl(item.source_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.source_url))
                   ),
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url },
-                    e('a', { href: `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.target_url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.target_url || '—')
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.target_url) },
+                    e('a', { href: fullUrl(item.target_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.target_url))
                   ),
                   e('td', { style: tdStyle },
                     e('span', { style: badgeStyle(
@@ -9992,11 +9995,11 @@
               ),
               e('tbody', null,
                 brokenLinks.map((item, i) => e('tr', { key: item.id || i, style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.source_url },
-                    e('a', { href: `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.source_url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.source_url || '—')
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.source_url) },
+                    e('a', { href: fullUrl(item.source_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.source_url))
                   ),
-                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url },
-                    e('a', { href: item.target_url && item.target_url.startsWith('http') ? item.target_url : `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}${item.target_url || ''}`, target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.target_url || '—')
+                  e('td', { style: { ...tdStyle, ...urlCell }, title: item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url) },
+                    e('a', { href: item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, item.target_url && item.target_url.startsWith('http') ? item.target_url : fullUrl(item.target_url))
                   ),
                   e('td', { style: tdStyle }, statusBadge(item.status_code)),
                   e('td', { style: { ...tdStyle, fontSize: 12, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: item.anchor_text }, item.anchor_text || '—'),
