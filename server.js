@@ -7082,6 +7082,7 @@ Rules:
 - Meta title: 50-60 characters, keyword near the front, include brand name at end with | separator
 - Meta description: 120-155 characters, include keyword naturally, add call-to-action
 - Focus keyword: choose the MOST RELEVANT keyword for each page BASED ON THE BUSINESS TYPE above. If the current focus keyword doesn't match the business (e.g. "seo agency" on a plumbing website), REPLACE it with a proper keyword matching the business industry and page content.
+- CRITICAL: The suggested_keyword MUST appear as an EXACT substring inside the suggested_title (case-insensitive). For example if keyword is "Perth SEO agency" then the title must contain those exact words in that order. Do NOT add filler words like "for", "in", "and" between keyword words in the title unless they are part of the keyword itself.
 - This is a managed SEO dashboard. The business info above is the CLIENT's business. Always optimize for THEIR industry, not for SEO/marketing keywords.
 - If current values are already good, return them unchanged
 - ONLY return valid JSON array, no explanation`
