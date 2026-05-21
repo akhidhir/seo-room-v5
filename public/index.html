@@ -20603,6 +20603,26 @@
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setImporting(false);
       };
+      const importFromMaps = async () => {
+        const mapsKws = merged.filter(kw => kw.location);
+        if (mapsKws.length === 0) return alert('No Maps keywords to import. Add keywords in Maps Rankings first.');
+        const uniqueServices = [...new Set(mapsKws.map(k => k.keyword.toLowerCase().trim()))];
+        const existingSerp = new Set(merged.filter(kw => !kw.location).map(k => k.keyword.toLowerCase().trim()));
+        const toImport = uniqueServices.filter(s => !existingSerp.has(s));
+        if (toImport.length === 0) return alert('All Maps keywords are already tracked in SERP.');
+        if (!confirm(`Import ${toImport.length} unique service keywords from Maps to SERP?\n\n${toImport.slice(0, 10).join(', ')}${toImport.length > 10 ? `... and ${toImport.length - 10} more` : ''}`)) return;
+        setImporting(true);
+        try {
+          const resp = await api(`/projects/${project.id}/rank-tracking/keywords`, {
+            method: 'POST',
+            body: { keywords: toImport, location: '' }
+          });
+          if (resp.error) alert(resp.error);
+          else alert(`Imported ${resp.added || toImport.length} keywords to SERP tracking`);
+          loadData();
+        } catch (e) { alert('Error: ' + e.message); }
+        setImporting(false);
+      };
       const importCSV = () => {
         const input = document.createElement('input');
         input.type = 'file';
@@ -20872,6 +20892,9 @@
               </button>
               <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
                 {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Importing...</> : <><i className="fa-solid fa-download" style={{ marginRight: 6 }} />Import from GSC</>}
+              </button>
+              <button className="btn" onClick={importFromMaps} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
+                {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Importing...</> : <><i className="fa-solid fa-map-location-dot" style={{ marginRight: 6 }} />Import from Maps</>}
               </button>
               <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
                 {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
