@@ -3295,19 +3295,19 @@ async function wpFetch(wpUrl, endpoint) {
 }
 
 // Helper: run Google PageSpeed Insights on a URL and extract image issues
-async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
+async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
   const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
   const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
   const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(60000) });
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(90000) });
       if (!resp.ok) {
         const text = await resp.text();
         let msg = `HTTP ${resp.status}`;
         try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
         if (attempt < retries) {
-          const delay = 3000 + attempt * 3000; // 3s, 6s — fast retries
+          const delay = 5000 + attempt * 5000; // 5s, 10s, 15s
           console.log(`[pagespeed] ${strategy} ${url}: ${msg} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
           await new Promise(r => setTimeout(r, delay));
           continue;
@@ -3319,7 +3319,7 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
       const runtimeErr = data.lighthouseResult?.runtimeError;
       if (runtimeErr && (runtimeErr.code === 'ERRORED_DOCUMENT_REQUEST' || runtimeErr.code === 'UNKNOWN_ERROR')) {
         if (attempt < retries) {
-          const delay = 5000 + attempt * 5000; // 5s, 10s
+          const delay = 5000 + attempt * 5000;
           console.log(`[pagespeed] ${strategy} ${url}: Lighthouse ${runtimeErr.code} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
           await new Promise(r => setTimeout(r, delay));
           continue;
@@ -3328,8 +3328,10 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 2) {
       }
       return data;
     } catch (err) {
+      // ECONNRESET / socket hang up — connection dropped, use longer backoff
+      const isConnErr = /ECONNRESET|ETIMEDOUT|socket hang up|network|UND_ERR/i.test(err.message);
       if (attempt < retries) {
-        const delay = 3000 + attempt * 3000;
+        const delay = isConnErr ? (8000 + attempt * 8000) : (5000 + attempt * 5000);
         console.log(`[pagespeed] ${strategy} ${url}: ${err.message} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
         await new Promise(r => setTimeout(r, delay));
         continue;
@@ -3594,9 +3596,21 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         } catch (cacheErr) {
           console.log(`[speed-audit] Connector cache unavailable: ${cacheErr.message}`);
         }
-        // Fallback to external discovery if no cache
+        // Fallback to external discovery if no cache (retry on connection errors)
         if (pages.length === 0) {
-          pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+          for (let discAttempt = 0; discAttempt < 3; discAttempt++) {
+            try {
+              pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+              break;
+            } catch (discErr) {
+              if (discAttempt < 2 && /ECONNRESET|ETIMEDOUT|socket hang up|UND_ERR/i.test(discErr.message)) {
+                console.log(`[speed-audit] Page discovery failed (${discErr.message}), retry ${discAttempt + 1}/2...`);
+                await new Promise(r => setTimeout(r, 5000));
+                continue;
+              }
+              throw discErr;
+            }
+          }
         }
         // Sort: homepage → service pages → blog posts. Always sort, not just when >50.
         const baseClean = siteUrl.replace(/\/$/, '');
