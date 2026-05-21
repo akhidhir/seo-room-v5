@@ -20610,7 +20610,8 @@
         const existingSerp = new Set(merged.filter(kw => !kw.location).map(k => k.keyword.toLowerCase().trim()));
         const toImport = uniqueServices.filter(s => !existingSerp.has(s));
         if (toImport.length === 0) return alert('All Maps keywords are already tracked in SERP.');
-        if (!confirm(`Import ${toImport.length} unique service keywords from Maps to SERP?\n\n${toImport.slice(0, 10).join(', ')}${toImport.length > 10 ? `... and ${toImport.length - 10} more` : ''}`)) return;
+        const preview = toImport.slice(0, 10).join(', ') + (toImport.length > 10 ? '... and ' + (toImport.length - 10) + ' more' : '');
+        if (!confirm('Import ' + toImport.length + ' unique service keywords from Maps to SERP?\n\n' + preview)) return;
         setImporting(true);
         try {
           const resp = await api(`/projects/${project.id}/rank-tracking/keywords`, {
@@ -20618,7 +20619,7 @@
             body: { keywords: toImport, location: '' }
           });
           if (resp.error) alert(resp.error);
-          else alert(`Imported ${resp.added || toImport.length} keywords to SERP tracking`);
+          else alert('Imported ' + (resp.added || toImport.length) + ' keywords to SERP tracking');
           loadData();
         } catch (e) { alert('Error: ' + e.message); }
         setImporting(false);
