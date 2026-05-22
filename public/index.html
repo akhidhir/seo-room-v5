@@ -20690,6 +20690,89 @@
       const [expandedAnalysis, setExpandedAnalysis] = useState(null);
       const [sentToActionPlan, setSentToActionPlan] = useState({});
       const [importingMaps, setImportingMaps] = useState(false);
+      const [serpView, setSerpView] = useState('rankings');
+      const [actionFilter, setActionFilter] = useState('all');
+      const [actionsDone, setActionsDone] = useState({});
+
+      // Load saved action done states from DB
+      useEffect(() => {
+        if (!project?.id) return;
+        api('/projects/' + project.id + '/serp-actions').then(r => {
+          if (r && !r.error && typeof r === 'object') setActionsDone(r);
+        }).catch(() => {});
+      }, [project?.id]);
+
+      const toggleActionDone = async (key) => {
+        const newVal = !actionsDone[key];
+        setActionsDone(prev => ({ ...prev, [key]: newVal }));
+        try {
+          await api('/projects/' + project.id + '/serp-actions', {
+            method: 'POST',
+            body: { key, done: newVal }
+          });
+        } catch (e) { console.error(e); }
+      };
+
+      // Build flat action items from all analysis results
+      const serpActions = useMemo(() => {
+        const items = [];
+        Object.entries(analysisResults).forEach(function(entry) {
+          var keyword = entry[0];
+          var ar = entry[1];
+          if (ar.error) return;
+          var a = ar.analysis || {};
+          var serpKw = serpOnly.find(function(k) { return k.keyword === keyword; });
+          var pos = serpKw ? serpKw.serp_position : null;
+          var score = a.score;
+          // Quick wins
+          (a.quick_wins || []).forEach(function(qw, i) {
+            items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::qw_' + i, text: qw, fix: qw, category: 'Content', impact: 'high', type: 'quick_win' });
+          });
+          // Gaps
+          (a.gaps || []).filter(function(g) { return g.status !== 'done'; }).forEach(function(g, i) {
+            items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::gap_' + i, text: g.issue, fix: g.fix || '', category: g.category || 'Content', impact: g.impact || 'medium', type: 'gap' });
+          });
+          // Content recs
+          if (a.content_recommendations) {
+            var cr = a.content_recommendations;
+            if (cr.title_suggestion) {
+              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::title', text: 'Update title tag to: ' + cr.title_suggestion, fix: 'Better keyword targeting and CTR', category: 'On-Page', impact: 'high', type: 'content_rec' });
+            }
+            if (cr.meta_suggestion) {
+              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::meta', text: 'Update meta description to: ' + cr.meta_suggestion, fix: 'Better CTR in search results', category: 'On-Page', impact: 'medium', type: 'content_rec' });
+            }
+            if (cr.target_word_count && ar.userPage && ar.userPage.wordCount < cr.target_word_count) {
+              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::wordcount', text: 'Increase word count from ' + (ar.userPage.wordCount || '?') + ' to ' + cr.target_word_count + ' words', fix: 'Add quality content covering missing topics', category: 'Content', impact: 'high', type: 'content_rec' });
+            }
+            (cr.missing_topics || []).forEach(function(t, ti) {
+              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::topic_' + ti, text: 'Add missing topic: ' + t, fix: 'Expand content to cover this topic', category: 'Content', impact: 'medium', type: 'content_rec' });
+            });
+          }
+        });
+        return items;
+      }, [analysisResults, serpOnly]);
+
+      // Group actions by keyword
+      const actionsByKeyword = useMemo(() => {
+        var filtered = actionFilter === 'all' ? serpActions : serpActions.filter(function(a) { return a.category === actionFilter; });
+        var groups = {};
+        filtered.forEach(function(item) {
+          if (!groups[item.keyword]) groups[item.keyword] = { keyword: item.keyword, position: item.position, score: item.score, items: [] };
+          groups[item.keyword].items.push(item);
+        });
+        // Sort groups: worst ranking first (no position = worst)
+        return Object.values(groups).sort(function(a, b) {
+          var pa = a.position || 999;
+          var pb = b.position || 999;
+          return pb - pa;
+        });
+      }, [serpActions, actionFilter]);
+
+      const actionCategories = useMemo(() => {
+        var cats = {};
+        serpActions.forEach(function(a) { cats[a.category] = (cats[a.category] || 0) + 1; });
+        return cats;
+      }, [serpActions]);
 
       const importFromMaps = async () => {
         const mapsKws = merged.filter(kw => kw.location);
@@ -20737,6 +20820,50 @@
         } catch (e) {
           console.error('Failed to send to action plan:', e);
         }
+      };
+
+      const sendAllToActionPlan = async (keyword) => {
+        const ar = analysisResults[keyword];
+        if (!ar || ar.error) return;
+        const a = ar.analysis || {};
+        const items = [];
+        // Quick wins
+        (a.quick_wins || []).forEach((qw, i) => {
+          const key = keyword + '::qw_' + i;
+          if (!sentToActionPlan[key]) items.push({ key, gap: { issue: qw, fix: qw, category: 'Content', impact: 'high' }, index: 'qw_' + i });
+        });
+        // Gaps
+        const openGaps = (a.gaps || []).filter(g => g.status !== 'done');
+        openGaps.forEach((g, i) => {
+          const key = keyword + '::' + i;
+          if (!sentToActionPlan[key]) items.push({ key, gap: g, index: i });
+        });
+        // Content recs
+        if (a.content_recommendations) {
+          const cr = a.content_recommendations;
+          if (cr.title_suggestion && !sentToActionPlan[keyword + '::title']) {
+            items.push({ key: keyword + '::title', gap: { issue: 'Update title tag to: ' + cr.title_suggestion, fix: 'Change the page title tag for better SERP visibility', category: 'On-Page', impact: 'high' }, index: 'title' });
+          }
+          if (cr.meta_suggestion && !sentToActionPlan[keyword + '::meta']) {
+            items.push({ key: keyword + '::meta', gap: { issue: 'Update meta description to: ' + cr.meta_suggestion, fix: 'Change the page meta description for better CTR', category: 'On-Page', impact: 'medium' }, index: 'meta' });
+          }
+          if (cr.target_word_count && ar.userPage && ar.userPage.wordCount < cr.target_word_count && !sentToActionPlan[keyword + '::wordcount']) {
+            items.push({ key: keyword + '::wordcount', gap: { issue: 'Increase word count from ' + (ar.userPage.wordCount || '?') + ' to ' + cr.target_word_count + ' words', fix: 'Add more quality content covering missing topics', category: 'Content', impact: 'high' }, index: 'wordcount' });
+          }
+          (cr.missing_topics || []).forEach((t, ti) => {
+            const key = keyword + '::topic_' + ti;
+            if (!sentToActionPlan[key]) items.push({ key, gap: { issue: 'Add missing topic: ' + t, fix: 'Create a section or expand content to cover: ' + t, category: 'Content', impact: 'medium' }, index: 'topic_' + ti });
+          });
+        }
+        if (items.length === 0) return;
+        let sent = 0;
+        for (const item of items) {
+          try {
+            await sendGapToActionPlan(keyword, item.gap, item.index);
+            sent++;
+          } catch (e) { console.error(e); }
+        }
+        alert('Sent ' + sent + ' items to Action Plan');
       };
 
       const modelCosts = {
@@ -20873,14 +21000,135 @@
 
       return (
         <div>
-          {/* Header */}
+          {/* Header with view toggle */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 10, color: 'var(--accent)' }} />SERP Rankings</h2>
-            <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
-              {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 10, color: 'var(--accent)' }} />SERP Rankings</h2>
+              <div style={{ display: 'flex', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                {[
+                  { key: 'rankings', label: 'Rankings', icon: 'fa-chart-simple' },
+                  { key: 'actions', label: 'Action Plan', icon: 'fa-list-check', count: serpActions.filter(function(a) { return !actionsDone[a.key]; }).length }
+                ].map(function(tab) {
+                  var active = serpView === tab.key;
+                  return React.createElement('button', {
+                    key: tab.key,
+                    onClick: function() { setSerpView(tab.key); },
+                    className: 'btn',
+                    style: { fontSize: 13, padding: '7px 16px', borderRadius: 0, border: 'none', background: active ? 'var(--accent)' : 'transparent', color: active ? '#fff' : 'var(--text2)', fontWeight: active ? 700 : 500 }
+                  }, React.createElement('i', { className: 'fa-solid ' + tab.icon, style: { marginRight: 6 } }), tab.label,
+                    tab.count > 0 ? React.createElement('span', { style: { marginLeft: 6, fontSize: 11, padding: '2px 7px', borderRadius: 10, background: active ? 'rgba(255,255,255,0.2)' : 'rgba(239,68,68,0.15)', color: active ? '#fff' : '#ef4444', fontWeight: 700 } }, tab.count) : null
+                  );
+                })}
+              </div>
+            </div>
+            {serpView === 'rankings' && (
+              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
+                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
+              </button>
+            )}
           </div>
 
+          {/* ===== ACTION PLAN VIEW ===== */}
+          {serpView === 'actions' && (
+            <div>
+              {serpActions.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+                  <i className="fa-solid fa-list-check" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+                  <div style={{ fontSize: 16, marginBottom: 8 }}>No actions yet</div>
+                  <div style={{ fontSize: 13, marginBottom: 16 }}>Run SERP Analysis on keywords to generate action items.</div>
+                  <button className="btn btn-primary" onClick={function() { setSerpView('rankings'); }}>
+                    <i className="fa-solid fa-arrow-left" style={{ marginRight: 6 }} />Go to Rankings
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  {/* Summary stats */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                    {[
+                      { label: 'TOTAL', value: serpActions.length, color: 'var(--text)' },
+                      { label: 'REMAINING', value: serpActions.filter(function(a) { return !actionsDone[a.key]; }).length, color: '#f59e0b' },
+                      { label: 'DONE', value: serpActions.filter(function(a) { return actionsDone[a.key]; }).length, color: '#22c55e' },
+                      { label: 'KEYWORDS', value: Object.keys(actionsByKeyword.reduce(function(acc, g) { acc[g.keyword] = 1; return acc; }, {})).length, color: 'var(--accent)' },
+                    ].map(function(s) {
+                      return React.createElement('div', { key: s.label, style: { background: 'var(--card)', borderRadius: 10, padding: 16, textAlign: 'center', border: '1px solid var(--border)' } },
+                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: s.color } }, s.value),
+                        React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4, letterSpacing: 0.5 } }, s.label)
+                      );
+                    })}
+                  </div>
+
+                  {/* Category tabs */}
+                  <div style={{ display: 'flex', gap: 0, marginBottom: 16 }}>
+                    {[
+                      { key: 'all', label: 'All', icon: 'fa-layer-group', color: 'var(--accent)' },
+                      { key: 'Content', label: 'Content', icon: 'fa-file-lines', color: '#8b5cf6' },
+                      { key: 'On-Page', label: 'On-Page', icon: 'fa-code', color: '#f59e0b' },
+                      { key: 'Technical', label: 'Technical', icon: 'fa-gear', color: '#06b6d4' },
+                      { key: 'Authority', label: 'Authority', icon: 'fa-shield-halved', color: '#ef4444' },
+                      { key: 'UX', label: 'UX', icon: 'fa-mobile-screen', color: '#ec4899' }
+                    ].filter(function(tab) { return tab.key === 'all' || actionCategories[tab.key]; }).map(function(tab, idx, arr) {
+                      var count = tab.key === 'all' ? serpActions.length : (actionCategories[tab.key] || 0);
+                      var active = actionFilter === tab.key;
+                      return React.createElement('button', {
+                        key: tab.key,
+                        onClick: function() { setActionFilter(tab.key); },
+                        style: { flex: 1, padding: '12px 10px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)', borderBottom: active ? '3px solid ' + tab.color : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)', fontWeight: active ? 700 : 500, fontSize: 13, borderRadius: idx === 0 ? '8px 0 0 0' : idx === arr.length - 1 ? '0 8px 0 0' : 0 }
+                      }, React.createElement('i', { className: 'fa-solid ' + tab.icon, style: { marginRight: 6 } }), tab.label, ' (' + count + ')');
+                    })}
+                  </div>
+
+                  {/* Keyword groups */}
+                  {actionsByKeyword.map(function(group) {
+                    var doneCount = group.items.filter(function(i) { return actionsDone[i.key]; }).length;
+                    var totalCount = group.items.length;
+                    var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
+                    var scoreColor2 = !group.score ? 'var(--text3)' : group.score >= 70 ? '#22c55e' : group.score >= 40 ? '#f59e0b' : '#ef4444';
+                    return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' } },
+                      React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)' } }, group.keyword),
+                          React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
+                          group.score != null ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
+                        ),
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                          React.createElement('div', { style: { width: 100, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' } },
+                            React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: doneCount === totalCount ? '#22c55e' : '#f59e0b', borderRadius: 3 } })
+                          ),
+                          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, doneCount + '/' + totalCount)
+                        )
+                      ),
+                      React.createElement('div', null,
+                        group.items.map(function(item) {
+                          var isDone = actionsDone[item.key];
+                          var impactColor = item.impact === 'high' ? '#ef4444' : item.impact === 'medium' ? '#f59e0b' : '#3b82f6';
+                          var impactLabel = item.impact === 'high' ? 'critical' : item.impact === 'medium' ? 'warning' : 'suggestion';
+                          var catColorMap = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
+                          var catCol = catColorMap[item.category] || 'var(--accent)';
+                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
+                            React.createElement('input', { type: 'checkbox', checked: !!isDone, onChange: function() { toggleActionDone(item.key); }, style: { marginTop: 3, accentColor: '#22c55e', width: 16, height: 16, cursor: 'pointer', flexShrink: 0 } }),
+                            React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                              React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 4, alignItems: 'center', flexWrap: 'wrap' } },
+                                isDone ? React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, 'done') : React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
+                                React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
+                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 3 } }), 'quick win') : null
+                              ),
+                              React.createElement('div', { style: { fontSize: 13, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.5 } }, item.text),
+                              item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } },
+                                React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 4, color: '#22c55e', fontSize: 11 } }), item.fix
+                              ) : null
+                            )
+                          );
+                        })
+                      )
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ===== RANKINGS VIEW ===== */}
+          {serpView === 'rankings' && <React.Fragment>
           {/* Summary cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
             {[
@@ -21206,6 +21454,12 @@
                           <div style={{ display: 'flex', gap: 8 }}>
                             <button className="btn" onClick={async e => {
                               e.stopPropagation();
+                              await sendAllToActionPlan(kw.keyword);
+                            }} style={{ fontSize: 11, color: '#22c55e', borderColor: 'rgba(34,197,94,0.4)', background: 'rgba(34,197,94,0.08)' }}>
+                              <i className="fa-solid fa-paper-plane" style={{ marginRight: 4 }} />Send All to Action Plan
+                            </button>
+                            <button className="btn" onClick={async e => {
+                              e.stopPropagation();
                               if (!confirm('Re-analyze this keyword?')) return;
                               await api('/projects/' + project.id + '/rank-tracking/analyses/' + encodeURIComponent(kw.keyword), { method: 'DELETE' });
                               setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; });
@@ -21299,6 +21553,7 @@
               )}
             </div>
           )}
+          </React.Fragment>}
           {/* Discover Keywords Modal */}
           {discovered && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}

@@ -25023,6 +25023,51 @@ app.delete('/api/projects/:projectId/rank-tracking/analyses/:keyword', async (re
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============ SERP ACTION PLAN ============
+
+// Get action done states
+app.get('/api/projects/:projectId/serp-actions', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT data FROM serp_action_status WHERE project_id=$1', [req.params.projectId]);
+    res.json(r.rows.length > 0 ? r.rows[0].data : {});
+  } catch (e) {
+    // Table might not exist yet
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS serp_action_status (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        data JSONB DEFAULT '{}',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`);
+      res.json({});
+    } catch (e2) { res.json({}); }
+  }
+});
+
+// Toggle action done state
+app.post('/api/projects/:projectId/serp-actions', async (req, res) => {
+  const { key, done } = req.body;
+  if (!key) return res.status(400).json({ error: 'key required' });
+  try {
+    // Ensure table exists
+    await pool.query(`CREATE TABLE IF NOT EXISTS serp_action_status (
+      project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      data JSONB DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    // Upsert
+    if (done) {
+      await pool.query(`INSERT INTO serp_action_status (project_id, data, updated_at) VALUES ($1, jsonb_build_object($2::text, true), NOW())
+        ON CONFLICT (project_id) DO UPDATE SET data = serp_action_status.data || jsonb_build_object($2::text, true), updated_at = NOW()`,
+        [req.params.projectId, key]);
+    } else {
+      await pool.query(`INSERT INTO serp_action_status (project_id, data, updated_at) VALUES ($1, '{}', NOW())
+        ON CONFLICT (project_id) DO UPDATE SET data = serp_action_status.data - $2, updated_at = NOW()`,
+        [req.params.projectId, key]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ============ MAPS AI ANALYSIS ============
 
 // Run Maps analysis for a keyword+location
