@@ -25016,8 +25016,12 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
 // Get saved SERP analysis results
 app.get('/api/projects/:projectId/rank-tracking/analyses', async (req, res) => {
   try {
+    // Only return analyses for keywords that still exist in rank_keywords (SERP only, no location)
     const { rows } = await pool.query(
-      `SELECT keyword, model, analysis, user_page, competitors, cost, analyzed_at FROM serp_analysis WHERE project_id=$1`,
+      `SELECT sa.keyword, sa.model, sa.analysis, sa.user_page, sa.competitors, sa.cost, sa.analyzed_at
+       FROM serp_analysis sa
+       INNER JOIN rank_keywords rk ON rk.project_id = sa.project_id AND rk.keyword = sa.keyword AND (rk.location IS NULL OR rk.location = '')
+       WHERE sa.project_id=$1`,
       [req.params.projectId]
     );
     const results = {};
