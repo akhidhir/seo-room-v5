@@ -21284,6 +21284,8 @@
                         { key: 'reviewing_sub', label: 'In Review', count: serpActions.filter(function(a) { return reviewingKeys[a.key]; }).length, color: '#a855f7', bg: '#a855f7' },
                         { key: 'in_progress_sub', label: 'In Progress', count: ipCount, color: '#3b82f6', bg: '#3b82f6' },
                         { key: 'done_sub', label: 'Done', count: doneCount, color: '#22c55e', bg: '#22c55e' },
+                        { key: 'assignee_onpage', label: 'On-Page Fix', count: filtered.filter(function(a) { return getAssignee(a).type === 'onpage'; }).length, color: '#8b5cf6', bg: '#8b5cf6' },
+                        { key: 'assignee_human', label: 'Human', count: filtered.filter(function(a) { return getAssignee(a).type === 'human'; }).length, color: '#f59e0b', bg: '#f59e0b' },
                       ].filter(function(p) { return p.key === 'all_sub' || p.count > 0; }).map(function(pill) {
                         var subActive = (actionSubFilter || 'all_sub') === pill.key;
                         return React.createElement('button', {
@@ -21307,6 +21309,8 @@
                       if (sf === 'pending') return getActionStatus(item.key) === 'pending';
                       if (sf === 'reviewing_sub') return reviewingKeys[item.key];
                       if (sf === 'in_progress_sub') return getActionStatus(item.key) === 'in_progress';
+                      if (sf === 'assignee_onpage') return getAssignee(item).type === 'onpage';
+                      if (sf === 'assignee_human') return getAssignee(item).type === 'human';
                       if (sf === 'done_sub') return getActionStatus(item.key) === 'done';
                       return true;
                     });
