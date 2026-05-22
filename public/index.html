@@ -20762,58 +20762,60 @@
           var metaMatch = t.match(/(?:Update meta description to|meta desc(?:ription)? to)[:\s]*(.+)/i);
           return metaMatch ? { fixType: 'meta_desc', pageUrl: pageUrl, newValue: metaMatch[1].trim() } : null;
         }
-        // Quote pattern: matches single/double/curly quotes
-        var Q = “[‘\”\\u2018\\u2019\\u201C\\u201D]”;
-        var QP = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘g’);
-        var QPonce = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’);
+        // Helper: extract all quoted strings (handles straight and curly quotes)
+        var extractQuoted = function(str) {
+          var results = [];
+          var chars = Array.from(str);
+          var quoteChars = "'\"";
+          // Also match curly quotes by char code
+          var isQuote = function(c) { return quoteChars.indexOf(c) >= 0 || c.charCodeAt(0) === 8216 || c.charCodeAt(0) === 8217 || c.charCodeAt(0) === 8218 || c.charCodeAt(0) === 8220 || c.charCodeAt(0) === 8221 || c.charCodeAt(0) === 8222; };
+          var i = 0;
+          while (i < chars.length) {
+            if (isQuote(chars[i])) {
+              var start = i + 1;
+              i++;
+              while (i < chars.length && !isQuote(chars[i])) i++;
+              if (i > start) results.push(str.substring(start, i));
+              i++;
+            } else { i++; }
+          }
+          return results;
+        };
         // H1 replace
-        if (t.toLowerCase().includes(‘h1’)) {
-          var h1Pat = new RegExp(‘(?:from|says)\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+.*?(?:to|keyword is)\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘i’);
-          var h1FromTo = t.match(h1Pat);
-          if (h1FromTo) return { fixType: ‘h1_replace’, pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
-          var h1ToPat = new RegExp(‘h1\\s+to\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘i’);
-          var h1To = t.match(h1ToPat);
-          if (h1To) return { fixType: ‘h1_replace’, pageUrl: pageUrl, newValue: h1To[1].trim() };
+        if (t.toLowerCase().includes('h1')) {
+          var quoted = extractQuoted(t);
+          if (quoted.length >= 2) {
+            return { fixType: 'h1_replace', pageUrl: pageUrl, oldValue: quoted[0].trim(), newValue: quoted[1].trim() };
+          }
+          if (quoted.length === 1) {
+            return { fixType: 'h1_replace', pageUrl: pageUrl, newValue: quoted[0].trim() };
+          }
           return null;
         }
         // H2 replace
-        if (t.toLowerCase().includes(‘h2’) && (t.toLowerCase().includes(‘replace’) || t.toLowerCase().includes(‘heading’))) {
+        if (t.toLowerCase().includes('h2') && (t.toLowerCase().includes('replace') || t.toLowerCase().includes('heading'))) {
           var newH2Matches = [];
           var parenMatch = t.match(/\(([^)]+)\)/);
           if (parenMatch) {
-            var inner = parenMatch[1];
-            var qm;
-            var tempPat = new RegExp(QP.source, ‘g’);
-            while ((qm = tempPat.exec(inner)) !== null) {
-              newH2Matches.push(qm[1].trim());
-            }
+            newH2Matches = extractQuoted(parenMatch[1]);
           }
-          var oldH2Pat = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+\\s*h2’, ‘i’);
-          var oldH2Match = t.match(oldH2Pat);
-          var oldVal = oldH2Match ? oldH2Match[1].trim() : null;
-          if (!oldVal) {
-            var combined = t + ‘ ‘ + (item.fix || ‘’);
-            var allVals = [];
-            var tempPat2 = new RegExp(QP.source, ‘g’);
-            var qm2;
-            while ((qm2 = tempPat2.exec(combined)) !== null) {
-              allVals.push(qm2[1].trim());
-            }
-            var newLower = {};
-            newH2Matches.forEach(function(v) { newLower[v.toLowerCase()] = true; });
-            for (var qi = 0; qi < allVals.length; qi++) {
-              if (!newLower[allVals[qi].toLowerCase()] && allVals[qi].length < 50) {
-                oldVal = allVals[qi];
-                break;
-              }
+          // Old value: quoted value before "H2" or first quoted not in newH2Matches
+          var allQuoted = extractQuoted(t + ' ' + (item.fix || ''));
+          var oldVal = null;
+          var newLower = {};
+          newH2Matches.forEach(function(v) { newLower[v.toLowerCase().trim()] = true; });
+          for (var qi = 0; qi < allQuoted.length; qi++) {
+            if (!newLower[allQuoted[qi].toLowerCase().trim()] && allQuoted[qi].length < 50) {
+              oldVal = allQuoted[qi].trim();
+              break;
             }
           }
           if (!oldVal) {
-            var phoneMatch = (t + ‘ ‘ + (item.fix || ‘’)).match(/(\d{4}\s*\d{3}\s*\d{3})/);
+            var phoneMatch = (t + ' ' + (item.fix || '')).match(/(\d{4}\s*\d{3}\s*\d{3})/);
             if (phoneMatch) oldVal = phoneMatch[1].trim();
           }
           if (newH2Matches.length > 0) {
-            return { fixType: ‘h2_multi’, pageUrl: pageUrl, oldValue: oldVal, replacements: newH2Matches };
+            return { fixType: 'h2_multi', pageUrl: pageUrl, oldValue: oldVal, replacements: newH2Matches };
           }
           return null;
         }
