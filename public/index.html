@@ -20771,27 +20771,53 @@
           return null;
         }
         // H2 replace: extract quoted old value and quoted new values
-        if (t.toLowerCase().includes('h2') && (t.toLowerCase().includes('replace') || t.toLowerCase().includes('heading'))) {
-          // Pattern: "Replace ... 'oldValue' H2 tags with ... ('newValue1' and 'newValue2')"
-          // Or: "Replace both 'X' H2 tags with keyword-rich headings ('Y' and 'Z')"
-          var oldH2Match = t.match(/['‘’""]([^'‘’""]+)['‘’""]\s*h2/i);
+        if (t.toLowerCase().includes(‘h2’) && (t.toLowerCase().includes(‘replace’) || t.toLowerCase().includes(‘heading’))) {
+          // Extract new values from parentheses: (‘X’ and ‘Y’)
           var newH2Matches = [];
-          var quoteRegex = /\(([^)]+)\)/; // content inside parentheses
-          var parenMatch = t.match(quoteRegex);
+          var parenMatch = t.match(/\(([^)]+)\)/);
           if (parenMatch) {
-            // Extract quoted values inside parentheses: ('X' and 'Y')
             var inner = parenMatch[1];
-            var quotedVals = inner.match(/['‘’""]([^'‘’""]+)['‘’""]/g);
+            var quotedVals = inner.match(/[‘’’""]([^’’’""]+)[‘’’""]/g);
             if (quotedVals) {
-              newH2Matches = quotedVals.map(function(v) { return v.replace(/['‘’""]/g, '').trim(); });
+              newH2Matches = quotedVals.map(function(v) { return v.replace(/[‘’’""]/g, ‘’).trim(); });
             }
           }
-          if (oldH2Match && newH2Matches.length > 0) {
-            // Return multiple fixes as array
+          // Extract old value: try ‘X’ H2 pattern first
+          var oldH2Match = t.match(/[‘’’""]([^’’’""]+)[‘’’""]\s*h2/i);
+          var oldVal = oldH2Match ? oldH2Match[1].trim() : null;
+          // Fallback: check fix text and full text for quoted values that aren’t in newH2Matches
+          if (!oldVal) {
+            var fixText = item.fix || ‘’;
+            var combined = t + ‘ ‘ + fixText;
+            var allQuoted = combined.match(/[‘’’""]([^’’’""]+)[‘’’""]/g) || [];
+            var allVals = allQuoted.map(function(v) { return v.replace(/[‘’’""]/g, ‘’).trim(); });
+            var newSet = new Set(newH2Matches.map(function(v) { return v.toLowerCase(); }));
+            for (var qi = 0; qi < allVals.length; qi++) {
+              if (!newSet.has(allVals[qi].toLowerCase()) && allVals[qi].length < 50) {
+                oldVal = allVals[qi];
+                break;
+              }
+            }
+          }
+          // Fallback: if text mentions phone number pattern, use it
+          if (!oldVal) {
+            var phoneMatch = (t + ‘ ‘ + (item.fix || ‘’)).match(/(\d{4}\s*\d{3}\s*\d{3})/);
+            if (phoneMatch) oldVal = phoneMatch[1].trim();
+          }
+          if (oldVal && newH2Matches.length > 0) {
             return {
-              fixType: 'h2_multi',
+              fixType: ‘h2_multi’,
               pageUrl: pageUrl,
-              oldValue: oldH2Match[1].trim(),
+              oldValue: oldVal,
+              replacements: newH2Matches
+            };
+          }
+          // Single H2 with just new values (no old found) — still allow if we have replacements
+          if (newH2Matches.length > 0) {
+            return {
+              fixType: ‘h2_multi’,
+              pageUrl: pageUrl,
+              oldValue: null,
               replacements: newH2Matches
             };
           }
