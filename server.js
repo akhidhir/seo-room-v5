@@ -1003,7 +1003,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/serp-test'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -26411,6 +26411,24 @@ app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
 });
 
 // ==================== 15. SERVE ====================
+
+// Debug: test SerpAPI call with GPS
+app.get('/api/debug/serp-test', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
+  const q = req.query.q || 'blocked drain warner';
+  const lat = parseFloat(req.query.lat) || -27.322;
+  const lng = parseFloat(req.query.lng) || 152.95;
+  try {
+    const data = await serpApiSearch({ engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30, lat, lon: lng });
+    const organic = (data.organic_results || []).slice(0, 10).map(r => {
+      let host = '';
+      try { host = new URL(r.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { host = r.link; }
+      return { pos: r.position, host, title: r.title, link: (r.link || '').substring(0, 80) };
+    });
+    const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
+    res.json({ query: q, lat, lng, organic, local, searchInfo: data.search_information });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
