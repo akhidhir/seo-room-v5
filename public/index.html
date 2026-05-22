@@ -20873,91 +20873,61 @@
 
       return (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 10, color: 'var(--accent)' }} />SERP Rankings</h2>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 14, padding: '8px 16px', color: '#ef4444', borderColor: '#ef4444' }}>
-                <i className="fa-solid fa-trash" style={{ marginRight: 6 }} />Delete All
-              </button>}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-                <select value={discoverLimit} onChange={e => setDiscoverLimit(Number(e.target.value))} disabled={discovering}
-                  style={{ fontSize: 14, padding: '8px 10px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)', borderRight: 'none', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer' }}>
-                  {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-                <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 14, padding: '8px 16px', borderRadius: '0 6px 6px 0' }}>
-                  {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 6 }} />Discover Keywords</>}
-                </button>
-              </div>
-              <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
-                <i className="fa-solid fa-file-csv" style={{ marginRight: 6 }} />Import CSV
-              </button>
-              <button onClick={downloadSampleCSV} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: '0 4px', textDecoration: 'underline', alignSelf: 'center' }}>
-                Sample CSV
-              </button>
-              <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 14, padding: '8px 16px' }}>
-                {importing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Importing...</> : <><i className="fa-solid fa-download" style={{ marginRight: 6 }} />Import from GSC</>}
-              </button>
-              <button className="btn" onClick={importFromMaps} disabled={importingMaps} style={{ fontSize: 14, padding: '8px 16px' }}>
-                {importingMaps ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Importing...</> : <><i className="fa-solid fa-map-location-dot" style={{ marginRight: 6 }} />Import from Maps</>}
-              </button>
-              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
-                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
-              </button>
-            </div>
+            <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
+              {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
+            </button>
           </div>
 
           {/* Summary cards */}
-          {rankings.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-              {[
-                { label: 'Tracked', value: serpOnly.length, color: 'var(--text)' },
-                { label: 'Top 3', value: rankings.filter(r => r.serp_position && r.serp_position <= 3).length, color: '#22c55e' },
-                { label: 'Top 10', value: rankings.filter(r => r.serp_position && r.serp_position <= 10).length, color: '#3b82f6' },
-                { label: 'Top 20', value: rankings.filter(r => r.serp_position && r.serp_position <= 20).length, color: '#f59e0b' },
-                { label: 'Not Ranking', value: rankings.filter(r => !r.serp_position).length, color: '#ef4444' },
-              ].map(s => (
-                <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
-                </div>
-              ))}
-            </div>
-          )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+            {[
+              { label: 'TRACKED', value: serpOnly.length, color: 'var(--text)' },
+              { label: 'TOP 3', value: serpOnly.filter(r => r.serp_position && r.serp_position <= 3).length, color: '#22c55e' },
+              { label: 'TOP 10', value: serpOnly.filter(r => r.serp_position && r.serp_position <= 10).length, color: '#3b82f6' },
+              { label: 'TOP 20', value: serpOnly.filter(r => r.serp_position && r.serp_position <= 20).length, color: '#f59e0b' },
+              { label: 'NOT RANKING', value: serpOnly.filter(r => !r.serp_position).length, color: '#ef4444' },
+            ].map(s => (
+              <div key={s.label} style={{ background: 'var(--card)', borderRadius: 10, padding: 16, textAlign: 'center', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, letterSpacing: 0.5 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
 
-          {/* SERP Analysis toolbar */}
-          {keywords.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '14px 18px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
-              <i className="fa-solid fa-brain" style={{ color: 'var(--accent)', fontSize: 18 }} />
-              <span style={{ fontWeight: 700, fontSize: 15 }}>SERP Analysis</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Model:</span>
-                <select value={analysisModel} onChange={e => setAnalysisModel(e.target.value)}
-                  style={{ fontSize: 14, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
-                  <option value="haiku-4.5">Haiku 4.5 (~$0.002/kw)</option>
-                  <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
-                  <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
-                  <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
-                </select>
-              </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', marginLeft: 8 }}>
-                {analysisCheckedCount > 0 ? (
-                  <span><strong>{analysisCheckedCount}</strong> keyword{analysisCheckedCount !== 1 ? 's' : ''} selected — Est. <strong style={{ color: '#f59e0b' }}>${(analysisCheckedCount * costPerKw).toFixed(3)}</strong></span>
-                ) : (
-                  <span style={{ color: 'var(--text3)' }}>Select keywords to analyze (use checkboxes)</span>
-                )}
-              </div>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={toggleAllAnalysis} style={{ fontSize: 13, padding: '6px 14px' }}>
-                  {allChecked ? 'Deselect All' : 'Select All'}
-                </button>
-                <button className="btn btn-primary" disabled={analysisCheckedCount === 0 || analyzing}
-                  onClick={() => setShowCostConfirm(true)}
-                  style={{ fontSize: 14, padding: '8px 18px' }}>
-                  {analyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Analyze</>}
-                </button>
-              </div>
+          {/* Import buttons row + Add keyword */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+              <select value={discoverLimit} onChange={e => setDiscoverLimit(Number(e.target.value))} disabled={discovering}
+                style={{ fontSize: 13, padding: '7px 8px', borderRadius: '6px 0 0 6px', border: '1px solid var(--border)', borderRight: 'none', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', width: 48 }}>
+                {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button className="btn" onClick={discoverKeywords} disabled={discovering} style={{ fontSize: 13, padding: '7px 14px', borderRadius: '0 6px 6px 0' }}>
+                {discovering ? <i className="fa-solid fa-spinner fa-spin" /> : <><i className="fa-solid fa-magnifying-glass" style={{ marginRight: 5 }} />Discover</>}
+              </button>
             </div>
-          )}
+            <button className="btn" onClick={importCSV} disabled={importing} style={{ fontSize: 13, padding: '7px 14px' }}>
+              <i className="fa-solid fa-file-csv" style={{ marginRight: 5 }} />CSV
+            </button>
+            <button className="btn" onClick={() => importKeywords()} disabled={importing} style={{ fontSize: 13, padding: '7px 14px' }}>
+              {importing ? <i className="fa-solid fa-spinner fa-spin" /> : <><i className="fa-solid fa-download" style={{ marginRight: 5 }} />GSC</>}
+            </button>
+            <button className="btn" onClick={importFromMaps} disabled={importingMaps} style={{ fontSize: 13, padding: '7px 14px' }}>
+              {importingMaps ? <i className="fa-solid fa-spinner fa-spin" /> : <><i className="fa-solid fa-map-location-dot" style={{ marginRight: 5 }} />Maps</>}
+            </button>
+            {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, padding: '7px 14px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)' }}>
+              <i className="fa-solid fa-trash" style={{ marginRight: 5 }} />Delete All
+            </button>}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input value={newKw} onChange={e => setNewKw(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKw.trim()) { addKeyword(newKw); setNewKw(''); } }}
+                placeholder="Add keyword..." style={{ padding: '7px 12px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, width: 200 }} />
+              <button className="btn btn-primary" onClick={() => { if (newKw.trim()) { addKeyword(newKw); setNewKw(''); } }} disabled={!newKw.trim()} style={{ fontSize: 13, padding: '7px 14px' }}>
+                <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
+              </button>
+            </div>
+          </div>
 
           {/* Cost confirmation modal */}
           {showCostConfirm && (
@@ -20976,7 +20946,7 @@
                       <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
                       <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
                       <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
-                        </select>
+                    </select>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
                     <span>Cost per keyword</span><strong>${costPerKw.toFixed(3)}</strong>
@@ -20995,15 +20965,6 @@
             </div>
           )}
 
-          {/* Add keyword */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-            <input value={newKw} onChange={e => setNewKw(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newKw.trim()) { addKeyword(newKw); setNewKw(''); } }}
-              placeholder="Add keyword to track..." style={{ flex: 1, padding: '10px 14px', background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-            <button className="btn btn-primary" onClick={() => { if (newKw.trim()) { addKeyword(newKw); setNewKw(''); } }} disabled={!newKw.trim()} style={{ fontSize: 14, padding: '10px 20px' }}>
-              <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
-            </button>
-          </div>
-
           {keywords.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
               <i className="fa-solid fa-chart-line" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
@@ -21021,65 +20982,55 @@
                 const hasAnalysis = analysisResults[kw.keyword] && !analysisResults[kw.keyword].error;
                 const hasError = analysisResults[kw.keyword] && analysisResults[kw.keyword].error;
                 const isAnalysisOpen = expandedAnalysis === kw.keyword;
+                const aScore = hasAnalysis ? analysisResults[kw.keyword].analysis?.score : null;
                 return (
                 <div key={kw.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid ' + bdrColor, borderRadius: '0 10px 10px 0', overflow: 'hidden' }}>
                   {/* Card header */}
-                  <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', transition: 'background 0.15s' }}
-                    onClick={() => loadHistory(kw.keyword)}
+                  <div style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer', transition: 'background 0.15s' }}
+                    onClick={() => { if (hasAnalysis || hasError) setExpandedAnalysis(isAnalysisOpen ? null : kw.keyword); else loadHistory(kw.keyword); }}
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                     onMouseLeave={e => e.currentTarget.style.background = ''}>
                     <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} onClick={e => e.stopPropagation()} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
-                        {hasAnalysis && (
-                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: analysisResults[kw.keyword].analysis?.score >= 70 ? 'rgba(34,197,94,0.15)' : analysisResults[kw.keyword].analysis?.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)', color: analysisResults[kw.keyword].analysis?.score >= 70 ? '#22c55e' : analysisResults[kw.keyword].analysis?.score >= 40 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
-                            {analysisResults[kw.keyword].analysis?.score}/100
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : <span style={{ color: 'var(--text3)' }}>Not found in top 100</span>}
+                      <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span>}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Vol</div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text2)' }}>{kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
+                      <div style={{ textAlign: 'center', minWidth: 50 }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>VOLUME</div>
                       </div>
-                      {kw.gsc_position != null && (
-                        <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>GSC</div>
-                          <div style={{ fontSize: 14, fontWeight: 800, color: posColor(Math.round(kw.gsc_position)) }}>{Math.round(kw.gsc_position * 10) / 10}</div>
-                        </div>
-                      )}
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>SERP</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ fontSize: 16, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{posLabel(kw.serp_position, kw.checked_at)}</span>
-                          <RankChangeBadge change={kw.serp_change} />
-                        </div>
+                      <div style={{ textAlign: 'center', minWidth: 40 }}>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{kw.serp_position ? '#' + kw.serp_position : '>100'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>SERP</div>
                       </div>
-                      {serpComps.length > 0 && (
-                        <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '4px 10px' }}>
-                          <i className="fa-solid fa-users" style={{ marginRight: 4, fontSize: 11 }} />{serpComps.length}
-                        </button>
-                      )}
-                      {(hasAnalysis || hasError) && (
-                        <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(isAnalysisOpen ? null : kw.keyword); }}
-                          style={{ fontSize: 12, padding: '4px 10px', color: hasError ? '#ef4444' : 'var(--accent)', borderColor: hasError ? '#ef4444' : 'var(--accent)' }}>
-                          <i className={'fa-solid ' + (hasError ? 'fa-exclamation-triangle' : isAnalysisOpen ? 'fa-chevron-up' : 'fa-eye')} style={{ marginRight: 4 }} />
-                          {hasError ? 'Error' : isAnalysisOpen ? 'Hide' : 'View'}
-                        </button>
-                      )}
-                      <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: 4, opacity: 0.5 }}>
-                        <i className="fa-solid fa-trash" />
-                      </button>
+                      <div style={{ textAlign: 'center', minWidth: 40 }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: kw.gsc_position != null ? posColor(Math.round(kw.gsc_position)) : 'var(--text3)' }}>{kw.gsc_position != null ? Math.round(kw.gsc_position * 10) / 10 : '—'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>GSC POS</div>
+                      </div>
+                      <div style={{ textAlign: 'center', minWidth: 40 }}>
+                        {kw.serp_change ? (
+                          <div style={{ fontSize: 16, fontWeight: 700, color: kw.serp_change > 0 ? '#22c55e' : '#ef4444' }}>{kw.serp_change > 0 ? '↑' : '↓'}{Math.abs(kw.serp_change)}</div>
+                        ) : (
+                          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text3)' }}>—</div>
+                        )}
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>CHANGE</div>
+                      </div>
+                      {hasAnalysis ? (
+                        <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Analyzed
+                        </span>
+                      ) : !kw.serp_position ? (
+                        <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 20, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>Not ranking</span>
+                      ) : null}
+                      <i className={'fa-solid ' + (isAnalysisOpen ? 'fa-chevron-up' : 'fa-chevron-down')} style={{ fontSize: 12, color: 'var(--text3)' }} />
                     </div>
                   </div>
                   {/* Competitors sub-panel */}
                   {expandedKw === kw.keyword && serpComps.length > 0 && (
-                    <div style={{ padding: '8px 16px 10px 46px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ padding: '8px 18px 10px 46px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
                       {serpComps.map((c, j) => (
                         <div key={j} style={{ display: 'flex', gap: 12, padding: '3px 0', fontSize: 12, color: 'var(--text2)' }}>
                           <span style={{ fontWeight: 600, color: posColor(c.position) }}>#{c.position}</span>
@@ -21107,306 +21058,197 @@
                   {isAnalysisOpen && hasAnalysis && (() => {
                     const ar = analysisResults[kw.keyword];
                     const a = ar.analysis || {};
-                    const impactIcon = { high: 'fa-circle-exclamation', medium: 'fa-triangle-exclamation', low: 'fa-circle-info' };
-                    const impactColor = { high: '#ef4444', medium: '#f59e0b', low: '#3b82f6' };
-                    const impactBg = { high: 'rgba(239,68,68,0.08)', medium: 'rgba(245,158,11,0.08)', low: 'rgba(59,130,246,0.08)' };
                     const catIcon = { Content: 'fa-file-lines', Technical: 'fa-gear', 'On-Page': 'fa-code', Authority: 'fa-shield-halved', UX: 'fa-mobile-screen' };
                     const catColor = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
                     const scoreColor = a.score >= 70 ? '#22c55e' : a.score >= 40 ? '#f59e0b' : '#ef4444';
-                    const scoreLabel = a.score >= 70 ? 'Good' : a.score >= 40 ? 'Needs Work' : 'Critical';
+                    const scoreLabel = a.score >= 70 ? 'Strong position' : a.score >= 40 ? 'Needs improvement' : 'Weak position';
                     const openGaps = (a.gaps || []).filter(g => g.status !== 'done');
-                    const doneGaps = (a.gaps || []).filter(g => g.status === 'done');
                     const highGaps = openGaps.filter(g => g.impact === 'high');
                     const medGaps = openGaps.filter(g => g.impact === 'medium');
                     const lowGaps = openGaps.filter(g => g.impact === 'low');
                     return (
-                      <div style={{ borderTop: '3px solid ' + scoreColor }}>
+                      <div style={{ borderTop: '1px solid var(--border)', padding: '20px 24px' }}>
+                        {/* Score + Verdict + Stats */}
+                        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', marginBottom: 20 }}>
+                          <div style={{ position: 'relative', width: 72, height: 72, flexShrink: 0 }}>
+                            <svg viewBox="0 0 36 36" style={{ width: 72, height: 72, transform: 'rotate(-90deg)' }}>
+                              <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+                              <circle cx="18" cy="18" r="15.9" fill="none" stroke={scoreColor} strokeWidth="3" strokeDasharray={a.score + ' ' + (100 - a.score)} strokeLinecap="round" />
+                            </svg>
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <span style={{ fontSize: 22, fontWeight: 900, color: scoreColor }}>{a.score}</span>
+                            </div>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: scoreColor, marginBottom: 4 }}>{scoreLabel}</div>
+                            <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>{a.verdict}</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                            {[
+                              { label: 'Critical', value: highGaps.length, color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+                              { label: 'Warnings', value: medGaps.length, color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
+                              { label: 'Quick wins', value: (a.quick_wins || []).length, color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
+                            ].map(s => (
+                              <div key={s.label} style={{ textAlign: 'center', padding: '10px 16px', background: s.bg, borderRadius: 8, border: '1px solid ' + s.color + '22', minWidth: 70 }}>
+                                <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
+                                <div style={{ fontSize: 10, color: s.color, marginTop: 2 }}>{s.label}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-                              {/* ── HEADER: Score + Verdict ── */}
-                              <div style={{ padding: '28px 32px 24px', background: `linear-gradient(135deg, ${scoreColor}08, transparent)` }}>
-                                <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
-                                  {/* Score circle */}
-                                  <div style={{ position: 'relative', width: 90, height: 90, flexShrink: 0 }}>
-                                    <svg viewBox="0 0 36 36" style={{ width: 90, height: 90, transform: 'rotate(-90deg)' }}>
-                                      <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
-                                      <circle cx="18" cy="18" r="15.9" fill="none" stroke={scoreColor} strokeWidth="3" strokeDasharray={`${a.score} ${100 - a.score}`} strokeLinecap="round" />
-                                    </svg>
-                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                                      <span style={{ fontSize: 26, fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{a.score}</span>
-                                      <span style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{scoreLabel}</span>
-                                    </div>
-                                  </div>
-                                  {/* Verdict */}
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.5, color: scoreColor, fontWeight: 800, marginBottom: 6 }}>
-                                      <i className="fa-solid fa-brain" style={{ marginRight: 6 }} />WHY YOU'RE NOT RANKING
-                                    </div>
-                                    <div style={{ fontSize: 16, fontWeight: 500, color: 'var(--text)', lineHeight: 1.6 }}>{a.verdict}</div>
-                                  </div>
-                                  <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(null); }} style={{ alignSelf: 'flex-start', fontSize: 12 }}>
-                                    <i className="fa-solid fa-xmark" style={{ marginRight: 4 }} />Close
-                                  </button>
+                        {/* Quick Wins */}
+                        {a.quick_wins && a.quick_wins.length > 0 && (
+                          <div style={{ marginBottom: 20 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', marginBottom: 10 }}><i className="fa-solid fa-bolt" style={{ marginRight: 6 }} />Quick wins</div>
+                            {a.quick_wins.map((qw, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 10, padding: '10px 14px', marginBottom: 6, background: 'rgba(34,197,94,0.06)', borderRadius: 8, borderLeft: '3px solid #22c55e', alignItems: 'flex-start' }}>
+                                <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#22c55e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{i + 1}</div>
+                                <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5, paddingTop: 2 }}>{qw}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Competitors */}
+                        {(ar.competitors || []).length > 0 && (
+                          <div style={{ marginBottom: 16 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text2)', marginBottom: 10 }}><i className="fa-solid fa-users" style={{ marginRight: 6 }} />Competitors</div>
+                            {(ar.competitors || []).slice(0, 3).map((cp, i) => (
+                              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', marginBottom: 4, background: 'var(--bg)', borderRadius: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: posColor(cp.position || i + 1) + '22', color: posColor(cp.position || i + 1) }}>#{cp.position || i + 1}</span>
+                                  <span style={{ fontSize: 13, color: 'var(--text2)' }}>{cp.url ? cp.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : cp.domain || 'Unknown'}</span>
                                 </div>
+                                <span style={{ fontSize: 12, color: 'var(--text3)' }}>{cp.wordCount ? cp.wordCount.toLocaleString() + ' words' : ''}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                                {/* Stats bar */}
-                                <div style={{ display: 'flex', gap: 16, marginTop: 20 }}>
-                                  {[
-                                    { icon: 'fa-fire', label: 'Critical Issues', value: highGaps.length, color: '#ef4444' },
-                                    { icon: 'fa-exclamation', label: 'Warnings', value: medGaps.length, color: '#f59e0b' },
-                                    { icon: 'fa-info', label: 'Suggestions', value: lowGaps.length, color: '#3b82f6' },
-                                    { icon: 'fa-file-lines', label: 'Your Words', value: ar.userPage?.wordCount?.toLocaleString() || '?', color: 'var(--accent)' },
-                                    { icon: 'fa-users', label: 'Avg Competitor', value: (ar.competitors || []).length > 0 ? Math.round((ar.competitors || []).reduce((s, c) => s + (c.wordCount || 0), 0) / (ar.competitors || []).length).toLocaleString() : '?', color: 'var(--text2)' },
-                                  ].map((s, i) => (
-                                    <div key={i} style={{ flex: 1, padding: '12px 14px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
-                                      <i className={`fa-solid ${s.icon}`} style={{ color: s.color, fontSize: 14, marginBottom: 4, display: 'block' }} />
-                                      <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
-                                      <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>{s.label}</div>
-                                    </div>
+                        {/* Issues by Priority */}
+                        {[
+                          { title: 'Critical Issues', items: highGaps, accent: '#ef4444', icon: 'fa-fire' },
+                          { title: 'Warnings', items: medGaps, accent: '#f59e0b', icon: 'fa-triangle-exclamation' },
+                          { title: 'Suggestions', items: lowGaps, accent: '#3b82f6', icon: 'fa-lightbulb' }
+                        ].filter(sec => sec.items.length > 0).map((sec, si) => (
+                          <div key={si} style={{ marginBottom: 16 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: sec.accent, marginBottom: 8 }}>
+                              <i className={'fa-solid ' + sec.icon} style={{ marginRight: 6 }} />{sec.title} ({sec.items.length})
+                            </div>
+                            {sec.items.map((g, gi) => (
+                              <div key={gi} style={{ marginBottom: 8, padding: '12px 16px', background: 'var(--bg)', borderRadius: 8, borderLeft: '3px solid ' + (catColor[g.category] || sec.accent) }}>
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 4, alignItems: 'center' }}>
+                                  <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: (catColor[g.category] || sec.accent) + '15', color: catColor[g.category] || sec.accent, fontWeight: 700 }}>{g.category}</span>
+                                  {g.status === 'done' && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 700 }}><i className="fa-solid fa-check" style={{ marginRight: 3 }} />Done</span>}
+                                </div>
+                                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{g.issue}</div>
+                                {g.fix && <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, padding: '6px 10px', background: 'rgba(34,197,94,0.04)', borderRadius: 4 }}><i className="fa-solid fa-wrench" style={{ marginRight: 4, color: '#22c55e', fontSize: 10 }} />{g.fix}</div>}
+                                {g.status !== 'done' && (
+                                  <div style={{ marginTop: 6, textAlign: 'right' }}>
+                                    <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, gi); }}
+                                      disabled={sentToActionPlan[kw.keyword + '::' + gi]}
+                                      style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[kw.keyword + '::' + gi] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[kw.keyword + '::' + gi] ? '#22c55e' : '#f59e0b', border: '1px solid ' + (sentToActionPlan[kw.keyword + '::' + gi] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'), fontWeight: 600 }}>
+                                      <i className={'fa-solid ' + (sentToActionPlan[kw.keyword + '::' + gi] ? 'fa-check' : 'fa-paper-plane')} style={{ marginRight: 4 }} />
+                                      {sentToActionPlan[kw.keyword + '::' + gi] ? 'Sent' : 'Send to Action Plan'}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+
+                        {/* Content Recommendations */}
+                        {a.content_recommendations && (
+                          <div style={{ marginBottom: 16 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}><i className="fa-solid fa-pen-nib" style={{ marginRight: 6 }} />Content Recommendations</div>
+                            {a.content_recommendations.title_suggestion && (
+                              <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 6, marginBottom: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Suggested Title</div>
+                                <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 500 }}>{a.content_recommendations.title_suggestion}</div>
+                              </div>
+                            )}
+                            {a.content_recommendations.meta_suggestion && (
+                              <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 6, marginBottom: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Suggested Meta</div>
+                                <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{a.content_recommendations.meta_suggestion}</div>
+                              </div>
+                            )}
+                            {a.content_recommendations.target_word_count && (
+                              <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 6, marginBottom: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Target Word Count</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                                  <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{a.content_recommendations.target_word_count.toLocaleString()}</span>
+                                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>words (yours: {ar.userPage?.wordCount?.toLocaleString() || '?'})</span>
+                                </div>
+                              </div>
+                            )}
+                            {a.content_recommendations.missing_topics && a.content_recommendations.missing_topics.length > 0 && (
+                              <div style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#ec4899', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Missing Topics</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {a.content_recommendations.missing_topics.map((t, ti) => (
+                                    <span key={ti} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, background: 'rgba(236,72,153,0.08)', color: '#ec4899', fontWeight: 600 }}>{t}</span>
                                   ))}
                                 </div>
                               </div>
+                            )}
+                          </div>
+                        )}
 
-                              {/* ── SECTION 1: Quick Wins ── */}
-                              {a.quick_wins && a.quick_wins.length > 0 && (
-                                <div style={{ padding: '0 32px 24px' }}>
-                                  <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, rgba(34,197,94,0.06), rgba(34,197,94,0.02))', borderRadius: 14, border: '1px solid rgba(34,197,94,0.15)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <i className="fa-solid fa-bolt" style={{ color: '#22c55e', fontSize: 16 }} />
-                                      </div>
-                                      <div>
-                                        <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e' }}>Quick Wins</div>
-                                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>Do these first for fastest impact</div>
-                                      </div>
-                                    </div>
-                                    {a.quick_wins.map((qw, i) => (
-                                      <div key={i} style={{ display: 'flex', gap: 12, padding: '10px 0', borderTop: i > 0 ? '1px solid rgba(34,197,94,0.1)' : 'none' }}>
-                                        <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#22c55e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>{i + 1}</div>
-                                        <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6, paddingTop: 3 }}>{qw}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* ── SECTION 2: Issues by Priority ── */}
-                              {[
-                                { title: 'Critical Issues', subtitle: 'Fix these to have any chance of ranking', items: highGaps, accent: '#ef4444', bgAccent: 'rgba(239,68,68,0.06)', icon: 'fa-fire' },
-                                { title: 'Warnings', subtitle: 'Important improvements for better rankings', items: medGaps, accent: '#f59e0b', bgAccent: 'rgba(245,158,11,0.06)', icon: 'fa-triangle-exclamation' },
-                                { title: 'Suggestions', subtitle: 'Nice to have optimizations', items: lowGaps, accent: '#3b82f6', bgAccent: 'rgba(59,130,246,0.06)', icon: 'fa-lightbulb' }
-                              ].filter(sec => sec.items.length > 0).map((sec, si) => (
-                                <div key={si} style={{ padding: '0 32px 24px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                                    <div style={{ width: 36, height: 36, borderRadius: 10, background: sec.bgAccent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                      <i className={`fa-solid ${sec.icon}`} style={{ color: sec.accent, fontSize: 16 }} />
-                                    </div>
-                                    <div>
-                                      <div style={{ fontSize: 16, fontWeight: 800, color: sec.accent }}>{sec.title} ({sec.items.length})</div>
-                                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>{sec.subtitle}</div>
-                                    </div>
-                                  </div>
-                                  {sec.items.map((g, i) => (
-                                    <div key={i} style={{ marginBottom: 12, borderRadius: 12, overflow: 'hidden', border: `1px solid ${g.status === 'done' ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`, background: g.status === 'done' ? 'rgba(34,197,94,0.03)' : 'var(--card)', opacity: g.status === 'done' ? 0.7 : 1 }}>
-                                      {/* Issue header */}
-                                      <div style={{ padding: '14px 18px', borderLeft: `4px solid ${g.status === 'done' ? '#22c55e' : catColor[g.category] || sec.accent}`, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                                        <div style={{ width: 30, height: 30, borderRadius: 8, background: g.status === 'done' ? 'rgba(34,197,94,0.15)' : `${catColor[g.category] || sec.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
-                                          <i className={`fa-solid ${g.status === 'done' ? 'fa-circle-check' : g.status === 'in_progress' ? 'fa-spinner' : catIcon[g.category] || 'fa-flag'}`} style={{ color: g.status === 'done' ? '#22c55e' : g.status === 'in_progress' ? '#f59e0b' : catColor[g.category] || sec.accent, fontSize: 13 }} />
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                          <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                                            <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: `${catColor[g.category] || '#6366f1'}15`, color: catColor[g.category] || '#6366f1', fontWeight: 700 }}>{g.category}</span>
-                                            {g.status === 'done' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 800 }}><i className="fa-solid fa-check" style={{ marginRight: 4 }} />ALREADY DONE</span>}
-                                            {g.status === 'in_progress' && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 800 }}><i className="fa-solid fa-clock" style={{ marginRight: 4 }} />IN PROGRESS</span>}
-                                          </div>
-                                          <div style={{ fontSize: 15, fontWeight: 600, color: g.status === 'done' ? 'var(--text2)' : 'var(--text)', lineHeight: 1.5, textDecoration: g.status === 'done' ? 'line-through' : 'none' }}>{g.issue}</div>
-                                          {g.status_reason && <div style={{ fontSize: 12, color: g.status === 'done' ? '#22c55e' : '#f59e0b', marginTop: 4, fontStyle: 'italic' }}><i className="fa-solid fa-circle-info" style={{ marginRight: 4 }} />{g.status_reason}</div>}
-                                        </div>
-                                      </div>
-                                      {/* Fix section */}
-                                      <div style={{ padding: '14px 18px 14px 62px', background: 'rgba(34,197,94,0.04)', borderTop: '1px solid var(--border)' }}>
-                                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                                          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                                            <i className="fa-solid fa-wrench" style={{ color: '#22c55e', fontSize: 11 }} />
-                                          </div>
-                                          <div>
-                                            <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>How to Fix</div>
-                                            <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{g.fix}</div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                      {/* Competitor benchmark */}
-                                      {g.competitor_benchmark && (
-                                        <div style={{ padding: '12px 18px 12px 62px', background: 'rgba(99,102,241,0.03)', borderTop: '1px solid var(--border)' }}>
-                                          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                                            <div style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                                              <i className="fa-solid fa-users" style={{ color: 'var(--accent)', fontSize: 11 }} />
-                                            </div>
-                                            <div>
-                                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>What Competitors Do</div>
-                                              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{g.competitor_benchmark}</div>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      )}
-                                      {/* Send to Action Plan button */}
-                                      {g.status !== 'done' && (
-                                        <div style={{ padding: '10px 18px 10px 62px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
-                                          <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, i); }}
-                                            disabled={sentToActionPlan[`${kw.keyword}::${i}`]}
-                                            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 8, background: sentToActionPlan[`${kw.keyword}::${i}`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::${i}`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::${i}`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, cursor: sentToActionPlan[`${kw.keyword}::${i}`] ? 'default' : 'pointer', fontWeight: 600 }}>
-                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::${i}`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 6 }} />
-                                            {sentToActionPlan[`${kw.keyword}::${i}`] ? 'Sent to Action Plan' : 'Send to Action Plan'}
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              ))}
-
-                              {/* ── SECTION 3: Content Recommendations ── */}
-                              {a.content_recommendations && (
-                                <div style={{ padding: '0 32px 24px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                                    <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245,158,11,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                      <i className="fa-solid fa-pen-nib" style={{ color: '#f59e0b', fontSize: 16 }} />
-                                    </div>
-                                    <div>
-                                      <div style={{ fontSize: 16, fontWeight: 800, color: '#f59e0b' }}>Content Recommendations</div>
-                                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Optimize your content to match what Google rewards</div>
-                                    </div>
-                                  </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                                    {a.content_recommendations.title_suggestion && (
-                                      <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', gridColumn: '1 / -1' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-heading" style={{ marginRight: 6 }} />Suggested Title Tag</div>
-                                          <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: 'Update title tag to: ' + a.content_recommendations.title_suggestion, fix: 'Change the page title tag to the suggested version for better SERP visibility', category: 'On-Page', impact: 'high' }, 'title')}
-                                            disabled={sentToActionPlan[`${kw.keyword}::title`]}
-                                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::title`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::title`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::title`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::title`] ? 'default' : 'pointer' }}>
-                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::title`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
-                                            {sentToActionPlan[`${kw.keyword}::title`] ? 'Sent' : 'Send to Action Plan'}
-                                          </button>
-                                        </div>
-                                        <div style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600, padding: '10px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px dashed rgba(34,197,94,0.3)' }}>{a.content_recommendations.title_suggestion}</div>
-                                      </div>
-                                    )}
-                                    {a.content_recommendations.meta_suggestion && (
-                                      <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', gridColumn: '1 / -1' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-align-left" style={{ marginRight: 6 }} />Suggested Meta Description</div>
-                                          <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: 'Update meta description to: ' + a.content_recommendations.meta_suggestion, fix: 'Change the page meta description to the suggested version for better CTR', category: 'On-Page', impact: 'medium' }, 'meta')}
-                                            disabled={sentToActionPlan[`${kw.keyword}::meta`]}
-                                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::meta`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::meta`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::meta`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::meta`] ? 'default' : 'pointer' }}>
-                                            <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::meta`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
-                                            {sentToActionPlan[`${kw.keyword}::meta`] ? 'Sent' : 'Send to Action Plan'}
-                                          </button>
-                                        </div>
-                                        <div style={{ fontSize: 14, color: 'var(--text2)', padding: '10px 14px', background: 'rgba(59,130,246,0.06)', borderRadius: 8, border: '1px dashed rgba(59,130,246,0.3)', lineHeight: 1.6 }}>{a.content_recommendations.meta_suggestion}</div>
-                                      </div>
-                                    )}
-                                    {a.content_recommendations.target_word_count && (
-                                      <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-text-width" style={{ marginRight: 6 }} />Target Word Count</div>
-                                          {ar.userPage?.wordCount < a.content_recommendations.target_word_count && (
-                                            <button className="btn" onClick={() => sendGapToActionPlan(kw.keyword, { issue: `Increase word count from ${ar.userPage?.wordCount || '?'} to ${a.content_recommendations.target_word_count} words`, fix: `Add ${a.content_recommendations.target_word_count - (ar.userPage?.wordCount || 0)} more words of quality content covering missing topics`, category: 'Content', impact: 'high' }, 'wordcount')}
-                                              disabled={sentToActionPlan[`${kw.keyword}::wordcount`]}
-                                              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[`${kw.keyword}::wordcount`] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[`${kw.keyword}::wordcount`] ? '#22c55e' : '#f59e0b', border: `1px solid ${sentToActionPlan[`${kw.keyword}::wordcount`] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`, fontWeight: 600, cursor: sentToActionPlan[`${kw.keyword}::wordcount`] ? 'default' : 'pointer' }}>
-                                              <i className={`fa-solid ${sentToActionPlan[`${kw.keyword}::wordcount`] ? 'fa-check' : 'fa-paper-plane'}`} style={{ marginRight: 4 }} />
-                                              {sentToActionPlan[`${kw.keyword}::wordcount`] ? 'Sent' : 'Send to Action Plan'}
-                                            </button>
-                                          )}
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                                          <span style={{ fontSize: 28, fontWeight: 900, color: 'var(--accent)' }}>{a.content_recommendations.target_word_count.toLocaleString()}</span>
-                                          <span style={{ fontSize: 13, color: 'var(--text3)' }}>words (yours: {ar.userPage?.wordCount?.toLocaleString() || '?'})</span>
-                                        </div>
-                                        {ar.userPage?.wordCount && a.content_recommendations.target_word_count && (
-                                          <div style={{ marginTop: 8, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
-                                            <div style={{ height: '100%', width: `${Math.min(100, (ar.userPage.wordCount / a.content_recommendations.target_word_count) * 100)}%`, background: ar.userPage.wordCount >= a.content_recommendations.target_word_count ? '#22c55e' : '#f59e0b', borderRadius: 3 }} />
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                    {a.content_recommendations.missing_topics && a.content_recommendations.missing_topics.length > 0 && (
-                                      <div style={{ padding: 16, borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                          <div style={{ fontSize: 11, fontWeight: 700, color: '#ec4899', textTransform: 'uppercase', letterSpacing: 0.5 }}><i className="fa-solid fa-puzzle-piece" style={{ marginRight: 6 }} />Missing Topics</div>
-                                        </div>
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                          {a.content_recommendations.missing_topics.map((t, ti) => (
-                                            <span key={ti} onClick={() => { if (!sentToActionPlan[`${kw.keyword}::topic_${ti}`]) sendGapToActionPlan(kw.keyword, { issue: `Add missing topic: ${t}`, fix: `Create a section or expand existing content to cover: ${t}`, category: 'Content', impact: 'medium' }, `topic_${ti}`); }}
-                                              style={{ fontSize: 12, padding: '5px 12px', borderRadius: 20, background: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'rgba(34,197,94,0.08)' : 'rgba(236,72,153,0.08)', color: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? '#22c55e' : '#ec4899', fontWeight: 600, border: `1px solid ${sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'rgba(34,197,94,0.15)' : 'rgba(236,72,153,0.15)'}`, cursor: 'pointer', textDecoration: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 'line-through' : 'none', opacity: sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? 0.6 : 1 }}>
-                                              {sentToActionPlan[`${kw.keyword}::topic_${ti}`] ? '✓ ' : ''}{t}
-                                            </span>
-                                          ))}
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8, fontStyle: 'italic' }}>Click a topic to send it to Action Plan</div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* ── SECTION 4: Page Comparison ── */}
-                              <div style={{ padding: '0 32px 20px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <i className="fa-solid fa-scale-balanced" style={{ color: 'var(--accent)', fontSize: 16 }} />
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--accent)' }}>You vs Competitors</div>
-                                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>Word count comparison</div>
-                                  </div>
-                                </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-                                  <div style={{ padding: 16, background: 'var(--card)', borderRadius: 12, border: '2px solid var(--accent)', textAlign: 'center' }}>
-                                    <div style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>Your Page</div>
-                                    <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--text)' }}>{ar.userPage?.wordCount?.toLocaleString() || '?'}</div>
-                                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>words</div>
-                                    {ar.userPage?.title && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ar.userPage.title}>{ar.userPage.title}</div>}
-                                  </div>
-                                  {(ar.competitors || []).slice(0, 3).map((cp, i) => (
-                                    <div key={i} style={{ padding: 16, background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', textAlign: 'center' }}>
-                                      <div style={{ fontSize: 10, color: posColor(cp.position || i + 1), fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>#{cp.position || i + 1} Ranking</div>
-                                      <div style={{ fontSize: 24, fontWeight: 900, color: posColor(cp.position || i + 1) }}>{cp.wordCount?.toLocaleString() || '?'}</div>
-                                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>words</div>
-                                      {cp.url && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cp.url}>{cp.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</div>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* Footer */}
-                              <div style={{ padding: '12px 32px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                                  <i className="fa-solid fa-robot" style={{ marginRight: 4 }} />
-                                  {ar.model?.includes('opus') ? 'Claude Opus' : ar.model?.includes('sonnet') ? 'Claude Sonnet' : 'Claude Haiku'} · {ar.cost?.inputTokens?.toLocaleString() || '?'} input + {ar.cost?.outputTokens?.toLocaleString() || '?'} output tokens · ${ar.cost?.total?.toFixed(4) || '?'}
-                                  {ar.analyzed_at && <span> · {new Date(ar.analyzed_at).toLocaleDateString()}</span>}
-                                </div>
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                  <button className="btn" onClick={async e => {
-                                    e.stopPropagation();
-                                    if (!confirm('Re-analyze this keyword? This will use AI credits.')) return;
-                                    await api(`/projects/${project.id}/rank-tracking/analyses/${encodeURIComponent(kw.keyword)}`, { method: 'DELETE' });
-                                    setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; });
-                                    setExpandedAnalysis(null);
-                                    setAnalysisChecked(prev => ({...prev, [kw.id]: true}));
-                                  }} style={{ fontSize: 12, color: '#f59e0b', borderColor: '#f59e0b' }}>
-                                    <i className="fa-solid fa-rotate" style={{ marginRight: 4 }} />Re-analyze
-                                  </button>
-                                  <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(null); }} style={{ fontSize: 12 }}>
-                                    <i className="fa-solid fa-chevron-up" style={{ marginRight: 4 }} />Collapse
-                                  </button>
-                                </div>
-                              </div>
+                        {/* Footer */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                            {ar.model?.includes('opus') ? 'Opus' : ar.model?.includes('sonnet') ? 'Sonnet' : 'Haiku'} · ${ar.cost?.total?.toFixed(4) || '?'}
+                            {ar.analyzed_at && <span> · {new Date(ar.analyzed_at).toLocaleDateString()}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="btn" onClick={async e => {
+                              e.stopPropagation();
+                              if (!confirm('Re-analyze this keyword?')) return;
+                              await api('/projects/' + project.id + '/rank-tracking/analyses/' + encodeURIComponent(kw.keyword), { method: 'DELETE' });
+                              setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; });
+                              setExpandedAnalysis(null);
+                              setAnalysisChecked(prev => ({...prev, [kw.id]: true}));
+                            }} style={{ fontSize: 11, color: '#f59e0b', borderColor: '#f59e0b' }}>
+                              <i className="fa-solid fa-rotate" style={{ marginRight: 4 }} />Re-analyze
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     );
                   })()}
                 </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Bottom Analysis Toolbar */}
+          {serpOnly.length > 0 && (
+            <div style={{ marginTop: 12, padding: '12px 18px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fa-solid fa-brain" style={{ color: 'var(--accent)', fontSize: 16 }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>SERP Analysis</span>
+              </div>
+              <span style={{ fontSize: 13, color: 'var(--text2)' }}>{analysisCheckedCount} selected</span>
+              <span style={{ fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>~${(analysisCheckedCount * costPerKw).toFixed(3)}</span>
+              <select value={analysisModel} onChange={e => setAnalysisModel(e.target.value)}
+                style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
+                <option value="haiku-4.5">Haiku 4.5</option>
+                <option value="sonnet-4.5">Sonnet 4.5</option>
+                <option value="sonnet-4.6">Sonnet 4.6</option>
+                <option value="opus-4.6">Opus 4.6</option>
+              </select>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <button className="btn" onClick={toggleAllAnalysis} style={{ fontSize: 12, padding: '6px 14px' }}>
+                  {allChecked ? 'Deselect all' : 'Select all'}
+                </button>
+                <button className="btn btn-primary" onClick={() => { if (analysisCheckedCount > 0) setShowCostConfirm(true); }} disabled={analysisCheckedCount === 0 || analyzing} style={{ fontSize: 12, padding: '6px 16px' }}>
+                  {analyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-play" style={{ marginRight: 6 }} />Analyze</>}
+                </button>
+              </div>
             </div>
           )}
 
