@@ -9447,6 +9447,7 @@
       // 404 state
       const [fourOhFours, setFourOhFours] = useState([]);
       const [fourTotal, setFourTotal] = useState(0);
+      const [botFiltered, setBotFiltered] = useState(0);
       const [fourLoading, setFourLoading] = useState(false);
       const [redirectingId, setRedirectingId] = useState(null);
       const [redirectTarget, setRedirectTarget] = useState('');
@@ -9500,9 +9501,15 @@
         setFourLoading(true);
         try {
           const data = await api(`/projects/${project.id}/plugin/404s`);
-          const items = (data.items || []).sort((a, b) => (b.hit_count || 0) - (a.hit_count || 0));
+          const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)/i;
+          const allItems = (data.items || []).sort((a, b) => (b.hit_count || 0) - (a.hit_count || 0));
+          const items = allItems.filter(item => {
+            const url = (item.url || item.url_path || '').toLowerCase();
+            return !botPatterns.test(url);
+          });
+          setBotFiltered(allItems.length - items.length);
           setFourOhFours(items);
-          setFourTotal(data.total || items.length);
+          setFourTotal(items.length);
         } catch (err) { console.error('Load 404s error:', err); }
         setFourLoading(false);
       };
@@ -9727,9 +9734,15 @@
               `${Object.values(suggestions).filter(Boolean).length}/${fourOhFours.length} matched`
             )
           ),
-          e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
-            clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
-            clearingAll ? ' Clearing...' : ' Clear All'
+          e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            botFiltered > 0 && e('span', { style: { fontSize: 12, color: 'var(--text3)', background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 } },
+              e('i', { className: 'fas fa-robot', style: { marginRight: 4 } }),
+              botFiltered + ' bot URLs hidden'
+            ),
+            e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
+              clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
+              clearingAll ? ' Clearing...' : ' Clear All'
+            )
           )
         ),
         // Table
