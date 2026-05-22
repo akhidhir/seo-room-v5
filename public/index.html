@@ -21078,12 +21078,13 @@
                   {/* Summary stats */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
                     {[
-                      { label: 'TOTAL', value: serpActions.length, color: 'var(--text)' },
-                      { label: 'PENDING', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'pending'; }).length, color: '#f59e0b' },
-                      { label: 'IN PROGRESS', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'in_progress'; }).length, color: '#3b82f6' },
-                      { label: 'DONE', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'done'; }).length, color: '#22c55e' },
+                      { label: 'TOTAL', value: serpActions.length, color: 'var(--text)', filterKey: 'all_sub' },
+                      { label: 'PENDING', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'pending'; }).length, color: '#f59e0b', filterKey: 'pending' },
+                      { label: 'IN PROGRESS', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'in_progress'; }).length, color: '#3b82f6', filterKey: 'in_progress_sub' },
+                      { label: 'DONE', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'done'; }).length, color: '#22c55e', filterKey: 'done_sub' },
                     ].map(function(s) {
-                      return React.createElement('div', { key: s.label, style: { background: 'var(--card)', borderRadius: 10, padding: 20, textAlign: 'center', border: '1px solid var(--border)' } },
+                      var isActive = (s.filterKey === 'all_sub' && !actionSubFilter) || actionSubFilter === s.filterKey;
+                      return React.createElement('div', { key: s.label, onClick: function() { setActionSubFilter(s.filterKey === 'all_sub' ? null : (actionSubFilter === s.filterKey ? null : s.filterKey)); }, style: { background: 'var(--card)', borderRadius: 10, padding: 20, textAlign: 'center', border: isActive ? '2px solid ' + s.color : '1px solid var(--border)', cursor: 'pointer', transition: 'border 0.15s, transform 0.15s', transform: isActive ? 'scale(1.02)' : 'scale(1)' } },
                         React.createElement('div', { style: { fontSize: 36, fontWeight: 800, color: s.color } }, s.value),
                         React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 6, letterSpacing: 0.5 } }, s.label)
                       );
