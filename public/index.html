@@ -20713,6 +20713,9 @@
         } catch (e) { console.error(e); }
       };
 
+      // SERP only: filter out Maps keywords (those with location)
+      const serpOnly = useMemo(() => merged.filter(kw => !kw.location), [merged]);
+
       // Build flat action items from all analysis results
       const serpActions = useMemo(() => {
         const items = [];
@@ -20889,8 +20892,7 @@
       };
       const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
-      // SERP only: filter out Maps keywords (those with location)
-      const serpOnly = useMemo(() => merged.filter(kw => !kw.location), [merged]);
+
 
       const sorted = useMemo(() => {
         if (!sortCol) return serpOnly;
