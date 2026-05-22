@@ -3277,6 +3277,18 @@ async function serpApiSearch(params) {
   return resp.json();
 }
 
+// ==================== 11a-ii. UULE v2 Encoder (GPS → Google location param) ====================
+// Encodes latitude/longitude into a UULE v2 string for SerpAPI's `uule` parameter.
+// This gives suburb-level accuracy for organic SERP results (unlike `location` which only accepts cities).
+function generateUULE(lat, lng) {
+  const timestamp = Date.now() * 1000; // microseconds
+  const latE7 = Math.round(lat * 1e7);
+  const lngE7 = Math.round(lng * 1e7);
+  const payload = `role:1\nproducer:12\nprovenance:0\ntimestamp:${timestamp}\nlatlng{\nlatitude_e7:${latE7}\nlongitude_e7:${lngE7}\n}\nradius:-1\n`;
+  const encoded = Buffer.from(payload).toString('base64');
+  return 'a+' + encoded;
+}
+
 // ==================== 11b. SPEED AUDIT (via Google PageSpeed Insights API) ====================
 
 // Helper: get WordPress URL for a project
@@ -24195,16 +24207,15 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
               if (found) break;
             }
           }
-          // For google engine (organic SERP), use `location` text param — NOT lat/lon (lat/lon only works for google_maps engine)
-          if (detectedSuburb) {
-            // Capitalize suburb name for SerpAPI location matching
-            const suburbTitle = detectedSuburb.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            paramObj.location = suburbTitle + ', Queensland, Australia';
-            if (idx < 3) console.log(`[rank-sync] "${query}" using location "${paramObj.location}" (detected from keyword text)`);
-          } else if (kw.location) {
-            paramObj.location = kw.location + ', Australia';
+          // Use UULE v2 (GPS-encoded) for suburb-level accuracy — gives Google exact coordinates
+          // `uule` and `location` can't be used together, and `uule` is more precise
+          if (gps) {
+            paramObj.uule = generateUULE(gps.lat, gps.lng);
+            if (idx < 3) console.log(`[rank-sync] "${query}" using UULE for suburb "${detectedSuburb}" (${gps.lat}, ${gps.lng})`);
           } else {
+            // Fallback to city-level location text for keywords without suburb GPS
             paramObj.location = (project.location || 'Australia').trim();
+            if (idx < 3) console.log(`[rank-sync] "${query}" using location fallback "${paramObj.location}"`);
           }
 
           const data = await serpApiSearch(paramObj);
@@ -26417,16 +26428,25 @@ app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
 app.get('/api/debug/serp-test', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
   const q = req.query.q || 'blocked drain warner';
-  const location = req.query.location || 'Warner, Queensland, Australia';
+  const suburb = (req.query.suburb || 'warner').toLowerCase();
+  const gps = SUBURB_GPS[suburb];
   try {
-    const data = await serpApiSearch({ engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30, location });
+    const params = { engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30 };
+    if (gps) {
+      params.uule = generateUULE(gps.lat, gps.lng);
+    } else if (req.query.location) {
+      params.location = req.query.location;
+    } else {
+      params.location = 'Brisbane, Queensland, Australia';
+    }
+    const data = await serpApiSearch(params);
     const organic = (data.organic_results || []).slice(0, 10).map(r => {
       let host = '';
       try { host = new URL(r.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { host = r.link; }
       return { pos: r.position, host, title: r.title, link: (r.link || '').substring(0, 80) };
     });
     const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
-    res.json({ query: q, location, organic, local, searchInfo: data.search_information });
+    res.json({ query: q, suburb, gps: gps || null, uule: params.uule || null, location: params.location || null, organic, local, searchInfo: data.search_information });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
