@@ -25094,6 +25094,140 @@ app.post('/api/projects/:projectId/serp-actions', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============ SERP ACTION FIX (On-Page) ============
+app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
+  const { projectId } = req.params;
+  const { fixType, pageUrl, newValue, oldValue } = req.body;
+  if (!fixType || !pageUrl) return res.status(400).json({ error: 'fixType and pageUrl required' });
+
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpBase) return res.status(400).json({ error: 'WordPress URL not configured' });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress Application Password not configured' });
+
+    // Resolve page slug from URL
+    const slug = pageUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/|\/$/g, '').split('/').pop() || '';
+    console.log(`[serp-fix] ${fixType} on slug="${slug}" pageUrl="${pageUrl}"`);
+
+    const wpPage = await readWpYoastMeta(wpBase, slug, authHeaders);
+    if (!wpPage) return res.status(404).json({ error: 'Page not found in WordPress: ' + slug });
+
+    const pageType = wpPage.type; // 'pages' or 'posts'
+    const wpId = wpPage.wpId;
+    const changes = [];
+
+    if (fixType === 'meta_title') {
+      if (!newValue) return res.status(400).json({ error: 'newValue required for meta_title' });
+      const oldVal = wpPage.yoast_wpseo_title;
+      const meta = { _yoast_wpseo_title: newValue };
+      let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ meta }), signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+        writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+          method: 'POST', headers: authHeaders,
+          body: JSON.stringify({ yoast_meta: { yoast_wpseo_title: newValue } }), signal: AbortSignal.timeout(15000)
+        });
+      }
+      if (!writeResp.ok) return res.status(500).json({ error: `WP returned ${writeResp.status}` });
+      changes.push({ field: 'yoast_wpseo_title', old: oldVal, new: newValue });
+      console.log(`[serp-fix] Meta title updated on ${pageType}/${wpId}`);
+
+    } else if (fixType === 'meta_desc') {
+      if (!newValue) return res.status(400).json({ error: 'newValue required for meta_desc' });
+      const oldVal = wpPage.yoast_wpseo_metadesc;
+      const meta = { _yoast_wpseo_metadesc: newValue };
+      let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ meta }), signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok && (writeResp.status === 401 || writeResp.status === 403)) {
+        writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+          method: 'POST', headers: authHeaders,
+          body: JSON.stringify({ yoast_meta: { yoast_wpseo_metadesc: newValue } }), signal: AbortSignal.timeout(15000)
+        });
+      }
+      if (!writeResp.ok) return res.status(500).json({ error: `WP returned ${writeResp.status}` });
+      changes.push({ field: 'yoast_wpseo_metadesc', old: oldVal, new: newValue });
+      console.log(`[serp-fix] Meta desc updated on ${pageType}/${wpId}`);
+
+    } else if (fixType === 'h1_replace') {
+      if (!newValue) return res.status(400).json({ error: 'newValue required for h1_replace' });
+      // Fetch current page content
+      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        headers: authHeaders, signal: AbortSignal.timeout(15000)
+      });
+      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
+      const pageData = await pageResp.json();
+      const content = pageData.content?.raw || pageData.content?.rendered || '';
+
+      // Find and replace existing H1
+      const h1Regex = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
+      const h1Match = content.match(h1Regex);
+      if (!h1Match) {
+        // No H1 found — inject one
+        const newContent = `<h1>${newValue}</h1>\n${content}`;
+        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+          method: 'POST', headers: authHeaders,
+          body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+        });
+        if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+        changes.push({ field: 'content', old: '(no H1)', new: `<h1>${newValue}</h1>` });
+      } else {
+        const oldH1 = h1Match[1].replace(/<[^>]+>/g, '').trim();
+        const newContent = content.replace(h1Regex, `<h1>${newValue}</h1>`);
+        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+          method: 'POST', headers: authHeaders,
+          body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+        });
+        if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+        changes.push({ field: 'content', old: `<h1>${oldH1}</h1>`, new: `<h1>${newValue}</h1>` });
+      }
+      console.log(`[serp-fix] H1 replaced on ${pageType}/${wpId}`);
+
+    } else if (fixType === 'h2_replace') {
+      if (!oldValue || !newValue) return res.status(400).json({ error: 'oldValue and newValue required for h2_replace' });
+      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        headers: authHeaders, signal: AbortSignal.timeout(15000)
+      });
+      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
+      const pageData = await pageResp.json();
+      const content = pageData.content?.raw || pageData.content?.rendered || '';
+
+      // Replace matching H2
+      const h2Regex = new RegExp(`<h2[^>]*>${oldValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/h2>`, 'gi');
+      if (!h2Regex.test(content)) return res.status(404).json({ error: `H2 "${oldValue}" not found in page content` });
+      const newContent = content.replace(h2Regex, `<h2>${newValue}</h2>`);
+      const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+      changes.push({ field: 'content', old: `<h2>${oldValue}</h2>`, new: `<h2>${newValue}</h2>` });
+      console.log(`[serp-fix] H2 replaced on ${pageType}/${wpId}`);
+
+    } else {
+      return res.status(400).json({ error: `Unknown fixType: ${fixType}` });
+    }
+
+    // Log all changes to wp_change_history
+    for (const ch of changes) {
+      await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'serp_fix', $5, $6, $7)`,
+        [projectId, wpId, pageUrl, wpPage.title || '', ch.field, ch.old || '', ch.new || '']);
+    }
+
+    res.json({ ok: true, fixType, changes: changes.length, pageType, wpId });
+  } catch (e) {
+    console.error('[serp-fix] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============ MAPS AI ANALYSIS ============
 
 // Run Maps analysis for a keyword+location

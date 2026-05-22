@@ -20744,6 +20744,59 @@
       // Helper to get status for a key
       const getActionStatus = (key) => actionsDone[key] || 'pending';
 
+      // Parse fix parameters from action item
+      const parseSerpFix = (item) => {
+        var t = item.text || '';
+        var k = item.key || '';
+        var keyword = item.keyword || '';
+        var ar = analysisResults[keyword] || {};
+        var pageUrl = ar.userPage ? ar.userPage.url : '';
+
+        // Meta title: "Update title tag to: <value>"
+        if (k.includes('::title')) {
+          var titleMatch = t.match(/(?:Update title tag to|title to)[:\s]*(.+)/i);
+          return titleMatch ? { fixType: 'meta_title', pageUrl: pageUrl, newValue: titleMatch[1].trim() } : null;
+        }
+        // Meta desc: "Update meta description to: <value>"
+        if (k.includes('::meta')) {
+          var metaMatch = t.match(/(?:Update meta description to|meta desc(?:ription)? to)[:\s]*(.+)/i);
+          return metaMatch ? { fixType: 'meta_desc', pageUrl: pageUrl, newValue: metaMatch[1].trim() } : null;
+        }
+        // H1 replace: "Change H1 from 'X' to 'Y'" or "H1 says 'X' but target keyword is 'Y'"
+        if (t.toLowerCase().includes('h1')) {
+          var h1FromTo = t.match(/(?:from|says)\s+['""]([^'""]+)['""].*?(?:to|keyword is)\s+['""]([^'""]+)['"'"]/i);
+          if (h1FromTo) return { fixType: 'h1_replace', pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
+          // Simpler: "Change H1 to 'Y'"
+          var h1To = t.match(/h1\s+to\s+['""]([^'""]+)['"'"]/i);
+          if (h1To) return { fixType: 'h1_replace', pageUrl: pageUrl, newValue: h1To[1].trim() };
+          return null;
+        }
+        return null;
+      };
+
+      // Execute On-Page fix from SERP action
+      const [fixingKey, setFixingKey] = useState(null);
+      const executeSerpFix = async (item) => {
+        var fix = parseSerpFix(item);
+        if (!fix || !fix.pageUrl) return alert('Cannot parse fix parameters or page URL not found');
+        if (!confirm('Apply fix to ' + fix.pageUrl + '?\n\nType: ' + fix.fixType + '\nNew value: ' + fix.newValue)) return;
+        setFixingKey(item.key);
+        try {
+          var resp = await api('/projects/' + project.id + '/serp-fix', {
+            method: 'POST',
+            body: fix
+          });
+          if (resp.error) { alert('Fix failed: ' + resp.error); }
+          else {
+            // Auto-mark as done
+            setActionsDone(prev => ({ ...prev, [item.key]: 'done' }));
+            await api('/projects/' + project.id + '/serp-actions', { method: 'POST', body: { key: item.key, status: 'done' } });
+            alert('Fixed! ' + fix.fixType + ' updated on WordPress. Change logged to history for rollback.');
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setFixingKey(null);
+      };
+
       // SERP only: filter out Maps keywords (those with location)
       const serpOnly = useMemo(() => merged.filter(kw => !kw.location), [merged]);
 
@@ -21230,7 +21283,12 @@
                                 React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
                                 React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
                                 item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'quick win') : null,
-                                React.createElement('span', { style: { fontSize: 13, padding: '4px 12px', borderRadius: 8, background: assignee.color + '15', color: assignee.color, fontWeight: 600, marginLeft: 'auto', border: '1px solid ' + assignee.color + '30' } }, React.createElement('i', { className: 'fa-solid ' + assignee.icon, style: { marginRight: 6, fontSize: 12 } }), assignee.label)
+                                React.createElement('span', { style: { fontSize: 13, padding: '4px 12px', borderRadius: 8, background: assignee.color + '15', color: assignee.color, fontWeight: 600, marginLeft: 'auto', border: '1px solid ' + assignee.color + '30' } }, React.createElement('i', { className: 'fa-solid ' + assignee.icon, style: { marginRight: 6, fontSize: 12 } }), assignee.label),
+                                assignee.type === 'onpage' && !isDone && parseSerpFix(item) ? React.createElement('button', {
+                                  onClick: function(e) { e.stopPropagation(); executeSerpFix(item); },
+                                  disabled: fixingKey === item.key,
+                                  style: { fontSize: 13, padding: '5px 14px', borderRadius: 8, background: '#22c55e', color: '#fff', fontWeight: 700, border: 'none', cursor: fixingKey === item.key ? 'wait' : 'pointer', opacity: fixingKey === item.key ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 6 }
+                                }, React.createElement('i', { className: fixingKey === item.key ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wrench', style: { fontSize: 12 } }), fixingKey === item.key ? 'Fixing...' : 'Fix Now') : null
                               ),
                               React.createElement('div', { style: { fontSize: 18, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.7 } }, item.text),
                               item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 } },
