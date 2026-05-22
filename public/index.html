@@ -21145,7 +21145,7 @@
                       React.createElement('div', { style: { padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
                         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
                           React.createElement('span', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, group.keyword),
-                          React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
+                          React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : (group.checked_at ? '>100' : '—')),
                           group.score != null ? React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
                         ),
                         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
@@ -21300,7 +21300,7 @@
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span>}
+                        {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : kw.checked_at ? <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>Click "Check Rankings" to scan</span>}
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
@@ -21309,7 +21309,7 @@
                         <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>VOLUME</div>
                       </div>
                       <div style={{ textAlign: 'center', minWidth: 40 }}>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{kw.serp_position ? '#' + kw.serp_position : '>100'}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{kw.serp_position ? '#' + kw.serp_position : (kw.checked_at ? '>100' : '—')}</div>
                         <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>SERP</div>
                       </div>
                       <div style={{ textAlign: 'center', minWidth: 40 }}>
@@ -21328,8 +21328,10 @@
                         <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontWeight: 600, whiteSpace: 'nowrap' }}>
                           <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Analyzed
                         </span>
-                      ) : !kw.serp_position ? (
+                      ) : !kw.serp_position && kw.checked_at ? (
                         <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 20, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>Not ranking</span>
+                      ) : !kw.checked_at ? (
+                        <span style={{ fontSize: 12, padding: '4px 12px', borderRadius: 20, background: 'rgba(255,255,255,0.06)', color: 'var(--text3)', fontWeight: 500, whiteSpace: 'nowrap' }}>Not checked</span>
                       ) : null}
                       <i className={'fa-solid ' + (isAnalysisOpen ? 'fa-chevron-up' : 'fa-chevron-down')} style={{ fontSize: 12, color: 'var(--text3)' }} />
                     </div>
