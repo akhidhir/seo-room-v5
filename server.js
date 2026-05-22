@@ -23796,12 +23796,19 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
 
     // Process keywords sequentially, grid points in parallel batches of 5
     for (const kw of keywords) {
-      // Per-keyword grid center: detect suburb in keyword and use its GPS
+      // Per-keyword grid center: check location field first, then keyword text
       const kwLower = (kw.keyword || '').toLowerCase();
+      const kwLocation = (kw.location || '').toLowerCase().trim();
       let kwCenter = centerGps;
-      const suburbKeys = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length); // longest first to match "east cannington" before "cannington"
-      for (const sub of suburbKeys) {
-        if (kwLower.includes(sub)) { kwCenter = SUBURB_GPS[sub]; break; }
+      // Priority 1: exact match on location field (e.g. "Warner", "North Brisbane")
+      if (kwLocation && SUBURB_GPS[kwLocation]) {
+        kwCenter = SUBURB_GPS[kwLocation];
+      } else {
+        // Priority 2: detect suburb in keyword text
+        const suburbKeys = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length);
+        for (const sub of suburbKeys) {
+          if (kwLocation.includes(sub) || kwLower.includes(sub)) { kwCenter = SUBURB_GPS[sub]; break; }
+        }
       }
       const gridPoints = generateGrid(kwCenter.lat, kwCenter.lng, radiusFloat, gridSizeInt);
       console.log(`[grid-scan] Keyword "${kw.keyword}" center: ${kwCenter.lat},${kwCenter.lng}`);
