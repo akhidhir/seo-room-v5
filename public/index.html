@@ -20710,6 +20710,11 @@
       // Pipeline status: actionsDone[key] = "in_progress" | "done" | undefined (pending)
       // Backwards compatible: old boolean true = "done"
       const [actionsDone, setActionsDone] = useState({});
+      // Independent review flag: reviewingKeys[key] = true/false
+      const [reviewingKeys, setReviewingKeys] = useState({});
+      const toggleReviewing = (key) => {
+        setReviewingKeys(prev => ({ ...prev, [key]: !prev[key] }));
+      };
 
       // Load saved action statuses from DB
       useEffect(() => {
@@ -20724,10 +20729,10 @@
         }).catch(() => {});
       }, [project?.id]);
 
-      // Cycle pipeline status: pending → reviewing → in_progress → done → pending
+      // Cycle pipeline status: pending → in_progress → done → pending
       const cycleActionStatus = async (key) => {
         var current = actionsDone[key] || 'pending';
-        var next = current === 'pending' ? 'reviewing' : current === 'reviewing' ? 'in_progress' : current === 'in_progress' ? 'done' : 'pending';
+        var next = current === 'pending' ? 'in_progress' : current === 'in_progress' ? 'done' : 'pending';
         setActionsDone(prev => {
           var updated = { ...prev };
           if (next === 'pending') { delete updated[key]; } else { updated[key] = next; }
@@ -21225,7 +21230,7 @@
                     {[
                       { label: 'TOTAL', value: serpActions.length, color: 'var(--text)', filterKey: 'all_sub' },
                       { label: 'PENDING', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'pending'; }).length, color: '#f59e0b', filterKey: 'pending' },
-                      { label: 'IN REVIEW', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'reviewing'; }).length, color: '#a855f7', filterKey: 'reviewing_sub' },
+                      { label: 'IN REVIEW', value: serpActions.filter(function(a) { return reviewingKeys[a.key]; }).length, color: '#a855f7', filterKey: 'reviewing_sub' },
                       { label: 'IN PROGRESS', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'in_progress'; }).length, color: '#3b82f6', filterKey: 'in_progress_sub' },
                       { label: 'DONE', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'done'; }).length, color: '#22c55e', filterKey: 'done_sub' },
                     ].map(function(s) {
@@ -21276,7 +21281,7 @@
                         { key: 'suggestion', label: 'Suggestions', count: sugCount, color: '#3b82f6', bg: '#3b82f6' },
                         { key: 'quick_win', label: 'Quick Wins', count: qwCount, color: '#22c55e', bg: '#22c55e' },
                         { key: 'pending', label: 'Pending', count: pendCount, color: '#f59e0b', bg: '#f59e0b' },
-                        { key: 'reviewing_sub', label: 'In Review', count: serpActions.filter(function(a) { return getActionStatus(a.key) === 'reviewing'; }).length, color: '#a855f7', bg: '#a855f7' },
+                        { key: 'reviewing_sub', label: 'In Review', count: serpActions.filter(function(a) { return reviewingKeys[a.key]; }).length, color: '#a855f7', bg: '#a855f7' },
                         { key: 'in_progress_sub', label: 'In Progress', count: ipCount, color: '#3b82f6', bg: '#3b82f6' },
                         { key: 'done_sub', label: 'Done', count: doneCount, color: '#22c55e', bg: '#22c55e' },
                       ].filter(function(p) { return p.key === 'all_sub' || p.count > 0; }).map(function(pill) {
@@ -21300,14 +21305,14 @@
                       if (sf === 'suggestion') return item.impact === 'low';
                       if (sf === 'quick_win') return item.type === 'quick_win';
                       if (sf === 'pending') return getActionStatus(item.key) === 'pending';
-                      if (sf === 'reviewing_sub') return getActionStatus(item.key) === 'reviewing';
+                      if (sf === 'reviewing_sub') return reviewingKeys[item.key];
                       if (sf === 'in_progress_sub') return getActionStatus(item.key) === 'in_progress';
                       if (sf === 'done_sub') return getActionStatus(item.key) === 'done';
                       return true;
                     });
                     if (groupItems.length === 0) return null;
                     var doneCount = groupItems.filter(function(i) { return getActionStatus(i.key) === 'done'; }).length;
-                    var reviewCountG = groupItems.filter(function(i) { return getActionStatus(i.key) === 'reviewing'; }).length;
+                    var reviewCountG = groupItems.filter(function(i) { return reviewingKeys[i.key]; }).length;
                     var ipCountG = groupItems.filter(function(i) { return getActionStatus(i.key) === 'in_progress'; }).length;
                     var totalCount = groupItems.length;
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
@@ -21346,13 +21351,20 @@
                           var catCol = catColorMap[item.category] || 'var(--accent)';
                           var assignee = getAssignee(item);
                           // Pipeline status badge config
-                          var statusConfig = { pending: { icon: 'fa-circle', color: '#f59e0b', label: 'pending', bg: 'rgba(245,158,11,0.1)' }, reviewing: { icon: 'fa-eye', color: '#a855f7', label: 'in review', bg: 'rgba(168,85,247,0.1)' }, in_progress: { icon: 'fa-spinner', color: '#3b82f6', label: 'in progress', bg: 'rgba(59,130,246,0.1)' }, done: { icon: 'fa-circle-check', color: '#22c55e', label: 'done', bg: 'rgba(34,197,94,0.1)' } };
+                          var statusConfig = { pending: { icon: 'fa-circle', color: '#f59e0b', label: 'pending', bg: 'rgba(245,158,11,0.1)' }, in_progress: { icon: 'fa-spinner', color: '#3b82f6', label: 'in progress', bg: 'rgba(59,130,246,0.1)' }, done: { icon: 'fa-circle-check', color: '#22c55e', label: 'done', bg: 'rgba(34,197,94,0.1)' } };
+                          var isReviewing = reviewingKeys[item.key];
                           var sc = statusConfig[itemStatus] || statusConfig.pending;
-                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 16, padding: '18px 24px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
-                            // Pipeline status button — click to cycle: pending → in_progress → done → pending
-                            React.createElement('button', { onClick: function() { cycleActionStatus(item.key); }, title: 'Click to advance: pending → in progress → done', style: { marginTop: 2, background: sc.bg, border: '1px solid ' + sc.color + '40', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 110 } },
-                              React.createElement('i', { className: 'fa-solid ' + sc.icon, style: { color: sc.color, fontSize: 14 } }),
-                              React.createElement('span', { style: { color: sc.color, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 } }, sc.label)
+                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '18px 24px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1, background: isReviewing ? 'rgba(168,85,247,0.04)' : 'transparent', borderLeft: isReviewing ? '3px solid #a855f7' : '3px solid transparent' } },
+                            // Pipeline status button + review toggle
+                            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 } },
+                              React.createElement('button', { onClick: function() { cycleActionStatus(item.key); }, title: 'Click to advance: pending → in progress → done', style: { background: sc.bg, border: '1px solid ' + sc.color + '40', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, minWidth: 110 } },
+                                React.createElement('i', { className: 'fa-solid ' + sc.icon, style: { color: sc.color, fontSize: 14 } }),
+                                React.createElement('span', { style: { color: sc.color, fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 } }, sc.label)
+                              ),
+                              React.createElement('button', { onClick: function() { toggleReviewing(item.key); }, title: isReviewing ? 'Remove from review' : 'Mark as reviewing', style: { background: isReviewing ? 'rgba(168,85,247,0.15)' : 'transparent', border: '1px solid ' + (isReviewing ? '#a855f7' : 'var(--border)'), borderRadius: 8, padding: '4px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, minWidth: 110, justifyContent: 'center' } },
+                                React.createElement('i', { className: 'fa-solid fa-eye', style: { color: isReviewing ? '#a855f7' : 'var(--text3)', fontSize: 12 } }),
+                                React.createElement('span', { style: { color: isReviewing ? '#a855f7' : 'var(--text3)', fontSize: 11, fontWeight: 600 } }, isReviewing ? 'reviewing' : 'review')
+                              )
                             ),
                             React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                               React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' } },
