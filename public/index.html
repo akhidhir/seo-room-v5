@@ -20762,62 +20762,61 @@
           var metaMatch = t.match(/(?:Update meta description to|meta desc(?:ription)? to)[:\s]*(.+)/i);
           return metaMatch ? { fixType: 'meta_desc', pageUrl: pageUrl, newValue: metaMatch[1].trim() } : null;
         }
-        // H1 replace: "Change H1 from 'X' to 'Y'" or "H1 says 'X' but target keyword is 'Y'"
-        if (t.toLowerCase().includes('h1')) {
-          var h1FromTo = t.match(/(?:from|says)\s+['‘’""]([^'‘’""]+)['‘’""].*?(?:to|keyword is)\s+['‘’""]([^'‘’""]+)['‘’""]/i);
-          if (h1FromTo) return { fixType: 'h1_replace', pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
-          var h1To = t.match(/h1\s+to\s+['‘’""]([^'‘’""]+)['‘’""]/i);
-          if (h1To) return { fixType: 'h1_replace', pageUrl: pageUrl, newValue: h1To[1].trim() };
+        // H1 replace: "Change H1 from ‘X’ to ‘Y’" or "H1 says ‘X’ but target keyword is ‘Y’"
+        if (t.toLowerCase().includes(‘h1’)) {
+          var h1FromTo = t.match(/(?:from|says)\s+[‘""’]+([^’""’]+)[‘""’]+.*?(?:to|keyword is)\s+[‘""’]+([^’""’]+)[‘""’]+/i);
+          if (h1FromTo) return { fixType: ‘h1_replace’, pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
+          var h1To = t.match(/h1\s+to\s+[‘""’]+([^’""’]+)[‘""’]+/i);
+          if (h1To) return { fixType: ‘h1_replace’, pageUrl: pageUrl, newValue: h1To[1].trim() };
           return null;
         }
         // H2 replace: extract quoted old value and quoted new values
         if (t.toLowerCase().includes(‘h2’) && (t.toLowerCase().includes(‘replace’) || t.toLowerCase().includes(‘heading’))) {
+          var qPat = /[‘’“”’"]+([^’"‘’“”]+)[‘’“”’"]+/g;
+          var stripQ = function(s) { return s.replace(/[‘’“”’"]/g, ‘’).trim(); };
           // Extract new values from parentheses: (‘X’ and ‘Y’)
           var newH2Matches = [];
           var parenMatch = t.match(/\(([^)]+)\)/);
           if (parenMatch) {
             var inner = parenMatch[1];
-            var quotedVals = inner.match(/[‘’’""]([^’’’""]+)[‘’’""]/g);
-            if (quotedVals) {
-              newH2Matches = quotedVals.map(function(v) { return v.replace(/[‘’’""]/g, ‘’).trim(); });
+            var qm;
+            var tempPat = new RegExp(qPat.source, ‘g’);
+            while ((qm = tempPat.exec(inner)) !== null) {
+              newH2Matches.push(qm[1].trim());
             }
           }
           // Extract old value: try ‘X’ H2 pattern first
-          var oldH2Match = t.match(/[‘’’""]([^’’’""]+)[‘’’""]\s*h2/i);
+          var oldH2Pat = /[‘’“”’"]+([^’"‘’“”]+)[‘’“”’"]+\s*h2/i;
+          var oldH2Match = t.match(oldH2Pat);
           var oldVal = oldH2Match ? oldH2Match[1].trim() : null;
-          // Fallback: check fix text and full text for quoted values that aren’t in newH2Matches
+          // Fallback: check all quoted values in text+fix that aren’t in newH2Matches
           if (!oldVal) {
-            var fixText = item.fix || ‘’;
-            var combined = t + ‘ ‘ + fixText;
-            var allQuoted = combined.match(/[‘’’""]([^’’’""]+)[‘’’""]/g) || [];
-            var allVals = allQuoted.map(function(v) { return v.replace(/[‘’’""]/g, ‘’).trim(); });
-            var newSet = new Set(newH2Matches.map(function(v) { return v.toLowerCase(); }));
+            var combined = t + ‘ ‘ + (item.fix || ‘’);
+            var allVals = [];
+            var tempPat2 = new RegExp(qPat.source, ‘g’);
+            var qm2;
+            while ((qm2 = tempPat2.exec(combined)) !== null) {
+              allVals.push(qm2[1].trim());
+            }
+            var newLower = {};
+            newH2Matches.forEach(function(v) { newLower[v.toLowerCase()] = true; });
             for (var qi = 0; qi < allVals.length; qi++) {
-              if (!newSet.has(allVals[qi].toLowerCase()) && allVals[qi].length < 50) {
+              if (!newLower[allVals[qi].toLowerCase()] && allVals[qi].length < 50) {
                 oldVal = allVals[qi];
                 break;
               }
             }
           }
-          // Fallback: if text mentions phone number pattern, use it
+          // Fallback: phone number pattern
           if (!oldVal) {
             var phoneMatch = (t + ‘ ‘ + (item.fix || ‘’)).match(/(\d{4}\s*\d{3}\s*\d{3})/);
             if (phoneMatch) oldVal = phoneMatch[1].trim();
           }
-          if (oldVal && newH2Matches.length > 0) {
-            return {
-              fixType: ‘h2_multi’,
-              pageUrl: pageUrl,
-              oldValue: oldVal,
-              replacements: newH2Matches
-            };
-          }
-          // Single H2 with just new values (no old found) — still allow if we have replacements
           if (newH2Matches.length > 0) {
             return {
               fixType: ‘h2_multi’,
               pageUrl: pageUrl,
-              oldValue: null,
+              oldValue: oldVal,
               replacements: newH2Matches
             };
           }
