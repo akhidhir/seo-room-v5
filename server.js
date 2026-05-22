@@ -24149,28 +24149,7 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
 
     console.log(`[rank-sync] Starting SerpAPI sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}"`);
 
-    // GPS coordinates for Perth suburbs
-    const suburbGPS = {
-      'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
-      'east cannington': { lat: -32.0100, lng: 115.9500 }, 'ferndale': { lat: -32.0300, lng: 115.9500 },
-      'lynwood': { lat: -32.0400, lng: 115.9300 }, 'parkwood': { lat: -32.0450, lng: 115.9150 },
-      'queens park': { lat: -32.0050, lng: 115.9400 }, 'riverton': { lat: -32.0350, lng: 115.8940 },
-      'rossmoyne': { lat: -32.0380, lng: 115.8700 }, 'shelley': { lat: -32.0280, lng: 115.8800 },
-      'willetton': { lat: -32.0530, lng: 115.8890 }, 'wilson': { lat: -32.0230, lng: 115.9100 },
-      'canning vale': { lat: -32.0580, lng: 115.9180 }, 'bentley': { lat: -32.0000, lng: 115.9200 },
-      'welshpool': { lat: -31.9930, lng: 115.9450 }, 'atwell': { lat: -32.1440, lng: 115.8640 },
-      'aubin grove': { lat: -32.1640, lng: 115.8660 }, 'banjup': { lat: -32.1290, lng: 115.8580 },
-      'beeliar': { lat: -32.1350, lng: 115.8150 }, 'bibra lake': { lat: -32.0930, lng: 115.8200 },
-      'cockburn': { lat: -32.1300, lng: 115.8500 }, 'coogee': { lat: -32.1190, lng: 115.7650 },
-      'coolbellup': { lat: -32.0830, lng: 115.8030 }, 'hamilton hill': { lat: -32.0820, lng: 115.7770 },
-      'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
-      'jandakot': { lat: -32.1050, lng: 115.8700 }, 'lake coogee': { lat: -32.1280, lng: 115.7800 },
-      'munster': { lat: -32.1310, lng: 115.7870 }, 'north coogee': { lat: -32.1100, lng: 115.7640 },
-      'north lake': { lat: -32.0770, lng: 115.8330 }, 'south lake': { lat: -32.0870, lng: 115.8350 },
-      'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
-      'treeby': { lat: -32.1500, lng: 115.8630 }, 'wattleup': { lat: -32.1470, lng: 115.7990 },
-      'yangebup': { lat: -32.1220, lng: 115.8140 }, 'murdoch': { lat: -32.0660, lng: 115.8430 }
-    };
+    // Uses global SUBURB_GPS for GPS coordinates (all AU suburbs)
 
     const results = [];
     const competitors = project.competitors || [];
@@ -24193,13 +24172,16 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             hl: 'en',
             num: 30
           };
-          // Use GPS coords for suburb-level accuracy
-          const gps = kw.location ? suburbGPS[kw.location.toLowerCase()] : null;
+          // Use GPS coords for suburb-level accuracy (global SUBURB_GPS has all AU suburbs)
+          const gps = kw.location ? SUBURB_GPS[kw.location.toLowerCase().trim()] : null;
           if (gps) {
             paramObj.lat = gps.lat;
             paramObj.lon = gps.lng;
+          } else if (kw.location) {
+            // Use location string as SerpAPI location param
+            paramObj.location = kw.location + ', Australia';
           } else {
-            paramObj.location = 'Perth, Western Australia, Australia';
+            paramObj.location = (project.location || 'Australia').trim();
           }
 
           const data = await serpApiSearch(paramObj);
