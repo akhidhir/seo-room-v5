@@ -20802,30 +20802,24 @@
         });
       }, [serpActions, actionFilter]);
 
-      // Auto-assign: Dashboard (auto-fixable) vs Human (manual)
+      // Auto-assign: On-Page Fix (dashboard auto-fixable) vs Human (manual)
       const getAssignee = (item) => {
         var t = (item.text || '').toLowerCase();
         var k = item.key || '';
-        // On-Page fix: title & meta suggestions
-        if (k.includes('::title')) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
-        if (k.includes('::meta')) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
-        // Technical fix: H1, canonical, schema, noindex
-        if (t.includes('change h1') || t.includes('h1 says') || t.includes('h1 from') || t.includes('h1 to ') || t.includes('missing h1')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
-        if (t.includes('canonical')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
-        if (t.includes('schema') || t.includes('faqpage') || t.includes('faq schema') || t.includes('structured data')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
-        if (t.includes('noindex')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
-        if (t.includes('mixed content')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
-        // On-Page fix: H2 heading replacements (content edit via WP REST)
-        if (t.includes('replace') && (t.includes('h2') || t.includes('heading'))) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
-        // Human tasks
-        if (item.category === 'Authority') return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
-        if (item.category === 'UX') return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
-        if (k.includes('::wordcount') || k.includes('::topic_')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
-        if (t.includes('backlink') || t.includes('review') || t.includes('landing page') || t.includes('new page') || t.includes('create a')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
-        if (t.includes('word count') || t.includes('increase') || t.includes('add content') || t.includes('add missing topic') || t.includes('expand content')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
-        // Default: if On-Page category and looks like a tag/meta fix → dashboard, else human
-        if (item.category === 'On-Page') return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
-        if (item.category === 'Technical') return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        // On-Page Fix: meta title & meta description suggestions
+        if (k.includes('::title')) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        if (k.includes('::meta')) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // On-Page Fix: H1 changes
+        if (t.includes('change h1') || t.includes('h1 says') || t.includes('h1 from') || t.includes('h1 to ') || t.includes('missing h1')) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // On-Page Fix: H2 heading replacements
+        if (t.includes('replace') && (t.includes('h2') || t.includes('heading'))) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // On-Page Fix: schema/FAQ additions
+        if (t.includes('faq schema') || t.includes('faqpage') || t.includes('add a') && t.includes('faq')) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // On-Page Fix: canonical fixes
+        if (t.includes('canonical') && (t.includes('fix') || t.includes('verify') || t.includes('confirm'))) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // On-Page Fix: other On-Page category items that are tag/meta related
+        if (item.category === 'On-Page' && (t.includes('title') || t.includes('meta') || t.includes('tag'))) return { type: 'onpage', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // Human: everything else
         return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
       };
 
@@ -21191,7 +21185,7 @@
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
                     var scoreColor2 = !group.score ? 'var(--text3)' : group.score >= 70 ? '#22c55e' : group.score >= 40 ? '#f59e0b' : '#ef4444';
                     var isExpanded = expandedActionKw === group.keyword;
-                    var autoCount = groupItems.filter(function(i) { return getAssignee(i).type === 'dashboard'; }).length;
+                    var autoCount = groupItems.filter(function(i) { return getAssignee(i).type === 'onpage'; }).length;
                     var humanCount = groupItems.filter(function(i) { return getAssignee(i).type === 'human'; }).length;
                     return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' } },
                       React.createElement('div', { onClick: function() { setExpandedActionKw(isExpanded ? null : group.keyword); }, style: { padding: '20px 24px', borderBottom: isExpanded ? '1px solid var(--border)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' } },
