@@ -21104,7 +21104,7 @@
                         return React.createElement('button', {
                           key: pill.key,
                           onClick: function() { setActionSubFilter(pill.key === 'all_sub' ? null : pill.key); },
-                          style: { fontSize: 13, padding: '6px 14px', borderRadius: 20, border: '1px solid ' + (subActive ? pill.color : 'var(--border)'), background: subActive ? pill.color + '18' : 'transparent', color: subActive ? pill.color : 'var(--text3)', cursor: 'pointer', fontWeight: subActive ? 700 : 500 }
+                          style: { fontSize: 16, padding: '8px 18px', borderRadius: 20, border: '1px solid ' + (subActive ? pill.color : 'var(--border)'), background: subActive ? pill.color + '18' : 'transparent', color: subActive ? pill.color : 'var(--text3)', cursor: 'pointer', fontWeight: subActive ? 700 : 500 }
                         }, pill.label + ' (' + pill.count + ')');
                       })
                     );
@@ -21128,18 +21128,18 @@
                     var totalCount = groupItems.length;
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
                     var scoreColor2 = !group.score ? 'var(--text3)' : group.score >= 70 ? '#22c55e' : group.score >= 40 ? '#f59e0b' : '#ef4444';
-                    return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14, overflow: 'hidden' } },
-                      React.createElement('div', { style: { padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
-                          React.createElement('span', { style: { fontSize: 17, fontWeight: 700, color: 'var(--text)' } }, group.keyword),
-                          React.createElement('span', { style: { fontSize: 14, padding: '4px 12px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
-                          group.score != null ? React.createElement('span', { style: { fontSize: 14, padding: '4px 12px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
+                    return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' } },
+                      React.createElement('div', { style: { padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
+                          React.createElement('span', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, group.keyword),
+                          React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
+                          group.score != null ? React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
                         ),
-                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-                          React.createElement('div', { style: { width: 120, height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' } },
-                            React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: doneCount === totalCount ? '#22c55e' : '#f59e0b', borderRadius: 4 } })
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                          React.createElement('div', { style: { width: 140, height: 10, borderRadius: 5, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' } },
+                            React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: doneCount === totalCount ? '#22c55e' : '#f59e0b', borderRadius: 5 } })
                           ),
-                          React.createElement('span', { style: { fontSize: 14, color: 'var(--text3)', fontWeight: 600 } }, doneCount + '/' + totalCount)
+                          React.createElement('span', { style: { fontSize: 18, color: 'var(--text3)', fontWeight: 600 } }, doneCount + '/' + totalCount)
                         )
                       ),
                       React.createElement('div', null,
@@ -21149,17 +21149,17 @@
                           var impactLabel = item.impact === 'high' ? 'critical' : item.impact === 'medium' ? 'warning' : 'suggestion';
                           var catColorMap = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
                           var catCol = catColorMap[item.category] || 'var(--accent)';
-                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 20px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
-                            React.createElement('input', { type: 'checkbox', checked: !!isDone, onChange: function() { toggleActionDone(item.key); }, style: { marginTop: 4, accentColor: '#22c55e', width: 18, height: 18, cursor: 'pointer', flexShrink: 0 } }),
+                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 16, padding: '18px 24px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
+                            React.createElement('input', { type: 'checkbox', checked: !!isDone, onChange: function() { toggleActionDone(item.key); }, style: { marginTop: 5, accentColor: '#22c55e', width: 22, height: 22, cursor: 'pointer', flexShrink: 0 } }),
                             React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                              React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' } },
-                                isDone ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, 'done') : React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
-                                React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
-                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 4 } }), 'quick win') : null
+                              React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                                isDone ? React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, 'done') : React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
+                                React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
+                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'quick win') : null
                               ),
-                              React.createElement('div', { style: { fontSize: 15, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.6 } }, item.text),
-                              item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 6 } },
-                                React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 6, color: '#22c55e', fontSize: 12 } }), item.fix
+                              React.createElement('div', { style: { fontSize: 18, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.7 } }, item.text),
+                              item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 } },
+                                React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 8, color: '#22c55e', fontSize: 14 } }), item.fix
                               ) : null
                             )
                           );
