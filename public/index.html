@@ -20762,38 +20762,39 @@
           var metaMatch = t.match(/(?:Update meta description to|meta desc(?:ription)? to)[:\s]*(.+)/i);
           return metaMatch ? { fixType: 'meta_desc', pageUrl: pageUrl, newValue: metaMatch[1].trim() } : null;
         }
-        // H1 replace: "Change H1 from ‘X’ to ‘Y’" or "H1 says ‘X’ but target keyword is ‘Y’"
+        // Quote pattern: matches single/double/curly quotes
+        var Q = “[‘\”\\u2018\\u2019\\u201C\\u201D]”;
+        var QP = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘g’);
+        var QPonce = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’);
+        // H1 replace
         if (t.toLowerCase().includes(‘h1’)) {
-          var h1FromTo = t.match(/(?:from|says)\s+[‘""’]+([^’""’]+)[‘""’]+.*?(?:to|keyword is)\s+[‘""’]+([^’""’]+)[‘""’]+/i);
+          var h1Pat = new RegExp(‘(?:from|says)\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+.*?(?:to|keyword is)\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘i’);
+          var h1FromTo = t.match(h1Pat);
           if (h1FromTo) return { fixType: ‘h1_replace’, pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
-          var h1To = t.match(/h1\s+to\s+[‘""’]+([^’""’]+)[‘""’]+/i);
+          var h1ToPat = new RegExp(‘h1\\s+to\\s+’ + Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+’, ‘i’);
+          var h1To = t.match(h1ToPat);
           if (h1To) return { fixType: ‘h1_replace’, pageUrl: pageUrl, newValue: h1To[1].trim() };
           return null;
         }
-        // H2 replace: extract quoted old value and quoted new values
+        // H2 replace
         if (t.toLowerCase().includes(‘h2’) && (t.toLowerCase().includes(‘replace’) || t.toLowerCase().includes(‘heading’))) {
-          var qPat = /[‘’“”’"]+([^’"‘’“”]+)[‘’“”’"]+/g;
-          var stripQ = function(s) { return s.replace(/[‘’“”’"]/g, ‘’).trim(); };
-          // Extract new values from parentheses: (‘X’ and ‘Y’)
           var newH2Matches = [];
           var parenMatch = t.match(/\(([^)]+)\)/);
           if (parenMatch) {
             var inner = parenMatch[1];
             var qm;
-            var tempPat = new RegExp(qPat.source, ‘g’);
+            var tempPat = new RegExp(QP.source, ‘g’);
             while ((qm = tempPat.exec(inner)) !== null) {
               newH2Matches.push(qm[1].trim());
             }
           }
-          // Extract old value: try ‘X’ H2 pattern first
-          var oldH2Pat = /[‘’“”’"]+([^’"‘’“”]+)[‘’“”’"]+\s*h2/i;
+          var oldH2Pat = new RegExp(Q + ‘+([^’ + “’\”\\u2018\\u2019\\u201C\\u201D” + ‘]+)’ + Q + ‘+\\s*h2’, ‘i’);
           var oldH2Match = t.match(oldH2Pat);
           var oldVal = oldH2Match ? oldH2Match[1].trim() : null;
-          // Fallback: check all quoted values in text+fix that aren’t in newH2Matches
           if (!oldVal) {
             var combined = t + ‘ ‘ + (item.fix || ‘’);
             var allVals = [];
-            var tempPat2 = new RegExp(qPat.source, ‘g’);
+            var tempPat2 = new RegExp(QP.source, ‘g’);
             var qm2;
             while ((qm2 = tempPat2.exec(combined)) !== null) {
               allVals.push(qm2[1].trim());
@@ -20807,18 +20808,12 @@
               }
             }
           }
-          // Fallback: phone number pattern
           if (!oldVal) {
             var phoneMatch = (t + ‘ ‘ + (item.fix || ‘’)).match(/(\d{4}\s*\d{3}\s*\d{3})/);
             if (phoneMatch) oldVal = phoneMatch[1].trim();
           }
           if (newH2Matches.length > 0) {
-            return {
-              fixType: ‘h2_multi’,
-              pageUrl: pageUrl,
-              oldValue: oldVal,
-              replacements: newH2Matches
-            };
+            return { fixType: ‘h2_multi’, pageUrl: pageUrl, oldValue: oldVal, replacements: newH2Matches };
           }
           return null;
         }
