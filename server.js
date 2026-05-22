@@ -24173,10 +24173,32 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             num: 30
           };
           // Use GPS coords for suburb-level accuracy (global SUBURB_GPS has all AU suburbs)
-          const gps = kw.location ? SUBURB_GPS[kw.location.toLowerCase().trim()] : null;
+          let gps = kw.location ? SUBURB_GPS[kw.location.toLowerCase().trim()] : null;
+          let detectedSuburb = kw.location || null;
+          // If no location field, try to detect suburb name in the keyword text itself
+          // (e.g. "plumber warner" → detect "warner" as a suburb)
+          if (!gps && !kw.location) {
+            const kwLower = kw.keyword.toLowerCase().trim();
+            const kwWords = kwLower.split(/\s+/);
+            // Check multi-word suburbs first (e.g. "north brisbane"), then single words
+            for (let wLen = Math.min(3, kwWords.length); wLen >= 1; wLen--) {
+              let found = false;
+              for (let wi = 0; wi <= kwWords.length - wLen; wi++) {
+                const candidate = kwWords.slice(wi, wi + wLen).join(' ');
+                if (SUBURB_GPS[candidate]) {
+                  gps = SUBURB_GPS[candidate];
+                  detectedSuburb = candidate;
+                  found = true;
+                  break;
+                }
+              }
+              if (found) break;
+            }
+          }
           if (gps) {
             paramObj.lat = gps.lat;
             paramObj.lon = gps.lng;
+            if (idx < 3) console.log(`[rank-sync] "${query}" using GPS for suburb "${detectedSuburb}": ${gps.lat},${gps.lng}`);
           } else if (kw.location) {
             // Use location string as SerpAPI location param
             paramObj.location = kw.location + ', Australia';

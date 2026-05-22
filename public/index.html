@@ -20794,7 +20794,7 @@
       const importFromMaps = async () => {
         const mapsKws = merged.filter(kw => kw.location);
         if (mapsKws.length === 0) return alert('No Maps keywords to import. Add keywords in Maps Rankings first.');
-        // Combine keyword + location for SERP (e.g. "content marketing perth")
+        // Combine keyword + location for SERP (e.g. "plumber warner") — stored without location field so it shows in SERP page
         const combos = [...new Set(mapsKws.map(k => (k.keyword + ' ' + k.location).toLowerCase().trim()))];
         const existingSerp = new Set(merged.filter(kw => !kw.location).map(k => k.keyword.toLowerCase().trim()));
         const toImport = combos.filter(s => !existingSerp.has(s));
