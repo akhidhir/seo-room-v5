@@ -20724,10 +20724,10 @@
         }).catch(() => {});
       }, [project?.id]);
 
-      // Cycle pipeline status: pending → in_progress → done → pending
+      // Cycle pipeline status: pending → reviewing → in_progress → done → pending
       const cycleActionStatus = async (key) => {
         var current = actionsDone[key] || 'pending';
-        var next = current === 'pending' ? 'in_progress' : current === 'in_progress' ? 'done' : 'pending';
+        var next = current === 'pending' ? 'reviewing' : current === 'reviewing' ? 'in_progress' : current === 'in_progress' ? 'done' : 'pending';
         setActionsDone(prev => {
           var updated = { ...prev };
           if (next === 'pending') { delete updated[key]; } else { updated[key] = next; }
@@ -21221,10 +21221,11 @@
               ) : (
                 <div>
                   {/* Summary stats */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
                     {[
                       { label: 'TOTAL', value: serpActions.length, color: 'var(--text)', filterKey: 'all_sub' },
                       { label: 'PENDING', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'pending'; }).length, color: '#f59e0b', filterKey: 'pending' },
+                      { label: 'IN REVIEW', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'reviewing'; }).length, color: '#a855f7', filterKey: 'reviewing_sub' },
                       { label: 'IN PROGRESS', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'in_progress'; }).length, color: '#3b82f6', filterKey: 'in_progress_sub' },
                       { label: 'DONE', value: serpActions.filter(function(a) { return getActionStatus(a.key) === 'done'; }).length, color: '#22c55e', filterKey: 'done_sub' },
                     ].map(function(s) {
@@ -21275,6 +21276,7 @@
                         { key: 'suggestion', label: 'Suggestions', count: sugCount, color: '#3b82f6', bg: '#3b82f6' },
                         { key: 'quick_win', label: 'Quick Wins', count: qwCount, color: '#22c55e', bg: '#22c55e' },
                         { key: 'pending', label: 'Pending', count: pendCount, color: '#f59e0b', bg: '#f59e0b' },
+                        { key: 'reviewing_sub', label: 'In Review', count: serpActions.filter(function(a) { return getActionStatus(a.key) === 'reviewing'; }).length, color: '#a855f7', bg: '#a855f7' },
                         { key: 'in_progress_sub', label: 'In Progress', count: ipCount, color: '#3b82f6', bg: '#3b82f6' },
                         { key: 'done_sub', label: 'Done', count: doneCount, color: '#22c55e', bg: '#22c55e' },
                       ].filter(function(p) { return p.key === 'all_sub' || p.count > 0; }).map(function(pill) {
@@ -21298,12 +21300,14 @@
                       if (sf === 'suggestion') return item.impact === 'low';
                       if (sf === 'quick_win') return item.type === 'quick_win';
                       if (sf === 'pending') return getActionStatus(item.key) === 'pending';
+                      if (sf === 'reviewing_sub') return getActionStatus(item.key) === 'reviewing';
                       if (sf === 'in_progress_sub') return getActionStatus(item.key) === 'in_progress';
                       if (sf === 'done_sub') return getActionStatus(item.key) === 'done';
                       return true;
                     });
                     if (groupItems.length === 0) return null;
                     var doneCount = groupItems.filter(function(i) { return getActionStatus(i.key) === 'done'; }).length;
+                    var reviewCountG = groupItems.filter(function(i) { return getActionStatus(i.key) === 'reviewing'; }).length;
                     var ipCountG = groupItems.filter(function(i) { return getActionStatus(i.key) === 'in_progress'; }).length;
                     var totalCount = groupItems.length;
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
@@ -21322,6 +21326,7 @@
                         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
                           autoCount > 0 ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 12, background: 'rgba(6,182,212,0.1)', color: '#06b6d4', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-gear', style: { marginRight: 4, fontSize: 10 } }), autoCount + ' auto') : null,
                           humanCount > 0 ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 12, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-user', style: { marginRight: 4, fontSize: 10 } }), humanCount + ' manual') : null,
+                          reviewCountG > 0 ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 12, background: 'rgba(168,85,247,0.1)', color: '#a855f7', fontWeight: 600 } }, reviewCountG + ' in review') : null,
                           ipCountG > 0 ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 12, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontWeight: 600 } }, ipCountG + ' in progress') : null,
                           React.createElement('div', { style: { width: 140, height: 10, borderRadius: 5, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', display: 'flex' } },
                             React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: '#22c55e' } }),
@@ -21341,7 +21346,7 @@
                           var catCol = catColorMap[item.category] || 'var(--accent)';
                           var assignee = getAssignee(item);
                           // Pipeline status badge config
-                          var statusConfig = { pending: { icon: 'fa-circle', color: '#f59e0b', label: 'pending', bg: 'rgba(245,158,11,0.1)' }, in_progress: { icon: 'fa-spinner', color: '#3b82f6', label: 'in progress', bg: 'rgba(59,130,246,0.1)' }, done: { icon: 'fa-circle-check', color: '#22c55e', label: 'done', bg: 'rgba(34,197,94,0.1)' } };
+                          var statusConfig = { pending: { icon: 'fa-circle', color: '#f59e0b', label: 'pending', bg: 'rgba(245,158,11,0.1)' }, reviewing: { icon: 'fa-eye', color: '#a855f7', label: 'in review', bg: 'rgba(168,85,247,0.1)' }, in_progress: { icon: 'fa-spinner', color: '#3b82f6', label: 'in progress', bg: 'rgba(59,130,246,0.1)' }, done: { icon: 'fa-circle-check', color: '#22c55e', label: 'done', bg: 'rgba(34,197,94,0.1)' } };
                           var sc = statusConfig[itemStatus] || statusConfig.pending;
                           return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 16, padding: '18px 24px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
                             // Pipeline status button — click to cycle: pending → in_progress → done → pending
