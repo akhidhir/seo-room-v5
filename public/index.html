@@ -20764,11 +20764,37 @@
         }
         // H1 replace: "Change H1 from 'X' to 'Y'" or "H1 says 'X' but target keyword is 'Y'"
         if (t.toLowerCase().includes('h1')) {
-          var h1FromTo = t.match(/(?:from|says)\s+['""]([^'""]+)['""].*?(?:to|keyword is)\s+['""]([^'""]+)['"'"]/i);
+          var h1FromTo = t.match(/(?:from|says)\s+['‘’""]([^'‘’""]+)['‘’""].*?(?:to|keyword is)\s+['‘’""]([^'‘’""]+)['‘’""]/i);
           if (h1FromTo) return { fixType: 'h1_replace', pageUrl: pageUrl, oldValue: h1FromTo[1].trim(), newValue: h1FromTo[2].trim() };
-          // Simpler: "Change H1 to 'Y'"
-          var h1To = t.match(/h1\s+to\s+['""]([^'""]+)['"'"]/i);
+          var h1To = t.match(/h1\s+to\s+['‘’""]([^'‘’""]+)['‘’""]/i);
           if (h1To) return { fixType: 'h1_replace', pageUrl: pageUrl, newValue: h1To[1].trim() };
+          return null;
+        }
+        // H2 replace: extract quoted old value and quoted new values
+        if (t.toLowerCase().includes('h2') && (t.toLowerCase().includes('replace') || t.toLowerCase().includes('heading'))) {
+          // Pattern: "Replace ... 'oldValue' H2 tags with ... ('newValue1' and 'newValue2')"
+          // Or: "Replace both 'X' H2 tags with keyword-rich headings ('Y' and 'Z')"
+          var oldH2Match = t.match(/['‘’""]([^'‘’""]+)['‘’""]\s*h2/i);
+          var newH2Matches = [];
+          var quoteRegex = /\(([^)]+)\)/; // content inside parentheses
+          var parenMatch = t.match(quoteRegex);
+          if (parenMatch) {
+            // Extract quoted values inside parentheses: ('X' and 'Y')
+            var inner = parenMatch[1];
+            var quotedVals = inner.match(/['‘’""]([^'‘’""]+)['‘’""]/g);
+            if (quotedVals) {
+              newH2Matches = quotedVals.map(function(v) { return v.replace(/['‘’""]/g, '').trim(); });
+            }
+          }
+          if (oldH2Match && newH2Matches.length > 0) {
+            // Return multiple fixes as array
+            return {
+              fixType: 'h2_multi',
+              pageUrl: pageUrl,
+              oldValue: oldH2Match[1].trim(),
+              replacements: newH2Matches
+            };
+          }
           return null;
         }
         return null;
@@ -20779,6 +20805,29 @@
       const executeSerpFix = async (item) => {
         var fix = parseSerpFix(item);
         if (!fix || !fix.pageUrl) return alert('Cannot parse fix parameters or page URL not found');
+
+        // Handle multi-H2 replace
+        if (fix.fixType === 'h2_multi') {
+          var confirmMsg = 'Replace H2 headings on ' + fix.pageUrl + '?\n\nOld H2: "' + fix.oldValue + '" (all occurrences)\n\nNew H2s:\n';
+          fix.replacements.forEach(function(r, i) { confirmMsg += (i + 1) + '. ' + r + '\n'; });
+          if (!confirm(confirmMsg)) return;
+          setFixingKey(item.key);
+          try {
+            var resp = await api('/projects/' + project.id + '/serp-fix', {
+              method: 'POST',
+              body: { fixType: 'h2_replace_all', pageUrl: fix.pageUrl, oldValue: fix.oldValue, replacements: fix.replacements }
+            });
+            if (resp.error) { alert('Fix failed: ' + resp.error); }
+            else {
+              setActionsDone(prev => ({ ...prev, [item.key]: 'done' }));
+              await api('/projects/' + project.id + '/serp-actions', { method: 'POST', body: { key: item.key, status: 'done' } });
+              alert('Fixed! ' + resp.replaced + ' H2(s) replaced on WordPress. Change logged for rollback.');
+            }
+          } catch (e) { alert('Error: ' + e.message); }
+          setFixingKey(null);
+          return;
+        }
+
         if (!confirm('Apply fix to ' + fix.pageUrl + '?\n\nType: ' + fix.fixType + '\nNew value: ' + fix.newValue)) return;
         setFixingKey(item.key);
         try {
@@ -20788,7 +20837,6 @@
           });
           if (resp.error) { alert('Fix failed: ' + resp.error); }
           else {
-            // Auto-mark as done
             setActionsDone(prev => ({ ...prev, [item.key]: 'done' }));
             await api('/projects/' + project.id + '/serp-actions', { method: 'POST', body: { key: item.key, status: 'done' } });
             alert('Fixed! ' + fix.fixType + ' updated on WordPress. Change logged to history for rollback.');

@@ -25215,6 +25215,38 @@ app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
       changes.push({ field: 'content', old: `<h2>${oldValue}</h2>`, new: `<h2>${newValue}</h2>` });
       console.log(`[serp-fix] H2 replaced on ${pageType}/${wpId}`);
 
+    } else if (fixType === 'h2_replace_all') {
+      // Replace all occurrences of oldValue H2 with different new values (one per occurrence)
+      const { replacements } = req.body;
+      if (!oldValue || !replacements || !replacements.length) return res.status(400).json({ error: 'oldValue and replacements[] required' });
+      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        headers: authHeaders, signal: AbortSignal.timeout(15000)
+      });
+      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
+      const pageData = await pageResp.json();
+      let content = pageData.content?.raw || pageData.content?.rendered || '';
+      const escapedOld = oldValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const h2Pattern = new RegExp(`(<h2[^>]*>)${escapedOld}(<\\/h2>)`, 'i');
+
+      let replaced = 0;
+      for (const newVal of replacements) {
+        if (h2Pattern.test(content)) {
+          content = content.replace(h2Pattern, `$1${newVal}$2`);
+          changes.push({ field: 'content', old: `<h2>${oldValue}</h2>`, new: `<h2>${newVal}</h2>` });
+          replaced++;
+        }
+      }
+      if (replaced === 0) return res.status(404).json({ error: `H2 "${oldValue}" not found in page content` });
+
+      const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ content }), signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+      console.log(`[serp-fix] ${replaced} H2(s) replaced on ${pageType}/${wpId}`);
+      // Store replaced count for response
+      res._serpFixExtra = { replaced };
+
     } else {
       return res.status(400).json({ error: `Unknown fixType: ${fixType}` });
     }
@@ -25225,7 +25257,8 @@ app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
         [projectId, wpId, pageUrl, wpPage.title || '', ch.field, ch.old || '', ch.new || '']);
     }
 
-    res.json({ ok: true, fixType, changes: changes.length, pageType, wpId });
+    const extra = res._serpFixExtra || {};
+    res.json({ ok: true, fixType, changes: changes.length, pageType, wpId, ...extra });
   } catch (e) {
     console.error('[serp-fix] Error:', e.message);
     res.status(500).json({ error: e.message });
