@@ -20924,40 +20924,7 @@
             </div>
           )}
 
-          {/* SERP Analysis toolbar */}
-          {keywords.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '14px 18px', background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' }}>
-              <i className="fa-solid fa-brain" style={{ color: 'var(--accent)', fontSize: 18 }} />
-              <span style={{ fontWeight: 700, fontSize: 15 }}>SERP Analysis</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
-                <span style={{ fontSize: 13, color: 'var(--text2)' }}>Model:</span>
-                <select value={analysisModel} onChange={e => setAnalysisModel(e.target.value)}
-                  style={{ fontSize: 14, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
-                  <option value="haiku-4.5">Haiku 4.5 (~$0.002/kw)</option>
-                  <option value="sonnet-4.5">Sonnet 4.5 (~$0.015/kw)</option>
-                  <option value="sonnet-4.6">Sonnet 4.6 (~$0.015/kw)</option>
-                  <option value="opus-4.6">Opus 4.6 (~$0.075/kw)</option>
-                </select>
-              </div>
-              <div style={{ fontSize: 14, color: 'var(--text2)', marginLeft: 8 }}>
-                {analysisCheckedCount > 0 ? (
-                  <span><strong>{analysisCheckedCount}</strong> keyword{analysisCheckedCount !== 1 ? 's' : ''} selected — Est. <strong style={{ color: '#f59e0b' }}>${(analysisCheckedCount * costPerKw).toFixed(3)}</strong></span>
-                ) : (
-                  <span style={{ color: 'var(--text3)' }}>Select keywords to analyze (use checkboxes)</span>
-                )}
-              </div>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={toggleAllAnalysis} style={{ fontSize: 13, padding: '6px 14px' }}>
-                  {allChecked ? 'Deselect All' : 'Select All'}
-                </button>
-                <button className="btn btn-primary" disabled={analysisCheckedCount === 0 || analyzing}
-                  onClick={() => setShowCostConfirm(true)}
-                  style={{ fontSize: 14, padding: '8px 18px' }}>
-                  {analyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Analyze</>}
-                </button>
-              </div>
-            </div>
-          )}
+          {/* SERP Analysis toolbar - bottom bar */}
 
           {/* Cost confirmation modal */}
           {showCostConfirm && (
@@ -21014,108 +20981,89 @@
               </button>
             </div>
           ) : (
-            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
-                <thead>
-                  <tr style={{ background: 'var(--bg)', borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ width: 40, padding: '14px 8px 14px 14px', textAlign: 'center' }}>
-                      <input type="checkbox" checked={allChecked} onChange={toggleAllAnalysis} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }} />
-                    </th>
-                    {[
-                      { key: 'keyword', label: 'Keyword', align: 'left', w: null },
-                      { key: 'volume', label: 'Volume', align: 'center', w: 100 },
-                      { key: 'gsc', label: 'GSC Pos', align: 'center', w: 100 },
-                      { key: 'position', label: 'SERP Pos', align: 'center', w: 100 },
-                      { key: null, label: 'Ranking URL', align: 'left', w: 260 },
-                      { key: 'competitors', label: 'Competitors', align: 'center', w: 120 },
-                      { key: 'checked', label: 'Checked', align: 'center', w: 110 },
-                    ].map(h => (
-                      <th key={h.label} onClick={h.key ? () => toggleSort(h.key) : undefined} style={{ padding: '14px 16px', textAlign: h.align, fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.5, color: sortCol === h.key ? 'var(--accent)' : 'var(--text2)', width: h.w || undefined, cursor: h.key ? 'pointer' : 'default', userSelect: 'none' }}>
-                        {h.label}{h.key && sortIcon(h.key)}
-                      </th>
-                    ))}
-                    <th style={{ width: 80 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map(kw => (
-                    <React.Fragment key={kw.id}>
-                      <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.15s' }} onClick={() => loadHistory(kw.keyword)} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'} onMouseLeave={e => e.currentTarget.style.background = ''}>
-                        <td style={{ padding: '14px 8px 14px 14px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                          <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }} />
-                        </td>
-                        <td style={{ padding: '14px 16px', fontWeight: 600, fontSize: 15 }}>
-                          {kw.keyword}
-                          {kw.location && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}><i className="fa-solid fa-location-dot" style={{ fontSize: 10, marginRight: 3 }} />{kw.location}</span>}
-                          {analysisResults[kw.keyword] && !analysisResults[kw.keyword].error && (
-                            <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', borderRadius: 10, background: analysisResults[kw.keyword].analysis?.score >= 70 ? 'rgba(34,197,94,0.15)' : analysisResults[kw.keyword].analysis?.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)', color: analysisResults[kw.keyword].analysis?.score >= 70 ? '#22c55e' : analysisResults[kw.keyword].analysis?.score >= 40 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {sorted.map(kw => {
+                const borderColor = kw.serp_position && kw.serp_position <= 3 ? '#22c55e' : kw.serp_position && kw.serp_position <= 10 ? '#3b82f6' : kw.serp_position && kw.serp_position <= 20 ? '#f59e0b' : '#ef4444';
+                const isExpanded = expandedAnalysis === kw.keyword;
+                const hasAnalysis = analysisResults[kw.keyword] && !analysisResults[kw.keyword].error;
+                const hasError = analysisResults[kw.keyword] && analysisResults[kw.keyword].error;
+                const serpComps = (kw.competitors || []).filter(c => c.source === 'serp');
+                return (
+                <div key={kw.id} style={{ background: 'var(--card)', border: isExpanded ? '1px solid ' + borderColor : '1px solid var(--border)', borderLeft: '3px solid ' + borderColor, borderRadius: '0 8px 8px 0', overflow: 'hidden' }}>
+                  {/* Card header row */}
+                  <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+                    onClick={() => { if (hasAnalysis || hasError) setExpandedAnalysis(isExpanded ? null : kw.keyword); else loadHistory(kw.keyword); }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+                      <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} onClick={e => e.stopPropagation()} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
+                          {hasAnalysis && (
+                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: analysisResults[kw.keyword].analysis?.score >= 70 ? 'rgba(34,197,94,0.15)' : analysisResults[kw.keyword].analysis?.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)', color: analysisResults[kw.keyword].analysis?.score >= 70 ? '#22c55e' : analysisResults[kw.keyword].analysis?.score >= 40 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
                               {analysisResults[kw.keyword].analysis?.score}/100
                             </span>
                           )}
-                        </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: 15, color: 'var(--text2)' }}>
-                          {kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}
-                        </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          {kw.gsc_position != null ? <span style={{ color: posColor(Math.round(kw.gsc_position)), fontWeight: 800, fontSize: 18 }}>{Math.round(kw.gsc_position * 10) / 10}</span> : <span style={{ color: 'var(--text3)', fontSize: 14 }}>—</span>}
-                        </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          <span style={{ color: posColor(kw.serp_position, kw.checked_at), fontWeight: 800, fontSize: kw.serp_position ? 18 : 15 }}>{posLabel(kw.serp_position, kw.checked_at)}</span>
-                          <RankChangeBadge change={kw.serp_change} />
-                        </td>
-                        <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--accent)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : '—'}
-                        </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          {(kw.competitors || []).filter(c => c.source === 'serp').length > 0 ? (
-                            <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 13, padding: '5px 14px' }}>
-                              {(kw.competitors || []).filter(c => c.source === 'serp').length} <i className="fa-solid fa-chevron-down" style={{ fontSize: 10, marginLeft: 4 }} />
-                            </button>
-                          ) : <span style={{ color: 'var(--text3)', fontSize: 14 }}>—</span>}
-                        </td>
-                        <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
-                          {kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : '—'}
-                        </td>
-                        <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                          <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center' }}>
-                            {analysisResults[kw.keyword] && (
-                              <button className="btn" onClick={e => { e.stopPropagation(); setExpandedAnalysis(expandedAnalysis === kw.keyword ? null : kw.keyword); }}
-                                style={{ fontSize: 12, padding: '4px 10px', color: analysisResults[kw.keyword].error ? '#ef4444' : 'var(--accent)', borderColor: analysisResults[kw.keyword].error ? '#ef4444' : 'var(--accent)' }}>
-                                <i className={`fa-solid ${analysisResults[kw.keyword].error ? 'fa-exclamation-triangle' : 'fa-eye'}`} style={{ marginRight: 4 }} />
-                                {analysisResults[kw.keyword].error ? 'Error' : 'View'}
-                              </button>
-                            )}
-                            <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 6 }}>
-                              <i className="fa-solid fa-trash" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {expandedKw === kw.keyword && (kw.competitors || []).filter(c => c.source === 'serp').length > 0 && (
-                        <tr><td colSpan={9} style={{ padding: '0 14px 10px 30px', background: 'var(--bg)' }}>
-                          {(kw.competitors || []).filter(c => c.source === 'serp').map((c, j) => (
-                            <div key={j} style={{ display: 'flex', gap: 12, padding: '4px 0', fontSize: 12, color: 'var(--text2)' }}>
-                              <span style={{ fontWeight: 600, color: posColor(c.position) }}>#{c.position}</span>
-                              <span>{c.domain}</span>
-                              <span style={{ color: 'var(--text3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
-                            </div>
-                          ))}
-                        </td></tr>
+                          {hasError && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 700 }}>Error</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : 'Not found in top 100'}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+                      <div style={{ textAlign: 'center', minWidth: 50 }}>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>Vol</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>{kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}</div>
+                      </div>
+                      {kw.gsc_position != null && (
+                        <div style={{ textAlign: 'center', minWidth: 50 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>GSC</div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: posColor(Math.round(kw.gsc_position)) }}>{Math.round(kw.gsc_position * 10) / 10}</div>
+                        </div>
                       )}
-                      {/* SERP Analysis error panel */}
-                      {expandedAnalysis === kw.keyword && analysisResults[kw.keyword] && analysisResults[kw.keyword].error && (
-                        <tr><td colSpan={9} style={{ padding: '16px 24px', background: 'rgba(239,68,68,0.05)', borderTop: '2px solid #ef4444' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <i className="fa-solid fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 18 }} />
-                            <div>
-                              <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>Analysis Failed</div>
-                              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{analysisResults[kw.keyword].error}</div>
-                            </div>
-                            <button className="btn" onClick={e => { e.stopPropagation(); setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; }); setExpandedAnalysis(null); }}
-                              style={{ marginLeft: 'auto', fontSize: 12 }}>Dismiss</button>
-                          </div>
-                        </td></tr>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: kw.serp_position && kw.serp_position <= 3 ? 'rgba(34,197,94,0.15)' : kw.serp_position && kw.serp_position <= 10 ? 'rgba(59,130,246,0.15)' : kw.serp_position && kw.serp_position <= 20 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)', color: borderColor }}>
+                          {kw.serp_position ? '#' + kw.serp_position : '100+'}
+                        </span>
+                        <RankChangeBadge change={kw.serp_change} />
+                      </div>
+                      {serpComps.length > 0 && (
+                        <button className="btn" onClick={e => { e.stopPropagation(); setExpandedKw(expandedKw === kw.keyword ? null : kw.keyword); }} style={{ fontSize: 12, padding: '4px 10px' }}>
+                          <i className="fa-solid fa-users" style={{ marginRight: 4, fontSize: 11 }} />{serpComps.length}
+                        </button>
                       )}
+                      <button onClick={e => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: 4, opacity: 0.6 }}>
+                        <i className="fa-solid fa-trash" />
+                      </button>
+                      <i className={'fa-solid ' + (isExpanded ? 'fa-chevron-up' : 'fa-chevron-down')} style={{ fontSize: 12, color: 'var(--text3)' }} />
+                    </div>
+                  </div>
+                  {/* Competitors sub-panel */}
+                  {expandedKw === kw.keyword && serpComps.length > 0 && (
+                    <div style={{ padding: '8px 16px 12px 46px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
+                      {serpComps.map((c, j) => (
+                        <div key={j} style={{ display: 'flex', gap: 12, padding: '3px 0', fontSize: 12, color: 'var(--text2)' }}>
+                          <span style={{ fontWeight: 600, color: posColor(c.position) }}>#{c.position}</span>
+                          <span>{c.domain}</span>
+                          <span style={{ color: 'var(--text3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Analysis error panel */}
+                  {isExpanded && hasError && (
+                    <div style={{ padding: '16px 24px', background: 'rgba(239,68,68,0.05)', borderTop: '2px solid #ef4444' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <i className="fa-solid fa-exclamation-triangle" style={{ color: '#ef4444', fontSize: 18 }} />
+                        <div>
+                          <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>Analysis Failed</div>
+                          <div style={{ fontSize: 13, color: 'var(--text2)' }}>{analysisResults[kw.keyword].error}</div>
+                        </div>
+                        <button className="btn" onClick={e => { e.stopPropagation(); setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; }); setExpandedAnalysis(null); }}
+                          style={{ marginLeft: 'auto', fontSize: 12 }}>Dismiss</button>
+                      </div>
+                    </div>
+                  )}
                       {/* SERP Analysis results panel */}
                       {expandedAnalysis === kw.keyword && analysisResults[kw.keyword] && !analysisResults[kw.keyword].error && (() => {
                         const ar = analysisResults[kw.keyword];
@@ -21133,8 +21081,7 @@
                         const medGaps = openGaps.filter(g => g.impact === 'medium');
                         const lowGaps = openGaps.filter(g => g.impact === 'low');
                         return (
-                          <tr><td colSpan={9} style={{ padding: 0 }}>
-                            <div style={{ borderTop: `3px solid ${scoreColor}` }}>
+                          <div style={{ borderTop: '3px solid ' + scoreColor }}>
 
                               {/* ── HEADER: Score + Verdict ── */}
                               <div style={{ padding: '28px 32px 24px', background: `linear-gradient(135deg, ${scoreColor}08, transparent)` }}>
@@ -21415,14 +21362,40 @@
                                   </button>
                                 </div>
                               </div>
-                            </div>
-                          </td></tr>
+                          </div>
                         );
                       })()}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
+                </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Analysis toolbar - bottom */}
+          {keywords.length > 0 && (
+            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+                  {analysisCheckedCount > 0 ? <span><strong>{analysisCheckedCount}</strong> selected — Est. <strong style={{ color: '#f59e0b' }}>${(analysisCheckedCount * costPerKw).toFixed(3)}</strong></span> : <span style={{ color: 'var(--text3)' }}>Select keywords to analyze</span>}
+                </span>
+                <button className="btn" onClick={toggleAllAnalysis} style={{ fontSize: 12, padding: '4px 12px' }}>
+                  {allChecked ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <select value={analysisModel} onChange={e => setAnalysisModel(e.target.value)}
+                  style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer' }}>
+                  <option value="haiku-4.5">Haiku (fast)</option>
+                  <option value="sonnet-4.5">Sonnet 4.5</option>
+                  <option value="sonnet-4.6">Sonnet 4.6</option>
+                  <option value="opus-4.6">Opus (deep)</option>
+                </select>
+                <button className="btn btn-primary" disabled={analysisCheckedCount === 0 || analyzing}
+                  onClick={() => setShowCostConfirm(true)}
+                  style={{ fontSize: 13, padding: '6px 16px' }}>
+                  {analyzing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Analyzing...</> : <><i className="fa-solid fa-brain" style={{ marginRight: 6 }} />Analyze</>}
+                </button>
+              </div>
             </div>
           )}
 
