@@ -24195,12 +24195,13 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
               if (found) break;
             }
           }
-          if (gps) {
-            paramObj.lat = gps.lat;
-            paramObj.lon = gps.lng;
-            if (idx < 3) console.log(`[rank-sync] "${query}" using GPS for suburb "${detectedSuburb}": ${gps.lat},${gps.lng}`);
+          // For google engine (organic SERP), use `location` text param — NOT lat/lon (lat/lon only works for google_maps engine)
+          if (detectedSuburb) {
+            // Capitalize suburb name for SerpAPI location matching
+            const suburbTitle = detectedSuburb.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            paramObj.location = suburbTitle + ', Queensland, Australia';
+            if (idx < 3) console.log(`[rank-sync] "${query}" using location "${paramObj.location}" (detected from keyword text)`);
           } else if (kw.location) {
-            // Use location string as SerpAPI location param
             paramObj.location = kw.location + ', Australia';
           } else {
             paramObj.location = (project.location || 'Australia').trim();
@@ -26412,21 +26413,20 @@ app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
 
 // ==================== 15. SERVE ====================
 
-// Debug: test SerpAPI call with GPS
+// Debug: test SerpAPI call with location
 app.get('/api/debug/serp-test', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
   const q = req.query.q || 'blocked drain warner';
-  const lat = parseFloat(req.query.lat) || -27.322;
-  const lng = parseFloat(req.query.lng) || 152.95;
+  const location = req.query.location || 'Warner, Queensland, Australia';
   try {
-    const data = await serpApiSearch({ engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30, lat, lon: lng });
+    const data = await serpApiSearch({ engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30, location });
     const organic = (data.organic_results || []).slice(0, 10).map(r => {
       let host = '';
       try { host = new URL(r.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { host = r.link; }
       return { pos: r.position, host, title: r.title, link: (r.link || '').substring(0, 80) };
     });
     const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
-    res.json({ query: q, lat, lng, organic, local, searchInfo: data.search_information });
+    res.json({ query: q, location, organic, local, searchInfo: data.search_information });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
