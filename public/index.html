@@ -20802,6 +20802,33 @@
         });
       }, [serpActions, actionFilter]);
 
+      // Auto-assign: Dashboard (auto-fixable) vs Human (manual)
+      const getAssignee = (item) => {
+        var t = (item.text || '').toLowerCase();
+        var k = item.key || '';
+        // On-Page fix: title & meta suggestions
+        if (k.includes('::title')) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        if (k.includes('::meta')) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // Technical fix: H1, canonical, schema, noindex
+        if (t.includes('change h1') || t.includes('h1 says') || t.includes('h1 from') || t.includes('h1 to ') || t.includes('missing h1')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        if (t.includes('canonical')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        if (t.includes('schema') || t.includes('faqpage') || t.includes('faq schema') || t.includes('structured data')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        if (t.includes('noindex')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        if (t.includes('mixed content')) return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        // On-Page fix: H2 heading replacements (content edit via WP REST)
+        if (t.includes('replace') && (t.includes('h2') || t.includes('heading'))) return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        // Human tasks
+        if (item.category === 'Authority') return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+        if (item.category === 'UX') return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+        if (k.includes('::wordcount') || k.includes('::topic_')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+        if (t.includes('backlink') || t.includes('review') || t.includes('landing page') || t.includes('new page') || t.includes('create a')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+        if (t.includes('word count') || t.includes('increase') || t.includes('add content') || t.includes('add missing topic') || t.includes('expand content')) return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+        // Default: if On-Page category and looks like a tag/meta fix → dashboard, else human
+        if (item.category === 'On-Page') return { type: 'dashboard', label: 'On-Page Fix', icon: 'fa-wand-magic-sparkles', color: '#8b5cf6' };
+        if (item.category === 'Technical') return { type: 'dashboard', label: 'Technical Fix', icon: 'fa-gear', color: '#06b6d4' };
+        return { type: 'human', label: 'Human', icon: 'fa-user', color: '#f59e0b' };
+      };
+
       const actionCategories = useMemo(() => {
         var cats = {};
         serpActions.forEach(function(a) { cats[a.category] = (cats[a.category] || 0) + 1; });
@@ -21164,6 +21191,8 @@
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
                     var scoreColor2 = !group.score ? 'var(--text3)' : group.score >= 70 ? '#22c55e' : group.score >= 40 ? '#f59e0b' : '#ef4444';
                     var isExpanded = expandedActionKw === group.keyword;
+                    var autoCount = groupItems.filter(function(i) { return getAssignee(i).type === 'dashboard'; }).length;
+                    var humanCount = groupItems.filter(function(i) { return getAssignee(i).type === 'human'; }).length;
                     return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' } },
                       React.createElement('div', { onClick: function() { setExpandedActionKw(isExpanded ? null : group.keyword); }, style: { padding: '20px 24px', borderBottom: isExpanded ? '1px solid var(--border)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' } },
                         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
@@ -21173,6 +21202,8 @@
                           group.score != null ? React.createElement('span', { style: { fontSize: 16, padding: '5px 14px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
                         ),
                         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                          autoCount > 0 ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 12, background: 'rgba(6,182,212,0.1)', color: '#06b6d4', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-gear', style: { marginRight: 4, fontSize: 10 } }), autoCount + ' auto') : null,
+                          humanCount > 0 ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 12, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-user', style: { marginRight: 4, fontSize: 10 } }), humanCount + ' manual') : null,
                           ipCountG > 0 ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 12, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontWeight: 600 } }, ipCountG + ' in progress') : null,
                           React.createElement('div', { style: { width: 140, height: 10, borderRadius: 5, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', display: 'flex' } },
                             React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: '#22c55e' } }),
@@ -21190,6 +21221,7 @@
                           var impactLabel = item.impact === 'high' ? 'critical' : item.impact === 'medium' ? 'warning' : 'suggestion';
                           var catColorMap = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
                           var catCol = catColorMap[item.category] || 'var(--accent)';
+                          var assignee = getAssignee(item);
                           // Pipeline status badge config
                           var statusConfig = { pending: { icon: 'fa-circle', color: '#f59e0b', label: 'pending', bg: 'rgba(245,158,11,0.1)' }, in_progress: { icon: 'fa-spinner', color: '#3b82f6', label: 'in progress', bg: 'rgba(59,130,246,0.1)' }, done: { icon: 'fa-circle-check', color: '#22c55e', label: 'done', bg: 'rgba(34,197,94,0.1)' } };
                           var sc = statusConfig[itemStatus] || statusConfig.pending;
@@ -21203,7 +21235,8 @@
                               React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' } },
                                 React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
                                 React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
-                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'quick win') : null
+                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 15, padding: '5px 14px', borderRadius: 8, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'quick win') : null,
+                                React.createElement('span', { style: { fontSize: 13, padding: '4px 12px', borderRadius: 8, background: assignee.color + '15', color: assignee.color, fontWeight: 600, marginLeft: 'auto', border: '1px solid ' + assignee.color + '30' } }, React.createElement('i', { className: 'fa-solid ' + assignee.icon, style: { marginRight: 6, fontSize: 12 } }), assignee.label)
                               ),
                               React.createElement('div', { style: { fontSize: 18, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.7 } }, item.text),
                               item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 } },
