@@ -20881,28 +20881,29 @@
           var serpKw = serpOnly.find(function(k) { return k.keyword === keyword; });
           var pos = serpKw ? serpKw.serp_position : null;
           var score = a.score;
+          var pageUrl = ar.userPage ? ar.userPage.url : '';
           // Quick wins
           (a.quick_wins || []).forEach(function(qw, i) {
-            items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::qw_' + i, text: qw, fix: qw, category: 'Content', impact: 'high', type: 'quick_win' });
+            items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::qw_' + i, text: qw, fix: qw, category: 'Content', impact: 'high', type: 'quick_win' });
           });
           // Gaps
           (a.gaps || []).filter(function(g) { return g.status !== 'done'; }).forEach(function(g, i) {
-            items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::gap_' + i, text: g.issue, fix: g.fix || '', category: g.category || 'Content', impact: g.impact || 'medium', type: 'gap' });
+            items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::gap_' + i, text: g.issue, fix: g.fix || '', category: g.category || 'Content', impact: g.impact || 'medium', type: 'gap' });
           });
           // Content recs
           if (a.content_recommendations) {
             var cr = a.content_recommendations;
             if (cr.title_suggestion) {
-              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::title', text: 'Update title tag to: ' + cr.title_suggestion, fix: 'Better keyword targeting and CTR', category: 'On-Page', impact: 'high', type: 'content_rec' });
+              items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::title', text: 'Update title tag to: ' + cr.title_suggestion, fix: 'Better keyword targeting and CTR', category: 'On-Page', impact: 'high', type: 'content_rec' });
             }
             if (cr.meta_suggestion) {
-              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::meta', text: 'Update meta description to: ' + cr.meta_suggestion, fix: 'Better CTR in search results', category: 'On-Page', impact: 'medium', type: 'content_rec' });
+              items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::meta', text: 'Update meta description to: ' + cr.meta_suggestion, fix: 'Better CTR in search results', category: 'On-Page', impact: 'medium', type: 'content_rec' });
             }
             if (cr.target_word_count && ar.userPage && ar.userPage.wordCount < cr.target_word_count) {
-              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::wordcount', text: 'Increase word count from ' + (ar.userPage.wordCount || '?') + ' to ' + cr.target_word_count + ' words', fix: 'Add quality content covering missing topics', category: 'Content', impact: 'high', type: 'content_rec' });
+              items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::wordcount', text: 'Increase word count from ' + (ar.userPage.wordCount || '?') + ' to ' + cr.target_word_count + ' words', fix: 'Add quality content covering missing topics', category: 'Content', impact: 'high', type: 'content_rec' });
             }
             (cr.missing_topics || []).forEach(function(t, ti) {
-              items.push({ keyword: keyword, position: pos, score: score, key: keyword + '::topic_' + ti, text: 'Add missing topic: ' + t, fix: 'Expand content to cover this topic', category: 'Content', impact: 'medium', type: 'content_rec' });
+              items.push({ keyword: keyword, position: pos, score: score, pageUrl: pageUrl, key: keyword + '::topic_' + ti, text: 'Add missing topic: ' + t, fix: 'Expand content to cover this topic', category: 'Content', impact: 'medium', type: 'content_rec' });
             });
           }
         });
@@ -21361,6 +21362,7 @@
                                 }, React.createElement('i', { className: fixingKey === item.key ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wrench', style: { fontSize: 12 } }), fixingKey === item.key ? 'Fixing...' : 'Fix Now') : null
                               ),
                               React.createElement('div', { style: { fontSize: 18, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.7 } }, item.text),
+                              item.pageUrl ? React.createElement('a', { href: item.pageUrl, target: '_blank', rel: 'noopener', style: { fontSize: 13, color: 'var(--accent)', textDecoration: 'none', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4 } }, React.createElement('i', { className: 'fa-solid fa-link', style: { fontSize: 10 } }), item.pageUrl.replace(/^https?:\/\//, '')) : null,
                               item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 } },
                                 React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 8, color: '#22c55e', fontSize: 14 } }), item.fix
                               ) : null
