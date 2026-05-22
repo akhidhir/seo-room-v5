@@ -24207,16 +24207,11 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
               if (found) break;
             }
           }
-          // Use UULE v2 (GPS-encoded) for suburb-level accuracy — gives Google exact coordinates
-          // `uule` and `location` can't be used together, and `uule` is more precise
-          if (gps) {
-            paramObj.uule = generateUULE(gps.lat, gps.lng);
-            if (idx < 3) console.log(`[rank-sync] "${query}" using UULE for suburb "${detectedSuburb}" (${gps.lat}, ${gps.lng})`);
-          } else {
-            // Fallback to city-level location text for keywords without suburb GPS
-            paramObj.location = (project.location || 'Australia').trim();
-            if (idx < 3) console.log(`[rank-sync] "${query}" using location fallback "${paramObj.location}"`);
-          }
+          // For organic SERP, use project-level location (city). Suburb-level isn't needed
+          // because organic results are NOT as location-sensitive as Maps.
+          // Unpersonalized results = industry standard for rank tracking.
+          paramObj.location = (project.location || 'Australia').trim();
+          if (idx < 3) console.log(`[rank-sync] "${query}" using location "${paramObj.location}"`);
 
           const data = await serpApiSearch(paramObj);
           if (idx === 0) console.log(`[rank-sync] First keyword "${query}" response keys:`, Object.keys(data));
@@ -25066,9 +25061,9 @@ app.get('/api/projects/:projectId/serp-actions', async (req, res) => {
   }
 });
 
-// Toggle action done state
+// Update action pipeline status (pending → in_progress → done)
 app.post('/api/projects/:projectId/serp-actions', async (req, res) => {
-  const { key, done } = req.body;
+  const { key, done, status } = req.body;
   if (!key) return res.status(400).json({ error: 'key required' });
   try {
     // Ensure table exists
@@ -25077,17 +25072,25 @@ app.post('/api/projects/:projectId/serp-actions', async (req, res) => {
       data JSONB DEFAULT '{}',
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
-    // Upsert
-    if (done) {
-      await pool.query(`INSERT INTO serp_action_status (project_id, data, updated_at) VALUES ($1, jsonb_build_object($2::text, true), NOW())
-        ON CONFLICT (project_id) DO UPDATE SET data = serp_action_status.data || jsonb_build_object($2::text, true), updated_at = NOW()`,
-        [req.params.projectId, key]);
-    } else {
+    // Support both old boolean format and new status format
+    // status can be: "pending", "in_progress", "done"
+    let newStatus = status;
+    if (!newStatus) {
+      // Legacy boolean support
+      newStatus = done ? 'done' : 'pending';
+    }
+    if (newStatus === 'pending') {
+      // Remove key from data (pending = default/absent)
       await pool.query(`INSERT INTO serp_action_status (project_id, data, updated_at) VALUES ($1, '{}', NOW())
         ON CONFLICT (project_id) DO UPDATE SET data = serp_action_status.data - $2, updated_at = NOW()`,
         [req.params.projectId, key]);
+    } else {
+      // Set key to status string
+      await pool.query(`INSERT INTO serp_action_status (project_id, data, updated_at) VALUES ($1, jsonb_build_object($2::text, $3::text), NOW())
+        ON CONFLICT (project_id) DO UPDATE SET data = serp_action_status.data || jsonb_build_object($2::text, $3::text), updated_at = NOW()`,
+        [req.params.projectId, key, newStatus]);
     }
-    res.json({ ok: true });
+    res.json({ ok: true, status: newStatus });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
