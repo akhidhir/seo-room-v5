@@ -20692,6 +20692,7 @@
       const [importingMaps, setImportingMaps] = useState(false);
       const [serpView, setSerpView] = useState('rankings');
       const [actionFilter, setActionFilter] = useState('all');
+      const [actionSubFilter, setActionSubFilter] = useState(null);
       const [actionsDone, setActionsDone] = useState({});
 
       // Load saved action done states from DB
@@ -21045,22 +21046,22 @@
               ) : (
                 <div>
                   {/* Summary stats */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
                     {[
                       { label: 'TOTAL', value: serpActions.length, color: 'var(--text)' },
                       { label: 'REMAINING', value: serpActions.filter(function(a) { return !actionsDone[a.key]; }).length, color: '#f59e0b' },
                       { label: 'DONE', value: serpActions.filter(function(a) { return actionsDone[a.key]; }).length, color: '#22c55e' },
                       { label: 'KEYWORDS', value: Object.keys(actionsByKeyword.reduce(function(acc, g) { acc[g.keyword] = 1; return acc; }, {})).length, color: 'var(--accent)' },
                     ].map(function(s) {
-                      return React.createElement('div', { key: s.label, style: { background: 'var(--card)', borderRadius: 10, padding: 16, textAlign: 'center', border: '1px solid var(--border)' } },
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: s.color } }, s.value),
-                        React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 4, letterSpacing: 0.5 } }, s.label)
+                      return React.createElement('div', { key: s.label, style: { background: 'var(--card)', borderRadius: 10, padding: 20, textAlign: 'center', border: '1px solid var(--border)' } },
+                        React.createElement('div', { style: { fontSize: 36, fontWeight: 800, color: s.color } }, s.value),
+                        React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 6, letterSpacing: 0.5 } }, s.label)
                       );
                     })}
                   </div>
 
                   {/* Category tabs */}
-                  <div style={{ display: 'flex', gap: 0, marginBottom: 16 }}>
+                  <div style={{ display: 'flex', gap: 0, marginBottom: 12 }}>
                     {[
                       { key: 'all', label: 'All', icon: 'fa-layer-group', color: 'var(--accent)' },
                       { key: 'Content', label: 'Content', icon: 'fa-file-lines', color: '#8b5cf6' },
@@ -21074,49 +21075,91 @@
                       return React.createElement('button', {
                         key: tab.key,
                         onClick: function() { setActionFilter(tab.key); },
-                        style: { flex: 1, padding: '12px 10px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)', borderBottom: active ? '3px solid ' + tab.color : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)', fontWeight: active ? 700 : 500, fontSize: 13, borderRadius: idx === 0 ? '8px 0 0 0' : idx === arr.length - 1 ? '0 8px 0 0' : 0 }
-                      }, React.createElement('i', { className: 'fa-solid ' + tab.icon, style: { marginRight: 6 } }), tab.label, ' (' + count + ')');
+                        style: { flex: 1, padding: '14px 12px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)', borderBottom: active ? '3px solid ' + tab.color : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)', fontWeight: active ? 700 : 500, fontSize: 15, borderRadius: idx === 0 ? '8px 0 0 0' : idx === arr.length - 1 ? '0 8px 0 0' : 0 }
+                      }, React.createElement('i', { className: 'fa-solid ' + tab.icon, style: { marginRight: 8 } }), tab.label, ' (' + count + ')');
                     })}
                   </div>
 
+                  {/* Sub-filter pills: severity + type */}
+                  {(() => {
+                    var filtered = actionFilter === 'all' ? serpActions : serpActions.filter(function(a) { return a.category === actionFilter; });
+                    var critCount = filtered.filter(function(a) { return a.impact === 'high'; }).length;
+                    var warnCount = filtered.filter(function(a) { return a.impact === 'medium'; }).length;
+                    var sugCount = filtered.filter(function(a) { return a.impact === 'low'; }).length;
+                    var qwCount = filtered.filter(function(a) { return a.type === 'quick_win'; }).length;
+                    var doneCount = filtered.filter(function(a) { return actionsDone[a.key]; }).length;
+                    var pendCount = filtered.filter(function(a) { return !actionsDone[a.key]; }).length;
+                    return React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' } },
+                      React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)', marginRight: 4 } }, 'Filter:'),
+                      [
+                        { key: 'all_sub', label: 'All', count: filtered.length, color: 'var(--accent)', bg: 'var(--accent)' },
+                        { key: 'critical', label: 'Critical', count: critCount, color: '#ef4444', bg: '#ef4444' },
+                        { key: 'warning', label: 'Warnings', count: warnCount, color: '#f59e0b', bg: '#f59e0b' },
+                        { key: 'suggestion', label: 'Suggestions', count: sugCount, color: '#3b82f6', bg: '#3b82f6' },
+                        { key: 'quick_win', label: 'Quick Wins', count: qwCount, color: '#22c55e', bg: '#22c55e' },
+                        { key: 'pending', label: 'Pending', count: pendCount, color: '#f59e0b', bg: '#f59e0b' },
+                        { key: 'done_sub', label: 'Done', count: doneCount, color: '#22c55e', bg: '#22c55e' },
+                      ].filter(function(p) { return p.key === 'all_sub' || p.count > 0; }).map(function(pill) {
+                        var subActive = (actionSubFilter || 'all_sub') === pill.key;
+                        return React.createElement('button', {
+                          key: pill.key,
+                          onClick: function() { setActionSubFilter(pill.key === 'all_sub' ? null : pill.key); },
+                          style: { fontSize: 13, padding: '6px 14px', borderRadius: 20, border: '1px solid ' + (subActive ? pill.color : 'var(--border)'), background: subActive ? pill.color + '18' : 'transparent', color: subActive ? pill.color : 'var(--text3)', cursor: 'pointer', fontWeight: subActive ? 700 : 500 }
+                        }, pill.label + ' (' + pill.count + ')');
+                      })
+                    );
+                  })()}
+
                   {/* Keyword groups */}
                   {actionsByKeyword.map(function(group) {
-                    var doneCount = group.items.filter(function(i) { return actionsDone[i.key]; }).length;
-                    var totalCount = group.items.length;
+                    var groupItems = group.items.filter(function(item) {
+                      var sf = actionSubFilter;
+                      if (!sf || sf === 'all_sub') return true;
+                      if (sf === 'critical') return item.impact === 'high';
+                      if (sf === 'warning') return item.impact === 'medium';
+                      if (sf === 'suggestion') return item.impact === 'low';
+                      if (sf === 'quick_win') return item.type === 'quick_win';
+                      if (sf === 'pending') return !actionsDone[item.key];
+                      if (sf === 'done_sub') return actionsDone[item.key];
+                      return true;
+                    });
+                    if (groupItems.length === 0) return null;
+                    var doneCount = groupItems.filter(function(i) { return actionsDone[i.key]; }).length;
+                    var totalCount = groupItems.length;
                     var posColor2 = !group.position ? '#ef4444' : group.position <= 3 ? '#22c55e' : group.position <= 10 ? '#3b82f6' : group.position <= 20 ? '#f59e0b' : '#ef4444';
                     var scoreColor2 = !group.score ? 'var(--text3)' : group.score >= 70 ? '#22c55e' : group.score >= 40 ? '#f59e0b' : '#ef4444';
-                    return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' } },
-                      React.createElement('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-                          React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)' } }, group.keyword),
-                          React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
-                          group.score != null ? React.createElement('span', { style: { fontSize: 12, padding: '3px 10px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
+                    return React.createElement('div', { key: group.keyword, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14, overflow: 'hidden' } },
+                      React.createElement('div', { style: { padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+                          React.createElement('span', { style: { fontSize: 17, fontWeight: 700, color: 'var(--text)' } }, group.keyword),
+                          React.createElement('span', { style: { fontSize: 14, padding: '4px 12px', borderRadius: 20, background: posColor2 + '18', color: posColor2, fontWeight: 600 } }, group.position ? '#' + group.position : '>100'),
+                          group.score != null ? React.createElement('span', { style: { fontSize: 14, padding: '4px 12px', borderRadius: 20, background: scoreColor2 + '18', color: scoreColor2, fontWeight: 600 } }, 'Score: ' + group.score) : null
                         ),
-                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                          React.createElement('div', { style: { width: 100, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' } },
-                            React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: doneCount === totalCount ? '#22c55e' : '#f59e0b', borderRadius: 3 } })
+                        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                          React.createElement('div', { style: { width: 120, height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' } },
+                            React.createElement('div', { style: { height: '100%', width: (totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0) + '%', background: doneCount === totalCount ? '#22c55e' : '#f59e0b', borderRadius: 4 } })
                           ),
-                          React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, doneCount + '/' + totalCount)
+                          React.createElement('span', { style: { fontSize: 14, color: 'var(--text3)', fontWeight: 600 } }, doneCount + '/' + totalCount)
                         )
                       ),
                       React.createElement('div', null,
-                        group.items.map(function(item) {
+                        groupItems.map(function(item) {
                           var isDone = actionsDone[item.key];
                           var impactColor = item.impact === 'high' ? '#ef4444' : item.impact === 'medium' ? '#f59e0b' : '#3b82f6';
                           var impactLabel = item.impact === 'high' ? 'critical' : item.impact === 'medium' ? 'warning' : 'suggestion';
                           var catColorMap = { Content: '#8b5cf6', Technical: '#06b6d4', 'On-Page': '#f59e0b', Authority: '#ef4444', UX: '#ec4899' };
                           var catCol = catColorMap[item.category] || 'var(--accent)';
-                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
-                            React.createElement('input', { type: 'checkbox', checked: !!isDone, onChange: function() { toggleActionDone(item.key); }, style: { marginTop: 3, accentColor: '#22c55e', width: 16, height: 16, cursor: 'pointer', flexShrink: 0 } }),
+                          return React.createElement('div', { key: item.key, style: { display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 20px', borderBottom: '1px solid rgba(42,45,58,0.5)', opacity: isDone ? 0.5 : 1 } },
+                            React.createElement('input', { type: 'checkbox', checked: !!isDone, onChange: function() { toggleActionDone(item.key); }, style: { marginTop: 4, accentColor: '#22c55e', width: 18, height: 18, cursor: 'pointer', flexShrink: 0 } }),
                             React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                              React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 4, alignItems: 'center', flexWrap: 'wrap' } },
-                                isDone ? React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, 'done') : React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
-                                React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
-                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 3 } }), 'quick win') : null
+                              React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                                isDone ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, 'done') : React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: impactColor + '18', color: impactColor, fontWeight: 600 } }, impactLabel),
+                                React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: catCol + '18', color: catCol, fontWeight: 600 } }, item.category),
+                                item.type === 'quick_win' ? React.createElement('span', { style: { fontSize: 13, padding: '3px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600 } }, React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 4 } }), 'quick win') : null
                               ),
-                              React.createElement('div', { style: { fontSize: 13, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.5 } }, item.text),
-                              item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 4 } },
-                                React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 4, color: '#22c55e', fontSize: 11 } }), item.fix
+                              React.createElement('div', { style: { fontSize: 15, color: isDone ? 'var(--text3)' : 'var(--text)', textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.6 } }, item.text),
+                              item.fix && item.fix !== item.text ? React.createElement('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 6 } },
+                                React.createElement('i', { className: 'fa-solid fa-wrench', style: { marginRight: 6, color: '#22c55e', fontSize: 12 } }), item.fix
                               ) : null
                             )
                           );
