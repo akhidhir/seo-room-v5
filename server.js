@@ -718,6 +718,9 @@ async function initDb() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
+    // Copywriting brief storage on website_builds
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS copywriting_brief JSONB DEFAULT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS brief_raw_text TEXT`).catch(() => {});
     // Add optional build_id to site_pages and content_keywords
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
     await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
@@ -1351,6 +1354,222 @@ app.delete('/api/website-builds/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ===== Copywriting Brief Upload + Parse =====
+app.post('/api/builds/:buildId/brief/upload', async (req, res) => {
+  try {
+    const buildId = req.params.buildId;
+    const { pdf_base64 } = req.body;
+    if (!pdf_base64) return res.status(400).json({ error: 'pdf_base64 required' });
+
+    // 1. Extract text from PDF
+    const pdfParse = require('pdf-parse');
+    const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+    const pdfData = await pdfParse(pdfBuffer);
+    const rawText = pdfData.text;
+    if (!rawText || rawText.trim().length < 50) return res.status(400).json({ error: 'Could not extract enough text from PDF' });
+
+    // 2. Send to Haiku for structured parsing
+    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    const parseResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      messages: [{ role: 'user', content: `You are parsing a copywriting brief for a new website build. Extract ALL information into this exact JSON structure. Be thorough — capture every detail.
+
+COPYWRITING BRIEF TEXT:
+${rawText.substring(0, 15000)}
+
+Return ONLY valid JSON with this structure:
+{
+  "business_name": "string",
+  "brand_tone": ["array of tone descriptors"],
+  "words_to_avoid": ["array of words/phrases to avoid"],
+  "differentiators": ["array of what makes the business stand out"],
+  "competitors": [{"name": "string", "url": "string or null"}],
+  "about_page": {
+    "summary": "the about/who we are text",
+    "keywords": ["target keywords for about page"],
+    "dot_points": ["key points to include"]
+  },
+  "service_pages": [
+    {
+      "page_name": "string — the service name",
+      "description": "the client-provided description/content for this service",
+      "process_steps": ["array of process/service steps if provided"],
+      "types_or_styles": ["array of sub-types/styles if listed"],
+      "keywords": ["target keywords if mentioned"]
+    }
+  ],
+  "additional_notes": "any extra notes, photo plans, testimonial info etc"
+}` }],
+    });
+
+    // Extract JSON from response
+    let briefJson;
+    const responseText = parseResponse.content[0].text;
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(500).json({ error: 'AI failed to parse brief into JSON' });
+    try { briefJson = JSON.parse(jsonMatch[0]); } catch (e) { return res.status(500).json({ error: 'AI returned invalid JSON: ' + e.message }); }
+
+    // 3. Save to DB
+    await pool.query(
+      'UPDATE website_builds SET copywriting_brief=$1, brief_raw_text=$2, updated_at=NOW() WHERE id=$3',
+      [JSON.stringify(briefJson), rawText.substring(0, 50000), buildId]
+    );
+
+    // 4. Auto-create site_pages from parsed brief
+    const createdPages = [];
+
+    // About page
+    if (briefJson.about_page && briefJson.about_page.summary) {
+      const existing = await pool.query('SELECT id FROM site_pages WHERE build_id=$1 AND page_type=$2 AND page_name=$3', [buildId, 'page', 'About']);
+      if (existing.rows.length === 0) {
+        const r = await pool.query(
+          `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, ai_notes, stage) VALUES ($1, 'page', 'About', 'about', $2, $3, 'brief') RETURNING *`,
+          [buildId, (briefJson.about_page.keywords || [])[0] || '', briefJson.about_page.summary]
+        );
+        createdPages.push(r.rows[0]);
+      }
+    }
+
+    // Service pages
+    if (briefJson.service_pages && briefJson.service_pages.length > 0) {
+      for (const sp of briefJson.service_pages) {
+        const slug = sp.page_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const existing = await pool.query('SELECT id FROM site_pages WHERE build_id=$1 AND page_name=$2', [buildId, sp.page_name]);
+        if (existing.rows.length === 0) {
+          const notes = [sp.description || ''];
+          if (sp.process_steps && sp.process_steps.length) notes.push('\n\nProcess:\n' + sp.process_steps.map((s, i) => `${i+1}. ${s}`).join('\n'));
+          if (sp.types_or_styles && sp.types_or_styles.length) notes.push('\n\nTypes/Styles: ' + sp.types_or_styles.join(', '));
+          const r = await pool.query(
+            `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, ai_notes, stage) VALUES ($1, 'service', $2, $3, $4, $5, 'brief') RETURNING *`,
+            [buildId, sp.page_name, slug, (sp.keywords || [])[0] || '', notes.join('')]
+          );
+          createdPages.push(r.rows[0]);
+        }
+      }
+    }
+
+    // Home page (always create if not exists)
+    const homeExisting = await pool.query('SELECT id FROM site_pages WHERE build_id=$1 AND page_type=$2 AND page_name=$3', [buildId, 'page', 'Home']);
+    if (homeExisting.rows.length === 0) {
+      const homeNotes = `Brand tone: ${(briefJson.brand_tone || []).join(', ')}\nDifferentiators: ${(briefJson.differentiators || []).join(', ')}`;
+      const r = await pool.query(
+        `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, ai_notes, stage, is_cornerstone) VALUES ($1, 'page', 'Home', '', $2, $3, 'brief', true) RETURNING *`,
+        [buildId, briefJson.business_name || '', homeNotes]
+      );
+      createdPages.push(r.rows[0]);
+    }
+
+    res.json({ brief: briefJson, pages_created: createdPages.length, pages: createdPages });
+  } catch (e) {
+    console.error('[brief-upload] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get parsed brief for a build
+app.get('/api/builds/:buildId/brief', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT copywriting_brief, brief_raw_text FROM website_builds WHERE id=$1', [req.params.buildId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Build not found' });
+    res.json({ brief: result.rows[0].copywriting_brief, raw_text: result.rows[0].brief_raw_text });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== DataForSEO Content Analysis — text quality scoring =====
+app.post('/api/content/analyze', async (req, res) => {
+  try {
+    const { text, keyword } = req.body;
+    if (!text || text.trim().length < 20) return res.status(400).json({ error: 'Text too short to analyze' });
+    const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN;
+    const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
+    if (!DATAFORSEO_LOGIN) return res.status(500).json({ error: 'DataForSEO credentials not configured' });
+    const dfAuth = Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64');
+
+    // Run text_summary + check_grammar in parallel
+    const [summaryRes, grammarRes] = await Promise.all([
+      fetch('https://api.dataforseo.com/v3/content_generation/text_summary/live', {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${dfAuth}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ text: text.substring(0, 25000), language_code: 'en', internal_list_limit: 20 }])
+      }).then(r => r.json()),
+      fetch('https://api.dataforseo.com/v3/content_generation/check_grammar/live', {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${dfAuth}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ text: text.substring(0, 25000), language_code: 'en' }])
+      }).then(r => r.json())
+    ]);
+
+    const summary = summaryRes?.tasks?.[0]?.result?.[0] || {};
+    const grammar = grammarRes?.tasks?.[0]?.result || [];
+
+    // Build a combined score (0-100)
+    const readability = summary.automated_readability_index || 0;
+    const wordCount = summary.sentences_count ? (summary.words_count || 0) : 0;
+    const vocabDensity = summary.vocabulary_density || 0;
+    const grammarErrors = Array.isArray(grammar) ? grammar.length : 0;
+
+    // Score: readability (target 8-12), word count (target 800+), grammar (fewer=better), vocab density (target 0.6+)
+    let readScore = readability >= 6 && readability <= 14 ? 25 : (readability >= 4 && readability <= 16 ? 15 : 5);
+    let wordScore = wordCount >= 800 ? 25 : (wordCount >= 400 ? 15 : (wordCount >= 200 ? 10 : 5));
+    let grammarScore = grammarErrors === 0 ? 25 : (grammarErrors <= 3 ? 20 : (grammarErrors <= 10 ? 10 : 5));
+    let vocabScore = vocabDensity >= 0.6 ? 25 : (vocabDensity >= 0.4 ? 15 : 10);
+    const totalScore = readScore + wordScore + grammarScore + vocabScore;
+
+    res.json({
+      score: totalScore,
+      details: {
+        word_count: summary.words_count || 0,
+        sentence_count: summary.sentences_count || 0,
+        paragraph_count: summary.paragraphs_count || 0,
+        vocabulary_density: vocabDensity,
+        automated_readability_index: readability,
+        coleman_liau_index: summary.coleman_liau_readability_index || null,
+        flesch_kincaid: summary.flesch_kincaid_grade_level || null,
+        smog_index: summary.smog_readability_index || null,
+        keyword_density: summary.keyword_density || {},
+        grammar_errors: grammarErrors,
+        grammar_corrections: Array.isArray(grammar) ? grammar.slice(0, 20) : []
+      },
+      recommendations: generateContentRecommendations(summary, grammarErrors, keyword)
+    });
+  } catch (e) {
+    console.error('[content-analyze] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+function generateContentRecommendations(summary, grammarErrors, keyword) {
+  const recs = [];
+  const wc = summary.words_count || 0;
+  const readability = summary.automated_readability_index || 0;
+  const vocabDensity = summary.vocabulary_density || 0;
+
+  if (wc < 300) recs.push({ type: 'critical', text: `Content is too thin (${wc} words). Aim for at least 800 words for service pages.` });
+  else if (wc < 600) recs.push({ type: 'warning', text: `Content is short (${wc} words). Consider expanding to 800-1200 words for better SEO.` });
+  else if (wc >= 800) recs.push({ type: 'good', text: `Good content length (${wc} words).` });
+
+  if (readability > 14) recs.push({ type: 'warning', text: `Readability is too complex (grade ${readability.toFixed(1)}). Simplify for a general audience (target grade 8-12).` });
+  else if (readability < 5) recs.push({ type: 'warning', text: `Readability is very simple (grade ${readability.toFixed(1)}). May lack depth — target grade 8-12.` });
+  else recs.push({ type: 'good', text: `Good readability (grade ${readability.toFixed(1)}).` });
+
+  if (grammarErrors > 5) recs.push({ type: 'critical', text: `${grammarErrors} grammar/spelling issues found. Fix before publishing.` });
+  else if (grammarErrors > 0) recs.push({ type: 'warning', text: `${grammarErrors} minor grammar issue${grammarErrors > 1 ? 's' : ''} found.` });
+  else recs.push({ type: 'good', text: 'No grammar issues detected.' });
+
+  if (vocabDensity < 0.4) recs.push({ type: 'warning', text: 'Low vocabulary diversity — too repetitive. Use more varied language.' });
+  else if (vocabDensity >= 0.6) recs.push({ type: 'good', text: 'Good vocabulary diversity.' });
+
+  if (keyword) {
+    const kd = summary.keyword_density || {};
+    const kwLower = keyword.toLowerCase();
+    const kwCount = Object.entries(kd).find(([k]) => k.toLowerCase().includes(kwLower));
+    if (!kwCount) recs.push({ type: 'critical', text: `Focus keyword "${keyword}" not found in content. Include it naturally.` });
+  }
+
+  return recs;
+}
 
 // Site pages and keywords for a build (same structure, build_id instead of project_id)
 app.get('/api/builds/:buildId/site-pages', async (req, res) => {

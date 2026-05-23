@@ -13549,6 +13549,10 @@
       });
       var [saved, setSaved] = React.useState(false);
       var [loading, setLoading] = React.useState(true);
+      var [brief, setBrief] = React.useState(null);
+      var [briefLoading, setBriefLoading] = React.useState(false);
+      var [briefError, setBriefError] = React.useState('');
+      var [briefExpanded, setBriefExpanded] = React.useState({});
 
       // Load existing settings from project or build
       React.useEffect(function() {
@@ -13563,6 +13567,10 @@
             nw_business_type: project.nw_business_type || '',
             nw_notes: project.nw_notes || '',
           });
+          // Load existing brief
+          api('/builds/' + project.build_id + '/brief').then(function(data) {
+            if (data.brief) setBrief(data.brief);
+          }).catch(function() {});
         } else {
           setForm({
             name: project.nw_name || project.business_name || '',
@@ -13576,6 +13584,31 @@
         }
         setLoading(false);
       }, [project]);
+
+      var handleBriefUpload = async function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        if (!file.name.endsWith('.pdf')) { setBriefError('Please upload a PDF file'); return; }
+        if (file.size > 10 * 1024 * 1024) { setBriefError('File too large (max 10MB)'); return; }
+        setBriefLoading(true); setBriefError('');
+        try {
+          var reader = new FileReader();
+          reader.onload = async function() {
+            var base64 = reader.result.split(',')[1];
+            try {
+              var result = await api('/builds/' + project.build_id + '/brief/upload', { method: 'POST', body: { pdf_base64: base64 } });
+              setBrief(result.brief);
+              setBriefLoading(false);
+              alert('Brief parsed! ' + result.pages_created + ' pages created from the brief.');
+            } catch (err) { setBriefError(err.message); setBriefLoading(false); }
+          };
+          reader.readAsDataURL(file);
+        } catch (err) { setBriefError(err.message); setBriefLoading(false); }
+      };
+
+      var toggleBriefSection = function(key) {
+        setBriefExpanded(function(prev) { return Object.assign({}, prev, { [key]: !prev[key] }); });
+      };
 
       var handleSave = async function() {
         setSaved(false);
@@ -13670,6 +13703,137 @@
             'Next step: expand "New Website Copywriter" in the sidebar and go to ',
             React.createElement('strong', null, 'Keywords'),
             ' to upload your target keywords.'
+          )
+        ),
+
+        // ===== Copywriting Brief Upload Section =====
+        isBuild && React.createElement('div', { style: { maxWidth: 600, marginTop: 24, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 } },
+          React.createElement('h3', { style: { fontSize: 18, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: 'fas fa-file-pdf', style: { color: '#ef4444' } }),
+            'Copywriting Brief',
+            brief && React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', borderRadius: 4, fontWeight: 600 } }, 'UPLOADED')
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: '0 0 16px' } },
+            'Upload the client\'s copywriting brief (PDF). The system will parse it, extract brand guidelines, and auto-create pages ready for drafting.'
+          ),
+
+          // Upload area
+          !brief && React.createElement('div', null,
+            React.createElement('label', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '24px 16px', border: '2px dashed var(--border)', borderRadius: 8, cursor: briefLoading ? 'wait' : 'pointer', color: 'var(--text2)', fontSize: 14, background: briefLoading ? 'rgba(99,102,241,0.05)' : 'transparent', transition: 'all 0.2s' } },
+              briefLoading ? React.createElement('span', null,
+                React.createElement('div', { className: 'spinner-large', style: { width: 20, height: 20, margin: '0 8px 0 0', display: 'inline-block' } }),
+                'Parsing brief with AI...'
+              ) : React.createElement('span', null,
+                React.createElement('i', { className: 'fas fa-cloud-upload-alt', style: { fontSize: 20, marginRight: 6 } }),
+                'Click to upload PDF brief'
+              ),
+              React.createElement('input', { type: 'file', accept: '.pdf', onChange: handleBriefUpload, style: { display: 'none' }, disabled: briefLoading })
+            ),
+            briefError && React.createElement('div', { style: { marginTop: 8, color: '#ef4444', fontSize: 12 } },
+              React.createElement('i', { className: 'fas fa-exclamation-circle', style: { marginRight: 4 } }), briefError
+            )
+          ),
+
+          // Parsed brief display
+          brief && React.createElement('div', { style: { marginTop: 4 } },
+            // Business Name
+            brief.business_name && React.createElement('div', { style: { marginBottom: 12, padding: '8px 12px', background: 'rgba(99,102,241,0.06)', borderRadius: 6, fontSize: 14, fontWeight: 600 } },
+              React.createElement('i', { className: 'fas fa-building', style: { marginRight: 6, color: 'var(--accent)' } }), brief.business_name
+            ),
+
+            // Brand Tone
+            React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('tone'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.tone ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-palette', style: { color: '#8b5cf6' } }), 'Brand Tone'
+              ),
+              briefExpanded.tone && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                (brief.brand_tone || []).map(function(t, i) {
+                  return React.createElement('span', { key: i, style: { padding: '3px 10px', background: 'rgba(139,92,246,0.12)', color: '#8b5cf6', borderRadius: 12, fontSize: 12, fontWeight: 500 } }, t);
+                })
+              )
+            ),
+
+            // Words to Avoid
+            React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('avoid'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.avoid ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-ban', style: { color: '#ef4444' } }), 'Words to Avoid'
+              ),
+              briefExpanded.avoid && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                (brief.words_to_avoid || []).map(function(w, i) {
+                  return React.createElement('span', { key: i, style: { padding: '3px 10px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 12, fontSize: 12, fontWeight: 500, textDecoration: 'line-through' } }, w);
+                })
+              )
+            ),
+
+            // Differentiators
+            React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('diff'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.diff ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-star', style: { color: '#f59e0b' } }), 'Differentiators'
+              ),
+              briefExpanded.diff && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
+                (brief.differentiators || []).map(function(d, i) {
+                  return React.createElement('div', { key: i, style: { fontSize: 13, color: 'var(--text)', marginBottom: 4 } },
+                    React.createElement('i', { className: 'fas fa-check', style: { color: '#22c55e', marginRight: 6, fontSize: 10 } }), d
+                  );
+                })
+              )
+            ),
+
+            // Competitors
+            React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('comp'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.comp ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-users', style: { color: '#3b82f6' } }), 'Competitors (' + (brief.competitors || []).length + ')'
+              ),
+              briefExpanded.comp && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
+                (brief.competitors || []).map(function(c, i) {
+                  return React.createElement('div', { key: i, style: { fontSize: 13, color: 'var(--text)', marginBottom: 4 } },
+                    c.name, c.url && React.createElement('a', { href: c.url, target: '_blank', style: { marginLeft: 6, color: 'var(--accent)', fontSize: 11 } }, c.url)
+                  );
+                })
+              )
+            ),
+
+            // Service Pages
+            React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('services'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.services ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-file-alt', style: { color: '#14b8a6' } }), 'Service Pages (' + (brief.service_pages || []).length + ')'
+              ),
+              briefExpanded.services && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
+                (brief.service_pages || []).map(function(sp, i) {
+                  return React.createElement('div', { key: i, style: { marginBottom: 8, padding: '8px 10px', background: 'rgba(20,184,166,0.06)', borderRadius: 6, border: '1px solid rgba(20,184,166,0.15)' } },
+                    React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, sp.page_name),
+                    sp.description && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', lineHeight: 1.4 } }, sp.description.substring(0, 200) + (sp.description.length > 200 ? '...' : '')),
+                    sp.types_or_styles && sp.types_or_styles.length > 0 && React.createElement('div', { style: { marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' } },
+                      sp.types_or_styles.map(function(t, j) {
+                        return React.createElement('span', { key: j, style: { padding: '1px 6px', background: 'rgba(20,184,166,0.1)', color: '#14b8a6', borderRadius: 4, fontSize: 10 } }, t);
+                      })
+                    )
+                  );
+                })
+              )
+            ),
+
+            // Additional Notes
+            brief.additional_notes && React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('notes'); } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
+                React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.notes ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
+                React.createElement('i', { className: 'fas fa-sticky-note', style: { color: '#6b7280' } }), 'Additional Notes'
+              ),
+              briefExpanded.notes && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, fontSize: 13, color: 'var(--text3)', lineHeight: 1.5 } }, brief.additional_notes)
+            ),
+
+            // Re-upload button
+            React.createElement('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', gap: 12, alignItems: 'center' } },
+              React.createElement('label', { style: { cursor: 'pointer', fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 4 } },
+                React.createElement('i', { className: 'fas fa-redo', style: { fontSize: 10 } }), 'Re-upload brief',
+                React.createElement('input', { type: 'file', accept: '.pdf', onChange: function(e) { if (confirm('This will replace the existing brief and may create duplicate pages. Continue?')) handleBriefUpload(e); }, style: { display: 'none' } })
+              )
+            )
           )
         )
       );
