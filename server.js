@@ -27868,6 +27868,13 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
     }
 
     const profile = rc?.profile || null;
+    console.log(`[local-intel] RC profile keys: ${profile ? Object.keys(profile).join(', ') : 'null'}`);
+    if (profile) {
+      console.log(`[local-intel] serviceArea: ${profile.serviceArea ? JSON.stringify(Object.keys(profile.serviceArea)) : 'missing'}`);
+      console.log(`[local-intel] categories: ${profile.categories ? JSON.stringify(Object.keys(profile.categories)) : 'missing'}`);
+      console.log(`[local-intel] serviceItems: ${profile.serviceItems ? profile.serviceItems.length + ' items' : 'missing'}`);
+      console.log(`[local-intel] description: ${profile.description ? profile.description.substring(0, 80) + '...' : (profile.profile?.description ? 'nested in profile.profile' : 'missing')}`);
+    }
 
     // Extract GBP suburbs from service areas (RC profile first, fallback to project.service_areas)
     const gbpSuburbs = [];
@@ -28094,6 +28101,7 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     // 6. Reviews stats
     let reviewStats = rc?.reviews_stats || {};
+    console.log(`[local-intel] reviewStats from RC: total_reviews=${reviewStats.total_reviews}, avg_rating=${reviewStats.average_rating}`);
 
     // ============ CROSS-REFERENCE: LOCATIONS ============
     // SOURCE OF TRUTH: Website pages (location pages discovered from sitemap)
