@@ -9160,6 +9160,23 @@
       const [filter, setFilter] = useState('all');
       const [canonicalNAP, setCanonicalNAP] = useState({});
       const [expandedNAP, setExpandedNAP] = useState({});
+      const [citSort, setCitSort] = useState({ key: 'priority', dir: 'asc' });
+
+      const toggleCitSort = (key) => setCitSort(prev => prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+
+      const sortDirs = (dirs) => {
+        const statusOrder = { listed: 0, pending: 1, not_listed: 2, not_checked: 3 };
+        const typeOrder = { Essential: 0, Major: 1, Industry: 2, Standard: 3 };
+        return [...dirs].sort((a, b) => {
+          let v = 0;
+          if (citSort.key === 'name') v = a.name.localeCompare(b.name);
+          else if (citSort.key === 'status') v = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+          else if (citSort.key === 'type') v = (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9);
+          else if (citSort.key === 'free') v = (a.free === b.free ? 0 : a.free ? -1 : 1);
+          else if (citSort.key === 'priority') v = (a.priority || 99) - (b.priority || 99);
+          return citSort.dir === 'desc' ? -v : v;
+        });
+      };
 
       useEffect(() => {
         if (project?.id) loadCitations();
@@ -9295,9 +9312,25 @@
             </div>
           )}
 
+          {/* Sortable header row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.5fr', padding: '10px 16px', borderBottom: '2px solid var(--border)', marginBottom: 16 }}>
+            {[
+              { key: 'name', label: 'DIRECTORY' },
+              { key: 'status', label: 'LISTED' },
+              { key: 'type', label: 'TYPE' },
+              { key: 'free', label: 'FREE' },
+              { key: 'priority', label: 'PRIORITY' },
+            ].map(col => (
+              <span key={col.key} onClick={() => toggleCitSort(col.key)} style={{ fontSize: 11, fontWeight: 700, color: citSort.key === col.key ? 'var(--accent)' : 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, cursor: 'pointer', userSelect: 'none' }}>
+                {col.label} {citSort.key === col.key ? (citSort.dir === 'asc' ? '▲' : '▼') : ''}
+              </span>
+            ))}
+          </div>
+
           {tiers.map(tier => {
             const allTierDirs = directories.filter(d => d.type === tier.key).length;
-            const tierDirs = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? (d.nap_match && (d.nap_match.name === 'mismatch' || d.nap_match.phone === 'mismatch' || d.nap_match.address === 'mismatch')) : d.status === filter)));
+            const tierDirsRaw = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? (d.nap_match && (d.nap_match.name === 'mismatch' || d.nap_match.phone === 'mismatch' || d.nap_match.address === 'mismatch')) : d.status === filter)));
+            const tierDirs = sortDirs(tierDirsRaw);
             if (tierDirs.length === 0) return null;
             const tierListed = directories.filter(d => d.type === tier.key && d.status === 'listed').length;
             return (
@@ -9332,7 +9365,7 @@
                             {dir.listing_url && <a href={dir.listing_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />View listing</a>}
                           </div>
 
-                          {/* Status */}
+                          {/* Listed status */}
                           <div>
                             <select
                               value={dir.status}
@@ -9353,35 +9386,27 @@
                             </select>
                           </div>
 
-                          {/* NAP Status */}
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {dir.status === 'listed' && dir.nap_match ? (
-                              ['name', 'phone', 'address'].map(field => {
-                                const val = dir.nap_match[field];
-                                const color = val === 'match' ? '#22c55e' : val === 'mismatch' ? '#ef4444' : val === 'partial' ? '#f59e0b' : '#64748b';
-                                const icon = val === 'match' ? 'fa-check' : val === 'mismatch' ? 'fa-times' : val === 'partial' ? 'fa-minus' : 'fa-question';
-                                return <span key={field} title={`${field}: ${val || 'unknown'}`} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: color + '18', color, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                                  <i className={`fas ${icon}`} style={{ fontSize: 8 }} />{field.charAt(0).toUpperCase()}
-                                </span>;
-                              })
-                            ) : dir.status === 'listed' ? (
-                              <span style={{ fontSize: 10, color: 'var(--text3)' }}>No NAP data</span>
-                            ) : null}
-                          </div>
-
-                          {/* Directory URL */}
+                          {/* Type */}
                           <div>
-                            <a href={`https://${dir.url}`} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>
-                              <i className="fas fa-external-link-alt" style={{ marginRight: 4, fontSize: 9 }} />{dir.url}
-                            </a>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: typeColor[dir.type] || 'var(--text3)' }}>{dir.type}</span>
                           </div>
 
-                          {/* Actions */}
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          {/* Free */}
+                          <div>
+                            {dir.free ? (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: '#22c55e' }}>Free</span>
+                            ) : (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b' }}>Paid</span>
+                            )}
+                          </div>
+
+                          {/* Priority */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>{dir.priority || '—'}</span>
                             <button
                               className="btn btn-secondary btn-small"
                               onClick={(e) => { e.stopPropagation(); setEditingDir(isEditing ? null : dir.name); setEditUrl(dir.listing_url || ''); setEditNotes(dir.notes || ''); }}
-                              style={{ fontSize: 11, padding: '4px 8px' }}
+                              style={{ fontSize: 11, padding: '4px 8px', marginLeft: 'auto' }}
                             >
                               <i className={`fas fa-${isEditing ? 'times' : 'edit'}`} />
                             </button>
