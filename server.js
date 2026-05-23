@@ -23696,7 +23696,10 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
         const location = project.location || 'Perth,Western Australia,Australia';
         const businessName = (project.business_name || project.name || '').toLowerCase();
         const domainLower = domain.toLowerCase();
-        console.log(`[discovery] Maps check: businessName="${businessName}", domain="${domainLower}", location="${location}"`);
+        // Build fuzzy match variants: "house works plumbing" → also match "houseworksplumbing", "houseworks plumbing", etc.
+        const bizNoSpaces = businessName.replace(/\s+/g, '');
+        const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
+        console.log(`[discovery] Maps check: businessName="${businessName}", bizNoSpaces="${bizNoSpaces}", domainBase="${domainBase}", location="${location}"`);
         const mapsKws = localKeywords.slice(0, 50);
         let mapsFound = 0;
         for (let i = 0; i < mapsKws.length; i += 5) {
@@ -23707,14 +23710,27 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
               const results = data.local_results || [];
               for (const r of results) {
                 const titleLow = (r.title || '').toLowerCase();
-                const domainLow = (r.domain || '').toLowerCase();
-                if (titleLow.includes(businessName) || domainLow.includes(domainLower)) {
+                const titleNoSpaces = titleLow.replace(/\s+/g, '');
+                const rDomain = (r.domain || '').toLowerCase();
+                const rWebsite = (r.website || '').toLowerCase();
+                // Match: exact name, name-no-spaces, domain in result domain/website, or domain base in title
+                const matched = titleLow.includes(businessName)
+                  || titleNoSpaces.includes(bizNoSpaces)
+                  || bizNoSpaces.includes(titleNoSpaces.replace(/[^a-z0-9]/g, ''))
+                  || rDomain.includes(domainLower)
+                  || rWebsite.includes(domainLower)
+                  || titleNoSpaces.includes(domainBase)
+                  || domainBase.includes(titleNoSpaces.replace(/[^a-z0-9]/g, '').slice(0, 10));
+                if (matched) {
                   kw.maps_position = r.position;
                   kw.on_maps = true;
                   mapsFound++;
-                  console.log(`[discovery] Maps match: "${kw.keyword}" → position ${r.position} (title="${r.title}")`);
+                  console.log(`[discovery] Maps match: "${kw.keyword}" → #${r.position} (title="${r.title}", domain="${rDomain}")`);
                   break;
                 }
+              }
+              if (!kw.on_maps && results.length > 0) {
+                console.log(`[discovery] Maps NO match for "${kw.keyword}" — top3: ${results.slice(0,3).map(r => `"${r.title}"`).join(', ')}`);
               }
             } catch (e) {
               console.error(`[discovery] Maps check error for "${kw.keyword}":`, e.message);
