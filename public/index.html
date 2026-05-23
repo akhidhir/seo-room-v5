@@ -22168,20 +22168,30 @@
           {hasRun && (
             <div>
               {/* Toolbar */}
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
                 <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-                  <i className="fa-solid fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 12 }} />
+                  <i className="fa-solid fa-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#14b8a6', fontSize: 14 }} />
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search keywords..."
-                    style={{ width: '100%', padding: '8px 10px 8px 32px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', fontSize: 13 }} />
+                    style={{ width: '100%', padding: '10px 12px 10px 36px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', fontSize: 15 }} />
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)' }}>{sorted.length} keywords · {selected.size} selected</div>
+                <div style={{ fontSize: 15, color: '#14b8a6', fontWeight: 600 }}>{sorted.length} keywords · {selected.size} selected</div>
                 {selected.size > 0 && (
                   <>
-                    <button className="btn" onClick={addToSerp} style={{ fontSize: 12, borderColor: 'var(--accent)', color: 'var(--accent)' }}>
+                    <button className="btn" onClick={addToSerp} style={{ fontSize: 13, borderColor: 'var(--accent)', color: 'var(--accent)' }}>
                       <i className="fa-solid fa-chart-line" style={{ marginRight: 4 }} />Add {selected.size} to SERP
                     </button>
-                    <button className="btn" onClick={addToMaps} style={{ fontSize: 12, borderColor: '#22c55e', color: '#22c55e' }}>
+                    <button className="btn" onClick={addToMaps} style={{ fontSize: 13, borderColor: '#22c55e', color: '#22c55e' }}>
                       <i className="fa-solid fa-map-location-dot" style={{ marginRight: 4 }} />Add {selected.size} to Maps
+                    </button>
+                    <button className="btn" onClick={() => {
+                      if (!confirm(`Delete ${selected.size} keywords from discovery results?`)) return;
+                      const remaining = keywords.filter(k => !selected.has(k.keyword));
+                      setKeywords(remaining);
+                      setSelected(new Set());
+                      // Persist to DB
+                      api(`/projects/${project.id}/discovery/update`, { method: 'POST', body: { keywords: remaining } });
+                    }} style={{ fontSize: 13, borderColor: '#ef4444', color: '#ef4444' }}>
+                      <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete {selected.size}
                     </button>
                   </>
                 )}
@@ -22189,58 +22199,64 @@
 
               {/* Table */}
               <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
                   <thead>
                     <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                      <th style={{ padding: '10px 12px', width: 30 }}>
+                      <th style={{ padding: '12px 14px', width: 30 }}>
                         <input type="checkbox" checked={allSelected} onChange={() => {
                           if (allSelected) setSelected(new Set());
                           else setSelected(new Set(sorted.map(k => k.keyword)));
                         }} />
                       </th>
-                      <th onClick={() => toggleSort('keyword')} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', cursor: 'pointer' }}>Keyword{sortIcon('keyword')}</th>
-                      <th onClick={() => toggleSort('position')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>SERP{sortIcon('position')}</th>
-                      <th onClick={() => toggleSort('maps')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>Maps{sortIcon('maps')}</th>
-                      <th onClick={() => toggleSort('volume')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80, cursor: 'pointer' }}>Volume{sortIcon('volume')}</th>
-                      <th onClick={() => toggleSort('cpc')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>CPC{sortIcon('cpc')}</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
-                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 50 }}></th>
+                      <th onClick={() => toggleSort('keyword')} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', cursor: 'pointer', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 }}>Keyword{sortIcon('keyword')}</th>
+                      <th onClick={() => toggleSort('position')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>SERP{sortIcon('position')}</th>
+                      <th onClick={() => toggleSort('maps')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Maps{sortIcon('maps')}</th>
+                      <th onClick={() => toggleSort('volume')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 90, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Volume{sortIcon('volume')}</th>
+                      <th onClick={() => toggleSort('cpc')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>CPC{sortIcon('cpc')}</th>
+                      <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', width: 200, fontSize: 14, textTransform: 'uppercase' }}>URL</th>
+                      <th style={{ padding: '12px 14px', textAlign: 'center', width: 70 }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.map(k => (
                       <tr key={k.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                        onClick={(e) => { if (e.target.type !== 'checkbox' && e.target.tagName !== 'A' && !e.target.closest('a')) { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); } }}>
-                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                        onClick={(e) => { if (e.target.type !== 'checkbox' && e.target.tagName !== 'A' && !e.target.closest('a') && !e.target.closest('button')) { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); } }}>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                           <input type="checkbox" checked={selected.has(k.keyword)} onChange={() => { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); }} />
                         </td>
-                        <td style={{ padding: '8px 12px', fontWeight: 500 }}>{k.keyword}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                          <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                        <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text1)', fontSize: 15 }}>{k.keyword}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                          <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 14, fontWeight: 700,
                             background: k.position <= 3 ? 'rgba(34,197,94,0.15)' : k.position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)',
-                            color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : 'var(--text2)' }}>
+                            color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : '#94a3b8' }}>
                             #{k.position}
                           </span>
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                           {k.maps_position ? (
-                            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 14, fontWeight: 700,
                               background: k.maps_position <= 3 ? 'rgba(34,197,94,0.15)' : k.maps_position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
                               color: k.maps_position <= 3 ? '#22c55e' : k.maps_position <= 10 ? '#f59e0b' : '#ef4444' }}>
                               #{k.maps_position}
                             </span>
-                          ) : <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>}
+                          ) : <span style={{ fontSize: 13, color: '#94a3b8' }}>—</span>}
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
-                        <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 700, color: 'var(--text1)', fontSize: 15 }}>{k.volume?.toLocaleString() || '—'}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
+                        <td style={{ padding: '10px 14px', fontSize: 13, color: '#94a3b8', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center', display: 'flex', gap: 8, justifyContent: 'center' }}>
                           <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5`} target="_blank" rel="noopener noreferrer"
-                            title="Check SERP on Google (non-personalized)"
-                            style={{ color: '#14b8a6', fontSize: 13, textDecoration: 'none' }}
+                            title="Check SERP on Google"
+                            style={{ color: '#14b8a6', fontSize: 14, textDecoration: 'none' }}
                             onClick={e => e.stopPropagation()}>
                             <i className="fa-solid fa-arrow-up-right-from-square" />
                           </a>
+                          <button onClick={(e) => { e.stopPropagation(); const remaining = keywords.filter(kk => kk.keyword !== k.keyword); setKeywords(remaining); selected.delete(k.keyword); setSelected(new Set(selected)); api(`/projects/${project.id}/discovery/update`, { method: 'POST', body: { keywords: remaining } }); }}
+                            title="Delete keyword"
+                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: 0, opacity: 0.6 }}
+                            onMouseOver={e => e.target.style.opacity = 1} onMouseOut={e => e.target.style.opacity = 0.6}>
+                            <i className="fa-solid fa-trash" />
+                          </button>
                         </td>
                       </tr>
                     ))}

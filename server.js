@@ -23733,6 +23733,19 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST: update discovery keywords (for deletions)
+app.post('/api/projects/:projectId/discovery/update', async (req, res) => {
+  try {
+    const { keywords } = req.body;
+    if (!Array.isArray(keywords)) return res.status(400).json({ error: 'keywords must be array' });
+    await pool.query(
+      `UPDATE discovery_cache SET keywords=$2, total_count=$3, updated_at=NOW() WHERE project_id=$1`,
+      [req.params.projectId, JSON.stringify(keywords), keywords.length]
+    );
+    res.json({ ok: true, count: keywords.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // DELETE: clear discovery cache
 app.delete('/api/projects/:projectId/discovery', async (req, res) => {
   try {
