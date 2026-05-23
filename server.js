@@ -24562,14 +24562,40 @@ app.post('/api/projects/:projectId/rank-tracking/debug-serp', async (req, res) =
     const project = projRes.rows[0];
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
     const loc = (project.location || 'Perth,Western Australia,Australia').trim();
-    const data = await dataForSeoSerp({ keyword, location: loc, depth: 30 });
-    // Show raw organic results with domain matching info
-    const organicWithMatch = (data.organic_results || []).map(item => {
-      let itemHost = '';
-      try { itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase(); }
-      return { position: item.position, host: itemHost, link: item.link, title: item.title, domainMatch: itemHost === domain.toLowerCase() };
+    // Raw DataForSEO call to see full response
+    const task = {
+      keyword,
+      language_code: 'en',
+      depth: 30,
+      os: 'desktop',
+      se_domain: 'google.com.au',
+      location_name: loc,
+    };
+    const rawResp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([task]),
     });
-    res.json({ domain, location: loc, keyword, organic_count: organicWithMatch.length, organic_results: organicWithMatch, local_results: data.local_results, source: data.source });
+    const rawData = await rawResp.json();
+    const taskResult = rawData.tasks?.[0] || {};
+    const items = taskResult.result?.[0]?.items || [];
+    const organicItems = items.filter(i => i.type === 'organic');
+    const localItems = items.filter(i => i.type === 'maps' || i.type === 'local_pack');
+    res.json({
+      domain, location: loc, keyword,
+      task_status: taskResult.status_code,
+      task_message: taskResult.status_message,
+      result_count: taskResult.result?.[0]?.items_count,
+      se_results_count: taskResult.result?.[0]?.se_results_count,
+      total_items: items.length,
+      organic_count: organicItems.length,
+      local_count: localItems.length,
+      item_types: [...new Set(items.map(i => i.type))],
+      organic_top5: organicItems.slice(0, 5).map(i => ({ pos: i.rank_group, domain: i.domain, url: i.url, title: i.title })),
+      local_items: localItems.map(i => ({ type: i.type, title: i.title, items: (i.items || []).slice(0, 3).map(li => ({ title: li.title, domain: li.domain })) })),
+      raw_task_id: taskResult.id,
+      cost: rawData.cost,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
