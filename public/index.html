@@ -22007,6 +22007,10 @@
 
       const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: [] });
       const [suburbGps, setSuburbGps] = useState(null);
+      const [showGuide, setShowGuide] = useState(false);
+      const [discovering, setDiscovering] = useState(false);
+      const [discoveredMaps, setDiscoveredMaps] = useState(null);
+      const [selectedDiscMaps, setSelectedDiscMaps] = useState(new Set());
 
       // Load suburb GPS data for grid tooltips
       useEffect(() => {
@@ -22063,7 +22067,7 @@
           if (result.error) { alert('RC Import failed: ' + result.error); setRcSyncing(false); return; }
           if (result.imported === 0) { alert(result.message || 'No new keywords to import from RC'); setRcSyncing(false); return; }
           loadData();
-          alert(`Imported ${result.imported} keywords from Rating Captain. Click "Grid Scan" to scan them via SerpAPI.`);
+          alert(`Imported ${result.imported} keywords from Rating Captain. Click "Grid Scan" to scan them via DataForSEO.`);
         } catch (e) {
           alert('RC Import error: ' + e.message);
         }
@@ -22076,7 +22080,7 @@
         const mapKws = selectedIds.length > 0 ? allMapKws.filter(k => selectedIds.includes(k.id)) : allMapKws;
         if (mapKws.length === 0) return alert('No maps keywords. Add service + location keywords first.');
         const totalCalls = mapKws.length * gridSize * gridSize;
-        if (!confirm(`Grid scan ${mapKws.length} keyword${mapKws.length > 1 ? 's' : ''} × ${gridSize}×${gridSize} grid = ${totalCalls} SerpAPI calls.\n\nEstimated cost: ~$${(totalCalls * 0.005).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
+        if (!confirm(`Grid scan ${mapKws.length} keyword${mapKws.length > 1 ? 's' : ''} × ${gridSize}×${gridSize} grid = ${totalCalls} DataForSEO calls.\n\nEstimated cost: ~$${(totalCalls * 0.002).toFixed(2)}\nEstimated time: ~${Math.ceil(totalCalls / 5 * 2)}s\n\nProceed?`)) return;
         setSyncing(true);
         const scanMap = { ...gridScans };
         let failed = 0;
@@ -22442,6 +22446,43 @@
         URL.revokeObjectURL(url);
       };
 
+      // DataForSEO: Discover which keywords this domain ranks for, filtered by local intent
+      const handleDiscoverMapKeywords = async () => {
+        setDiscovering(true);
+        try {
+          const r = await api(`/projects/${project.id}/discover-keywords`, {
+            method: 'POST',
+            body: { limit: 100, checkMaps: false }
+          });
+          if (r.error) { alert(r.error); setDiscovering(false); return; }
+          // Filter to local-intent keywords only, exclude already tracked
+          const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
+          const fresh = (r.keywords || []).filter(k => k.local_intent && !tracked.has(k.keyword.toLowerCase()));
+          setDiscoveredMaps(fresh);
+          setSelectedDiscMaps(new Set(fresh.map(k => k.keyword)));
+        } catch (e) { alert('Discovery failed: ' + e.message); }
+        setDiscovering(false);
+      };
+
+      const addDiscoveredMapKeywords = async () => {
+        if (selectedDiscMaps.size === 0) return;
+        const kws = discoveredMaps.filter(k => selectedDiscMaps.has(k.keyword));
+        // Add as map keywords with project location
+        const location = (project.location || 'Perth').split(',')[0].trim();
+        let added = 0;
+        for (const kw of kws) {
+          const r = await api(`/projects/${project.id}/rank-tracking/keywords`, {
+            method: 'POST',
+            body: { keywords: [kw.keyword], location }
+          });
+          if (r.ok || r.added) added++;
+        }
+        if (added > 0) alert(`Added ${added} discovered keywords. Click "Grid Scan" to check Maps positions.`);
+        setDiscoveredMaps(null);
+        setSelectedDiscMaps(new Set());
+        loadData();
+      };
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -22458,6 +22499,12 @@
               </button>}
               <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
+              </button>
+              <button className="btn" onClick={handleDiscoverMapKeywords} disabled={discovering} style={{ fontSize: 13, borderColor: '#14b8a6', color: '#14b8a6' }}>
+                {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-radar" style={{ marginRight: 4 }} />Discover Keywords</>}
+              </button>
+              <button className="btn" onClick={() => setShowGuide(!showGuide)} style={{ fontSize: 13, borderColor: 'var(--text3)', color: 'var(--text3)' }}>
+                <i className="fa-solid fa-circle-question" style={{ marginRight: 4 }} />{showGuide ? 'Hide Guide' : 'How To Use'}
               </button>
               <button className="btn" onClick={importMapsCSV} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
@@ -22494,8 +22541,111 @@
                 </select>
               </label>
               <span style={{ color: 'var(--text3)', fontSize: 11 }}>
-                {mapsKeywordsRaw.length} keywords × {gridSize*gridSize} pts = {mapsKeywordsRaw.length * gridSize * gridSize} API calls (~${(mapsKeywordsRaw.length * gridSize * gridSize * 0.005).toFixed(2)})
+                {mapsKeywordsRaw.length} keywords × {gridSize*gridSize} pts = {mapsKeywordsRaw.length * gridSize * gridSize} API calls (~${(mapsKeywordsRaw.length * gridSize * gridSize * 0.002).toFixed(2)} DataForSEO)
               </span>
+            </div>
+          )}
+
+          {/* How to Use Guide */}
+          {showGuide && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}><i className="fa-solid fa-route" style={{ marginRight: 8, color: '#14b8a6' }} />How to use Maps Rankings</div>
+                <button onClick={() => setShowGuide(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }}>×</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ background: 'rgba(20,184,166,0.08)', borderRadius: 8, padding: '12px 16px', borderLeft: '3px solid #14b8a6' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#14b8a6', marginBottom: 4 }}>1. Discover keywords</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Click <b>Discover Keywords</b> to find all keywords your domain ranks for organically. DataForSEO scans Google and returns keywords with volume, position, and local intent filtering. Cost: $0.02 per 100 keywords.
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(20,184,166,0.08)', borderRadius: 8, padding: '12px 16px', borderLeft: '3px solid #14b8a6' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#14b8a6', marginBottom: 4 }}>2. Select and import</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Review discovered keywords — only local-intent keywords are shown (contains "near me", city names, service terms). Select the ones you want to track and click <b>Add Keywords</b>.
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(20,184,166,0.08)', borderRadius: 8, padding: '12px 16px', borderLeft: '3px solid #14b8a6' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#14b8a6', marginBottom: 4 }}>3. Grid scan</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Click <b>Grid Scan</b> to check Maps positions from multiple GPS points around your business. Choose grid size (3×3 to 7×7) and radius (5-30km). Cost: $0.002 per grid point.
+                  </div>
+                </div>
+                <div style={{ background: 'rgba(20,184,166,0.08)', borderRadius: 8, padding: '12px 16px', borderLeft: '3px solid #14b8a6' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#14b8a6', marginBottom: 4 }}>4. Track over time</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Re-scan weekly or monthly to track position changes. Heatmaps show where you rank at each grid point. Competitor analysis shows who dominates your area.
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(34,197,94,0.08)', borderRadius: 8, fontSize: 11, color: 'var(--text2)' }}>
+                <i className="fa-solid fa-piggy-bank" style={{ marginRight: 6, color: '#22c55e' }} />
+                <b>Powered by DataForSEO</b> — 5× cheaper than SerpAPI. Discovery: $0.02/100kw. Maps SERP: $0.002/search. Full scan of 20 keywords on 5×5 grid = $1.00.
+              </div>
+            </div>
+          )}
+
+          {/* Discovered Keywords Modal */}
+          {discoveredMaps && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setDiscoveredMaps(null)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 750, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-radar" style={{ marginRight: 8, color: '#14b8a6' }} />Discovered Local Keywords</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{discoveredMaps.length} local-intent keywords found (already tracked excluded)</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn" onClick={() => {
+                      if (selectedDiscMaps.size === discoveredMaps.length) setSelectedDiscMaps(new Set());
+                      else setSelectedDiscMaps(new Set(discoveredMaps.map(k => k.keyword)));
+                    }} style={{ fontSize: 12 }}>
+                      {selectedDiscMaps.size === discoveredMaps.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                    <button className="btn btn-primary" onClick={addDiscoveredMapKeywords} disabled={selectedDiscMaps.size === 0} style={{ fontSize: 12 }}>
+                      <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {selectedDiscMaps.size} Keywords
+                    </button>
+                    <button onClick={() => setDiscoveredMaps(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
+                  </div>
+                </div>
+                <div style={{ overflow: 'auto', flex: 1 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0 }}>
+                        <th style={{ padding: '8px 12px', width: 30 }}></th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Keyword</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Position</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Volume</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>CPC</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {discoveredMaps.map(k => (
+                        <tr key={k.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                          onClick={(e) => { if (e.target.type !== 'checkbox') { const n = new Set(selectedDiscMaps); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelectedDiscMaps(n); } }}>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <input type="checkbox" checked={selectedDiscMaps.has(k.keyword)} onChange={() => { const n = new Set(selectedDiscMaps); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelectedDiscMaps(n); }} />
+                          </td>
+                          <td style={{ padding: '8px 12px', fontWeight: 500 }}>{k.keyword}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                              background: k.position <= 3 ? 'rgba(34,197,94,0.15)' : k.position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)',
+                              color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : 'var(--text2)' }}>
+                              #{k.position}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 
