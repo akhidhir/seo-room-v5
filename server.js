@@ -23375,7 +23375,14 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
       offset: 0,
     });
 
-    // Extract services by stripping suburb names + generic location terms from keywords
+    // Extract services by stripping suburb names, location terms, and business name/domain from keywords
+    const businessName = (project.business_name || project.name || '').toLowerCase().trim();
+    const domainParts = domain.replace(/\.(com|net|org|com\.au|net\.au|io).*$/, '').split(/[.\-_]/).filter(p => p.length > 2);
+    // Build blacklist: brand/domain terms that aren't real services
+    const brandTerms = [businessName, domain.split('.')[0]];
+    // Also add domain parts like "ilove", "gold", "pc" etc
+    for (const p of domainParts) brandTerms.push(p);
+    // Common non-service terms from domain names
     const stripTerms = [...allSuburbNames, 'near me', 'near', 'wa', 'western australia', 'perth', 'australia', 'sydney', 'melbourne', 'brisbane', 'adelaide'];
     stripTerms.sort((a, b) => b.length - a.length);
     const servicesSet = new Set();
@@ -23383,14 +23390,23 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
 
     for (const kw of result.keywords) {
       let service = (kw.keyword || '').toLowerCase().trim();
+      // Skip keywords that are primarily the business/brand name
+      const kwClean = service.replace(/\s+/g, '');
+      const isBrandKeyword = brandTerms.some(bt => {
+        if (!bt) return false;
+        const btClean = bt.replace(/\s+/g, '');
+        return kwClean === btClean || kwClean.startsWith(btClean) || service === bt || service.startsWith(bt + ' ') || service.endsWith(' ' + bt);
+      });
+      if (isBrandKeyword) continue;
       // Strip suburb/location terms
       for (const term of stripTerms) {
-        // Word-boundary-ish replacement
         service = service.replace(new RegExp('\\b' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '').trim();
       }
       // Clean up multiple spaces, trailing/leading hyphens
       service = service.replace(/\s+/g, ' ').replace(/^[\s\-]+|[\s\-]+$/g, '').trim();
-      if (service.length > 2 && !servicesSet.has(service)) {
+      // Skip if result is too short or looks like a brand fragment
+      if (service.length <= 2 || brandTerms.includes(service)) continue;
+      if (!servicesSet.has(service)) {
         servicesSet.add(service);
         serviceDetails.push({ service, original_keyword: kw.keyword, volume: kw.volume, position: kw.position });
       }
