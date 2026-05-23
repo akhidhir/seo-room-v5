@@ -3294,8 +3294,8 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
   if (lat != null && lng != null) {
     task.location_coordinate = `${lat},${lng},14z`;
   } else {
-    // Use location name (e.g. "Perth, Western Australia, Australia")
-    task.location_name = location || 'Perth,Western Australia,Australia';
+    // Use location name — normalize to DataForSEO format (no spaces after commas)
+    task.location_name = (location || 'Perth,Western Australia,Australia').replace(/,\s+/g, ',');
   }
   const resp = await fetch('https://api.dataforseo.com/v3/serp/google/maps/live/advanced', {
     method: 'POST',
@@ -3329,13 +3329,15 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
 // Returns normalized results matching the shape the dashboard expects
 async function dataForSeoSerp({ keyword, location, depth }) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.');
+  // DataForSEO requires location_name without spaces after commas, e.g. "Perth,Western Australia,Australia"
+  const normalizedLocation = (location || 'Perth,Western Australia,Australia').replace(/,\s+/g, ',');
   const task = {
     keyword,
     language_code: 'en',
     depth: depth || 30,
     os: 'desktop',
     se_domain: 'google.com.au',
-    location_name: location || 'Perth,Western Australia,Australia',
+    location_name: normalizedLocation,
   };
   const resp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
     method: 'POST',
@@ -24569,7 +24571,7 @@ app.post('/api/projects/:projectId/rank-tracking/debug-serp', async (req, res) =
       depth: 30,
       os: 'desktop',
       se_domain: 'google.com.au',
-      location_name: loc,
+      location_name: loc.replace(/,\s+/g, ','),
     };
     const rawResp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
       method: 'POST',
