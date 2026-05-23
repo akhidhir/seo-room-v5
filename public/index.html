@@ -21082,7 +21082,6 @@
           if (sortCol === 'keyword') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
           else if (sortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
           else if (sortCol === 'position') { va = a.serp_position ?? 999; vb = b.serp_position ?? 999; }
-          else if (sortCol === 'gsc') { va = a.gsc_position ?? 999; vb = b.gsc_position ?? 999; }
           else if (sortCol === 'competitors') { va = (a.competitors || []).filter(c => c.source === 'serp').length; vb = (b.competitors || []).filter(c => c.source === 'serp').length; }
           else if (sortCol === 'checked') { va = a.checked_at || ''; vb = b.checked_at || ''; }
           else return 0;
@@ -21516,20 +21515,16 @@
                         {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : kw.checked_at ? <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>Click "Check Rankings" to scan</span>}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0 }}>
-                      <div style={{ textAlign: 'center', minWidth: 50 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexShrink: 0 }}>
+                      <div style={{ textAlign: 'center', width: 60 }}>
                         <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{kw.search_volume != null ? kw.search_volume.toLocaleString() : '—'}</div>
                         <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>VOLUME</div>
                       </div>
-                      <div style={{ textAlign: 'center', minWidth: 40 }}>
+                      <div style={{ textAlign: 'center', width: 50 }}>
                         <div style={{ fontSize: 16, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{kw.serp_position ? '#' + kw.serp_position : (kw.checked_at ? '>100' : '—')}</div>
                         <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>SERP</div>
                       </div>
-                      <div style={{ textAlign: 'center', minWidth: 40 }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: kw.gsc_position != null ? posColor(Math.round(kw.gsc_position)) : 'var(--text3)' }}>{kw.gsc_position != null ? Math.round(kw.gsc_position * 10) / 10 : '—'}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 2 }}>GSC POS</div>
-                      </div>
-                      <div style={{ textAlign: 'center', minWidth: 40 }}>
+                      <div style={{ textAlign: 'center', width: 50 }}>
                         {kw.serp_change ? (
                           <div style={{ fontSize: 16, fontWeight: 700, color: kw.serp_change > 0 ? '#22c55e' : '#ef4444' }}>{kw.serp_change > 0 ? '↑' : '↓'}{Math.abs(kw.serp_change)}</div>
                         ) : (
