@@ -9498,6 +9498,9 @@
       const [suggestLoading, setSuggestLoading] = useState(false);
       const [autoRedirecting, setAutoRedirecting] = useState(false);
       const [autoProgress, setAutoProgress] = useState(null);
+      // Diagnose state
+      const [diagnoses, setDiagnoses] = useState({});
+      const [diagnosing, setDiagnosing] = useState(false);
       // Broken links state
       const [brokenLinks, setBrokenLinks] = useState([]);
       const [blTotal, setBlTotal] = useState(0);
@@ -9643,6 +9646,24 @@
         setTimeout(() => suggestRedirects(), 500);
       };
 
+      const diagnose404s = async () => {
+        if (!fourOhFours.length) return;
+        setDiagnosing(true);
+        try {
+          const urls = fourOhFours.map(f => f.url || f.url_path || '');
+          const referrers = {};
+          fourOhFours.forEach(f => {
+            const key = f.url || f.url_path || '';
+            if (f.referrer) referrers[key] = f.referrer;
+          });
+          const data = await api('/projects/' + project.id + '/plugin/404s/diagnose', {
+            method: 'POST', body: { urls, referrers }
+          });
+          setDiagnoses(data.diagnoses || {});
+        } catch (err) { console.error('Diagnose error:', err); }
+        setDiagnosing(false);
+      };
+
       const handleAddRedirect = async () => {
         if (!addSource.trim() || !addTarget.trim()) return;
         setAddSaving(true);
@@ -9749,6 +9770,10 @@
               suggestLoading ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-magic' }),
               suggestLoading ? ' Matching pages...' : ' Suggest Redirects'
             ),
+            e('button', { style: btnStyle('#f59e0b'), onClick: diagnose404s, disabled: diagnosing },
+              diagnosing ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-stethoscope' }),
+              diagnosing ? ' Scanning...' : ' Diagnose Root Cause'
+            ),
             Object.values(suggestions).filter(Boolean).length > 0 && e('button', {
               style: btnStyle('#22c55e'), onClick: autoRedirectAll, disabled: autoRedirecting
             },
@@ -9757,6 +9782,19 @@
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
               `${Object.values(suggestions).filter(Boolean).length}/${fourOhFours.length} matched`
+            ),
+            Object.keys(diagnoses).length > 0 && e('span', { style: { fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: 6 } },
+              (() => {
+                var vals = Object.values(diagnoses);
+                var sm = vals.filter(function(d) { return d.causes && d.causes.includes('sitemap'); }).length;
+                var il = vals.filter(function(d) { return d.causes && d.causes.includes('internal_link'); }).length;
+                var or = vals.filter(function(d) { return d.causes && d.causes.includes('orphan'); }).length;
+                var parts = [];
+                if (sm) parts.push(sm + ' sitemap');
+                if (il) parts.push(il + ' internal');
+                if (or) parts.push(or + ' orphan');
+                return parts.join(', ');
+              })()
             )
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -9782,6 +9820,7 @@
             e('thead', null,
               e('tr', null,
                 e('th', { style: thStyle }, 'URL'),
+                e('th', { style: { ...thStyle, width: 140 } }, 'Root Cause'),
                 e('th', { style: { ...thStyle, width: 80 } }, 'Hits'),
                 e('th', { style: { ...thStyle, width: 100 } }, 'Last Seen'),
                 e('th', { style: thStyle }, 'Referrer'),
@@ -9793,6 +9832,27 @@
                 e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
                     e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url))
+                  ),
+                  // Root Cause column
+                  e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
+                    (() => {
+                      const key = item.url || item.url_path || '';
+                      const diag = diagnoses[key];
+                      if (!diag) return e('span', { style: { fontSize: 11, color: 'var(--text3)' } }, '—');
+                      const causeConfig = {
+                        sitemap: { label: 'In Sitemap', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-sitemap' },
+                        internal_link: { label: 'Internal Link', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-link' },
+                        orphan: { label: 'Orphan', bg: 'rgba(107,114,128,0.15)', fg: '#9ca3af', icon: 'fas fa-ghost' }
+                      };
+                      return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                        diag.causes.map(function(cause, ci) {
+                          var cfg = causeConfig[cause] || { label: cause, bg: 'rgba(107,114,128,0.15)', fg: '#9ca3af', icon: 'fas fa-question' };
+                          return e('span', { key: ci, style: { ...badgeStyle(cfg.bg, cfg.fg), fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                            e('i', { className: cfg.icon, style: { fontSize: 9 } }), cfg.label
+                          );
+                        })
+                      );
+                    })()
                   ),
                   e('td', { style: tdStyle },
                     e('span', { style: badgeStyle('rgba(239,68,68,0.15)', '#ef4444') }, item.hit_count || 0)
@@ -9820,12 +9880,37 @@
                     })()
                   )
                 ),
+                // Diagnosis detail row (fix recommendations)
+                (() => {
+                  const key = item.url || item.url_path || '';
+                  const diag = diagnoses[key];
+                  if (!diag || !diag.fixes || !diag.fixes.length) return null;
+                  return e('tr', { style: { background: 'rgba(245,158,11,0.04)' } },
+                    e('td', { colSpan: 6, style: { padding: '6px 12px', fontSize: 12 } },
+                      e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' } },
+                        e('i', { className: 'fas fa-tools', style: { color: '#f59e0b', fontSize: 11 } }),
+                        diag.fixes.map(function(fix, fi) {
+                          return e('span', { key: fi, style: { color: 'var(--text2)', fontSize: 12 } },
+                            fix,
+                            fi < diag.fixes.length - 1 ? e('span', { style: { color: 'var(--text3)', margin: '0 4px' } }, '·') : null
+                          );
+                        }),
+                        diag.linked_from && diag.linked_from.length > 0 && e('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+                          '— Linked from: ',
+                          diag.linked_from.slice(0, 3).map(function(src, si) {
+                            return e('a', { key: si, href: src, target: '_blank', rel: 'noopener', style: { color: '#6366f1', textDecoration: 'none', marginLeft: 4 } }, src.replace(/^https?:\/\/[^/]+/, ''));
+                          })
+                        )
+                      )
+                    )
+                  );
+                })(),
                 // Suggestion preview row
                 (() => {
                   const key = item.url || item.url_path || '';
                   const sug = suggestions[key];
                   return sug && redirectingId !== item.id ? e('tr', { style: { background: 'rgba(34,197,94,0.04)' } },
-                    e('td', { colSpan: 5, style: { padding: '4px 12px', fontSize: 12 } },
+                    e('td', { colSpan: 6, style: { padding: '4px 12px', fontSize: 12 } },
                       e('span', { style: { color: 'var(--text3)' } }, '→ '),
                       e('span', { style: { color: '#22c55e' } }, sug.path || sug.url),
                       e('span', { style: { color: 'var(--text3)', marginLeft: 8 } }, sug.title),
@@ -9835,7 +9920,7 @@
                 })(),
                 // Inline redirect form
                 redirectingId === item.id && e('tr', { style: { background: 'rgba(99,102,241,0.08)' } },
-                  e('td', { colSpan: 5, style: { padding: '10px 12px' } },
+                  e('td', { colSpan: 6, style: { padding: '10px 12px' } },
                     e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                       e('span', { style: { fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' } }, 'Redirect to:'),
                       e('input', {

@@ -2154,6 +2154,147 @@ app.post('/api/projects/:id/plugin/404s/suggest-redirects', async (req, res) => 
   }
 });
 
+// POST /api/projects/:id/plugin/404s/diagnose — root cause analysis for 404s
+app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { urls, referrers } = req.body;
+    if (!urls || !urls.length) return res.status(400).json({ error: 'No URLs to diagnose' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const baseUrl = `https://${domain}`;
+    const fetchHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+
+    // 1. Fetch sitemap and collect all URLs
+    const sitemapUrlSet = new Set();
+    const sitemapPaths = [`${baseUrl}/sitemap.xml`, `${baseUrl}/sitemap_index.xml`, `${baseUrl}/wp-sitemap.xml`];
+    for (const smUrl of sitemapPaths) {
+      try {
+        const resp = await fetch(smUrl, { headers: fetchHeaders, signal: AbortSignal.timeout(10000), redirect: 'follow' });
+        if (!resp.ok) continue;
+        const xml = await resp.text();
+        if (xml.includes('Cloudflare') && xml.includes('Ray ID')) continue;
+        const locMatches = xml.match(/<loc>([^<]+)<\/loc>/g) || [];
+        for (const m of locMatches) {
+          const url = m.replace(/<\/?loc>/g, '');
+          if (url.endsWith('.xml')) {
+            // Sub-sitemap — fetch it
+            try {
+              const subResp = await fetch(url, { headers: fetchHeaders, signal: AbortSignal.timeout(10000) });
+              if (subResp.ok) {
+                const subXml = await subResp.text();
+                const subLocs = subXml.match(/<loc>([^<]+)<\/loc>/g) || [];
+                for (const sl of subLocs) {
+                  const su = sl.replace(/<\/?loc>/g, '');
+                  if (!su.endsWith('.xml')) sitemapUrlSet.add(su.replace(/\/$/, ''));
+                }
+              }
+            } catch {}
+          } else {
+            sitemapUrlSet.add(url.replace(/\/$/, ''));
+          }
+        }
+        if (sitemapUrlSet.size > 0) break;
+      } catch {}
+    }
+    console.log(`[404-diagnose] Sitemap has ${sitemapUrlSet.size} URLs`);
+
+    // 2. Quick internal link scan — crawl top pages to find broken links
+    const wpUrl = project.wordpress_url || null;
+    const authHeaders = getWpAuthHeaders(project);
+    const allPages = await discoverPages(baseUrl, wpUrl, authHeaders);
+    const pagesToScan = allPages.slice(0, 25);
+
+    // Build map: normalized target URL → Set of source page URLs
+    const linkSources = new Map();
+    const SCAN_BATCH = 5;
+    for (let i = 0; i < pagesToScan.length; i += SCAN_BATCH) {
+      if (i > 0) await new Promise(r => setTimeout(r, 300));
+      const batch = pagesToScan.slice(i, i + SCAN_BATCH);
+      await Promise.allSettled(batch.map(async (page) => {
+        try {
+          const resp = await fetch(page.url, { headers: fetchHeaders, signal: AbortSignal.timeout(15000), redirect: 'follow' });
+          if (!resp.ok) return;
+          const html = await resp.text();
+          const linkMatches = html.match(/<a[^>]*href=["']([^"'#]*?)["'][^>]*>/gi) || [];
+          for (const link of linkMatches) {
+            const hrefMatch = link.match(/href=["']([^"'#]*?)["']/i);
+            if (!hrefMatch) continue;
+            let href = hrefMatch[1];
+            if (href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) continue;
+            if (href.startsWith('/')) href = baseUrl + href;
+            else if (!href.startsWith('http')) continue;
+            if (!href.includes(domain)) continue;
+            const normalized = href.replace(/\/$/, '');
+            if (!linkSources.has(normalized)) linkSources.set(normalized, new Set());
+            linkSources.get(normalized).add(page.url);
+          }
+        } catch {}
+      }));
+    }
+    console.log(`[404-diagnose] Scanned ${pagesToScan.length} pages, ${linkSources.size} unique link targets`);
+
+    // 3. Diagnose each 404 URL
+    const diagnoses = {};
+    for (const url of urls) {
+      // Normalize: handle both full URLs and paths
+      const normalizedUrl = url.startsWith('http')
+        ? url.replace(/\/$/, '')
+        : `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`.replace(/\/$/, '');
+      const causes = [];
+      const details = {};
+
+      // Check sitemap
+      if (sitemapUrlSet.has(normalizedUrl)) {
+        causes.push('sitemap');
+        details.in_sitemap = true;
+      }
+
+      // Check internal links (from crawl scan)
+      const sources = linkSources.get(normalizedUrl);
+      if (sources && sources.size > 0) {
+        causes.push('internal_link');
+        details.linked_from = Array.from(sources).slice(0, 5);
+      }
+
+      // Check referrer (from plugin data)
+      const referrer = referrers ? referrers[url] : null;
+      if (referrer && referrer.includes(domain) && !causes.includes('internal_link')) {
+        causes.push('internal_link');
+        details.linked_from = [referrer];
+      } else if (referrer && referrer.includes(domain) && details.linked_from && !details.linked_from.includes(referrer)) {
+        details.linked_from.push(referrer);
+      }
+
+      // If no causes → orphan (old Google index)
+      if (causes.length === 0) {
+        causes.push('orphan');
+      }
+
+      // Fix recommendations per cause
+      const fixes = [];
+      if (causes.includes('sitemap')) {
+        fixes.push('Remove from sitemap — exclude in Yoast SEO or sitemap plugin settings, then resubmit sitemap in GSC');
+      }
+      if (causes.includes('internal_link')) {
+        const srcList = (details.linked_from || []).map(u => u.replace(baseUrl, '')).slice(0, 3).join(', ');
+        fixes.push('Fix broken link on: ' + srcList + ' — update or remove the <a> tag');
+      }
+      if (causes.includes('orphan')) {
+        fixes.push('Old Google index — use GSC URL Removal tool for faster de-indexing, or return 410 Gone');
+      }
+
+      diagnoses[url] = { causes, ...details, fixes };
+    }
+
+    res.json({ diagnoses, sitemap_urls: sitemapUrlSet.size, pages_scanned: pagesToScan.length });
+  } catch (e) {
+    console.error(`[404-diagnose] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/projects/:id/plugin/404s/:fid/redirect — create redirect from a 404
 app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
   try {
