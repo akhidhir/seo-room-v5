@@ -2076,6 +2076,74 @@ const SUBURB_GPS = {
   'wanneroo': { lat: -31.7500, lng: 115.8000 }, 'alkimos': { lat: -31.6280, lng: 115.7250 },
   'beaconsfield': { lat: -32.0560, lng: 115.7640 }, 'melville': { lat: -32.0440, lng: 115.7860 },
   'kwinana': { lat: -32.2400, lng: 115.7700 }, 'vincent': { lat: -31.9330, lng: 115.8500 },
+  'baldivis': { lat: -32.3260, lng: 115.7830 }, 'wellard': { lat: -32.2730, lng: 115.8260 },
+  'bertram': { lat: -32.2410, lng: 115.8440 }, 'piara waters': { lat: -32.1250, lng: 115.9130 },
+  'harrisdale': { lat: -32.1120, lng: 115.9300 }, 'southern river': { lat: -32.1050, lng: 115.9450 },
+  'thornlie': { lat: -32.0590, lng: 115.9540 }, 'langford': { lat: -32.0400, lng: 115.9470 },
+  'maddington': { lat: -32.0480, lng: 115.9790 }, 'kenwick': { lat: -32.0330, lng: 115.9630 },
+  'beckenham': { lat: -32.0240, lng: 115.9570 }, 'bull creek': { lat: -32.0550, lng: 115.8620 },
+  'winthrop': { lat: -32.0580, lng: 115.8360 }, 'kardinya': { lat: -32.0640, lng: 115.8220 },
+  'bateman': { lat: -32.0580, lng: 115.8480 }, 'booragoon': { lat: -32.0360, lng: 115.8380 },
+  'brentwood': { lat: -32.0450, lng: 115.8530 }, 'applecross': { lat: -32.0150, lng: 115.8410 },
+  'alfred cove': { lat: -32.0280, lng: 115.8200 }, 'myaree': { lat: -32.0420, lng: 115.8120 },
+  'palmyra': { lat: -32.0410, lng: 115.7810 }, 'bicton': { lat: -32.0260, lng: 115.7840 },
+  'east fremantle': { lat: -32.0390, lng: 115.7670 }, 'white gum valley': { lat: -32.0600, lng: 115.7590 },
+  'hilton': { lat: -32.0610, lng: 115.7830 }, 'o connor': { lat: -32.0610, lng: 115.7930 },
+  'samson': { lat: -32.0620, lng: 115.7760 }, 'karloo': { lat: -32.0570, lng: 115.7710 },
+  'south fremantle': { lat: -32.0700, lng: 115.7530 }, 'north fremantle': { lat: -32.0370, lng: 115.7490 },
+  'wandi': { lat: -32.1620, lng: 115.8350 }, 'mandogalup': { lat: -32.1770, lng: 115.8080 },
+  'calista': { lat: -32.2350, lng: 115.7770 }, 'medina': { lat: -32.2310, lng: 115.7930 },
+  'orelia': { lat: -32.2290, lng: 115.8080 }, 'parmelia': { lat: -32.2420, lng: 115.8220 },
+  'leda': { lat: -32.2620, lng: 115.7920 }, 'naval base': { lat: -32.1960, lng: 115.7670 },
+  'hope valley': { lat: -32.2040, lng: 115.7760 }, 'casuarina': { lat: -32.2670, lng: 115.8610 },
+  'warnbro': { lat: -32.3190, lng: 115.7470 }, 'safety bay': { lat: -32.3090, lng: 115.7380 },
+  'shoalwater': { lat: -32.2950, lng: 115.7100 }, 'secret harbour': { lat: -32.3850, lng: 115.7340 },
+  'golden bay': { lat: -32.3600, lng: 115.7440 }, 'singleton': { lat: -32.4230, lng: 115.7560 },
+  'yanchep': { lat: -31.5470, lng: 115.6350 }, 'two rocks': { lat: -31.4970, lng: 115.5880 },
+  'clarkson': { lat: -31.6830, lng: 115.7260 }, 'mindarie': { lat: -31.6870, lng: 115.7070 },
+  'quinns rocks': { lat: -31.6750, lng: 115.6870 }, 'butler': { lat: -31.6470, lng: 115.7060 },
+  'merriwa': { lat: -31.6620, lng: 115.7110 }, 'ridgewood': { lat: -31.6590, lng: 115.7200 },
+  'banksia grove': { lat: -31.7030, lng: 115.7810 }, 'tapping': { lat: -31.7190, lng: 115.7920 },
+  'carramar': { lat: -31.7280, lng: 115.7910 }, 'neerabup': { lat: -31.6940, lng: 115.7590 },
+  'currambine': { lat: -31.7260, lng: 115.7470 }, 'burns beach': { lat: -31.7300, lng: 115.7200 },
+  'kinross': { lat: -31.7390, lng: 115.7430 }, 'padbury': { lat: -31.8080, lng: 115.7680 },
+  'hillarys': { lat: -31.8080, lng: 115.7370 }, 'kallaroo': { lat: -31.7870, lng: 115.7380 },
+  'mullaloo': { lat: -31.7740, lng: 115.7360 }, 'ocean reef': { lat: -31.7580, lng: 115.7350 },
+  'heathridge': { lat: -31.7630, lng: 115.7560 }, 'edgewater': { lat: -31.7640, lng: 115.7830 },
+  'connolly': { lat: -31.7480, lng: 115.7560 }, 'iluka': { lat: -31.7340, lng: 115.7290 },
+  'sorrento': { lat: -31.8250, lng: 115.7520 }, 'duncraig': { lat: -31.8260, lng: 115.7720 },
+  'warwick': { lat: -31.8440, lng: 115.8090 }, 'greenwood': { lat: -31.8270, lng: 115.7990 },
+  'kingsley': { lat: -31.8100, lng: 115.7980 }, 'woodvale': { lat: -31.7880, lng: 115.7950 },
+  'madeley': { lat: -31.8070, lng: 115.8260 }, 'landsdale': { lat: -31.8030, lng: 115.8450 },
+  'darch': { lat: -31.8040, lng: 115.8340 }, 'alexander heights': { lat: -31.8220, lng: 115.8650 },
+  'ballajura': { lat: -31.8340, lng: 115.8900 }, 'malaga': { lat: -31.8400, lng: 115.8890 },
+  'noranda': { lat: -31.8780, lng: 115.8990 }, 'morley': { lat: -31.8900, lng: 115.9060 },
+  'dianella': { lat: -31.8880, lng: 115.8680 }, 'yokine': { lat: -31.9030, lng: 115.8560 },
+  'tuart hill': { lat: -31.9060, lng: 115.8440 }, 'osborne park': { lat: -31.9020, lng: 115.8160 },
+  'scarborough': { lat: -31.8930, lng: 115.7620 }, 'doubleview': { lat: -31.8930, lng: 115.7810 },
+  'innaloo': { lat: -31.8950, lng: 115.7960 }, 'karrinyup': { lat: -31.8720, lng: 115.7800 },
+  'gwelup': { lat: -31.8720, lng: 115.7950 }, 'carine': { lat: -31.8580, lng: 115.7830 },
+  'hamersley': { lat: -31.8500, lng: 115.8100 }, 'balcatta': { lat: -31.8550, lng: 115.8310 },
+  'nollamara': { lat: -31.8700, lng: 115.8500 }, 'mirrabooka': { lat: -31.8590, lng: 115.8600 },
+  'girrawheen': { lat: -31.8400, lng: 115.8440 }, 'koondoola': { lat: -31.8380, lng: 115.8620 },
+  'marangaroo': { lat: -31.8250, lng: 115.8400 }, 'west perth': { lat: -31.9480, lng: 115.8420 },
+  'east perth': { lat: -31.9530, lng: 115.8710 }, 'north perth': { lat: -31.9320, lng: 115.8580 },
+  'mt lawley': { lat: -31.9330, lng: 115.8730 }, 'highgate': { lat: -31.9380, lng: 115.8690 },
+  'leederville': { lat: -31.9350, lng: 115.8410 }, 'west leederville': { lat: -31.9380, lng: 115.8280 },
+  'wembley': { lat: -31.9350, lng: 115.8090 }, 'floreat': { lat: -31.9370, lng: 115.7870 },
+  'city beach': { lat: -31.9370, lng: 115.7580 }, 'churchlands': { lat: -31.9210, lng: 115.8000 },
+  'woodlands': { lat: -31.9140, lng: 115.7900 }, 'inglewood': { lat: -31.9130, lng: 115.8820 },
+  'maylands': { lat: -31.9260, lng: 115.8890 }, 'bedford': { lat: -31.9120, lng: 115.8960 },
+  'embleton': { lat: -31.9020, lng: 115.9120 }, 'guildford': { lat: -31.9010, lng: 115.9710 },
+  'south guildford': { lat: -31.9170, lng: 115.9650 }, 'hazelmere': { lat: -31.9100, lng: 116.0010 },
+  'helena valley': { lat: -31.9420, lng: 116.0730 }, 'high wycombe': { lat: -31.9540, lng: 116.0000 },
+  'forrestfield': { lat: -31.9760, lng: 116.0050 }, 'maida vale': { lat: -31.9530, lng: 116.0310 },
+  'darlington': { lat: -31.9260, lng: 116.0830 }, 'glen forrest': { lat: -31.9120, lng: 116.1060 },
+  'stratton': { lat: -31.8630, lng: 116.0400 }, 'jane brook': { lat: -31.8630, lng: 116.0680 },
+  'middle swan': { lat: -31.8530, lng: 116.0240 }, 'viveash': { lat: -31.8830, lng: 115.9840 },
+  'woodbridge': { lat: -31.8920, lng: 115.9740 }, 'caversham': { lat: -31.8730, lng: 115.9640 },
+  'henley brook': { lat: -31.8100, lng: 115.9820 }, 'ellenbrook': { lat: -31.7660, lng: 115.9690 },
+  'the vines': { lat: -31.7830, lng: 115.9870 }, 'aveley': { lat: -31.7860, lng: 115.9680 },
   // Brisbane & surrounds
   'brisbane': { lat: -27.4698, lng: 153.0251 }, 'brisbane city': { lat: -27.4698, lng: 153.0251 },
   'north brisbane': { lat: -27.3800, lng: 153.0100 }, 'south brisbane': { lat: -27.4820, lng: 153.0200 },
@@ -23382,6 +23450,56 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
 
     console.log(`[smart-gen] Starting for ${domain} (project ${projectId})`);
 
+    // Step 0: Build competitor name blacklist from project settings + grid scan data
+    const competitorNames = new Set();
+    // From project.competitors (user-entered TEXT[])
+    const projCompetitors = Array.isArray(project.competitors) ? project.competitors : [];
+    for (const c of projCompetitors) {
+      const name = (c || '').toLowerCase().trim();
+      if (name) {
+        competitorNames.add(name);
+        // Also add individual words (e.g. "Hilton Plumbing" → "hilton")
+        for (const word of name.split(/\s+/)) {
+          if (word.length > 3) competitorNames.add(word);
+        }
+      }
+    }
+    // From grid_scans competitors JSONB (actual Maps competitors)
+    try {
+      const gridCompRes = await pool.query(
+        `SELECT DISTINCT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 20`,
+        [projectId]
+      );
+      const bizName = (project.business_name || project.name || '').toLowerCase();
+      for (const row of gridCompRes.rows) {
+        const comp = typeof row.competitors === 'string' ? JSON.parse(row.competitors) : row.competitors;
+        const topComps = comp?.top || comp || [];
+        const compArr = Array.isArray(topComps) ? topComps : [];
+        for (const c of compArr) {
+          const cName = (c.name || c.title || '').toLowerCase().trim();
+          if (!cName || cName.includes(bizName) || bizName.includes(cName)) continue;
+          competitorNames.add(cName);
+          // Add individual meaningful words (skip common words)
+          const skipWords = new Set(['the', 'and', 'pty', 'ltd', 'inc', 'llc', 'co', 'group', 'services', 'service', 'plumbing', 'plumber', 'electrical', 'electrician', 'repair', 'repairs']);
+          for (const word of cName.split(/\s+/)) {
+            if (word.length > 3 && !skipWords.has(word)) competitorNames.add(word);
+          }
+        }
+      }
+    } catch (e) { console.log('[smart-gen] Grid competitors lookup skipped:', e.message); }
+    // Also add the project's own business name parts to avoid self-references
+    const ownBizName = (project.business_name || '').toLowerCase();
+    if (ownBizName) {
+      competitorNames.add(ownBizName);
+      for (const word of ownBizName.split(/\s+/)) {
+        if (word.length > 3) competitorNames.add(word);
+      }
+    }
+    // Remove common service/trade words that shouldn't be blacklisted
+    const safeWords = new Set(['plumber', 'plumbing', 'plumbers', 'electrician', 'electrical', 'roofing', 'roofer', 'painter', 'painting', 'carpenter', 'carpentry', 'locksmith', 'cleaning', 'cleaner', 'repair', 'repairs', 'service', 'services', 'computer', 'computers', 'tech', 'mobile', 'solar', 'water', 'drain', 'build', 'building', 'builder', 'builders', 'hvac', 'landscaping', 'gardening', 'fencing', 'tiling', 'flooring', 'carpet', 'pest', 'control']);
+    for (const safe of safeWords) competitorNames.delete(safe);
+    console.log(`[smart-gen] Competitor blacklist (${competitorNames.size}): ${[...competitorNames].slice(0, 20).join(', ')}`);
+
     // Step 1: Discover website pages and extract suburb names from slugs
     const pages = await discoverPages(projectUrl, wpUrl);
     console.log(`[smart-gen] Found ${pages.length} pages`);
@@ -23452,6 +23570,9 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
       // Clean up multiple spaces, trailing/leading hyphens
       service = service.replace(/\s+/g, ' ').replace(/^[\s\-]+|[\s\-]+$/g, '').trim();
       if (service.length <= 2) continue;
+      // Skip if the service matches a competitor business name
+      const isCompetitor = [...competitorNames].some(cn => service.includes(cn) || cn.includes(service));
+      if (isCompetitor) continue;
       // Only keep if the service contains at least one ACTION word (not just product nouns)
       const hasServiceWord = SERVICE_ACTION_WORDS.some(sw => service.includes(sw));
       if (!hasServiceWord) continue;
