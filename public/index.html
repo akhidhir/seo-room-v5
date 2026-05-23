@@ -26835,7 +26835,7 @@
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                   <code style={{ fontSize: 12, padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, color: 'var(--text)', userSelect: 'all' }}>{formData.pluginLicenseKey}</code>
                   <button className="btn btn-sm" title="Copy to clipboard" style={{ background: 'transparent', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: 6, cursor: 'pointer', color: 'var(--text3)', fontSize: 12 }}
-                    onClick={() => { navigator.clipboard.writeText(formData.pluginLicenseKey); const el = event.currentTarget; el.innerHTML = '<i class="fas fa-check" style="color:#22c55e"></i>'; setTimeout(() => { el.innerHTML = '<i class="fas fa-copy"></i>'; }, 1500); }}>
+                    onClick={(e) => { navigator.clipboard.writeText(formData.pluginLicenseKey); e.currentTarget.style.color = '#22c55e'; e.currentTarget.querySelector('i').className = 'fas fa-check'; const btn = e.currentTarget; setTimeout(() => { btn.style.color = 'var(--text3)'; btn.querySelector('i').className = 'fas fa-copy'; }, 1500); }}>
                     <i className="fas fa-copy" />
                   </button>
                   <span style={{
