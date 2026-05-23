@@ -2568,23 +2568,14 @@ app.get('/api/plugin/download', async (req, res) => {
 app.post('/api/plugin/license-check', async (req, res) => {
   try {
     const { license_key, domain } = req.body;
-    console.log(`[license-check] incoming key=${license_key} domain=${domain}`);
     if (!license_key) return res.json({ valid: false, reason: 'No license key' });
-
-    // Debug: check if column exists and what keys are stored
-    const colCheck = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='projects' AND column_name='plugin_license_key'`);
-    const allKeys = await pool.query(`SELECT id, name, plugin_license_key FROM projects WHERE plugin_license_key IS NOT NULL`);
-    console.log(`[license-check] column exists: ${colCheck.rows.length > 0}, projects with keys: ${JSON.stringify(allKeys.rows)}`);
 
     const result = await pool.query(
       `SELECT id, name, domain, plugin_license_expires, plugin_license_active
        FROM projects WHERE plugin_license_key = $1`,
       [license_key]
     );
-    if (result.rows.length === 0) {
-      console.log(`[license-check] KEY NOT FOUND: ${license_key}`);
-      return res.json({ valid: false, reason: 'Invalid license key' });
-    }
+    if (result.rows.length === 0) return res.json({ valid: false, reason: 'Invalid license key' });
 
     const project = result.rows[0];
     const now = new Date();
@@ -2648,9 +2639,8 @@ app.post('/api/projects/:id/license/renew', async (req, res) => {
     const project = (await pool.query('SELECT plugin_license_expires FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    // Extend from current expiry or from now, whichever is later
-    const baseDate = project.plugin_license_expires && new Date(project.plugin_license_expires) > new Date()
-      ? new Date(project.plugin_license_expires) : new Date();
+    // Always 12 months from now (no stacking)
+    const baseDate = new Date();
     baseDate.setMonth(baseDate.getMonth() + (months || 12));
 
     await pool.query(
