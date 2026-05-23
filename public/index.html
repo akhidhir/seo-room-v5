@@ -21208,6 +21208,17 @@
                 {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
               </button>
             )}
+            {serpView === 'actions' && serpActions.length > 0 && (
+              <button className="btn" onClick={async () => {
+                if (!confirm('Clear all SERP analyses and action items? You can re-analyze later.')) return;
+                try {
+                  await api(`/projects/${project.id}/rank-tracking/analyses`, { method: 'DELETE' });
+                  setAnalysisResults({});
+                } catch (e) { alert('Failed: ' + e.message); }
+              }} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef4444' }}>
+                <i className="fa-solid fa-trash" style={{ marginRight: 6 }} />Clear All Analyses
+              </button>
+            )}
           </div>
 
           {/* ===== ACTION PLAN VIEW ===== */}

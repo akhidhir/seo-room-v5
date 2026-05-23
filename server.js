@@ -25448,6 +25448,14 @@ app.delete('/api/projects/:projectId/rank-tracking/analyses/:keyword', async (re
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Delete ALL saved SERP analyses for a project
+app.delete('/api/projects/:projectId/rank-tracking/analyses', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM serp_analysis WHERE project_id=$1', [req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ============ SERP ACTION PLAN ============
 
 // Get action done states
