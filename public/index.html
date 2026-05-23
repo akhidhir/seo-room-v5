@@ -15314,70 +15314,85 @@
           )
         ),
 
-        // Sticky action bar (matches content_queue)
-        React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
-          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
-            // Import Current Copy
-            !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
-              onClick: handleImportCurrent, disabled: importingCurrent,
-              style: { fontSize: 12, padding: '6px 14px', background: 'transparent', color: '#3b82f6', border: '1px solid #3b82f6', borderRadius: 6, cursor: 'pointer', fontWeight: 600, opacity: importingCurrent ? 0.6 : 1 }
-            }, React.createElement('i', { className: importingCurrent ? 'fas fa-spinner fa-spin' : 'fas fa-download', style: { marginRight: 5 } }), importingCurrent ? 'Importing...' : 'Import Current Copy'),
-            // Rewrite
-            !isPublished && hasDraft && React.createElement('button', {
-              onClick: handleOptimise, disabled: optimising,
-              style: { background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 12, padding: '6px 14px', fontWeight: 700,
-                border: 'none', color: '#fff', borderRadius: 6, cursor: optimising ? 'wait' : 'pointer' }
-            }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 5 } }), optimising ? 'Rewriting...' : 'Rewrite'),
-            // Preview
-            hasDraft && React.createElement('button', {
-              onClick: function() {
-                var tkn = localStorage.getItem('token') || '';
-                handleSaveEdit().then(function() {
-                  window.open('/api' + apiPrefix + '/site-pages/' + page.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
-                }).catch(function() {
-                  window.open('/api' + apiPrefix + '/site-pages/' + page.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
-                });
-              },
-              style: { padding: '6px 14px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
-            }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 5 } }), 'Preview'),
-            // Save
-            !isPublished && React.createElement('button', { onClick: handleSaveEdit,
-              style: { padding: '6px 14px', background: savingMeta === 'done' ? '#22c55e' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 } },
-              React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 5 } }), savingMeta === 'done' ? 'Saved!' : 'Save'
-            )
+        // Sticky action bar (matches content_queue copywriter)
+        React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', marginBottom: 16, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+          // AI Editor
+          !isPublished && hasDraft && React.createElement('button', {
+            onClick: function() {
+              var html = editContent || '';
+              var plain = html.replace(/<[^>]+>/g, '');
+              var words = plain.trim() ? plain.trim().split(/\s+/).length : 0;
+              setOptimisePreview({
+                preview: true,
+                proposed: { content_html: html, meta_title: editMeta.meta_title || '', meta_description: editMeta.meta_desc || '', ai_notes: null },
+                stats: { current: { words: words }, proposed: { words: words, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length } },
+                item_id: page.id
+              });
+            },
+            style: { background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', fontSize: 14, padding: '8px 22px', fontWeight: 700, border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer', boxShadow: '0 2px 12px rgba(99,102,241,0.3)' }
+          }, React.createElement('i', { className: 'fa-solid fa-comments', style: { marginRight: 6 } }), 'AI Editor'),
+          // Save
+          !isPublished && React.createElement('button', { onClick: handleSaveEdit,
+            style: { padding: '8px 16px', background: savingMeta === 'done' ? '#22c55e' : '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
+            React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), savingMeta === 'done' ? 'Saved!' : 'Save'
           ),
-          React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
-            // Analyse Page Structure
-            !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
-              onClick: handleParseSections, disabled: parsingSections,
-              style: { fontSize: 12, padding: '4px 12px', background: '#059669', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', opacity: parsingSections ? 0.6 : 1 }
-            }, React.createElement('i', { className: parsingSections ? 'fas fa-spinner fa-spin' : 'fas fa-search-plus', style: { marginRight: 5 } }), parsingSections ? 'Analysing...' : 'Analyse Page Structure'),
-            // Suggest from Competitors
-            page.page_sections?.length > 0 && !isPublished && React.createElement('button', {
-              onClick: handleSuggestSections, disabled: loadingSuggestions,
-              style: { fontSize: 12, padding: '4px 12px', background: 'transparent', color: '#059669', border: '1px solid #059669', borderRadius: 6, cursor: 'pointer', opacity: loadingSuggestions ? 0.6 : 1 }
-            }, React.createElement('i', { className: loadingSuggestions ? 'fas fa-spinner fa-spin' : 'fas fa-trophy', style: { marginRight: 5 } }), loadingSuggestions ? 'Analysing competitors...' : 'Suggest from Competitors'),
-            // Section View toggle
-            page.page_sections?.length > 0 && React.createElement('button', {
-              onClick: function() { setSectionView(!sectionView); },
-              style: { fontSize: 12, padding: '4px 12px', background: sectionView ? 'rgba(5,150,105,0.1)' : 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }
-            }, React.createElement('i', { className: sectionView ? 'fas fa-th-list' : 'fas fa-align-left', style: { marginRight: 5 } }), sectionView ? 'Section View' : 'Full Editor'),
-            // Move to CW Current
-            !isPublished && React.createElement('button', {
-              onClick: function() {
-                if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current?')) return;
-                api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: page.id, from: 'site_pages', to: 'content_queue' } })
-                  .then(function() { onBack(); })
-                  .catch(function(e) { alert('Move failed: ' + e.message); });
-              },
-              style: { padding: '4px 12px', background: '#8b5cf620', color: '#8b5cf6', border: '1px solid #8b5cf640', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }
-            }, React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 4 } }), 'Move to CW Current'),
-            // Approve
-            !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove, style: { padding: '4px 12px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } }, 'Approve'),
-            // Publish
-            page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing, style: { padding: '4px 12px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 } },
-              publishing ? 'Publishing...' : 'Publish'
-            )
+          // Move to CW Current
+          !isPublished && pid && React.createElement('button', {
+            onClick: function() {
+              if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current?')) return;
+              api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: page.id, from: 'site_pages', to: 'content_queue' } })
+                .then(function() { onBack(); })
+                .catch(function(e) { alert('Move failed: ' + e.message); });
+            },
+            style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6 } }), 'Move to CW New'),
+          // Send for Approval
+          !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove,
+            style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
+            React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }), 'Send for Approval'
+          ),
+          // Preview (Design-Safe)
+          hasDraft && React.createElement('button', {
+            onClick: function() {
+              var tkn = localStorage.getItem('token') || '';
+              handleSaveEdit().then(function() {
+                window.open('/api' + apiPrefix + '/site-pages/' + page.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
+              }).catch(function() {
+                window.open('/api' + apiPrefix + '/site-pages/' + page.id + '/preview?token=' + encodeURIComponent(tkn), '_blank');
+              });
+            },
+            style: { padding: '8px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview (Design-Safe)'),
+          // Import Current Copy
+          !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
+            onClick: handleImportCurrent, disabled: importingCurrent,
+            style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: importingCurrent ? 0.6 : 1 }
+          }, React.createElement('i', { className: importingCurrent ? 'fas fa-spinner fa-spin' : 'fa-solid fa-download', style: { marginRight: 6 } }), importingCurrent ? 'Importing...' : 'Import Current Copy'),
+          // Rewrite
+          !isPublished && hasDraft && React.createElement('button', {
+            onClick: handleOptimise, disabled: optimising,
+            style: { padding: '8px 16px', background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 16px', fontWeight: 700,
+              border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer', boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
+          }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), optimising ? 'Rewriting...' : 'Rewrite'),
+          // Reset
+          !isPublished && React.createElement('button', {
+            onClick: function() {
+              if (!confirm('Reset this page? This will clear all draft content, meta, and AI notes. This cannot be undone.')) return;
+              setEditContent('');
+              setEditMeta({ meta_title: '', meta_desc: '', focus_keyword: page.focus_keyword || '' });
+              setOptimisePreview(null);
+              setSectionView(false);
+              setEditorKey(function(k) { return k + 1; });
+              api(apiPrefix + '/site-pages/' + page.id, { method: 'PUT', body: { draft_content: '', meta_title: '', meta_description: '', stage: 'brief' } })
+                .then(function() { onUpdate(Object.assign({}, page, { draft_content: '', meta_title: '', meta_description: '', stage: 'brief' })); })
+                .catch(function(e) { alert('Reset failed: ' + e.message); });
+            },
+            style: { padding: '8px 16px', background: '#ef444420', color: '#ef4444', border: '1px solid #ef444440', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-trash-can', style: { marginRight: 6 } }), 'Reset'),
+          // Publish (only when reviewed)
+          page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing,
+            style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
+            React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), publishing ? 'Publishing...' : 'Publish'
           )
         ),
 
