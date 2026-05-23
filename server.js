@@ -1003,7 +1003,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/serp-test'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/serp-test', '/api/debug/dfs-test'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -26809,6 +26809,23 @@ app.get('/api/debug/serp-test', async (req, res) => {
     });
     const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
     res.json({ query: q, suburb, gps: gps || null, uule: params.uule || null, location: params.location || null, organic, local, searchInfo: data.search_information });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DataForSEO debug — test SERP results for a keyword
+app.get('/api/debug/dfs-test', async (req, res) => {
+  const q = req.query.q || 'computer repairs bayswater';
+  const loc = req.query.location || 'Perth,Western Australia,Australia';
+  const depth = parseInt(req.query.depth) || 30;
+  try {
+    const data = await dataForSeoSerp({ keyword: q, location: loc, depth });
+    const organic = (data.organic_results || []).slice(0, 15).map(r => {
+      let host = '';
+      try { host = new URL(r.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { host = r.link; }
+      return { pos: r.position, host, title: (r.title || '').substring(0, 60), link: (r.link || '').substring(0, 80) };
+    });
+    const local = (data.local_results?.places || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews, website: p.website, domain: p.domain }));
+    res.json({ query: q, location: loc, depth, organic, local, cost: data.cost, source: data.source });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
