@@ -22021,27 +22021,50 @@
       const [sortDir, setSortDir] = useState('asc');
       const [hasRun, setHasRun] = useState(false);
 
+      // Load cached results on mount + poll if running
+      useEffect(() => {
+        if (!project?.id) return;
+        let pollTimer = null;
+        const load = async () => {
+          const r = await api(`/projects/${project.id}/discovery`);
+          if (r && !r.error) {
+            if (r.status === 'done' && r.keywords?.length > 0) {
+              setKeywords(r.keywords);
+              setHasRun(true);
+              setLoading(false);
+            } else if (r.status === 'running') {
+              setLoading(true);
+              setHasRun(true);
+              pollTimer = setTimeout(load, 3000);
+            } else if (r.status === 'error') {
+              setLoading(false);
+              setHasRun(false);
+            }
+          }
+        };
+        load();
+        return () => { if (pollTimer) clearTimeout(pollTimer); };
+      }, [project?.id]);
+
       const discover = async () => {
         setLoading(true);
+        setHasRun(true);
         try {
-          const r = await api(`/projects/${project.id}/discover-keywords`, {
-            method: 'POST',
-            body: { limit: 200, checkMaps: true }
-          });
-          if (r.error) { alert(r.error); setLoading(false); return; }
-          // Merge maps results
-          const mapsMap = {};
-          if (r.maps_results) {
-            for (const mr of r.maps_results) { mapsMap[mr.keyword.toLowerCase()] = mr; }
-          }
-          const all = (r.keywords || []).filter(k => k.local_intent).map(k => {
-            const mr = mapsMap[k.keyword.toLowerCase()];
-            return { ...k, maps_position: mr?.maps_position || null, on_maps: mr?.on_maps || false };
-          });
-          setKeywords(all);
-          setHasRun(true);
-        } catch (e) { alert('Discovery failed: ' + e.message); }
-        setLoading(false);
+          await api(`/projects/${project.id}/discovery/run`, { method: 'POST' });
+          // Poll for results
+          const poll = async () => {
+            const r = await api(`/projects/${project.id}/discovery`);
+            if (r.status === 'done') {
+              setKeywords(r.keywords || []);
+              setLoading(false);
+            } else if (r.status === 'running') {
+              setTimeout(poll, 3000);
+            } else {
+              setLoading(false);
+            }
+          };
+          setTimeout(poll, 3000);
+        } catch (e) { alert('Discovery failed: ' + e.message); setLoading(false); }
       };
 
       const addToSerp = async () => {
@@ -22181,12 +22204,13 @@
                       <th onClick={() => toggleSort('volume')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80, cursor: 'pointer' }}>Volume{sortIcon('volume')}</th>
                       <th onClick={() => toggleSort('cpc')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>CPC{sortIcon('cpc')}</th>
                       <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
+                      <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 50 }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.map(k => (
                       <tr key={k.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                        onClick={(e) => { if (e.target.type !== 'checkbox') { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); } }}>
+                        onClick={(e) => { if (e.target.type !== 'checkbox' && e.target.tagName !== 'A' && !e.target.closest('a')) { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); } }}>
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <input type="checkbox" checked={selected.has(k.keyword)} onChange={() => { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); }} />
                         </td>
@@ -22210,6 +22234,14 @@
                         <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
                         <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
                         <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30`} target="_blank" rel="noopener noreferrer"
+                            title="Check SERP on Google (non-personalized)"
+                            style={{ color: '#14b8a6', fontSize: 13, textDecoration: 'none' }}
+                            onClick={e => e.stopPropagation()}>
+                            <i className="fa-solid fa-arrow-up-right-from-square" />
+                          </a>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

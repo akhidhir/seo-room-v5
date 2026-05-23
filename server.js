@@ -439,6 +439,17 @@ async function initDb() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS discovery_cache (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'idle',
+        keywords JSONB DEFAULT '[]',
+        total_count INTEGER DEFAULT 0,
+        cost NUMERIC DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // WordPress change history — universal rollback for ALL WP writes
     await client.query(`
       CREATE TABLE IF NOT EXISTS wp_change_history (
@@ -23483,6 +23494,111 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
     console.error('[smart-gen] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ============ DISCOVERY CACHE (background + persistent) ============
+
+// GET: load cached discovery results
+app.get('/api/projects/:projectId/discovery', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM discovery_cache WHERE project_id=$1', [req.params.projectId]);
+    if (rows.length === 0) return res.json({ status: 'idle', keywords: [], total_count: 0 });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: start background discovery (returns immediately, runs in background)
+app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+    if (!domain) return res.status(400).json({ error: 'No domain configured' });
+
+    // Check if already running
+    const existing = (await pool.query('SELECT status FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    if (existing?.status === 'running') return res.json({ status: 'running', message: 'Already running' });
+
+    // Mark as running
+    await pool.query(
+      `INSERT INTO discovery_cache (project_id, status, keywords, total_count, updated_at)
+       VALUES ($1, 'running', '[]', 0, NOW())
+       ON CONFLICT (project_id) DO UPDATE SET status='running', updated_at=NOW()`,
+      [projectId]
+    );
+    res.json({ status: 'running' });
+
+    // Run in background (don't await)
+    (async () => {
+      try {
+        console.log(`[discovery] Background run for ${domain} (project ${projectId})`);
+        const result = await dataForSeoRankedKeywords({ domain, locationCode: 2036, limit: 200, offset: 0 });
+
+        // Build local signals
+        const localSignals = ['near me', 'perth', 'bayswater', 'morley', 'midland', 'wa', 'repair', 'fix', 'shop', 'store', 'service', 'services'];
+        const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas : [];
+        for (const area of serviceAreas) {
+          const areaLower = (typeof area === 'string' ? area : area.name || '').toLowerCase().trim();
+          if (areaLower && !localSignals.includes(areaLower)) localSignals.push(areaLower);
+        }
+        const locParts = (project.location || '').split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 2);
+        for (const part of locParts) { if (!localSignals.includes(part)) localSignals.push(part); }
+
+        const localKeywords = result.keywords.filter(kw => {
+          const kwLower = (kw.keyword || '').toLowerCase();
+          return localSignals.some(sig => kwLower.includes(sig));
+        }).map(kw => ({ ...kw, local_intent: true }));
+
+        console.log(`[discovery] Found ${localKeywords.length} local keywords out of ${result.keywords.length}`);
+
+        // Check Maps positions for top 50
+        const location = project.location || 'Perth,Western Australia,Australia';
+        const businessName = (project.business_name || project.name || '').toLowerCase();
+        const mapsKws = localKeywords.slice(0, 50);
+        for (let i = 0; i < mapsKws.length; i += 5) {
+          const batch = mapsKws.slice(i, i + 5);
+          const promises = batch.map(async (kw) => {
+            try {
+              const data = await dataForSeoMaps({ keyword: kw.keyword, location });
+              const results = data.local_results || [];
+              for (const r of results) {
+                const titleLower = (r.title || '').toLowerCase();
+                const domainLower = (r.domain || '').toLowerCase();
+                if (titleLower.includes(businessName) || domainLower.includes(domain.toLowerCase())) {
+                  kw.maps_position = r.position;
+                  kw.on_maps = true;
+                  break;
+                }
+              }
+            } catch {}
+          });
+          await Promise.all(promises);
+        }
+
+        // Save to DB
+        await pool.query(
+          `UPDATE discovery_cache SET status='done', keywords=$2, total_count=$3, cost=$4, updated_at=NOW() WHERE project_id=$1`,
+          [projectId, JSON.stringify(localKeywords), localKeywords.length, result.cost || 0]
+        );
+        console.log(`[discovery] Done. Saved ${localKeywords.length} keywords.`);
+      } catch (e) {
+        console.error(`[discovery] Background error:`, e.message);
+        await pool.query(
+          `UPDATE discovery_cache SET status='error', updated_at=NOW() WHERE project_id=$1`,
+          [projectId]
+        ).catch(() => {});
+      }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE: clear discovery cache
+app.delete('/api/projects/:projectId/discovery', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM discovery_cache WHERE project_id=$1', [req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Import discovered keywords with volume + position data
