@@ -22020,6 +22020,9 @@
       const [smartGen, setSmartGen] = useState(null); // { suburbs, services, combos, ... }
       const [smartGenLoading, setSmartGenLoading] = useState(false);
       const [smartGenSelected, setSmartGenSelected] = useState(new Set());
+      const [sgSearch, setSgSearch] = useState('');
+      const [sgSuburbFilter, setSgSuburbFilter] = useState('all');
+      const [sgServiceFilter, setSgServiceFilter] = useState('all');
 
       // Load suburb GPS data for grid tooltips
       useEffect(() => {
@@ -22682,39 +22685,82 @@
 
           {/* Discovered Keywords Modal */}
           {/* Smart Generate Modal */}
-          {smartGen && (
+          {smartGen && (() => {
+            const sgFiltered = smartGen.combos.filter(c => {
+              if (sgSearch && !c.service.toLowerCase().includes(sgSearch.toLowerCase()) && !c.suburb.toLowerCase().includes(sgSearch.toLowerCase())) return false;
+              if (sgSuburbFilter !== 'all' && c.suburb !== sgSuburbFilter) return false;
+              if (sgServiceFilter !== 'all' && c.service !== sgServiceFilter) return false;
+              return true;
+            });
+            const sgNewFiltered = sgFiltered.filter(c => !c.already_tracked);
+            const sgSelectedFiltered = sgFiltered.filter(c => smartGenSelected.has(c.keyword));
+            const uniqueServices = [...new Set(smartGen.combos.map(c => c.service))].sort();
+            return (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              onClick={() => setSmartGen(null)}>
-              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 850, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+              onClick={() => { setSmartGen(null); setSgSearch(''); setSgSuburbFilter('all'); setSgServiceFilter('all'); }}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 900, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
                 onClick={e => e.stopPropagation()}>
+                {/* Header */}
                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-bolt" style={{ marginRight: 8, color: '#a855f7' }} />Smart Generate</div>
                     <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
-                      {smartGen.suburbs.length} suburbs from website × {smartGen.services.length} services = {smartGen.combos.length} combos
-                      ({smartGen.combos.filter(c => !c.already_tracked).length} new)
+                      Showing {sgFiltered.length} of {smartGen.combos.length} combos — {smartGenSelected.size} selected
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {smartGenSelected.size > 0 && (
+                      <button className="btn" onClick={() => {
+                        const updated = { ...smartGen, combos: smartGen.combos.filter(c => !smartGenSelected.has(c.keyword)) };
+                        setSmartGen(updated);
+                        setSmartGenSelected(new Set());
+                      }} style={{ fontSize: 12, color: '#ef4444', borderColor: '#ef4444' }}>
+                        <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Remove {smartGenSelected.size}
+                      </button>
+                    )}
                     <button className="btn" onClick={() => {
-                      const newCombos = smartGen.combos.filter(c => !c.already_tracked);
-                      if (smartGenSelected.size === newCombos.length) setSmartGenSelected(new Set());
-                      else setSmartGenSelected(new Set(newCombos.map(c => c.keyword)));
+                      if (sgSelectedFiltered.length === sgNewFiltered.length) {
+                        // Deselect visible
+                        const n = new Set(smartGenSelected);
+                        sgNewFiltered.forEach(c => n.delete(c.keyword));
+                        setSmartGenSelected(n);
+                      } else {
+                        // Select visible
+                        const n = new Set(smartGenSelected);
+                        sgNewFiltered.forEach(c => n.add(c.keyword));
+                        setSmartGenSelected(n);
+                      }
                     }} style={{ fontSize: 12 }}>
-                      {smartGenSelected.size === smartGen.combos.filter(c => !c.already_tracked).length ? 'Deselect All' : 'Select All'}
+                      {sgSelectedFiltered.length === sgNewFiltered.length && sgNewFiltered.length > 0 ? 'Deselect Visible' : 'Select Visible'}
                     </button>
                     <button className="btn btn-primary" onClick={addSmartGenKeywords} disabled={smartGenSelected.size === 0 || smartGenLoading} style={{ fontSize: 12 }}>
                       {smartGenLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {smartGenSelected.size} Keywords</>}
                     </button>
-                    <button onClick={() => setSmartGen(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
+                    <button onClick={() => { setSmartGen(null); setSgSearch(''); setSgSuburbFilter('all'); setSgServiceFilter('all'); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
                   </div>
                 </div>
-                {/* Info bar */}
-                <div style={{ padding: '10px 20px', background: 'rgba(168,85,247,0.06)', borderBottom: '1px solid var(--border)', display: 'flex', gap: 24, fontSize: 12 }}>
-                  <div><strong style={{ color: '#a855f7' }}>{smartGen.total_pages}</strong> <span style={{ color: 'var(--text3)' }}>pages crawled</span></div>
-                  <div><strong style={{ color: '#a855f7' }}>{smartGen.suburbs.length}</strong> <span style={{ color: 'var(--text3)' }}>suburbs found:</span> <span style={{ color: 'var(--text2)' }}>{smartGen.suburbs.join(', ')}</span></div>
-                  <div><strong style={{ color: '#a855f7' }}>{smartGen.services.length}</strong> <span style={{ color: 'var(--text3)' }}>services (top by volume)</span></div>
+                {/* Search + Filters bar */}
+                <div style={{ padding: '10px 20px', background: 'rgba(168,85,247,0.04)', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
+                    <i className="fa-solid fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 12 }} />
+                    <input value={sgSearch} onChange={e => setSgSearch(e.target.value)} placeholder="Search services or suburbs..."
+                      style={{ width: '100%', padding: '7px 10px 7px 30px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', fontSize: 12 }} />
+                  </div>
+                  <select value={sgSuburbFilter} onChange={e => setSgSuburbFilter(e.target.value)}
+                    style={{ padding: '7px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', fontSize: 12 }}>
+                    <option value="all">All Suburbs ({smartGen.suburbs.length})</option>
+                    {smartGen.suburbs.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <select value={sgServiceFilter} onChange={e => setSgServiceFilter(e.target.value)}
+                    style={{ padding: '7px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text1)', fontSize: 12, maxWidth: 220 }}>
+                    <option value="all">All Services ({uniqueServices.length})</option>
+                    {uniqueServices.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                    <strong style={{ color: '#a855f7' }}>{smartGen.total_pages}</strong> pages · <strong style={{ color: '#a855f7' }}>{smartGen.suburbs.length}</strong> suburbs · <strong style={{ color: '#a855f7' }}>{uniqueServices.length}</strong> services
+                  </div>
                 </div>
+                {/* Table */}
                 <div style={{ overflow: 'auto', flex: 1 }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
@@ -22727,7 +22773,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {smartGen.combos.map(c => (
+                      {sgFiltered.map(c => (
                         <tr key={c.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: c.already_tracked ? 'default' : 'pointer', opacity: c.already_tracked ? 0.5 : 1 }}
                           onClick={() => { if (c.already_tracked) return; const n = new Set(smartGenSelected); if (n.has(c.keyword)) n.delete(c.keyword); else n.add(c.keyword); setSmartGenSelected(n); }}>
                           <td style={{ padding: '8px 12px', textAlign: 'center' }}>
@@ -22749,7 +22795,8 @@
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {discoveredMaps && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
