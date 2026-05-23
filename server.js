@@ -23375,14 +23375,26 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
       offset: 0,
     });
 
-    // Extract services by stripping suburb names, location terms, and business name/domain from keywords
-    const businessName = (project.business_name || project.name || '').toLowerCase().trim();
-    const domainParts = domain.replace(/\.(com|net|org|com\.au|net\.au|io).*$/, '').split(/[.\-_]/).filter(p => p.length > 2);
-    // Build blacklist: brand/domain terms that aren't real services
-    const brandTerms = [businessName, domain.split('.')[0]];
-    // Also add domain parts like "ilove", "gold", "pc" etc
-    for (const p of domainParts) brandTerms.push(p);
-    // Common non-service terms from domain names
+    // Extract services by stripping suburb names, location terms from keywords
+    // Then filter: only keep services that contain real service/product action words (not brand names)
+    const SERVICE_WORDS = [
+      'repair', 'repairs', 'fix', 'fixed', 'fixing', 'service', 'services', 'servicing',
+      'install', 'installation', 'setup', 'set up', 'restore', 'recovery', 'replacement',
+      'screen', 'battery', 'upgrade', 'clean', 'cleaning', 'maintenance', 'troubleshoot',
+      'build', 'custom', 'refurbished', 'second hand', 'used', 'buy', 'shop', 'store',
+      'removal', 'remove', 'data', 'backup', 'virus', 'malware', 'spyware',
+      'laptop', 'desktop', 'computer', 'pc', 'mac', 'macbook', 'imac', 'apple',
+      'asus', 'dell', 'hp', 'lenovo', 'acer', 'microsoft', 'surface',
+      'printer', 'monitor', 'keyboard', 'mouse', 'hard drive', 'ssd', 'ram', 'memory',
+      'wifi', 'network', 'internet', 'cable', 'ethernet', 'router', 'modem',
+      'windows', 'blue screen', 'slow', 'broken', 'cracked', 'dead', 'not working',
+      'how much', 'how to', 'cost', 'price', 'cheap', 'best', 'top', 'good',
+      'plumber', 'plumbing', 'electrician', 'electrical', 'hvac', 'air conditioning',
+      'roofing', 'roof', 'painting', 'painter', 'landscaping', 'gardening',
+      'locksmith', 'pest control', 'carpet', 'flooring', 'tiling', 'fencing',
+      'solar', 'panel', 'hot water', 'gas', 'drain', 'blocked', 'leak',
+      'emergency', 'same day', '24 hour', 'mobile', 'onsite', 'on site', 'home',
+    ];
     const stripTerms = [...allSuburbNames, 'near me', 'near', 'wa', 'western australia', 'perth', 'australia', 'sydney', 'melbourne', 'brisbane', 'adelaide'];
     stripTerms.sort((a, b) => b.length - a.length);
     const servicesSet = new Set();
@@ -23390,22 +23402,16 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
 
     for (const kw of result.keywords) {
       let service = (kw.keyword || '').toLowerCase().trim();
-      // Skip keywords that are primarily the business/brand name
-      const kwClean = service.replace(/\s+/g, '');
-      const isBrandKeyword = brandTerms.some(bt => {
-        if (!bt) return false;
-        const btClean = bt.replace(/\s+/g, '');
-        return kwClean === btClean || kwClean.startsWith(btClean) || service === bt || service.startsWith(bt + ' ') || service.endsWith(' ' + bt);
-      });
-      if (isBrandKeyword) continue;
       // Strip suburb/location terms
       for (const term of stripTerms) {
         service = service.replace(new RegExp('\\b' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '').trim();
       }
       // Clean up multiple spaces, trailing/leading hyphens
       service = service.replace(/\s+/g, ' ').replace(/^[\s\-]+|[\s\-]+$/g, '').trim();
-      // Skip if result is too short or looks like a brand fragment
-      if (service.length <= 2 || brandTerms.includes(service)) continue;
+      if (service.length <= 2) continue;
+      // Only keep if the service contains at least one real service/product word
+      const hasServiceWord = SERVICE_WORDS.some(sw => service.includes(sw));
+      if (!hasServiceWord) continue;
       if (!servicesSet.has(service)) {
         servicesSet.add(service);
         serviceDetails.push({ service, original_keyword: kw.keyword, volume: kw.volume, position: kw.position });
