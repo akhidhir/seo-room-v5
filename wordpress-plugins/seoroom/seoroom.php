@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.2.1
+ * Version: 8.3.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -2821,9 +2821,9 @@ add_action('rest_api_init', function() {
             global $wpdb;
             $table = $wpdb->prefix . 'seoroom_redirects';
             $source = trim($request->get_param('source_url'));
-            $target = trim($request->get_param('target_url'));
             $type = intval($request->get_param('redirect_type') ?: 301);
-            if (empty($source) || empty($target)) {
+            $target = $type === 410 ? '' : trim($request->get_param('target_url'));
+            if (empty($source) || ($type !== 410 && empty($target))) {
                 return new WP_REST_Response(array('error' => 'source_url and target_url required'), 400);
             }
             // Normalize source to path only
@@ -2881,8 +2881,8 @@ add_action('rest_api_init', function() {
             $tred = $wpdb->prefix . 'seoroom_redirects';
             $row404 = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t404 WHERE id=%d", $request['id']));
             if (!$row404) return new WP_REST_Response(array('error' => '404 not found'), 404);
-            $target = trim($request->get_param('target_url') ?: '/');
             $type = intval($request->get_param('redirect_type') ?: 301);
+            $target = $type === 410 ? '' : trim($request->get_param('target_url') ?: '/');
             $hash = md5($row404->url);
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO $tred (source_url, source_hash, target_url, redirect_type) VALUES (%s, %s, %s, %d)
@@ -3246,7 +3246,15 @@ function sropt_check_redirects() {
         $wpdb->query($wpdb->prepare(
             "UPDATE $table SET hit_count = hit_count + 1 WHERE id = %d", $redirect->id
         ));
-        wp_redirect($redirect->target_url, intval($redirect->redirect_type));
+        $rtype = intval($redirect->redirect_type);
+        if ($rtype === 410) {
+            // 410 Gone — tell search engines this page is permanently removed
+            status_header(410);
+            nocache_headers();
+            echo '<!DOCTYPE html><html><head><title>410 Gone</title></head><body><h1>410 Gone</h1><p>This page has been permanently removed.</p></body></html>';
+            exit;
+        }
+        wp_redirect($redirect->target_url, $rtype);
         exit;
     }
 }
