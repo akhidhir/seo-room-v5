@@ -23576,7 +23576,10 @@
                               {ar.error ? 'Err' : 'View'}
                             </button>
                           ) : null; })()}
-                          <button onClick={(e) => { e.stopPropagation(); removeKeyword(kw.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12, padding: 4 }}>
+                          <button onClick={(e) => { e.stopPropagation(); if (!mapsSelected[kw.id]) return; if (!confirm(`Delete "${kw.keyword} — ${kw.location}"?`)) return; removeKeyword(kw.id); }}
+                            style={{ background: 'none', border: 'none', color: mapsSelected[kw.id] ? '#ef4444' : '#555', cursor: mapsSelected[kw.id] ? 'pointer' : 'default', fontSize: 12, padding: 4, opacity: mapsSelected[kw.id] ? 0.7 : 0.25 }}
+                            onMouseOver={e => { if (mapsSelected[kw.id]) e.currentTarget.style.opacity = 1; }} onMouseOut={e => { e.currentTarget.style.opacity = mapsSelected[kw.id] ? 0.7 : 0.25; }}
+                            title={mapsSelected[kw.id] ? 'Delete keyword' : 'Select keyword first'}>
                             <i className="fa-solid fa-trash" />
                           </button>
                         </div>
