@@ -22065,9 +22065,9 @@
               setMapsLoading(true);
               setHasMapsRun(true);
               pollTimer = setTimeout(load, 3000);
-            } else if (r.maps_status === 'error') {
+            } else if (r.maps_status === 'error' || r.maps_status === 'idle') {
               setMapsLoading(false);
-              setHasMapsRun(false);
+              setHasMapsRun(r.maps_status === 'error' ? false : (r.maps_keywords?.length > 0));
             }
           }
         };

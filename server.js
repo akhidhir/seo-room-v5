@@ -23648,7 +23648,17 @@ app.get('/api/projects/:projectId/discovery', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM discovery_cache WHERE project_id=$1', [req.params.projectId]);
     if (rows.length === 0) return res.json({ status: 'idle', keywords: [], total_count: 0 });
-    res.json(rows[0]);
+    const row = rows[0];
+    // Auto-reset stale SERP runs (>5 min)
+    if (row.status === 'running' && row.updated_at) {
+      const ageMin = (Date.now() - new Date(row.updated_at).getTime()) / 60000;
+      if (ageMin > 5) {
+        await pool.query(`UPDATE discovery_cache SET status='idle' WHERE project_id=$1`, [req.params.projectId]);
+        console.log(`[discovery] Auto-reset stale SERP run for project ${req.params.projectId} (${ageMin.toFixed(1)} min old)`);
+        row.status = 'idle';
+      }
+    }
+    res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -23841,6 +23851,15 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
     );
     if (rows.length === 0) return res.json({ maps_status: 'idle', maps_keywords: [] });
     const row = rows[0];
+    // Auto-reset stale runs (>5 min)
+    if (row.maps_status === 'running' && row.updated_at) {
+      const ageMin = (Date.now() - new Date(row.updated_at).getTime()) / 60000;
+      if (ageMin > 5) {
+        await pool.query(`UPDATE discovery_cache SET maps_status='idle' WHERE project_id=$1`, [req.params.projectId]);
+        console.log(`[maps-discovery] Auto-reset stale maps run for project ${req.params.projectId} (${ageMin.toFixed(1)} min old)`);
+        return res.json({ maps_status: 'idle', maps_keywords: row.maps_keywords || [], maps_count: row.maps_count || 0, maps_cost: row.maps_cost || 0 });
+      }
+    }
     res.json({
       maps_status: row.maps_status || 'idle',
       maps_keywords: row.maps_keywords || [],
