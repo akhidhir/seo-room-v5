@@ -22475,15 +22475,43 @@
         const kws = discoveredMaps.filter(k => selectedDiscMaps.has(k.keyword));
         setDiscovering(true);
         try {
-          const projectLoc = (project.location || '').split(',')[0].trim() || 'Perth';
-          const kwList = kws.map(k => k.keyword);
-          const r = await api(`/projects/${project.id}/rank-tracking/keywords`, {
-            method: 'POST',
-            body: { keywords: kwList, location: projectLoc }
-          });
-          if (r.error) { alert(r.error); } else {
-            alert(`Added ${r.added || kwList.length} keywords to Maps tracking (location: ${projectLoc}).`);
+          const fallbackLoc = (project.location || '').split(',')[0].trim() || 'Perth';
+          // Build suburb list from project service_areas + SUBURB_GPS-style known suburbs
+          const knownSuburbs = (project.service_areas || []).map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().trim()).filter(Boolean);
+          // Add common Perth suburbs for matching
+          const commonSuburbs = ['perth','bayswater','morley','midland','joondalup','fremantle','rockingham','mandurah','armadale','cannington','belmont','victoria park','osborne park','malaga','welshpool','balcatta','wanneroo','ellenbrook','mundijong','kelmscott','gosnells','canning vale','bentley','carlisle','rivervale','east perth','west perth','north perth','south perth','subiaco','claremont','nedlands','cottesloe','scarborough','innaloo','stirling','mirrabooka','nollamara','dianella','mount lawley','inglewood','maylands','bassendean','guildford','swan view','kalamunda','lesmurdie','high wycombe','forrestfield','thornlie','huntingdale','langford','lynwood','willetton','bull creek','booragoon','melville','palmyra','bicton','applecross','como','manning','salter point','shelley','rossmoyne','woodlands','doubleview','churchlands','floreat','wembley','leederville','northbridge','east victoria park','kewdale','cloverdale','redcliffe','ascot','belmont','perth cbd','wa','western australia','abbotsford','keilor','church street','huntingdale'];
+          for (const s of commonSuburbs) { if (!knownSuburbs.includes(s)) knownSuburbs.push(s); }
+
+          let added = 0;
+          for (const kw of kws) {
+            const kwLower = kw.keyword.toLowerCase().trim();
+            const words = kwLower.split(/\s+/);
+            // Try to find longest matching suburb from end of keyword
+            let foundSuburb = '';
+            let service = kw.keyword;
+            for (let len = Math.min(3, words.length - 1); len >= 1; len--) {
+              for (let start = words.length - len; start >= 1; start--) {
+                const candidate = words.slice(start, start + len).join(' ');
+                if (knownSuburbs.includes(candidate) && candidate !== 'wa' && candidate !== 'western australia') {
+                  foundSuburb = candidate.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                  service = words.slice(0, start).join(' ');
+                  break;
+                }
+              }
+              if (foundSuburb) break;
+            }
+            // Remove "near me" from service
+            service = service.replace(/\s*near me\s*/gi, '').trim();
+            const location = foundSuburb || fallbackLoc;
+            if (service) {
+              await api(`/projects/${project.id}/rank-tracking/keywords`, {
+                method: 'POST',
+                body: { keywords: [service], location }
+              });
+              added++;
+            }
           }
+          alert(`Added ${added} Maps keywords with extracted locations.`);
           setDiscoveredMaps(null);
           setSelectedDiscMaps(new Set());
           loadData();
