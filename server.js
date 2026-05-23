@@ -1045,6 +1045,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/rc-grid-sync$/)) return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
+  // Allow plugin endpoints (license check, update check, download — no JWT)
+  if (req.path.match(/^\/api\/plugin\//)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
