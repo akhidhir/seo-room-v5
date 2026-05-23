@@ -23695,7 +23695,10 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
         // Check Maps positions for top 50
         const location = project.location || 'Perth,Western Australia,Australia';
         const businessName = (project.business_name || project.name || '').toLowerCase();
+        const domainLower = domain.toLowerCase();
+        console.log(`[discovery] Maps check: businessName="${businessName}", domain="${domainLower}", location="${location}"`);
         const mapsKws = localKeywords.slice(0, 50);
+        let mapsFound = 0;
         for (let i = 0; i < mapsKws.length; i += 5) {
           const batch = mapsKws.slice(i, i + 5);
           const promises = batch.map(async (kw) => {
@@ -23703,18 +23706,23 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
               const data = await dataForSeoMaps({ keyword: kw.keyword, location });
               const results = data.local_results || [];
               for (const r of results) {
-                const titleLower = (r.title || '').toLowerCase();
-                const domainLower = (r.domain || '').toLowerCase();
-                if (titleLower.includes(businessName) || domainLower.includes(domain.toLowerCase())) {
+                const titleLow = (r.title || '').toLowerCase();
+                const domainLow = (r.domain || '').toLowerCase();
+                if (titleLow.includes(businessName) || domainLow.includes(domainLower)) {
                   kw.maps_position = r.position;
                   kw.on_maps = true;
+                  mapsFound++;
+                  console.log(`[discovery] Maps match: "${kw.keyword}" → position ${r.position} (title="${r.title}")`);
                   break;
                 }
               }
-            } catch {}
+            } catch (e) {
+              console.error(`[discovery] Maps check error for "${kw.keyword}":`, e.message);
+            }
           });
           await Promise.all(promises);
         }
+        console.log(`[discovery] Maps check complete: ${mapsFound} found out of ${mapsKws.length}`);
 
         // Save to DB
         await pool.query(
