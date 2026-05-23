@@ -15344,16 +15344,6 @@
             style: { padding: '8px 16px', background: savingMeta === 'done' ? '#22c55e' : '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
             React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), savingMeta === 'done' ? 'Saved!' : 'Save'
           ),
-          // Move to CW Current
-          !isPublished && pid && React.createElement('button', {
-            onClick: function() {
-              if (!confirm('Move "' + (page.page_name || 'this page') + '" to Copywriter Current?')) return;
-              api('/projects/' + pid + '/copywriter-move', { method: 'POST', body: { item_id: page.id, from: 'site_pages', to: 'content_queue' } })
-                .then(function() { onBack(); })
-                .catch(function(e) { alert('Move failed: ' + e.message); });
-            },
-            style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
-          }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6 } }), 'Move to CW New'),
           // Send for Approval
           !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove,
             style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
