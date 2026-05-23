@@ -15980,7 +15980,7 @@
       var [loading, setLoading] = React.useState(true);
       var [selectedPage, setSelectedPage] = React.useState(null);
       var stageConfig = {
-        queue: { title: 'Draft Queue', icon: 'fas fa-pen', desc: 'Pages waiting for content generation or moved from Action Plan.', dbStages: ['draft'], empty: 'No pages in draft queue.' },
+        queue: { title: 'Draft Queue', icon: 'fas fa-pen', desc: 'Pages waiting for content generation or moved from Action Plan.', dbStages: ['draft', 'brief'], empty: 'No pages in draft queue.' },
         review: { title: 'Review & Approve', icon: 'fas fa-check-circle', desc: 'Review AI-generated content, edit, and approve for publishing.', dbStages: ['written', 'reviewed'], empty: 'No content to review.' },
         publish: { title: 'Publish to WordPress', icon: 'fas fa-rocket', desc: 'Approved content ready to be published as new pages.', dbStages: ['approved', 'published'], empty: 'No approved content.' },
       };
