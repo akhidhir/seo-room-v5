@@ -23656,9 +23656,13 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
     if (!domain) return res.status(400).json({ error: 'No domain configured' });
 
-    // Check if already running
-    const existing = (await pool.query('SELECT status FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
-    if (existing?.status === 'running') return res.json({ status: 'running', message: 'Already running' });
+    // Check if already running (but allow re-run if stuck for >5 minutes)
+    const existing = (await pool.query('SELECT status, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    if (existing?.status === 'running') {
+      const ageMinutes = (Date.now() - new Date(existing.updated_at).getTime()) / 60000;
+      if (ageMinutes < 5) return res.json({ status: 'running', message: 'Already running' });
+      console.log(`[discovery] Stale running status (${ageMinutes.toFixed(0)}min old), restarting...`);
+    }
 
     // Mark as running
     await pool.query(
@@ -23699,14 +23703,17 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
         // Build fuzzy match variants: "house works plumbing" → also match "houseworksplumbing", "houseworks plumbing", etc.
         const bizNoSpaces = businessName.replace(/\s+/g, '');
         const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
-        console.log(`[discovery] Maps check: businessName="${businessName}", bizNoSpaces="${bizNoSpaces}", domainBase="${domainBase}", location="${location}"`);
+        // Resolve GPS coordinates for Maps check — more reliable than location name
+        const locLower = (location || '').toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
+        const locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
+        console.log(`[discovery] Maps check: businessName="${businessName}", bizNoSpaces="${bizNoSpaces}", domainBase="${domainBase}", location="${location}", gps=${locGps.lat},${locGps.lng}`);
         const mapsKws = localKeywords.slice(0, 50);
         let mapsFound = 0;
         for (let i = 0; i < mapsKws.length; i += 5) {
           const batch = mapsKws.slice(i, i + 5);
           const promises = batch.map(async (kw) => {
             try {
-              const data = await dataForSeoMaps({ keyword: kw.keyword, location });
+              const data = await dataForSeoMaps({ keyword: kw.keyword, lat: locGps.lat, lng: locGps.lng });
               const results = data.local_results || [];
               for (const r of results) {
                 const titleLow = (r.title || '').toLowerCase();
