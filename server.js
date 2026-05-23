@@ -2538,7 +2538,7 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.3.0',
+    version: '8.3.1',
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
