@@ -23332,18 +23332,12 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
   const { keywords } = req.body; // [{keyword, volume, position, url, competition}]
   if (!Array.isArray(keywords) || keywords.length === 0) return res.status(400).json({ error: 'No keywords provided' });
   try {
-    // Enforce grid_scan_limit
-    const projR = await pool.query('SELECT grid_scan_limit FROM projects WHERE id=$1', [projectId]);
-    const limit = projR.rows[0]?.grid_scan_limit || 50;
-    const currentCount = await pool.query('SELECT COUNT(*) FROM rank_keywords WHERE project_id=$1', [projectId]);
-    const current = parseInt(currentCount.rows[0].count);
-
+    // No limit for SERP/discovered keywords — grid_scan_limit only applies to Maps keywords (with location)
     let added = 0;
     const baseTime = Date.now();
     for (let i = 0; i < keywords.length; i++) {
       const k = keywords[i];
       if (!k.keyword) continue;
-      if (current + added >= limit) break;
       const kw = k.keyword.trim();
       // Insert into rank_keywords with volume
       await pool.query(

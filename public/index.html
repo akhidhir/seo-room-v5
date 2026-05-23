@@ -22467,17 +22467,16 @@
       const addDiscoveredMapKeywords = async () => {
         if (selectedDiscMaps.size === 0) return;
         const kws = discoveredMaps.filter(k => selectedDiscMaps.has(k.keyword));
-        // Add as map keywords with project location
-        const location = (project.location || 'Perth').split(',')[0].trim();
-        let added = 0;
-        for (const kw of kws) {
-          const r = await api(`/projects/${project.id}/rank-tracking/keywords`, {
-            method: 'POST',
-            body: { keywords: [kw.keyword], location }
-          });
-          if (r.ok || r.added) added++;
+        // Use import-discovered endpoint which handles volume/position data
+        const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
+          method: 'POST',
+          body: { keywords: kws }
+        });
+        if (r.ok) {
+          alert(`Added ${r.added} discovered keywords with volume & position data.`);
+        } else {
+          alert(r.error || 'Failed to add keywords');
         }
-        if (added > 0) alert(`Added ${added} discovered keywords. Click "Grid Scan" to check Maps positions.`);
         setDiscoveredMaps(null);
         setSelectedDiscMaps(new Set());
         loadData();
