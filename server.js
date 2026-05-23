@@ -27869,13 +27869,21 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
 
     const profile = rc?.profile || null;
 
-    // Extract GBP suburbs from service areas
+    // Extract GBP suburbs from service areas (RC profile first, fallback to project.service_areas)
     const gbpSuburbs = [];
     if (profile?.serviceArea?.places?.placeInfos) {
       for (const p of profile.serviceArea.places.placeInfos) {
         const name = (p.placeName || '').replace(/,?\s*(WA|Australia|VIC|NSW|QLD|SA|NT|TAS|ACT)\s*/gi, '').replace(/\d{4}/, '').trim();
         if (name) gbpSuburbs.push(name);
       }
+    }
+    // Fallback: use project.service_areas if RC profile has none
+    if (gbpSuburbs.length === 0 && Array.isArray(project.service_areas) && project.service_areas.length > 0) {
+      for (const a of project.service_areas) {
+        const name = (typeof a === 'string' ? a : a.name || '').replace(/,?\s*(WA|Australia|VIC|NSW|QLD|SA|NT|TAS|ACT)\s*/gi, '').replace(/\d{4}/, '').trim();
+        if (name) gbpSuburbs.push(name);
+      }
+      console.log(`[local-intel] Using project.service_areas fallback: ${gbpSuburbs.length} suburbs`);
     }
     // Extract GBP services — resolve structuredServiceItem IDs via category serviceTypes
     const gbpServices = [];
