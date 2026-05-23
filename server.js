@@ -16599,6 +16599,104 @@ app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
 });
 
 // Generate content for a site page
+// Build-scoped content generation (uses copywriting brief)
+app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req, res) => {
+  const { buildId, pageId } = req.params;
+  try {
+    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [pageId, buildId]);
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+
+    // Get build info + brief
+    const buildResult = await pool.query('SELECT * FROM website_builds WHERE id=$1', [buildId]);
+    const build = buildResult.rows[0] || {};
+    const brief = build.copywriting_brief || {};
+
+    // Get all pages for linking context
+    const allPages = await pool.query('SELECT id, page_name, slug, is_cornerstone, focus_keyword FROM site_pages WHERE build_id=$1', [buildId]);
+
+    const linksContext = (page.internal_links || []).map(l => {
+      const target = allPages.rows.find(p => p.id === l.target_page_id);
+      return target ? `Link to "${target.page_name}" (${target.slug}) with anchor text "${l.anchor_text}"` : '';
+    }).filter(Boolean).join('\n');
+
+    // Build brief context for AI
+    let briefContext = '';
+    if (brief.brand_tone) briefContext += `\nBRAND TONE: ${brief.brand_tone.join(', ')}`;
+    if (brief.words_to_avoid && brief.words_to_avoid.length) briefContext += `\nWORDS TO AVOID (never use these): ${brief.words_to_avoid.join(', ')}`;
+    if (brief.differentiators && brief.differentiators.length) briefContext += `\nKEY DIFFERENTIATORS: ${brief.differentiators.join('; ')}`;
+
+    // Find matching service page from brief
+    let briefPageContent = '';
+    if (brief.service_pages) {
+      const match = brief.service_pages.find(sp => sp.page_name.toLowerCase() === page.page_name.toLowerCase());
+      if (match) {
+        briefPageContent = `\nCLIENT-PROVIDED CONTENT FOR THIS PAGE:\n${match.description || ''}`;
+        if (match.process_steps && match.process_steps.length) briefPageContent += `\nProcess steps: ${match.process_steps.join('; ')}`;
+        if (match.types_or_styles && match.types_or_styles.length) briefPageContent += `\nTypes/styles to mention: ${match.types_or_styles.join(', ')}`;
+      }
+    }
+    if (page.page_name === 'About' && brief.about_page) {
+      briefPageContent = `\nCLIENT-PROVIDED ABOUT INFO:\n${brief.about_page.summary || ''}`;
+      if (brief.about_page.dot_points) briefPageContent += `\nMust include: ${brief.about_page.dot_points.join('; ')}`;
+    }
+    if (page.page_name === 'Home') {
+      briefPageContent = `\nThis is the homepage. Incorporate the brand differentiators and showcase all services: ${(brief.service_pages || []).map(s => s.page_name).join(', ')}`;
+    }
+
+    // AI notes from brief upload
+    const aiNotes = page.ai_notes ? `\nADDITIONAL NOTES:\n${page.ai_notes}` : '';
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `Write a complete webpage for a ${build.industry || 'business'} website (${build.business_name || build.name}) in ${build.location || 'Australia'}.
+
+CRITICAL: The page topic is "${page.page_name}". ALL content, H1, meta title, and meta description MUST be specifically about "${page.page_name}".
+
+PAGE TOPIC: "${page.page_name}" (${page.page_type})
+FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
+${briefContext}
+${briefPageContent}
+${aiNotes}
+
+INTERNAL LINKS TO INCLUDE:
+${linksContext || 'No internal links planned.'}
+
+REQUIREMENTS:
+- The H1 MUST include "${page.page_name}" or a close variation
+- Target word count: 800-1200 words
+- Use the brand tone specified above
+- NEVER use any of the "words to avoid" listed above
+- Highlight the business differentiators naturally
+- Use H2 and H3 subheadings
+- Include the focus keyword in the H1 and first paragraph
+- Include a clear call to action
+- Write for SEO but natural for humans
+- Do NOT include <html>, <head>, or <body> tags — just content HTML starting with <h1>
+- No placeholder text — all content must be specific to this business
+
+Return ONLY the HTML content, no markdown wrapping.`
+      }]
+    });
+
+    const content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+
+    await pool.query(
+      'UPDATE site_pages SET draft_content=$1, word_count=$2, stage=$3, updated_at=NOW() WHERE id=$4',
+      [content, wordCount, 'written', pageId]
+    );
+
+    res.json({ content, word_count: wordCount });
+  } catch (e) {
+    console.error('[build-content-gen] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (req, res) => {
   const { projectId, pageId } = req.params;
   try {
