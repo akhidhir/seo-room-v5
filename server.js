@@ -24552,6 +24552,29 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
   }
 });
 
+// Debug: test DataForSEO SERP for a single keyword
+app.post('/api/projects/:projectId/rank-tracking/debug-serp', async (req, res) => {
+  try {
+    const { keyword } = req.body;
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
+    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+    const loc = (project.location || 'Perth,Western Australia,Australia').trim();
+    const data = await dataForSeoSerp({ keyword, location: loc, depth: 30 });
+    // Show raw organic results with domain matching info
+    const organicWithMatch = (data.organic_results || []).map(item => {
+      let itemHost = '';
+      try { itemHost = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { itemHost = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase(); }
+      return { position: item.position, host: itemHost, link: item.link, title: item.title, domainMatch: itemHost === domain.toLowerCase() };
+    });
+    res.json({ domain, location: loc, keyword, organic_count: organicWithMatch.length, organic_results: organicWithMatch, local_results: data.local_results, source: data.source });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get latest rankings for a project
 app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
   try {
