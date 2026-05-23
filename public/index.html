@@ -22011,6 +22011,216 @@
       { name: 'Superpages', url: 'superpages.com.au', free: true, type: 'Standard' },
     ];
 
+    // ============ DISCOVER LOCAL KEYWORDS PAGE ============
+    function DiscoverLocalPage({ project }) {
+      const [keywords, setKeywords] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [selected, setSelected] = useState(new Set());
+      const [search, setSearch] = useState('');
+      const [sortCol, setSortCol] = useState('position');
+      const [sortDir, setSortDir] = useState('asc');
+      const [hasRun, setHasRun] = useState(false);
+
+      const discover = async () => {
+        setLoading(true);
+        try {
+          const r = await api(`/projects/${project.id}/discover-keywords`, {
+            method: 'POST',
+            body: { limit: 200, checkMaps: true }
+          });
+          if (r.error) { alert(r.error); setLoading(false); return; }
+          // Merge maps results
+          const mapsMap = {};
+          if (r.maps_results) {
+            for (const mr of r.maps_results) { mapsMap[mr.keyword.toLowerCase()] = mr; }
+          }
+          const all = (r.keywords || []).filter(k => k.local_intent).map(k => {
+            const mr = mapsMap[k.keyword.toLowerCase()];
+            return { ...k, maps_position: mr?.maps_position || null, on_maps: mr?.on_maps || false };
+          });
+          setKeywords(all);
+          setHasRun(true);
+        } catch (e) { alert('Discovery failed: ' + e.message); }
+        setLoading(false);
+      };
+
+      const addToSerp = async () => {
+        const kws = keywords.filter(k => selected.has(k.keyword));
+        if (kws.length === 0) return;
+        try {
+          await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
+            method: 'POST',
+            body: { keywords: kws.map(k => ({ keyword: k.keyword, volume: k.volume, position: k.position, url: k.url, competition: k.competition })) }
+          });
+          alert(`Added ${kws.length} keywords to SERP Rankings.`);
+          setSelected(new Set());
+        } catch (e) { alert('Failed: ' + e.message); }
+      };
+
+      const addToMaps = async () => {
+        const kws = keywords.filter(k => selected.has(k.keyword));
+        if (kws.length === 0) return;
+        const allSuburbNames = Object.keys(window.__suburbGps || {});
+        if (allSuburbNames.length === 0) {
+          try { const gps = await api('/suburb-gps'); window.__suburbGps = gps; allSuburbNames.push(...Object.keys(gps)); } catch {}
+        }
+        const knownSuburbs = allSuburbNames.sort((a, b) => b.length - a.length);
+        let added = 0;
+        for (const kw of kws) {
+          const words = kw.keyword.toLowerCase().trim().split(/\s+/);
+          let foundSuburb = '';
+          let service = kw.keyword;
+          for (let len = Math.min(3, words.length - 1); len >= 1; len--) {
+            for (let start = words.length - len; start >= 1; start--) {
+              const candidate = words.slice(start, start + len).join(' ');
+              if (knownSuburbs.includes(candidate) && candidate !== 'wa' && candidate !== 'western australia') {
+                foundSuburb = candidate.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                service = words.slice(0, start).join(' ');
+                break;
+              }
+            }
+            if (foundSuburb) break;
+          }
+          service = service.replace(/\s*near me\s*/gi, '').trim();
+          const location = foundSuburb || (project.location || '').split(',')[0].trim() || 'Perth';
+          if (service) {
+            await api(`/projects/${project.id}/rank-tracking/keywords`, {
+              method: 'POST',
+              body: { keywords: [service], location }
+            });
+            added++;
+          }
+        }
+        alert(`Added ${added} keywords to Maps Rankings.`);
+        setSelected(new Set());
+      };
+
+      // Filter + sort
+      const filtered = keywords.filter(k => {
+        if (search && !k.keyword.toLowerCase().includes(search.toLowerCase())) return false;
+        return true;
+      });
+      const sorted = [...filtered].sort((a, b) => {
+        let va, vb;
+        if (sortCol === 'keyword') { va = a.keyword; vb = b.keyword; return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va); }
+        if (sortCol === 'position') { va = a.position || 999; vb = b.position || 999; }
+        else if (sortCol === 'maps') { va = a.maps_position || 999; vb = b.maps_position || 999; }
+        else if (sortCol === 'volume') { va = a.volume || 0; vb = b.volume || 0; }
+        else if (sortCol === 'cpc') { va = a.cpc || 0; vb = b.cpc || 0; }
+        else { va = 0; vb = 0; }
+        return sortDir === 'asc' ? va - vb : vb - va;
+      });
+
+      const toggleSort = (col) => {
+        if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setSortCol(col); setSortDir('asc'); }
+      };
+      const sortIcon = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+      const allSelected = sorted.length > 0 && sorted.every(k => selected.has(k.keyword));
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 10, color: '#14b8a6' }} />Discover Local Keywords</h2>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Find keywords your domain ranks for with local intent — add to SERP or Maps tracking</div>
+            </div>
+            <button className="btn btn-primary" onClick={discover} disabled={loading} style={{ fontSize: 14, padding: '8px 20px' }}>
+              {loading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 6 }} />Discover Keywords</>}
+            </button>
+          </div>
+
+          {!hasRun && !loading && (
+            <div style={{ textAlign: 'center', padding: 80, color: 'var(--text3)' }}>
+              <i className="fa-solid fa-magnifying-glass-chart" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No keywords discovered yet</div>
+              <div style={{ fontSize: 13, marginBottom: 20 }}>Click <strong>Discover Keywords</strong> to find what your domain ranks for with local search intent.</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 500, margin: '0 auto', lineHeight: 1.6 }}>
+                Uses DataForSEO to find organic keywords, then checks Google Maps positions for the top 50. Cost: ~$0.04 for discovery + ~$0.10 for Maps checks.
+              </div>
+            </div>
+          )}
+
+          {hasRun && (
+            <div>
+              {/* Toolbar */}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+                  <i className="fa-solid fa-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 12 }} />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search keywords..."
+                    style={{ width: '100%', padding: '8px 10px 8px 32px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', fontSize: 13 }} />
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text3)' }}>{sorted.length} keywords · {selected.size} selected</div>
+                {selected.size > 0 && (
+                  <>
+                    <button className="btn" onClick={addToSerp} style={{ fontSize: 12, borderColor: 'var(--accent)', color: 'var(--accent)' }}>
+                      <i className="fa-solid fa-chart-line" style={{ marginRight: 4 }} />Add {selected.size} to SERP
+                    </button>
+                    <button className="btn" onClick={addToMaps} style={{ fontSize: 12, borderColor: '#22c55e', color: '#22c55e' }}>
+                      <i className="fa-solid fa-map-location-dot" style={{ marginRight: 4 }} />Add {selected.size} to Maps
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Table */}
+              <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ padding: '10px 12px', width: 30 }}>
+                        <input type="checkbox" checked={allSelected} onChange={() => {
+                          if (allSelected) setSelected(new Set());
+                          else setSelected(new Set(sorted.map(k => k.keyword)));
+                        }} />
+                      </th>
+                      <th onClick={() => toggleSort('keyword')} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', cursor: 'pointer' }}>Keyword{sortIcon('keyword')}</th>
+                      <th onClick={() => toggleSort('position')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>SERP{sortIcon('position')}</th>
+                      <th onClick={() => toggleSort('maps')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>Maps{sortIcon('maps')}</th>
+                      <th onClick={() => toggleSort('volume')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80, cursor: 'pointer' }}>Volume{sortIcon('volume')}</th>
+                      <th onClick={() => toggleSort('cpc')} style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 70, cursor: 'pointer' }}>CPC{sortIcon('cpc')}</th>
+                      <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', width: 200 }}>URL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(k => (
+                      <tr key={k.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                        onClick={(e) => { if (e.target.type !== 'checkbox') { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); } }}>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <input type="checkbox" checked={selected.has(k.keyword)} onChange={() => { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); }} />
+                        </td>
+                        <td style={{ padding: '8px 12px', fontWeight: 500 }}>{k.keyword}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                            background: k.position <= 3 ? 'rgba(34,197,94,0.15)' : k.position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)',
+                            color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : 'var(--text2)' }}>
+                            #{k.position}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          {k.maps_position ? (
+                            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                              background: k.maps_position <= 3 ? 'rgba(34,197,94,0.15)' : k.maps_position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                              color: k.maps_position <= 3 ? '#22c55e' : k.maps_position <= 10 ? '#f59e0b' : '#ef4444' }}>
+                              #{k.maps_position}
+                            </span>
+                          ) : <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{k.volume?.toLocaleString() || '—'}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function MapsRankingsPage({ project, setPage }) {
       const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
       const [syncing, setSyncing] = useState(false);
@@ -27318,6 +27528,8 @@ case 'action-plan':
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
           case 'serp-rankings':
             return <SERPRankingsPage project={project} />;
+          case 'discover-local':
+            return <DiscoverLocalPage project={project} />;
           case 'monthly-reports':
             return <MonthlyReportsPage project={project} />;
           case 'gbp-posts':
@@ -27371,6 +27583,7 @@ case 'action-plan':
         { section: 'RANKINGS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
+          { id: 'discover-local', label: 'Discover Local Keywords', icon: 'fas fa-magnifying-glass-chart' },
         ]},
         { section: 'ACTION PLAN', items: [
           { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
