@@ -22461,9 +22461,9 @@
             body: { limit: 100, checkMaps: false }
           });
           if (r.error) { alert(r.error); setDiscovering(false); return; }
-          // Filter to local-intent keywords only, exclude already tracked
-          const tracked = new Set(keywords.map(k => k.keyword.toLowerCase()));
-          const fresh = (r.keywords || []).filter(k => k.local_intent && !tracked.has(k.keyword.toLowerCase()));
+          // Filter to local-intent keywords only, exclude already tracked as Maps keywords (with location)
+          const trackedMaps = new Set(keywords.filter(k => k.location).map(k => k.keyword.toLowerCase()));
+          const fresh = (r.keywords || []).filter(k => k.local_intent && !trackedMaps.has(k.keyword.toLowerCase()));
           setDiscoveredMaps(fresh);
           setSelectedDiscMaps(new Set(fresh.map(k => k.keyword)));
         } catch (e) { alert('Discovery failed: ' + e.message); }
