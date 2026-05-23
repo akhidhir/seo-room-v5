@@ -21494,6 +21494,17 @@
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Column header bar */}
+              <div style={{ display: 'flex', alignItems: 'center', padding: '6px 18px 6px 48px' }}>
+                <div style={{ flex: 1, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.8 }}>Keyword</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexShrink: 0 }}>
+                  <div style={{ textAlign: 'center', width: 60, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.8, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'volume' ? null : 'volume'); setSortDir(sortCol === 'volume' && sortDir === 'asc' ? 'desc' : 'asc'); }}>Volume {sortCol === 'volume' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
+                  <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.8, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'position' ? null : 'position'); setSortDir(sortCol === 'position' && sortDir === 'asc' ? 'desc' : 'asc'); }}>SERP {sortCol === 'position' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
+                  <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.8 }}>Change</div>
+                  <div style={{ width: 90 }} />{/* spacer for status badge */}
+                  <div style={{ width: 12 }} />{/* spacer for chevron */}
+                </div>
+              </div>
               {sorted.map(kw => {
                 const bdrColor = kw.serp_position && kw.serp_position <= 3 ? '#22c55e' : kw.serp_position && kw.serp_position <= 10 ? '#3b82f6' : kw.serp_position && kw.serp_position <= 20 ? '#f59e0b' : '#ef4444';
                 const serpComps = (kw.competitors || []).filter(c => c.source === 'serp');
