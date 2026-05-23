@@ -23328,6 +23328,109 @@ app.post('/api/projects/:projectId/discover-keywords', async (req, res) => {
   }
 });
 
+// Smart Generate: crawl website pages → extract suburbs, discover services → cross-combine
+app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+    if (!domain) return res.status(400).json({ error: 'Project has no domain configured' });
+    const projectUrl = project.domain.startsWith('http') ? project.domain : `https://${project.domain}`;
+    const wpUrl = project.wp_url || projectUrl;
+
+    console.log(`[smart-gen] Starting for ${domain} (project ${projectId})`);
+
+    // Step 1: Discover website pages and extract suburb names from slugs
+    const pages = await discoverPages(projectUrl, wpUrl);
+    console.log(`[smart-gen] Found ${pages.length} pages`);
+
+    const allSuburbNames = Object.keys(SUBURB_GPS);
+    // Sort longest first so "east cannington" matches before "cannington"
+    allSuburbNames.sort((a, b) => b.length - a.length);
+
+    const foundSuburbs = new Set();
+    for (const page of pages) {
+      const slug = (page.slug || '').toLowerCase().replace(/-/g, ' ');
+      for (const sub of allSuburbNames) {
+        if (slug.includes(sub) && sub !== 'perth' && sub !== 'wa' && sub !== 'sydney' && sub !== 'melbourne' && sub !== 'brisbane' && sub !== 'adelaide' && sub !== 'hobart') {
+          foundSuburbs.add(sub);
+        }
+      }
+    }
+    // Also add project service_areas
+    const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas : [];
+    for (const area of serviceAreas) {
+      const areaName = (typeof area === 'string' ? area : area.name || '').toLowerCase().trim();
+      if (areaName && SUBURB_GPS[areaName]) foundSuburbs.add(areaName);
+    }
+
+    console.log(`[smart-gen] Found ${foundSuburbs.size} suburbs from website: ${[...foundSuburbs].join(', ')}`);
+
+    // Step 2: Discover organic keywords and extract pure service terms
+    const result = await dataForSeoRankedKeywords({
+      domain,
+      locationCode: 2036,
+      limit: 200,
+      offset: 0,
+    });
+
+    // Extract services by stripping suburb names + generic location terms from keywords
+    const stripTerms = [...allSuburbNames, 'near me', 'near', 'wa', 'western australia', 'perth', 'australia', 'sydney', 'melbourne', 'brisbane', 'adelaide'];
+    stripTerms.sort((a, b) => b.length - a.length);
+    const servicesSet = new Set();
+    const serviceDetails = []; // [{service, original_keyword, volume, position}]
+
+    for (const kw of result.keywords) {
+      let service = (kw.keyword || '').toLowerCase().trim();
+      // Strip suburb/location terms
+      for (const term of stripTerms) {
+        // Word-boundary-ish replacement
+        service = service.replace(new RegExp('\\b' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '').trim();
+      }
+      // Clean up multiple spaces, trailing/leading hyphens
+      service = service.replace(/\s+/g, ' ').replace(/^[\s\-]+|[\s\-]+$/g, '').trim();
+      if (service.length > 2 && !servicesSet.has(service)) {
+        servicesSet.add(service);
+        serviceDetails.push({ service, original_keyword: kw.keyword, volume: kw.volume, position: kw.position });
+      }
+    }
+
+    console.log(`[smart-gen] Extracted ${servicesSet.size} services from ${result.keywords.length} keywords`);
+
+    // Step 3: Cross-combine services × suburbs
+    const suburbs = [...foundSuburbs].map(s => s.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')).sort();
+    const services = serviceDetails.sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 30); // Top 30 by volume
+    const combos = [];
+    for (const svc of services) {
+      for (const sub of suburbs) {
+        combos.push({ keyword: `${svc.service} ${sub}`, service: svc.service, suburb: sub, volume: svc.volume });
+      }
+    }
+
+    // Check which combos are already tracked
+    const existingRes = await pool.query('SELECT keyword, location FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL', [projectId]);
+    const existingSet = new Set(existingRes.rows.map(r => `${r.keyword.toLowerCase()}|${(r.location || '').toLowerCase()}`));
+    for (const c of combos) {
+      c.already_tracked = existingSet.has(`${c.service.toLowerCase()}|${c.suburb.toLowerCase()}`);
+    }
+
+    console.log(`[smart-gen] Generated ${combos.length} combos (${combos.filter(c => !c.already_tracked).length} new)`);
+
+    res.json({
+      suburbs,
+      services: services.map(s => ({ service: s.service, volume: s.volume, position: s.position })),
+      combos,
+      total_pages: pages.length,
+      total_keywords: result.keywords.length,
+      pages_with_suburbs: [...foundSuburbs].length,
+    });
+  } catch (e) {
+    console.error('[smart-gen] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Import discovered keywords with volume + position data
 app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req, res) => {
   const { projectId } = req.params;

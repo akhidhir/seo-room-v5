@@ -22017,6 +22017,9 @@
       const [discovering, setDiscovering] = useState(false);
       const [discoveredMaps, setDiscoveredMaps] = useState(null);
       const [selectedDiscMaps, setSelectedDiscMaps] = useState(new Set());
+      const [smartGen, setSmartGen] = useState(null); // { suburbs, services, combos, ... }
+      const [smartGenLoading, setSmartGenLoading] = useState(false);
+      const [smartGenSelected, setSmartGenSelected] = useState(new Set());
 
       // Load suburb GPS data for grid tooltips
       useEffect(() => {
@@ -22521,6 +22524,40 @@
         setDiscovering(false);
       };
 
+      // Smart Generate: crawl website → extract suburbs × services
+      const handleSmartGenerate = async () => {
+        setSmartGenLoading(true);
+        try {
+          const r = await api(`/projects/${project.id}/maps/smart-generate`, { method: 'POST', body: {} });
+          if (r.error) { alert(r.error); setSmartGenLoading(false); return; }
+          const newCombos = (r.combos || []).filter(c => !c.already_tracked);
+          setSmartGen({ ...r, combos: r.combos || [] });
+          setSmartGenSelected(new Set(newCombos.map(c => c.keyword)));
+        } catch (e) { alert('Smart Generate failed: ' + e.message); }
+        setSmartGenLoading(false);
+      };
+
+      const addSmartGenKeywords = async () => {
+        if (smartGenSelected.size === 0) return;
+        const toAdd = (smartGen.combos || []).filter(c => smartGenSelected.has(c.keyword) && !c.already_tracked);
+        setSmartGenLoading(true);
+        try {
+          let added = 0;
+          for (const combo of toAdd) {
+            await api(`/projects/${project.id}/rank-tracking/keywords`, {
+              method: 'POST',
+              body: { keywords: [combo.service], location: combo.suburb }
+            });
+            added++;
+          }
+          alert(`Added ${added} Maps keywords.`);
+          setSmartGen(null);
+          setSmartGenSelected(new Set());
+          loadData();
+        } catch (e) { alert('Failed: ' + e.message); }
+        setSmartGenLoading(false);
+      };
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -22537,6 +22574,9 @@
               </button>}
               <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
+              </button>
+              <button className="btn" onClick={handleSmartGenerate} disabled={smartGenLoading} style={{ fontSize: 13, borderColor: '#a855f7', color: '#a855f7' }}>
+                {smartGenLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Analyzing...</> : <><i className="fa-solid fa-bolt" style={{ marginRight: 4 }} />Smart Generate</>}
               </button>
               <button className="btn" onClick={handleDiscoverMapKeywords} disabled={discovering} style={{ fontSize: 13, borderColor: '#14b8a6', color: '#14b8a6' }}>
                 {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Discovering...</> : <><i className="fa-solid fa-radar" style={{ marginRight: 4 }} />Discover Keywords</>}
@@ -22625,6 +22665,76 @@
           )}
 
           {/* Discovered Keywords Modal */}
+          {/* Smart Generate Modal */}
+          {smartGen && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setSmartGen(null)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', width: 850, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}><i className="fa-solid fa-bolt" style={{ marginRight: 8, color: '#a855f7' }} />Smart Generate</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
+                      {smartGen.suburbs.length} suburbs from website × {smartGen.services.length} services = {smartGen.combos.length} combos
+                      ({smartGen.combos.filter(c => !c.already_tracked).length} new)
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button className="btn" onClick={() => {
+                      const newCombos = smartGen.combos.filter(c => !c.already_tracked);
+                      if (smartGenSelected.size === newCombos.length) setSmartGenSelected(new Set());
+                      else setSmartGenSelected(new Set(newCombos.map(c => c.keyword)));
+                    }} style={{ fontSize: 12 }}>
+                      {smartGenSelected.size === smartGen.combos.filter(c => !c.already_tracked).length ? 'Deselect All' : 'Select All'}
+                    </button>
+                    <button className="btn btn-primary" onClick={addSmartGenKeywords} disabled={smartGenSelected.size === 0 || smartGenLoading} style={{ fontSize: 12 }}>
+                      {smartGenLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {smartGenSelected.size} Keywords</>}
+                    </button>
+                    <button onClick={() => setSmartGen(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
+                  </div>
+                </div>
+                {/* Info bar */}
+                <div style={{ padding: '10px 20px', background: 'rgba(168,85,247,0.06)', borderBottom: '1px solid var(--border)', display: 'flex', gap: 24, fontSize: 12 }}>
+                  <div><strong style={{ color: '#a855f7' }}>{smartGen.total_pages}</strong> <span style={{ color: 'var(--text3)' }}>pages crawled</span></div>
+                  <div><strong style={{ color: '#a855f7' }}>{smartGen.suburbs.length}</strong> <span style={{ color: 'var(--text3)' }}>suburbs found:</span> <span style={{ color: 'var(--text2)' }}>{smartGen.suburbs.join(', ')}</span></div>
+                  <div><strong style={{ color: '#a855f7' }}>{smartGen.services.length}</strong> <span style={{ color: 'var(--text3)' }}>services (top by volume)</span></div>
+                </div>
+                <div style={{ overflow: 'auto', flex: 1 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
+                        <th style={{ padding: '8px 12px', width: 30 }}></th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Service</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: 'var(--text2)' }}>Suburb</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Volume</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: 'var(--text2)', width: 80 }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {smartGen.combos.map(c => (
+                        <tr key={c.keyword} style={{ borderBottom: '1px solid var(--border)', cursor: c.already_tracked ? 'default' : 'pointer', opacity: c.already_tracked ? 0.5 : 1 }}
+                          onClick={() => { if (c.already_tracked) return; const n = new Set(smartGenSelected); if (n.has(c.keyword)) n.delete(c.keyword); else n.add(c.keyword); setSmartGenSelected(n); }}>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            {c.already_tracked ? <i className="fa-solid fa-check" style={{ color: '#22c55e', fontSize: 11 }} /> :
+                            <input type="checkbox" checked={smartGenSelected.has(c.keyword)} onChange={() => { const n = new Set(smartGenSelected); if (n.has(c.keyword)) n.delete(c.keyword); else n.add(c.keyword); setSmartGenSelected(n); }} />}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontWeight: 500 }}>{c.service}</td>
+                          <td style={{ padding: '8px 12px' }}>
+                            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 12, background: 'rgba(168,85,247,0.1)', color: '#a855f7' }}>{c.suburb}</span>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600 }}>{c.volume?.toLocaleString() || '—'}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            {c.already_tracked ? <span style={{ fontSize: 11, color: '#22c55e' }}>Tracked</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>New</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {discoveredMaps && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               onClick={() => setDiscoveredMaps(null)}>
