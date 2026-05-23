@@ -23407,23 +23407,25 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
 
     // Extract services by stripping suburb names, location terms from keywords
     // Then filter: only keep services that contain real service/product action words (not brand names)
-    const SERVICE_WORDS = [
-      'repair', 'repairs', 'fix', 'fixed', 'fixing', 'service', 'services', 'servicing',
-      'install', 'installation', 'setup', 'set up', 'restore', 'recovery', 'replacement',
-      'screen', 'battery', 'upgrade', 'clean', 'cleaning', 'maintenance', 'troubleshoot',
-      'build', 'custom', 'refurbished', 'second hand', 'used', 'buy', 'shop', 'store',
-      'removal', 'remove', 'data', 'backup', 'virus', 'malware', 'spyware',
-      'laptop', 'desktop', 'computer', 'pc', 'mac', 'macbook', 'imac', 'apple',
-      'asus', 'dell', 'hp', 'lenovo', 'acer', 'microsoft', 'surface',
-      'printer', 'monitor', 'keyboard', 'mouse', 'hard drive', 'ssd', 'ram', 'memory',
-      'wifi', 'network', 'internet', 'cable', 'ethernet', 'router', 'modem',
-      'windows', 'blue screen', 'slow', 'broken', 'cracked', 'dead', 'not working',
-      'how much', 'how to', 'cost', 'price', 'cheap', 'best', 'top', 'good',
+    // Service ACTION words — the extracted service must contain at least one of these
+    // Product-only nouns (computer, laptop, mac) are NOT enough on their own — they pass brand names like "ilove computers"
+    const SERVICE_ACTION_WORDS = [
+      'repair', 'repairs', 'repairing', 'fix', 'fixed', 'fixing', 'service', 'services', 'servicing',
+      'install', 'installation', 'setup', 'set up', 'restore', 'recovery', 'replacement', 'replacing',
+      'upgrade', 'upgrading', 'clean', 'cleaning', 'maintenance', 'troubleshoot', 'troubleshooting',
+      'build', 'building', 'custom', 'refurbished', 'second hand', 'used',
+      'removal', 'remove', 'removing', 'backup', 'data recovery',
+      'screen repair', 'screen replacement', 'battery replacement',
+      'how much', 'how to', 'cost', 'price', 'cheap', 'best',
+      'buy', 'shop', 'store', 'sale', 'sales',
       'plumber', 'plumbing', 'electrician', 'electrical', 'hvac', 'air conditioning',
-      'roofing', 'roof', 'painting', 'painter', 'landscaping', 'gardening',
+      'roofing', 'painting', 'painter', 'landscaping', 'gardening',
       'locksmith', 'pest control', 'carpet', 'flooring', 'tiling', 'fencing',
-      'solar', 'panel', 'hot water', 'gas', 'drain', 'blocked', 'leak',
-      'emergency', 'same day', '24 hour', 'mobile', 'onsite', 'on site', 'home',
+      'solar', 'hot water', 'drain', 'blocked', 'leak',
+      'emergency', 'same day', '24 hour', 'mobile', 'onsite', 'on site',
+      'help', 'support', 'consultant', 'consulting', 'specialist', 'specialists',
+      'broken', 'cracked', 'dead', 'not working', 'slow',
+      'virus', 'malware', 'spyware', 'blue screen',
     ];
     const stripTerms = [...allSuburbNames, 'near me', 'near', 'wa', 'western australia', 'perth', 'australia', 'sydney', 'melbourne', 'brisbane', 'adelaide'];
     stripTerms.sort((a, b) => b.length - a.length);
@@ -23439,8 +23441,8 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
       // Clean up multiple spaces, trailing/leading hyphens
       service = service.replace(/\s+/g, ' ').replace(/^[\s\-]+|[\s\-]+$/g, '').trim();
       if (service.length <= 2) continue;
-      // Only keep if the service contains at least one real service/product word
-      const hasServiceWord = SERVICE_WORDS.some(sw => service.includes(sw));
+      // Only keep if the service contains at least one ACTION word (not just product nouns)
+      const hasServiceWord = SERVICE_ACTION_WORDS.some(sw => service.includes(sw));
       if (!hasServiceWord) continue;
       if (!servicesSet.has(service)) {
         servicesSet.add(service);
