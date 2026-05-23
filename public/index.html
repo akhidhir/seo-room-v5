@@ -22147,7 +22147,7 @@
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 10, color: '#14b8a6' }} />Discover Local Keywords</h2>
-              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Find keywords your domain ranks for with local intent — add to SERP or Maps tracking</div>
+              <div style={{ fontSize: 14, color: '#14b8a6', marginTop: 4 }}>Find keywords your domain ranks for with local intent — add to SERP or Maps tracking</div>
             </div>
             <button className="btn btn-primary" onClick={discover} disabled={loading} style={{ fontSize: 14, padding: '8px 20px' }}>
               {loading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 6 }} />Discover Keywords</>}
@@ -22235,7 +22235,7 @@
                         <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
                         <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                          <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30`} target="_blank" rel="noopener noreferrer"
+                          <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5`} target="_blank" rel="noopener noreferrer"
                             title="Check SERP on Google (non-personalized)"
                             style={{ color: '#14b8a6', fontSize: 13, textDecoration: 'none' }}
                             onClick={e => e.stopPropagation()}>
