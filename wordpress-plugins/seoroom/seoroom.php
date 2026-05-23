@@ -421,25 +421,25 @@ function sropt_settings_page() {
                         document.getElementById('sropt_check_license').addEventListener('click', function() {
                             var btn = this;
                             var result = document.getElementById('sropt_license_result');
-                            var url = document.getElementById('sropt_dashboard_url').value.replace(/\/$/, '');
                             var key = document.querySelector('input[name="sropt_options[license_key]"]').value;
-                            if (!url || !key) { result.innerHTML = '<span style="color:#ef4444;">Enter dashboard URL and license key first.</span>'; return; }
+                            if (!key) { result.innerHTML = '<span style="color:#ef4444;">Enter license key first.</span>'; return; }
                             btn.disabled = true;
                             result.innerHTML = '<span style="color:#666;">Checking...</span>';
-                            fetch(url + '/api/plugin/license-check', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ license_key: key, domain: '<?php echo esc_url(home_url()); ?>' })
-                            })
+                            var fd = new FormData();
+                            fd.append('action', 'sropt_ajax_check_license');
+                            fd.append('nonce', '<?php echo wp_create_nonce("sropt_license_nonce"); ?>');
+                            fd.append('license_key', key);
+                            fetch(ajaxurl, { method: 'POST', body: fd })
                             .then(function(r) { return r.json(); })
-                            .then(function(data) {
-                                if (data.valid) {
+                            .then(function(resp) {
+                                var data = resp.data || {};
+                                if (resp.success && data.valid) {
                                     var msg = '✓ Active';
                                     if (data.project_name) msg += ' — ' + data.project_name;
                                     if (data.days_remaining) msg += ' (' + data.days_remaining + ' days remaining)';
                                     result.innerHTML = '<span style="color:#22c55e;font-weight:600;">' + msg + '</span>';
                                 } else {
-                                    result.innerHTML = '<span style="color:#ef4444;font-weight:600;">✗ ' + (data.reason || 'Invalid') + '</span>';
+                                    result.innerHTML = '<span style="color:#ef4444;font-weight:600;">✗ ' + (data.reason || resp.data || 'Invalid') + '</span>';
                                 }
                             })
                             .catch(function(e) { result.innerHTML = '<span style="color:#ef4444;">✗ ' + e.message + '</span>'; })
@@ -3685,6 +3685,59 @@ function sropt_after_update($upgrader, $options) {
 // ================================================================
 // LICENSE SYSTEM — Yearly renewal, read-only on expire
 // ================================================================
+
+// AJAX handler for "Check License Now" button (server-side call, no CORS)
+add_action('wp_ajax_sropt_ajax_check_license', 'sropt_ajax_check_license');
+function sropt_ajax_check_license() {
+    check_ajax_referer('sropt_license_nonce', 'nonce');
+
+    $license_key = sanitize_text_field($_POST['license_key'] ?? '');
+    if (empty($license_key)) {
+        wp_send_json_error('No license key provided');
+    }
+
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'] ?? '', '/');
+    if (empty($dashboard_url)) {
+        wp_send_json_error('Dashboard URL not set');
+    }
+
+    // Clear cached status so we get fresh result
+    delete_transient('sropt_license_status');
+
+    $response = wp_remote_post($dashboard_url . '/api/plugin/license-check', array(
+        'timeout' => 15,
+        'headers' => array('Content-Type' => 'application/json'),
+        'body'    => json_encode(array(
+            'license_key' => $license_key,
+            'domain'      => home_url(),
+        )),
+    ));
+
+    if (is_wp_error($response)) {
+        wp_send_json_error('Connection failed: ' . $response->get_error_message());
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (!$data) {
+        wp_send_json_error('Invalid response from dashboard (HTTP ' . wp_remote_retrieve_response_code($response) . ')');
+    }
+
+    // Update stored license info
+    if (!empty($data['valid'])) {
+        set_transient('sropt_license_status', 'valid', DAY_IN_SECONDS);
+    }
+    update_option('sropt_license_info', array(
+        'valid'          => !empty($data['valid']),
+        'reason'         => $data['reason'] ?? '',
+        'project_name'   => $data['project_name'] ?? '',
+        'expires'        => $data['expires'] ?? '',
+        'days_remaining' => $data['days_remaining'] ?? null,
+        'checked_at'     => current_time('mysql'),
+    ));
+
+    wp_send_json_success($data);
+}
 
 // Check if license is valid (cached for 24 hours)
 function sropt_is_license_valid() {
