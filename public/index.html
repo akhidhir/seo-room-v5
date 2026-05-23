@@ -22367,10 +22367,10 @@
                             onClick={e => e.stopPropagation()}>
                             <i className="fa-solid fa-arrow-up-right-from-square" />
                           </a>
-                          <button onClick={(e) => { e.stopPropagation(); deleteKeywords(new Set([k.keyword])); }}
+                          <button onClick={(e) => { e.stopPropagation(); if (!confirm(`Delete "${k.keyword}"?`)) return; deleteKeywords(new Set([k.keyword])); }}
                             title="Delete keyword"
-                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: 0, opacity: 0.6 }}
-                            onMouseOver={e => e.target.style.opacity = 1} onMouseOut={e => e.target.style.opacity = 0.6}>
+                            style={{ background: 'none', border: 'none', color: selected.has(k.keyword) ? '#ef4444' : '#555', cursor: selected.has(k.keyword) ? 'pointer' : 'default', fontSize: 13, padding: 0, opacity: selected.has(k.keyword) ? 0.7 : 0.25, pointerEvents: selected.has(k.keyword) ? 'auto' : 'none' }}
+                            onMouseOver={e => { if (selected.has(k.keyword)) e.currentTarget.style.opacity = 1; }} onMouseOut={e => { if (selected.has(k.keyword)) e.currentTarget.style.opacity = 0.7; }}>
                             <i className="fa-solid fa-trash" />
                           </button>
                         </td>

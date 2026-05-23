@@ -19,8 +19,8 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 ## Architecture
 
 - **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
-- **Single-file React**: `public/index.html` via Babel standalone (~24500+ lines)
-- **Server**: `server.js` (~23500+ lines)
+- **Single-file React**: `public/index.html` via Babel standalone (~25000+ lines)
+- **Server**: `server.js` (~24500+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
@@ -44,7 +44,7 @@ Sandbox can't git push. The workflow is:
 - **Google Search Console API**: searchconsole.googleapis.com — URL Inspection for indexing checks, search analytics for GSC audit
 - **PageSpeed Insights API**: PAGESPEED_API_KEY — Core Web Vitals scoring per page (mobile). Batched 5-at-a-time for speed.
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
-- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator. Could be used for richer GBP/backlink data
+- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery). Could be used for richer GBP/backlink data
 - **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
 - **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
 
@@ -98,6 +98,14 @@ Sandbox can't git push. The workflow is:
   - **Frontend**: `PlayersHandshakePage` component in `public/index.html`. Currently being redesigned to match professional dark-mode SaaS mockup. Target: 4 KPI tiles + Next Best Actions sidebar, comparison table with progress bars, strengths/gaps panels, gap matrix work table. Teal (#14b8a6) accent.
   - **Design principles**: Quiet, professional, dense but clean, strong hierarchy, no card clutter, 8px border-radius max.
 
+### DISCOVER LOCAL KEYWORDS
+- **Discover Local Keywords** ✅ WORKING — Two-tab keyword discovery page under Reports section.
+  - **Discover SERP tab**: Finds organic keywords the domain ranks for via DataForSEO `ranked_keywords`. Smart Generate filters: strips suburb names from keywords (200+ suburbs in SUBURB_GPS), removes competitor brand names (from `projects.competitors` + `grid_scans.competitors`), TRADE_SUFFIXES pattern filter (e.g., "hilton plumbing" = competitor, not service). Saves to `discovery_cache.keywords`.
+  - **Discover Maps tab**: Finds keywords the business ranks for on Google Maps. Builds keyword list from: grid scans, rank tracking, industry templates, website page slugs, AND organic keywords (DataForSEO ranked_keywords with local intent filter). Checks each keyword on DataForSEO Maps API with GPS coordinates. Fuzzy business name matching (with/without spaces, domain base, website URL). Gets search volume for found keywords. Saves to `discovery_cache.maps_keywords`.
+  - **UI**: Tab switcher with badge counts, 15px font, teal (#14b8a6) uppercase headers, white keyword text, color-coded position badges, per-row trash icon delete, bulk delete, re-scan button, empty state with discover button.
+  - **Backend endpoints**: `GET/POST /api/projects/:id/discovery` (SERP), `GET/POST /api/projects/:id/discovery/maps/run` (Maps), `POST .../discovery/update` (SERP delete), `POST .../discovery/maps/update` (Maps delete).
+  - **Stale run detection**: If discovery status='running' for >5 minutes, auto-reset and allow re-run.
+
 ### REPORTS
 - **Maps Rankings** ✅ WORKING — Full Local Falcon replacement. AI-powered keyword generator (Haiku suggests service+suburb combos with DataForSEO volume estimation). **SerpAPI Grid Scan**: configurable NxN grid (3×3, 5×5, 7×7) at configurable radius (5-30km). Generates GPS grid around business, calls SerpAPI `google_maps` from each point, calculates ARP/ATRP/SOLV/coverage. **Grid Heatmap**: visual NxN grid with color-coded positions per keyword. **Competitor Gap Analysis**: captures top 3 at each grid point, shows You vs Threats cards with rating/reviews/dominance comparison, review gap bar, and prioritized "What To Do" actions. Bulk select/delete. CSV import/export.
 - **SERP Rankings** — SerpAPI-based keyword tracking
@@ -110,7 +118,7 @@ Sandbox can't git push. The workflow is:
 
 ## Database Tables
 
-projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**
+projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**, **discovery_cache**
 
 ### wp_change_history (Universal WordPress Rollback)
 ```sql
@@ -177,6 +185,25 @@ CREATE TABLE IF NOT EXISTS posts_cache (
 )
 ```
 
+### discovery_cache (Keyword Discovery — SERP + Maps)
+```sql
+CREATE TABLE IF NOT EXISTS discovery_cache (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT DEFAULT 'idle',
+  keywords JSONB DEFAULT '[]',
+  keyword_count INTEGER DEFAULT 0,
+  api_cost NUMERIC(10,4) DEFAULT 0,
+  discovered_at TIMESTAMPTZ,
+  maps_status TEXT DEFAULT 'idle',
+  maps_keywords JSONB DEFAULT '[]',
+  maps_count INTEGER DEFAULT 0,
+  maps_cost NUMERIC(10,4) DEFAULT 0
+)
+```
+- `keywords`: SERP discovery results array `[{keyword, position, url, volume, traffic, cpc}]`
+- `maps_keywords`: Maps discovery results array `[{keyword, position, volume}]`
+- Dual status columns allow independent SERP and Maps discovery runs
+
 ### Projects table extra columns
 - `wp_username TEXT` — WordPress Application Password username
 - `wp_app_password TEXT` — WordPress Application Password
@@ -198,7 +225,13 @@ CREATE TABLE IF NOT EXISTS posts_cache (
 - `generateGrid(centerLat, centerLng, radiusKm, gridSize)` — generates NxN GPS grid around center point using Haversine offsets
 - `GridHeatmap` component — visual NxN grid with color-coded cells (green top 3 → red not found), center pin marker, legend
 - `getGridData(kw)` — frontend helper to get grid scan data for a keyword (checks gridScans state, falls back to rank_tracking competitors)
-- `SUBURB_GPS` — 50+ Perth suburb GPS coordinates for distance calculation and grid center point lookup
+- `SUBURB_GPS` — 200+ Australian suburb GPS coordinates (Perth metro focus) for distance calculation, grid center point lookup, and keyword suburb stripping in Smart Generate
+- `TRADE_SUFFIXES` — `['plumbing', 'electrical', 'roofing', 'painting', 'landscaping', 'carpentry', 'fencing', 'tiling', 'flooring', 'glazing', 'concreting', 'excavating', 'welding', 'rendering', 'plastering', 'cabinetry', 'joinery', 'gasfitting']` — used in Smart Generate to detect competitor brand names (e.g., "hilton plumbing" → competitor, not service)
+- `SERVICE_ACTION_WORDS` — whitelist of action verbs (repair, install, fix, etc.) that indicate real services vs brand names
+- `INDUSTRY_SERVICES` — hardcoded service templates per industry (plumbing, electrical, computing, etc.) for Maps keyword discovery
+- `dataForSeoRankedKeywords(domain)` — gets organic keywords domain ranks for via DataForSEO labs API
+- `dataForSeoMaps(keyword, lat, lng)` — checks Google Maps results for a keyword at specific GPS coordinates via DataForSEO SERP API
+- Competitor name filtering in Smart Generate: loads from `projects.competitors` (TEXT[]) + `grid_scans.competitors` (JSONB), builds blacklist set, removes safe trade words from blacklist
 
 ### PILLAR_CATEGORIES constant
 ```javascript
@@ -244,15 +277,19 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Players Handshake redesign (IN PROGRESS)** — Redesigning `PlayersHandshakePage` component to match professional dark-mode SaaS mockup. Being handed to Codex for implementation. Target design: 4 KPI tiles + Next Best Actions sidebar, comparison table with progress bars, strengths/gaps panels, gap matrix work table. Teal (#14b8a6) primary accent.
-- **Handshake AI parsing fix** — Increased max_tokens 8000→12000, added JSON extraction (markdown fence stripping, first-{-to-last-} fallback), data-driven fallback strategy if AI fails.
-- **PageSpeed ECONNRESET fix** — Added retries with exponential backoff for PageSpeed API calls.
-- **PageSpeed page font size** — Increased readability of PageSpeed scores page.
+- **Discover Local Keywords — Dual Tab (SERP + Maps)** — Rewrote `DiscoverLocalPage` component with two tabs: "Discover SERP" (organic keywords via DataForSEO ranked_keywords) and "Discover Maps" (keywords business ranks for on Google Maps via DataForSEO Maps API). Separate state, loading, and polling for each tab. Per-row delete + bulk delete. Re-scan button.
+- **Smart Generate competitor filtering** — Added 3-layer brand name filtering: (1) competitor name blacklist from `projects.competitors` + `grid_scans.competitors`, (2) SERVICE_ACTION_WORDS whitelist, (3) TRADE_SUFFIXES pattern filter (e.g., "hilton plumbing" = competitor).
+- **SUBURB_GPS expansion** — Expanded from ~50 to 200+ Perth suburbs with GPS coordinates. Used for stripping suburb names from keywords in Smart Generate and Maps grid center lookups.
+- **Maps discovery backend** — New endpoints: `GET/POST /api/projects/:id/discovery/maps/run`, `POST .../discovery/maps/update`. Background job builds keyword list from grid scans + rank tracking + industry templates + organic keywords, checks DataForSEO Maps API with GPS coordinates, fuzzy matches business name.
+- **discovery_cache table extension** — Added `maps_status`, `maps_keywords`, `maps_count`, `maps_cost` columns for dual discovery.
+- **Stale run detection** — Discovery runs stuck at 'running' for >5 minutes auto-reset and allow re-run.
+- **UI improvements** — 15px table font, teal (#14b8a6) uppercase headers, white keyword text, color-coded position badges.
 
 ### Previous Session
-- **Local Intel Reviews & Posts fix** — RC API direct calls return 405. Fixed with bundled seed file (`data/local_intel_seed.json`), DB cache with 30-day TTL.
-- **Seed file approach** — `data/local_intel_seed.json` keyed by GBP location ID. Real review/post text for service-name matching.
-- **posts_cache table** — New DB table.
+- **Players Handshake redesign (IN PROGRESS)** — Redesigning `PlayersHandshakePage` to match professional dark-mode SaaS mockup.
+- **Handshake AI parsing fix** — Increased max_tokens 8000→12000, added JSON extraction.
+- **PageSpeed ECONNRESET fix** — Added retries with exponential backoff.
+- **Local Intel Reviews & Posts fix** — Bundled seed file (`data/local_intel_seed.json`), DB cache with 30-day TTL.
 
 ### Two Sessions Ago
 - **Action Plan Calendar** — Month/Week/Day views with navigation. Auto-distribute endpoint.
