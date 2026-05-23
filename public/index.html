@@ -22467,19 +22467,20 @@
       const addDiscoveredMapKeywords = async () => {
         if (selectedDiscMaps.size === 0) return;
         const kws = discoveredMaps.filter(k => selectedDiscMaps.has(k.keyword));
-        // Use import-discovered endpoint which handles volume/position data
-        const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
-          method: 'POST',
-          body: { keywords: kws }
-        });
-        if (r.ok) {
-          alert(`Added ${r.added} discovered keywords with volume & position data.`);
-        } else {
-          alert(r.error || 'Failed to add keywords');
+        setDiscovering(true);
+        try {
+          const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
+            method: 'POST',
+            body: { keywords: kws }
+          });
+          alert(`Added ${r.added || kws.length} discovered keywords with volume & position data.`);
+          setDiscoveredMaps(null);
+          setSelectedDiscMaps(new Set());
+          loadData();
+        } catch (e) {
+          alert('Failed to add keywords: ' + e.message);
         }
-        setDiscoveredMaps(null);
-        setSelectedDiscMaps(new Set());
-        loadData();
+        setDiscovering(false);
       };
 
       return (
