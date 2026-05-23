@@ -23911,13 +23911,21 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           cleaning: ['cleaner', 'cleaning', 'carpet cleaning', 'end of lease cleaning', 'office cleaning', 'window cleaning', 'pressure washing'],
           pest: ['pest control', 'termite inspection', 'ant treatment', 'spider spray', 'rodent control', 'cockroach treatment'],
           computing: ['computer repair', 'laptop repair', 'data recovery', 'virus removal', 'screen repair', 'it support', 'computer service'],
+          locksmith: ['locksmith', 'car key', 'car key replacement', 'car key cutting', 'car locksmith', 'auto locksmith', 'emergency locksmith', 'lock change', 'lock repair', 'key cutting', 'transponder key', 'car key programming', 'immobiliser', 'car immobiliser', 'lost car key', 'spare car key', 'remote key', 'smart key', 'flip key'],
+          automotive: ['car key', 'car key replacement', 'car key cutting', 'auto locksmith', 'car locksmith', 'transponder key', 'car key programming', 'immobiliser', 'car immobiliser', 'lost car key', 'spare car key', 'remote key', 'car key copy', 'car key rescue'],
+          painting: ['painter', 'painting', 'house painting', 'interior painting', 'exterior painting', 'commercial painting', 'residential painting', 'spray painting', 'roof painting'],
+          building: ['builder', 'building', 'home builder', 'renovation', 'extension', 'granny flat', 'new home', 'commercial builder'],
         };
-        // Match industry to templates
+        // Match industry to templates — also check business_name and domain
         for (const [key, terms] of Object.entries(INDUSTRY_SERVICES)) {
-          if (industry.includes(key) || (project.name || '').toLowerCase().includes(key)) {
+          if (industry.includes(key) || (project.name || '').toLowerCase().includes(key) || businessName.includes(key) || domainBase.includes(key)) {
             for (const t of terms) serviceSet.add(t);
           }
         }
+        // Fallback: add business name words as search terms
+        const nameParts = businessName.split(/\s+/).filter(w => w.length > 2 && !['pty', 'ltd', 'the', 'and'].includes(w));
+        if (nameParts.length >= 2) serviceSet.add(nameParts.join(' '));
+        for (const part of nameParts) { if (part.length > 3) serviceSet.add(part); }
 
         // From website pages — extract service terms from slugs
         try {
@@ -23933,7 +23941,7 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
                 svc = svc.replace(new RegExp('\\b' + sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g'), '').trim();
               }
               svc = svc.replace(/\s+/g, ' ').trim();
-              if (svc.length > 3 && svc !== slug) serviceSet.add(svc);
+              if (svc.length > 3) serviceSet.add(svc);
             }
           }
         } catch (e) { console.log('[maps-discovery] Page crawl skipped:', e.message); }

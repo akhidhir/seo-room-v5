@@ -22057,8 +22057,8 @@
         const load = async () => {
           const r = await api(`/projects/${project.id}/discovery/maps`);
           if (r && !r.error) {
-            if (r.maps_status === 'done' && r.maps_keywords?.length > 0) {
-              setMapsKeywords(r.maps_keywords);
+            if (r.maps_status === 'done') {
+              setMapsKeywords(r.maps_keywords || []);
               setHasMapsRun(true);
               setMapsLoading(false);
             } else if (r.maps_status === 'running') {
