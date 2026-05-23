@@ -558,6 +558,11 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
+    // Maps discovery columns on discovery_cache
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_status TEXT DEFAULT 'idle'`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_keywords JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_count INTEGER DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_cost NUMERIC DEFAULT 0`).catch(() => {});
 
     // Content queue for Copywriter pipeline
     await client.query(`
@@ -23696,56 +23701,96 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
 
         console.log(`[discovery] Found ${localKeywords.length} local keywords out of ${result.keywords.length}`);
 
-        // Check Maps positions for top 50
-        const location = project.location || 'Perth,Western Australia,Australia';
-        const businessName = (project.business_name || project.name || '').toLowerCase();
-        const domainLower = domain.toLowerCase();
-        // Build fuzzy match variants: "house works plumbing" → also match "houseworksplumbing", "houseworks plumbing", etc.
-        const bizNoSpaces = businessName.replace(/\s+/g, '');
-        const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
-        // Resolve GPS coordinates for Maps check — more reliable than location name
-        const locLower = (location || '').toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
-        const locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
-        console.log(`[discovery] Maps check: businessName="${businessName}", bizNoSpaces="${bizNoSpaces}", domainBase="${domainBase}", location="${location}", gps=${locGps.lat},${locGps.lng}`);
-        const mapsKws = localKeywords.slice(0, 50);
+        // Smart Maps check: pull positions from existing grid_scans + rank_tracking data (free, instant)
+        // Then only call API for keywords not already in DB
         let mapsFound = 0;
-        for (let i = 0; i < mapsKws.length; i += 5) {
-          const batch = mapsKws.slice(i, i + 5);
-          const promises = batch.map(async (kw) => {
-            try {
-              const data = await dataForSeoMaps({ keyword: kw.keyword, lat: locGps.lat, lng: locGps.lng });
-              const results = data.local_results || [];
-              for (const r of results) {
-                const titleLow = (r.title || '').toLowerCase();
-                const titleNoSpaces = titleLow.replace(/\s+/g, '');
-                const rDomain = (r.domain || '').toLowerCase();
-                const rWebsite = (r.website || '').toLowerCase();
-                // Match: exact name, name-no-spaces, domain in result domain/website, or domain base in title
-                const matched = titleLow.includes(businessName)
-                  || titleNoSpaces.includes(bizNoSpaces)
-                  || bizNoSpaces.includes(titleNoSpaces.replace(/[^a-z0-9]/g, ''))
-                  || rDomain.includes(domainLower)
-                  || rWebsite.includes(domainLower)
-                  || titleNoSpaces.includes(domainBase)
-                  || domainBase.includes(titleNoSpaces.replace(/[^a-z0-9]/g, '').slice(0, 10));
-                if (matched) {
-                  kw.maps_position = r.position;
-                  kw.on_maps = true;
-                  mapsFound++;
-                  console.log(`[discovery] Maps match: "${kw.keyword}" → #${r.position} (title="${r.title}", domain="${rDomain}")`);
-                  break;
-                }
-              }
-              if (!kw.on_maps && results.length > 0) {
-                console.log(`[discovery] Maps NO match for "${kw.keyword}" — top3: ${results.slice(0,3).map(r => `"${r.title}"`).join(', ')}`);
-              }
-            } catch (e) {
-              console.error(`[discovery] Maps check error for "${kw.keyword}":`, e.message);
+
+        // 1. Grid scans: keyword → best ARP (average rank position) where business was found
+        const gridRes = await pool.query(
+          `SELECT keyword, arp, found_in, data_points, grid_points FROM grid_scans
+           WHERE project_id=$1 AND found_in > 0
+           ORDER BY scanned_at DESC`,
+          [projectId]
+        );
+        const gridMap = {};
+        for (const row of gridRes.rows) {
+          const kwLow = row.keyword.toLowerCase().trim();
+          if (!gridMap[kwLow] || row.arp < gridMap[kwLow].arp) {
+            // Find best position from grid_points
+            let bestPos = null;
+            const points = typeof row.grid_points === 'string' ? JSON.parse(row.grid_points) : (row.grid_points || []);
+            for (const p of points) {
+              if (p.found && p.position && (bestPos === null || p.position < bestPos)) bestPos = p.position;
             }
-          });
-          await Promise.all(promises);
+            gridMap[kwLow] = { arp: row.arp, best_position: bestPos || Math.round(row.arp), found_in: row.found_in, data_points: row.data_points };
+          }
         }
-        console.log(`[discovery] Maps check complete: ${mapsFound} found out of ${mapsKws.length}`);
+
+        // 2. Rank tracking: keywords with location (Maps keywords) that have been checked
+        const rtRes = await pool.query(
+          `SELECT rk.keyword, rk.location, rt.position, rt.checked_at
+           FROM rank_keywords rk
+           LEFT JOIN rank_tracking rt ON rk.id = rt.keyword_id
+           WHERE rk.project_id=$1 AND rk.location IS NOT NULL AND rk.location != ''
+           ORDER BY rt.checked_at DESC NULLS LAST`,
+          [projectId]
+        );
+        const rtMap = {};
+        for (const row of rtRes.rows) {
+          const kwLow = row.keyword.toLowerCase().trim();
+          if (!rtMap[kwLow] && row.position) {
+            rtMap[kwLow] = { position: row.position, location: row.location };
+          }
+        }
+
+        console.log(`[discovery] Smart Maps: ${Object.keys(gridMap).length} grid keywords, ${Object.keys(rtMap).length} tracked keywords`);
+
+        // 3. Match discovered keywords against grid + rank tracking data
+        for (const kw of localKeywords) {
+          const kwLow = (kw.keyword || '').toLowerCase().trim();
+
+          // Direct match on grid scans
+          if (gridMap[kwLow]) {
+            kw.maps_position = gridMap[kwLow].best_position;
+            kw.on_maps = true;
+            kw.maps_source = 'grid';
+            mapsFound++;
+            continue;
+          }
+
+          // Direct match on rank tracking
+          if (rtMap[kwLow]) {
+            kw.maps_position = rtMap[kwLow].position;
+            kw.on_maps = true;
+            kw.maps_source = 'tracking';
+            mapsFound++;
+            continue;
+          }
+
+          // Fuzzy match: strip suburb from keyword, check if base service was scanned
+          // e.g. "plumber cannington" → check if "plumber" was scanned in grid
+          const allSuburbNames = Object.keys(SUBURB_GPS);
+          let baseService = kwLow;
+          for (const sub of allSuburbNames.sort((a, b) => b.length - a.length)) {
+            baseService = baseService.replace(new RegExp('\\b' + sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '').trim();
+          }
+          baseService = baseService.replace(/\s*(near me|near|wa|western australia|perth|in)\s*/gi, '').replace(/\s+/g, ' ').trim();
+          if (baseService && baseService !== kwLow && gridMap[baseService]) {
+            kw.maps_position = gridMap[baseService].best_position;
+            kw.on_maps = true;
+            kw.maps_source = 'grid_fuzzy';
+            mapsFound++;
+            continue;
+          }
+          // Check rank tracking with the base service + any location
+          if (baseService && rtMap[baseService]) {
+            kw.maps_position = rtMap[baseService].position;
+            kw.on_maps = true;
+            kw.maps_source = 'tracking_fuzzy';
+            mapsFound++;
+          }
+        }
+        console.log(`[discovery] Smart Maps complete: ${mapsFound} matched out of ${localKeywords.length}`);
 
         // Save to DB
         await pool.query(
@@ -23782,6 +23827,218 @@ app.delete('/api/projects/:projectId/discovery', async (req, res) => {
   try {
     await pool.query('DELETE FROM discovery_cache WHERE project_id=$1', [req.params.projectId]);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============ MAPS DISCOVERY (find keywords the business ranks for on Maps) ============
+
+// GET: load cached maps discovery results
+app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM discovery_cache WHERE project_id=$1`,
+      [req.params.projectId]
+    );
+    if (rows.length === 0) return res.json({ maps_status: 'idle', maps_keywords: [] });
+    const row = rows[0];
+    res.json({
+      maps_status: row.maps_status || 'idle',
+      maps_keywords: row.maps_keywords || [],
+      maps_count: row.maps_count || 0,
+      maps_cost: row.maps_cost || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: start background Maps discovery
+app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+    if (!domain) return res.status(400).json({ error: 'No domain configured' });
+
+    // Check if already running (with 5min timeout)
+    const existing = (await pool.query('SELECT maps_status, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    if (existing?.maps_status === 'running') {
+      const ageMinutes = (Date.now() - new Date(existing.updated_at).getTime()) / 60000;
+      if (ageMinutes < 5) return res.json({ maps_status: 'running', message: 'Already running' });
+    }
+
+    // Ensure discovery_cache row exists, mark maps as running
+    await pool.query(
+      `INSERT INTO discovery_cache (project_id, status, maps_status, keywords, maps_keywords, updated_at)
+       VALUES ($1, COALESCE((SELECT status FROM discovery_cache WHERE project_id=$1), 'idle'), 'running', COALESCE((SELECT keywords FROM discovery_cache WHERE project_id=$1), '[]'), '[]', NOW())
+       ON CONFLICT (project_id) DO UPDATE SET maps_status='running', updated_at=NOW()`,
+      [projectId]
+    );
+    res.json({ maps_status: 'running' });
+
+    // Run in background
+    (async () => {
+      try {
+        const businessName = (project.business_name || project.name || '').toLowerCase();
+        const bizNoSpaces = businessName.replace(/\s+/g, '');
+        const domainLower = domain.toLowerCase();
+        const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
+        const location = project.location || 'Perth,Western Australia,Australia';
+        const locLower = location.toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
+        const locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
+
+        console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${locLower} (${locGps.lat},${locGps.lng})`);
+
+        // Step 1: Build service keywords to scan
+        // Sources: industry, existing grid scan keywords, rank_keywords with location, website pages
+        const serviceSet = new Set();
+
+        // From existing grid scans
+        const gridKws = await pool.query('SELECT DISTINCT keyword FROM grid_scans WHERE project_id=$1', [projectId]);
+        for (const r of gridKws.rows) serviceSet.add(r.keyword.toLowerCase().trim());
+
+        // From rank_keywords with location (maps keywords)
+        const mapsKws = await pool.query('SELECT DISTINCT keyword FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != \'\'', [projectId]);
+        for (const r of mapsKws.rows) serviceSet.add(r.keyword.toLowerCase().trim());
+
+        // From industry — generate common service terms
+        const industry = (project.industry || '').toLowerCase();
+        const INDUSTRY_SERVICES = {
+          plumbing: ['plumber', 'plumbing', 'hot water', 'blocked drain', 'gas fitter', 'gas fitting', 'leak detection', 'burst pipe', 'toilet repair', 'tap repair', 'bathroom renovation', 'water heater', 'drain cleaning', 'emergency plumber', 'plumbing services', 'gas plumber'],
+          electrical: ['electrician', 'electrical', 'rewiring', 'switchboard upgrade', 'ceiling fan installation', 'smoke alarm', 'safety switch', 'power point', 'lighting', 'emergency electrician'],
+          hvac: ['air conditioning', 'heating', 'cooling', 'ducted air conditioning', 'split system', 'evaporative cooling', 'ac repair', 'ac installation'],
+          roofing: ['roofer', 'roofing', 'roof repair', 'roof restoration', 'roof painting', 'gutter cleaning', 'gutter replacement', 'roof leak', 'metal roofing', 'tile roofing'],
+          landscaping: ['landscaper', 'landscaping', 'garden design', 'lawn mowing', 'tree removal', 'retaining wall', 'paving', 'reticulation'],
+          cleaning: ['cleaner', 'cleaning', 'carpet cleaning', 'end of lease cleaning', 'office cleaning', 'window cleaning', 'pressure washing'],
+          pest: ['pest control', 'termite inspection', 'ant treatment', 'spider spray', 'rodent control', 'cockroach treatment'],
+          computing: ['computer repair', 'laptop repair', 'data recovery', 'virus removal', 'screen repair', 'it support', 'computer service'],
+        };
+        // Match industry to templates
+        for (const [key, terms] of Object.entries(INDUSTRY_SERVICES)) {
+          if (industry.includes(key) || (project.name || '').toLowerCase().includes(key)) {
+            for (const t of terms) serviceSet.add(t);
+          }
+        }
+
+        // From website pages — extract service terms from slugs
+        try {
+          const projectUrl = project.domain.startsWith('http') ? project.domain : 'https://' + project.domain;
+          const wpUrl = project.wp_url || projectUrl;
+          const pages = await discoverPages(projectUrl, wpUrl);
+          for (const page of pages) {
+            const slug = (page.slug || '').toLowerCase().replace(/-/g, ' ').trim();
+            if (slug.length > 3 && !slug.includes('contact') && !slug.includes('about') && !slug.includes('blog') && !slug.includes('privacy') && !slug.includes('terms')) {
+              // Strip suburb names from slug to get service
+              let svc = slug;
+              const allSubs = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length);
+              for (const sub of allSubs) {
+                svc = svc.replace(new RegExp('\\b' + sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g'), '').trim();
+              }
+              svc = svc.replace(/\s+/g, ' ').trim();
+              if (svc.length > 3 && svc !== slug) serviceSet.add(svc);
+            }
+          }
+        } catch (e) { console.log('[maps-discovery] Page crawl skipped:', e.message); }
+
+        const services = [...serviceSet].filter(s => s.length > 2);
+        console.log(`[maps-discovery] ${services.length} service keywords to scan: ${services.slice(0, 15).join(', ')}`);
+
+        // Step 2: Check each service on Maps from business location
+        const foundKeywords = [];
+        let totalCost = 0;
+
+        const matchBusiness = (r) => {
+          const titleLow = (r.title || '').toLowerCase();
+          const titleNoSpaces = titleLow.replace(/\s+/g, '');
+          const rDomain = (r.domain || '').toLowerCase();
+          const rWebsite = (r.website || '').toLowerCase();
+          return titleLow.includes(businessName)
+            || titleNoSpaces.includes(bizNoSpaces)
+            || rDomain.includes(domainLower)
+            || rWebsite.includes(domainLower)
+            || titleNoSpaces.includes(domainBase);
+        };
+
+        for (let i = 0; i < services.length; i += 5) {
+          const batch = services.slice(i, i + 5);
+          const promises = batch.map(async (keyword) => {
+            try {
+              const data = await dataForSeoMaps({ keyword, lat: locGps.lat, lng: locGps.lng });
+              totalCost += data.cost || 0;
+              const results = data.local_results || [];
+              for (const r of results) {
+                if (matchBusiness(r)) {
+                  foundKeywords.push({
+                    keyword,
+                    maps_position: r.position,
+                    on_maps: true,
+                    total_results: results.length,
+                  });
+                  console.log(`[maps-discovery] FOUND: "${keyword}" → #${r.position}`);
+                  break;
+                }
+              }
+            } catch (e) {
+              console.error(`[maps-discovery] Error checking "${keyword}":`, e.message);
+            }
+          });
+          await Promise.all(promises);
+        }
+
+        // Step 3: Get search volume for found keywords
+        if (foundKeywords.length > 0) {
+          try {
+            const volumeResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+              body: JSON.stringify([{ keywords: foundKeywords.map(k => k.keyword), location_code: 2036, language_code: 'en' }]),
+            });
+            if (volumeResp.ok) {
+              const volData = await volumeResp.json();
+              const volItems = volData.tasks?.[0]?.result || [];
+              totalCost += volData.cost || 0;
+              for (const item of volItems) {
+                const kw = foundKeywords.find(k => k.keyword.toLowerCase() === (item.keyword || '').toLowerCase());
+                if (kw) {
+                  kw.volume = item.search_volume || 0;
+                  kw.cpc = item.cpc || 0;
+                  kw.competition = item.competition || 0;
+                }
+              }
+            }
+          } catch (e) { console.log('[maps-discovery] Volume fetch skipped:', e.message); }
+        }
+
+        // Sort by position
+        foundKeywords.sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99));
+
+        console.log(`[maps-discovery] Done. Found ${foundKeywords.length} keywords where business ranks on Maps. Cost: $${totalCost.toFixed(4)}`);
+
+        // Save to DB
+        await pool.query(
+          `UPDATE discovery_cache SET maps_status='done', maps_keywords=$2, maps_count=$3, maps_cost=$4, updated_at=NOW() WHERE project_id=$1`,
+          [projectId, JSON.stringify(foundKeywords), foundKeywords.length, totalCost]
+        );
+      } catch (e) {
+        console.error(`[maps-discovery] Background error:`, e.message);
+        await pool.query(
+          `UPDATE discovery_cache SET maps_status='error', updated_at=NOW() WHERE project_id=$1`,
+          [projectId]
+        ).catch(() => {});
+      }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: update maps discovery keywords (for deletions)
+app.post('/api/projects/:projectId/discovery/maps/update', async (req, res) => {
+  try {
+    const { keywords } = req.body;
+    if (!Array.isArray(keywords)) return res.status(400).json({ error: 'keywords must be array' });
+    await pool.query(
+      `UPDATE discovery_cache SET maps_keywords=$2, maps_count=$3, updated_at=NOW() WHERE project_id=$1`,
+      [req.params.projectId, JSON.stringify(keywords), keywords.length]
+    );
+    res.json({ ok: true, count: keywords.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

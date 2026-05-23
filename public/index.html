@@ -22013,15 +22013,19 @@
 
     // ============ DISCOVER LOCAL KEYWORDS PAGE ============
     function DiscoverLocalPage({ project }) {
+      const [tab, setTab] = useState('serp'); // 'serp' or 'maps'
       const [keywords, setKeywords] = useState([]);
+      const [mapsKeywords, setMapsKeywords] = useState([]);
       const [loading, setLoading] = useState(false);
+      const [mapsLoading, setMapsLoading] = useState(false);
       const [selected, setSelected] = useState(new Set());
       const [search, setSearch] = useState('');
       const [sortCol, setSortCol] = useState('position');
       const [sortDir, setSortDir] = useState('asc');
       const [hasRun, setHasRun] = useState(false);
+      const [hasMapsRun, setHasMapsRun] = useState(false);
 
-      // Load cached results on mount + poll if running
+      // Load cached SERP results on mount + poll if running
       useEffect(() => {
         if (!project?.id) return;
         let pollTimer = null;
@@ -22046,12 +22050,36 @@
         return () => { if (pollTimer) clearTimeout(pollTimer); };
       }, [project?.id]);
 
+      // Load cached Maps results on mount + poll if running
+      useEffect(() => {
+        if (!project?.id) return;
+        let pollTimer = null;
+        const load = async () => {
+          const r = await api(`/projects/${project.id}/discovery/maps`);
+          if (r && !r.error) {
+            if (r.maps_status === 'done' && r.maps_keywords?.length > 0) {
+              setMapsKeywords(r.maps_keywords);
+              setHasMapsRun(true);
+              setMapsLoading(false);
+            } else if (r.maps_status === 'running') {
+              setMapsLoading(true);
+              setHasMapsRun(true);
+              pollTimer = setTimeout(load, 3000);
+            } else if (r.maps_status === 'error') {
+              setMapsLoading(false);
+              setHasMapsRun(false);
+            }
+          }
+        };
+        load();
+        return () => { if (pollTimer) clearTimeout(pollTimer); };
+      }, [project?.id]);
+
       const discover = async () => {
         setLoading(true);
         setHasRun(true);
         try {
           await api(`/projects/${project.id}/discovery/run`, { method: 'POST' });
-          // Poll for results
           const poll = async () => {
             const r = await api(`/projects/${project.id}/discovery`);
             if (r.status === 'done') {
@@ -22065,6 +22093,26 @@
           };
           setTimeout(poll, 3000);
         } catch (e) { alert('Discovery failed: ' + e.message); setLoading(false); }
+      };
+
+      const discoverMaps = async () => {
+        setMapsLoading(true);
+        setHasMapsRun(true);
+        try {
+          await api(`/projects/${project.id}/discovery/maps/run`, { method: 'POST' });
+          const poll = async () => {
+            const r = await api(`/projects/${project.id}/discovery/maps`);
+            if (r.maps_status === 'done') {
+              setMapsKeywords(r.maps_keywords || []);
+              setMapsLoading(false);
+            } else if (r.maps_status === 'running') {
+              setTimeout(poll, 3000);
+            } else {
+              setMapsLoading(false);
+            }
+          };
+          setTimeout(poll, 3000);
+        } catch (e) { alert('Maps discovery failed: ' + e.message); setMapsLoading(false); }
       };
 
       const addToSerp = async () => {
@@ -22118,8 +22166,13 @@
         setSelected(new Set());
       };
 
+      // Active data based on tab
+      const activeData = tab === 'serp' ? keywords : mapsKeywords;
+      const activeLoading = tab === 'serp' ? loading : mapsLoading;
+      const activeHasRun = tab === 'serp' ? hasRun : hasMapsRun;
+
       // Filter + sort
-      const filtered = keywords.filter(k => {
+      const filtered = activeData.filter(k => {
         if (search && !k.keyword.toLowerCase().includes(search.toLowerCase())) return false;
         return true;
       });
@@ -22142,30 +22195,88 @@
 
       const allSelected = sorted.length > 0 && sorted.every(k => selected.has(k.keyword));
 
+      const deleteKeywords = (kws) => {
+        if (tab === 'serp') {
+          const remaining = keywords.filter(k => !kws.has(k.keyword));
+          setKeywords(remaining);
+          api(`/projects/${project.id}/discovery/update`, { method: 'POST', body: { keywords: remaining } });
+        } else {
+          const remaining = mapsKeywords.filter(k => !kws.has(k.keyword));
+          setMapsKeywords(remaining);
+          api(`/projects/${project.id}/discovery/maps/update`, { method: 'POST', body: { keywords: remaining } });
+        }
+        setSelected(new Set());
+      };
+
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 22 }}><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 10, color: '#14b8a6' }} />Discover Local Keywords</h2>
-              <div style={{ fontSize: 14, color: '#14b8a6', marginTop: 4 }}>Find keywords your domain ranks for with local intent — add to SERP or Maps tracking</div>
+              <div style={{ fontSize: 14, color: '#14b8a6', marginTop: 4 }}>Find keywords your domain ranks for — SERP (organic) or Maps (local pack)</div>
             </div>
-            <button className="btn btn-primary" onClick={discover} disabled={loading} style={{ fontSize: 14, padding: '8px 20px' }}>
-              {loading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Discovering...</> : <><i className="fa-solid fa-magnifying-glass-chart" style={{ marginRight: 6 }} />Discover Keywords</>}
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '2px solid var(--border)' }}>
+            <button onClick={() => { setTab('serp'); setSelected(new Set()); setSearch(''); setSortCol('position'); }}
+              style={{ padding: '12px 24px', fontSize: 15, fontWeight: 700, cursor: 'pointer', border: 'none', borderBottom: tab === 'serp' ? '3px solid #14b8a6' : '3px solid transparent', background: 'none', color: tab === 'serp' ? '#14b8a6' : 'var(--text3)', marginBottom: -2 }}>
+              <i className="fa-solid fa-chart-line" style={{ marginRight: 8 }} />Discover SERP
+              {keywords.length > 0 && <span style={{ marginLeft: 8, fontSize: 12, background: 'rgba(20,184,166,0.15)', color: '#14b8a6', padding: '2px 8px', borderRadius: 10 }}>{keywords.length}</span>}
+            </button>
+            <button onClick={() => { setTab('maps'); setSelected(new Set()); setSearch(''); setSortCol('maps'); }}
+              style={{ padding: '12px 24px', fontSize: 15, fontWeight: 700, cursor: 'pointer', border: 'none', borderBottom: tab === 'maps' ? '3px solid #22c55e' : '3px solid transparent', background: 'none', color: tab === 'maps' ? '#22c55e' : 'var(--text3)', marginBottom: -2 }}>
+              <i className="fa-solid fa-map-location-dot" style={{ marginRight: 8 }} />Discover Maps
+              {mapsKeywords.length > 0 && <span style={{ marginLeft: 8, fontSize: 12, background: 'rgba(34,197,94,0.15)', color: '#22c55e', padding: '2px 8px', borderRadius: 10 }}>{mapsKeywords.length}</span>}
             </button>
           </div>
 
-          {!hasRun && !loading && (
-            <div style={{ textAlign: 'center', padding: 80, color: '#14b8a6' }}>
-              <i className="fa-solid fa-magnifying-glass-chart" style={{ fontSize: 120, marginBottom: 24, display: 'block', opacity: 0.5 }} />
-              <div style={{ fontSize: 40, marginBottom: 12, fontWeight: 700 }}>No keywords discovered yet</div>
-              <div style={{ fontSize: 32, marginBottom: 28, color: '#14b8a6', opacity: 0.7 }}>Click <strong>Discover Keywords</strong> to find what your domain ranks for with local search intent.</div>
-              <div style={{ fontSize: 28, color: '#14b8a6', opacity: 0.5, maxWidth: 700, margin: '0 auto', lineHeight: 1.6 }}>
-                Uses DataForSEO to find organic keywords, then checks Google Maps positions for the top 50. Cost: ~$0.04 for discovery + ~$0.10 for Maps checks.
+          {/* Empty state */}
+          {!activeHasRun && !activeLoading && (
+            <div style={{ textAlign: 'center', padding: 80, color: tab === 'serp' ? '#14b8a6' : '#22c55e' }}>
+              <i className={tab === 'serp' ? 'fa-solid fa-chart-line' : 'fa-solid fa-map-location-dot'} style={{ fontSize: 100, marginBottom: 24, display: 'block', opacity: 0.5 }} />
+              <div style={{ fontSize: 36, marginBottom: 12, fontWeight: 700 }}>
+                {tab === 'serp' ? 'Discover SERP Keywords' : 'Discover Maps Keywords'}
+              </div>
+              <div style={{ fontSize: 22, marginBottom: 28, opacity: 0.7, maxWidth: 600, margin: '0 auto 28px', lineHeight: 1.6 }}>
+                {tab === 'serp'
+                  ? 'Find organic keywords your domain ranks for with local intent.'
+                  : 'Scan Google Maps to find keywords where your business appears in the local pack.'}
+              </div>
+              <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} style={{ fontSize: 16, padding: '12px 28px' }}>
+                <i className={tab === 'serp' ? 'fa-solid fa-chart-line' : 'fa-solid fa-map-location-dot'} style={{ marginRight: 8 }} />
+                {tab === 'serp' ? 'Discover SERP Keywords' : 'Discover Maps Keywords'}
+              </button>
+              <div style={{ fontSize: 14, opacity: 0.4, marginTop: 16 }}>
+                {tab === 'serp' ? 'Cost: ~$0.04' : 'Scans service keywords × your location on Google Maps. Cost varies by keyword count.'}
               </div>
             </div>
           )}
 
-          {hasRun && (
+          {/* Loading state */}
+          {activeLoading && !sorted.length && (
+            <div style={{ textAlign: 'center', padding: 80 }}>
+              <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: 48, color: tab === 'serp' ? '#14b8a6' : '#22c55e', marginBottom: 16 }} />
+              <div style={{ fontSize: 20, color: 'var(--text1)', fontWeight: 600 }}>
+                {tab === 'serp' ? 'Discovering SERP keywords...' : 'Scanning Google Maps...'}
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 8 }}>
+                {tab === 'serp' ? 'Finding organic keywords with local intent' : 'Checking service keywords for your business in the local pack'}
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
+          {activeHasRun && !activeLoading && sorted.length === 0 && activeData.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 60 }}>
+              <div style={{ fontSize: 20, color: 'var(--text3)', marginBottom: 12 }}>No keywords found</div>
+              <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} style={{ fontSize: 14, padding: '8px 20px' }}>
+                <i className="fa-solid fa-arrows-rotate" style={{ marginRight: 6 }} />Run Again
+              </button>
+            </div>
+          )}
+
+          {(activeHasRun || activeData.length > 0) && (activeData.length > 0 || activeLoading) && (
             <div>
               {/* Toolbar */}
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
@@ -22174,22 +22285,23 @@
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search keywords..."
                     style={{ width: '100%', padding: '10px 12px 10px 36px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', fontSize: 15 }} />
                 </div>
-                <div style={{ fontSize: 15, color: '#14b8a6', fontWeight: 600 }}>{sorted.length} keywords · {selected.size} selected</div>
+                <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} disabled={activeLoading} style={{ fontSize: 13, padding: '8px 16px' }}>
+                  {activeLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Running...</> : <><i className="fa-solid fa-arrows-rotate" style={{ marginRight: 6 }} />Re-scan</>}
+                </button>
+                <div style={{ fontSize: 15, color: tab === 'serp' ? '#14b8a6' : '#22c55e', fontWeight: 600 }}>{sorted.length} keywords · {selected.size} selected</div>
                 {selected.size > 0 && (
                   <>
-                    <button className="btn" onClick={addToSerp} style={{ fontSize: 13, borderColor: 'var(--accent)', color: 'var(--accent)' }}>
-                      <i className="fa-solid fa-chart-line" style={{ marginRight: 4 }} />Add {selected.size} to SERP
-                    </button>
+                    {tab === 'serp' && (
+                      <button className="btn" onClick={addToSerp} style={{ fontSize: 13, borderColor: 'var(--accent)', color: 'var(--accent)' }}>
+                        <i className="fa-solid fa-chart-line" style={{ marginRight: 4 }} />Add to SERP
+                      </button>
+                    )}
                     <button className="btn" onClick={addToMaps} style={{ fontSize: 13, borderColor: '#22c55e', color: '#22c55e' }}>
-                      <i className="fa-solid fa-map-location-dot" style={{ marginRight: 4 }} />Add {selected.size} to Maps
+                      <i className="fa-solid fa-map-location-dot" style={{ marginRight: 4 }} />Add to Maps
                     </button>
                     <button className="btn" onClick={() => {
-                      if (!confirm(`Delete ${selected.size} keywords from discovery results?`)) return;
-                      const remaining = keywords.filter(k => !selected.has(k.keyword));
-                      setKeywords(remaining);
-                      setSelected(new Set());
-                      // Persist to DB
-                      api(`/projects/${project.id}/discovery/update`, { method: 'POST', body: { keywords: remaining } });
+                      if (!confirm(`Delete ${selected.size} keywords?`)) return;
+                      deleteKeywords(selected);
                     }} style={{ fontSize: 13, borderColor: '#ef4444', color: '#ef4444' }}>
                       <i className="fa-solid fa-trash" style={{ marginRight: 4 }} />Delete {selected.size}
                     </button>
@@ -22209,11 +22321,14 @@
                         }} />
                       </th>
                       <th onClick={() => toggleSort('keyword')} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', cursor: 'pointer', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 }}>Keyword{sortIcon('keyword')}</th>
-                      <th onClick={() => toggleSort('position')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>SERP{sortIcon('position')}</th>
-                      <th onClick={() => toggleSort('maps')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Maps{sortIcon('maps')}</th>
+                      {tab === 'maps' ? (
+                        <th onClick={() => toggleSort('maps')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#22c55e', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Maps{sortIcon('maps')}</th>
+                      ) : (
+                        <th onClick={() => toggleSort('position')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>SERP{sortIcon('position')}</th>
+                      )}
                       <th onClick={() => toggleSort('volume')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 90, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Volume{sortIcon('volume')}</th>
                       <th onClick={() => toggleSort('cpc')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>CPC{sortIcon('cpc')}</th>
-                      <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', width: 200, fontSize: 14, textTransform: 'uppercase' }}>URL</th>
+                      {tab === 'serp' && <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', width: 200, fontSize: 14, textTransform: 'uppercase' }}>URL</th>}
                       <th style={{ padding: '12px 14px', textAlign: 'center', width: 70 }}></th>
                     </tr>
                   </thead>
@@ -22225,33 +22340,34 @@
                           <input type="checkbox" checked={selected.has(k.keyword)} onChange={() => { const n = new Set(selected); if (n.has(k.keyword)) n.delete(k.keyword); else n.add(k.keyword); setSelected(n); }} />
                         </td>
                         <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text1)', fontSize: 15 }}>{k.keyword}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                          <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 14, fontWeight: 700,
-                            background: k.position <= 3 ? 'rgba(34,197,94,0.15)' : k.position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)',
-                            color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : '#94a3b8' }}>
-                            #{k.position}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                          {k.maps_position ? (
+                        {tab === 'maps' ? (
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                             <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 14, fontWeight: 700,
                               background: k.maps_position <= 3 ? 'rgba(34,197,94,0.15)' : k.maps_position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
                               color: k.maps_position <= 3 ? '#22c55e' : k.maps_position <= 10 ? '#f59e0b' : '#ef4444' }}>
                               #{k.maps_position}
                             </span>
-                          ) : <span style={{ fontSize: 13, color: '#94a3b8' }}>—</span>}
-                        </td>
+                          </td>
+                        ) : (
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 14, fontWeight: 700,
+                              background: k.position <= 3 ? 'rgba(34,197,94,0.15)' : k.position <= 10 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)',
+                              color: k.position <= 3 ? '#22c55e' : k.position <= 10 ? '#f59e0b' : '#94a3b8' }}>
+                              #{k.position}
+                            </span>
+                          </td>
+                        )}
                         <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 700, color: 'var(--text1)', fontSize: 15 }}>{k.volume?.toLocaleString() || '—'}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
-                        <td style={{ padding: '10px 14px', fontSize: 13, color: '#94a3b8', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>
+                        {tab === 'serp' && <td style={{ padding: '10px 14px', fontSize: 13, color: '#94a3b8', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>}
                         <td style={{ padding: '10px 14px', textAlign: 'center', display: 'flex', gap: 8, justifyContent: 'center' }}>
                           <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5`} target="_blank" rel="noopener noreferrer"
-                            title="Check SERP on Google"
+                            title="Check on Google"
                             style={{ color: '#14b8a6', fontSize: 14, textDecoration: 'none' }}
                             onClick={e => e.stopPropagation()}>
                             <i className="fa-solid fa-arrow-up-right-from-square" />
                           </a>
-                          <button onClick={(e) => { e.stopPropagation(); const remaining = keywords.filter(kk => kk.keyword !== k.keyword); setKeywords(remaining); selected.delete(k.keyword); setSelected(new Set(selected)); api(`/projects/${project.id}/discovery/update`, { method: 'POST', body: { keywords: remaining } }); }}
+                          <button onClick={(e) => { e.stopPropagation(); deleteKeywords(new Set([k.keyword])); }}
                             title="Delete keyword"
                             style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13, padding: 0, opacity: 0.6 }}
                             onMouseOver={e => e.target.style.opacity = 1} onMouseOut={e => e.target.style.opacity = 0.6}>
