@@ -26833,7 +26833,11 @@
             {formData.pluginLicenseKey ? (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <code style={{ fontSize: 12, padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, color: 'var(--text)' }}>{formData.pluginLicenseKey}</code>
+                  <code style={{ fontSize: 12, padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, color: 'var(--text)', userSelect: 'all' }}>{formData.pluginLicenseKey}</code>
+                  <button className="btn btn-sm" title="Copy to clipboard" style={{ background: 'transparent', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: 6, cursor: 'pointer', color: 'var(--text3)', fontSize: 12 }}
+                    onClick={() => { navigator.clipboard.writeText(formData.pluginLicenseKey); const el = event.currentTarget; el.innerHTML = '<i class="fas fa-check" style="color:#22c55e"></i>'; setTimeout(() => { el.innerHTML = '<i class="fas fa-copy"></i>'; }, 1500); }}>
+                    <i className="fas fa-copy" />
+                  </button>
                   <span style={{
                     fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
                     background: formData.pluginLicenseActive ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
@@ -26853,7 +26857,7 @@
                       try {
                         const r = await api('/projects/' + project.id + '/license/renew', { method: 'POST', body: { months: 12 } });
                         setFormData(prev => ({ ...prev, pluginLicenseExpires: r.expires, pluginLicenseActive: true }));
-                        alert('License renewed until ' + new Date(r.expires).toLocaleDateString());
+                        // renewed — UI updates automatically via setFormData
                       } catch (err) { alert('Error: ' + err.message); }
                     }}>
                     <i className="fas fa-sync" style={{ marginRight: 4 }} />Renew 12 Months
@@ -26883,7 +26887,7 @@
                   try {
                     const r = await api('/projects/' + project.id + '/license/generate', { method: 'POST', body: { months: 12 } });
                     setFormData(prev => ({ ...prev, pluginLicenseKey: r.license_key, pluginLicenseExpires: r.expires, pluginLicenseActive: true }));
-                    alert('License key generated: ' + r.license_key + '\n\nCopy this key to the SEO Room plugin settings in WordPress.');
+                    navigator.clipboard.writeText(r.license_key).catch(() => {});
                   } catch (err) { alert('Error: ' + err.message); }
                 }}>
                 <i className="fas fa-key" style={{ marginRight: 6 }} />Generate License Key

@@ -154,6 +154,15 @@ function isServicePage(path, schemas, wordCount, pageExclusions) {
 app.use(cors());
 app.use(express.json({ limit: '30mb' }));
 
+// CORS for WordPress plugin calls
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 // Load index.html once on startup
 let INDEX_HTML = '';
 const indexPath = path.join(__dirname, 'public', 'index.html');
