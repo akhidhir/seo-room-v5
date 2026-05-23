@@ -9501,6 +9501,10 @@
       // Diagnose state
       const [diagnoses, setDiagnoses] = useState({});
       const [diagnosing, setDiagnosing] = useState(false);
+      // Fix link state
+      const [fixingLinkId, setFixingLinkId] = useState(null);
+      const [fixLinkTarget, setFixLinkTarget] = useState('');
+      const [fixLinkSaving, setFixLinkSaving] = useState(false);
       // Broken links state
       const [brokenLinks, setBrokenLinks] = useState([]);
       const [blTotal, setBlTotal] = useState(0);
@@ -9662,6 +9666,30 @@
           setDiagnoses(data.diagnoses || {});
         } catch (err) { console.error('Diagnose error:', err); }
         setDiagnosing(false);
+      };
+
+      const handleFixLink = async (item, action) => {
+        // action: 'replace' or 'remove'
+        const key = item.url || item.url_path || '';
+        const diag = diagnoses[key];
+        if (!diag || !diag.linked_from || !diag.linked_from.length) return;
+        const brokenUrl = key.startsWith('http') ? key : domainBase + (key.startsWith('/') ? '' : '/') + key;
+        setFixLinkSaving(true);
+        var successCount = 0;
+        for (var si = 0; si < diag.linked_from.length; si++) {
+          try {
+            var body = { source_url: diag.linked_from[si], broken_url: brokenUrl, action: action };
+            if (action === 'replace') body.replacement_url = fixLinkTarget;
+            var result = await api('/projects/' + project.id + '/plugin/404s/fix-link', { method: 'POST', body: body });
+            if (result.success) successCount++;
+            else if (result.message) console.log('Fix link note:', result.message);
+          } catch (err) { console.error('Fix link error:', err); }
+        }
+        setFixLinkSaving(false);
+        setFixingLinkId(null);
+        setFixLinkTarget('');
+        if (successCount > 0) alert('Fixed broken link on ' + successCount + ' page(s). The 404 should stop recurring.');
+        else alert('Could not find the broken link in page content. It may be in a menu, widget, or page builder element.');
       };
 
       const handleAddRedirect = async () => {
@@ -9863,9 +9891,18 @@
                     (() => {
                       const key = item.url || item.url_path || '';
                       const sug = suggestions[key];
+                      const diag = diagnoses[key];
+                      const hasInternalLink = diag && diag.causes && diag.causes.includes('internal_link');
+                      const isOrphan = !diag || (diag.causes && diag.causes.includes('orphan'));
                       return e(React.Fragment, null,
-                        redirectingId === item.id ? null : e(React.Fragment, null,
+                        (redirectingId === item.id || fixingLinkId === item.id) ? null : e(React.Fragment, null,
                           sug && e('span', { style: { ...badgeStyle(sug.score >= 70 ? 'rgba(34,197,94,0.15)' : sug.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.15)', sug.score >= 70 ? '#22c55e' : sug.score >= 40 ? '#f59e0b' : '#6b7280'), marginRight: 6, fontSize: 10 } }, `${sug.score}%`),
+                          // Fix Link button (for internal_link cause)
+                          hasInternalLink && e('button', {
+                            style: { ...btnStyle('#f59e0b'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
+                            onClick: () => { setFixingLinkId(item.id); setFixLinkTarget(sug ? sug.url : ''); }
+                          }, e('i', { className: 'fas fa-wrench' }), ' Fix Link'),
+                          // Redirect button (always available)
                           e('button', {
                             style: { ...btnStyle(sug ? '#22c55e' : '#6366f1'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
                             onClick: () => { setRedirectingId(item.id); setRedirectTarget(sug ? sug.url : ''); }
@@ -9934,6 +9971,34 @@
                         e('i', { className: 'fas fa-check' }), ' Create'
                       ),
                       e('button', { style: { ...btnStyle('#94a3b8'), marginLeft: 4 }, onClick: () => setRedirectingId(null) },
+                        e('i', { className: 'fas fa-times' })
+                      )
+                    )
+                  )
+                ),
+                // Inline fix-link form
+                fixingLinkId === item.id && e('tr', { style: { background: 'rgba(245,158,11,0.08)' } },
+                  e('td', { colSpan: 6, style: { padding: '10px 12px' } },
+                    e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                      e('span', { style: { fontSize: 12, color: '#f59e0b', whiteSpace: 'nowrap', fontWeight: 600 } },
+                        e('i', { className: 'fas fa-wrench', style: { marginRight: 4 } }), 'Fix broken link:'
+                      ),
+                      e('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'on ' + ((diagnoses[item.url || item.url_path || ''] || {}).linked_from || []).map(function(s) { return s.replace(/^https?:\/\/[^/]+/, ''); }).join(', ')),
+                      e('input', {
+                        style: { ...inputStyle, flex: 1, minWidth: 200 },
+                        placeholder: 'Replace with URL (or leave empty to remove link)',
+                        value: fixLinkTarget,
+                        onChange: (ev) => setFixLinkTarget(ev.target.value)
+                      }),
+                      e('button', {
+                        style: btnStyle('#22c55e'),
+                        onClick: () => handleFixLink(item, fixLinkTarget ? 'replace' : 'remove'),
+                        disabled: fixLinkSaving
+                      },
+                        fixLinkSaving ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-check' }),
+                        fixLinkTarget ? ' Replace Link' : ' Remove Link'
+                      ),
+                      e('button', { style: { ...btnStyle('#94a3b8'), marginLeft: 4 }, onClick: () => { setFixingLinkId(null); setFixLinkTarget(''); } },
                         e('i', { className: 'fas fa-times' })
                       )
                     )

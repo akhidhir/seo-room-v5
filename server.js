@@ -2295,6 +2295,131 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
   }
 });
 
+// POST /api/projects/:id/plugin/404s/fix-link — fix a broken internal link on a source page via WP REST API
+app.post('/api/projects/:id/plugin/404s/fix-link', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { source_url, broken_url, replacement_url, action } = req.body;
+    // action: 'replace' (swap href) or 'remove' (remove the <a> tag, keep text)
+    if (!source_url || !broken_url) return res.status(400).json({ error: 'source_url and broken_url required' });
+
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress URL and credentials required' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const baseUrl = `https://${domain}`;
+
+    // Find the WP page/post by URL — try slug matching
+    const sourcePath = source_url.replace(/^https?:\/\/[^/]+/, '').replace(/^\/|\/$/g, '');
+    const sourceSlug = sourcePath.split('/').filter(Boolean).pop() || '';
+
+    let wpPageId = null;
+    let wpPageContent = null;
+    let wpPostType = null;
+
+    // Search pages then posts by slug
+    for (const postType of ['pages', 'posts']) {
+      try {
+        const searchResp = await fetch(`${wpUrl}/wp-json/wp/v2/${postType}?slug=${encodeURIComponent(sourceSlug)}&_fields=id,content,slug,link`, {
+          headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (searchResp.ok) {
+          const items = await searchResp.json();
+          if (items.length > 0) {
+            wpPageId = items[0].id;
+            wpPageContent = items[0].content?.rendered || '';
+            wpPostType = postType;
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    if (!wpPageId) return res.status(404).json({ error: 'Could not find source page in WordPress: ' + sourceSlug });
+
+    // Fetch raw content (rendered may differ from raw)
+    try {
+      const rawResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}?context=edit&_fields=content`, {
+        headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (rawResp.ok) {
+        const rawData = await rawResp.json();
+        wpPageContent = rawData.content?.raw || wpPageContent;
+      }
+    } catch {}
+
+    // Build the broken href patterns to search for (handle relative and absolute)
+    const brokenPath = broken_url.replace(/^https?:\/\/[^/]+/, '');
+    const brokenPatterns = [broken_url, brokenPath];
+    if (!brokenPath.endsWith('/')) brokenPatterns.push(brokenPath + '/');
+    if (brokenPath.endsWith('/')) brokenPatterns.push(brokenPath.replace(/\/$/, ''));
+    // Also try with baseUrl prefix
+    if (!broken_url.startsWith('http')) {
+      brokenPatterns.push(baseUrl + brokenPath);
+      brokenPatterns.push(baseUrl + brokenPath + '/');
+    }
+
+    let updatedContent = wpPageContent;
+    let fixCount = 0;
+
+    if (action === 'remove') {
+      // Remove <a> tags with the broken href but keep the inner text
+      for (const pattern of brokenPatterns) {
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+        const regex = new RegExp(`<a[^>]*href=["']${escaped}["'][^>]*>(.*?)<\\/a>`, 'gi');
+        const before = updatedContent;
+        updatedContent = updatedContent.replace(regex, '$1');
+        if (updatedContent !== before) fixCount++;
+      }
+    } else {
+      // Replace: swap href to replacement_url
+      if (!replacement_url) return res.status(400).json({ error: 'replacement_url required for replace action' });
+      for (const pattern of brokenPatterns) {
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+        const regex = new RegExp(`(href=["'])${escaped}(["'])`, 'gi');
+        const before = updatedContent;
+        updatedContent = updatedContent.replace(regex, `$1${replacement_url}$2`);
+        if (updatedContent !== before) fixCount++;
+      }
+    }
+
+    if (fixCount === 0) {
+      return res.json({ success: false, message: 'Broken link not found in page content. It may be in a widget, menu, or page builder element.' });
+    }
+
+    // Save change history before writing
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [project.id, wpPageId, source_url, sourceSlug, 'fix_broken_link', 'content',
+       broken_url, action === 'remove' ? '[link removed]' : replacement_url]
+    );
+
+    // Write updated content back to WordPress
+    const updateResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
+      body: JSON.stringify({ content: updatedContent }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!updateResp.ok) {
+      const errText = await updateResp.text().catch(() => '');
+      return res.status(500).json({ error: 'Failed to update WordPress page: ' + updateResp.status + ' ' + errText.substring(0, 200) });
+    }
+
+    console.log(`[fix-link] Fixed ${fixCount} broken link(s) on ${sourceSlug}: ${broken_url} → ${action === 'remove' ? 'removed' : replacement_url}`);
+    res.json({ success: true, fixes: fixCount, page_id: wpPageId, source_slug: sourceSlug });
+  } catch (e) {
+    console.error(`[fix-link] Error:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/projects/:id/plugin/404s/:fid/redirect — create redirect from a 404
 app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
   try {
