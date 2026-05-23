@@ -23573,6 +23573,25 @@ app.post('/api/projects/:projectId/maps/smart-generate', async (req, res) => {
       // Skip if the service matches a competitor business name
       const isCompetitor = [...competitorNames].some(cn => service.includes(cn) || cn.includes(service));
       if (isCompetitor) continue;
+      // Skip "[name] plumbing/electrical/roofing/etc" pattern — these are competitor business names
+      // e.g. "hilton plumbing", "smith electrical" — the non-trade word is a proper noun, not a service
+      const TRADE_SUFFIXES = ['plumbing', 'electrical', 'roofing', 'painting', 'landscaping', 'carpentry', 'fencing', 'tiling', 'flooring', 'glazing', 'concreting', 'excavating', 'welding', 'rendering', 'plastering', 'cabinetry', 'joinery', 'gasfitting'];
+      const serviceWords = service.split(/\s+/);
+      if (serviceWords.length >= 2) {
+        const lastWord = serviceWords[serviceWords.length - 1];
+        if (TRADE_SUFFIXES.includes(lastWord)) {
+          // Check if ALL other words are NOT in SERVICE_ACTION_WORDS — if so, it's a business name
+          const otherWords = serviceWords.slice(0, -1).join(' ');
+          const otherHasAction = SERVICE_ACTION_WORDS.some(sw => otherWords.includes(sw));
+          // Also check if the other words are a suburb name
+          const otherIsSuburb = allSuburbNames.some(sub => otherWords === sub || otherWords.includes(sub));
+          if (!otherHasAction && !otherIsSuburb) {
+            // Likely a business name like "hilton plumbing" — skip
+            console.log(`[smart-gen] Skipping competitor pattern: "${service}" (from "${kw.keyword}")`);
+            continue;
+          }
+        }
+      }
       // Only keep if the service contains at least one ACTION word (not just product nouns)
       const hasServiceWord = SERVICE_ACTION_WORDS.some(sw => service.includes(sw));
       if (!hasServiceWord) continue;
