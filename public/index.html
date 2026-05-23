@@ -22475,11 +22475,15 @@
         const kws = discoveredMaps.filter(k => selectedDiscMaps.has(k.keyword));
         setDiscovering(true);
         try {
-          const r = await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
+          const projectLoc = (project.location || '').split(',')[0].trim() || 'Perth';
+          const kwList = kws.map(k => k.keyword);
+          const r = await api(`/projects/${project.id}/rank-tracking/keywords`, {
             method: 'POST',
-            body: { keywords: kws }
+            body: { keywords: kwList, location: projectLoc }
           });
-          alert(`Added ${r.added || kws.length} discovered keywords with volume & position data.`);
+          if (r.error) { alert(r.error); } else {
+            alert(`Added ${r.added || kwList.length} keywords to Maps tracking (location: ${projectLoc}).`);
+          }
           setDiscoveredMaps(null);
           setSelectedDiscMaps(new Set());
           loadData();
