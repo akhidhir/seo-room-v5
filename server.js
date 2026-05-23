@@ -3287,7 +3287,7 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
     keyword,
     language_code: 'en',
     depth: depth || 20,
-    os: 'desktop',
+    device: 'desktop',
     se_domain: 'google.com.au',
   };
   // GPS coordinates for grid scan accuracy
@@ -3335,7 +3335,7 @@ async function dataForSeoSerp({ keyword, location, depth }) {
     keyword,
     language_code: 'en',
     depth: depth || 30,
-    os: 'desktop',
+    device: 'desktop',
     se_domain: 'google.com.au',
     location_name: normalizedLocation,
   };
@@ -24569,7 +24569,7 @@ app.post('/api/projects/:projectId/rank-tracking/debug-serp', async (req, res) =
       keyword,
       language_code: 'en',
       depth: 30,
-      os: 'desktop',
+      device: 'desktop',
       se_domain: 'google.com.au',
       location_name: loc.replace(/,\s+/g, ','),
     };
