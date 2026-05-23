@@ -1005,6 +1005,31 @@ async function initDb() {
       console.log('[boot] Houseworks RC data seeded successfully');
     }
 
+    // SEO Migration tracking
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS seo_migrations (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT DEFAULT 'Migration',
+        old_site_url TEXT NOT NULL,
+        new_site_url TEXT NOT NULL,
+        status TEXT DEFAULT 'pre_migration',
+        phase TEXT DEFAULT 'crawl',
+        old_crawl JSONB DEFAULT '[]',
+        new_crawl JSONB DEFAULT '[]',
+        url_map JSONB DEFAULT '[]',
+        unmatched_urls JSONB DEFAULT '[]',
+        seo_snapshot JSONB DEFAULT '{}',
+        post_snapshot JSONB DEFAULT '{}',
+        redirects_pushed INTEGER DEFAULT 0,
+        checklist JSONB DEFAULT '[]',
+        backlink_inventory JSONB DEFAULT '[]',
+        migration_report JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
@@ -2651,6 +2676,492 @@ app.post('/api/projects/:id/license/renew', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ================================================================
+// SEO MIGRATION — Old site → New site migration management
+// ================================================================
+
+// List migrations for a project
+app.get('/api/projects/:id/migrations', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, old_site_url, new_site_url, status, phase, redirects_pushed,
+              json_array_length(old_crawl) as old_pages, json_array_length(new_crawl) as new_pages,
+              json_array_length(url_map) as mapped_urls, json_array_length(unmatched_urls) as unmatched,
+              created_at, updated_at
+       FROM seo_migrations WHERE project_id = $1 ORDER BY created_at DESC`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single migration with full data
+app.get('/api/projects/:id/migrations/:migrationId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM seo_migrations WHERE id = $1 AND project_id = $2`,
+      [req.params.migrationId, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Migration not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create a new migration
+app.post('/api/projects/:id/migrations', async (req, res) => {
+  try {
+    const { name, old_site_url, new_site_url } = req.body;
+    if (!old_site_url || !new_site_url) return res.status(400).json({ error: 'Both old and new site URLs required' });
+    const result = await pool.query(
+      `INSERT INTO seo_migrations (project_id, name, old_site_url, new_site_url)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [req.params.id, name || 'Migration', old_site_url.replace(/\/$/, ''), new_site_url.replace(/\/$/, '')]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a migration
+app.delete('/api/projects/:id/migrations/:migrationId', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM seo_migrations WHERE id = $1 AND project_id = $2`, [req.params.migrationId, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 1: Crawl old site
+app.post('/api/projects/:id/migrations/:migrationId/crawl-old', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    res.json({ status: 'crawling', message: 'Crawling old site...' });
+
+    // Background crawl
+    (async () => {
+      try {
+        const pages = await crawlSiteForMigration(migration.old_site_url);
+        await pool.query(
+          `UPDATE seo_migrations SET old_crawl = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify(pages), migration.id]
+        );
+        console.log(`[migration] Crawled old site ${migration.old_site_url}: ${pages.length} pages`);
+      } catch (e) {
+        console.error('[migration] Crawl old error:', e.message);
+      }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 1: Crawl new site
+app.post('/api/projects/:id/migrations/:migrationId/crawl-new', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    res.json({ status: 'crawling', message: 'Crawling new site...' });
+
+    (async () => {
+      try {
+        const pages = await crawlSiteForMigration(migration.new_site_url);
+        await pool.query(
+          `UPDATE seo_migrations SET new_crawl = $1, updated_at = NOW() WHERE id = $2`,
+          [JSON.stringify(pages), migration.id]
+        );
+        console.log(`[migration] Crawled new site ${migration.new_site_url}: ${pages.length} pages`);
+      } catch (e) {
+        console.error('[migration] Crawl new error:', e.message);
+      }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Shared crawl helper — discovers pages via sitemap, then fetches meta for each
+async function crawlSiteForMigration(siteUrl) {
+  const axios = require('axios');
+  const pages = [];
+  const visited = new Set();
+
+  // Try sitemap first
+  const sitemapUrls = [`${siteUrl}/sitemap.xml`, `${siteUrl}/sitemap_index.xml`];
+  let pageUrls = [];
+
+  for (const smUrl of sitemapUrls) {
+    try {
+      const resp = await axios.get(smUrl, { timeout: 15000, headers: { 'User-Agent': 'SEORoom/1.0' } });
+      const xml = resp.data;
+      // Extract URLs from sitemap
+      const locMatches = xml.match(/<loc>(.*?)<\/loc>/gi) || [];
+      for (const loc of locMatches) {
+        const url = loc.replace(/<\/?loc>/gi, '').trim();
+        // Check if it's a sub-sitemap
+        if (url.includes('sitemap') && url.endsWith('.xml')) {
+          try {
+            const subResp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'SEORoom/1.0' } });
+            const subLocs = subResp.data.match(/<loc>(.*?)<\/loc>/gi) || [];
+            for (const subLoc of subLocs) {
+              const subUrl = subLoc.replace(/<\/?loc>/gi, '').trim();
+              if (!subUrl.includes('sitemap') && !subUrl.endsWith('.xml')) pageUrls.push(subUrl);
+            }
+          } catch (e) { /* skip broken sub-sitemap */ }
+        } else {
+          pageUrls.push(url);
+        }
+      }
+      if (pageUrls.length > 0) break;
+    } catch (e) { /* try next sitemap URL */ }
+  }
+
+  // Fallback: try WP REST API
+  if (pageUrls.length === 0) {
+    try {
+      const wpPages = await axios.get(`${siteUrl}/wp-json/wp/v2/pages?per_page=100&_fields=link`, { timeout: 10000 });
+      pageUrls.push(...wpPages.data.map(p => p.link));
+    } catch (e) { /* not WP */ }
+    try {
+      const wpPosts = await axios.get(`${siteUrl}/wp-json/wp/v2/posts?per_page=100&_fields=link`, { timeout: 10000 });
+      pageUrls.push(...wpPosts.data.map(p => p.link));
+    } catch (e) { /* not WP */ }
+  }
+
+  // Cap at 200 pages
+  pageUrls = [...new Set(pageUrls)].slice(0, 200);
+
+  // Fetch meta for each page (batch of 10)
+  for (let i = 0; i < pageUrls.length; i += 10) {
+    const batch = pageUrls.slice(i, i + 10);
+    const results = await Promise.allSettled(batch.map(async (url) => {
+      if (visited.has(url)) return null;
+      visited.add(url);
+      try {
+        const resp = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'SEORoom/1.0' }, maxRedirects: 3 });
+        const html = resp.data;
+        const title = (html.match(/<title[^>]*>(.*?)<\/title>/is) || [])[1]?.trim() || '';
+        const metaDesc = (html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/is) || [])[1]?.trim() || '';
+        const h1 = (html.match(/<h1[^>]*>(.*?)<\/h1>/is) || [])[1]?.replace(/<[^>]+>/g, '').trim() || '';
+        const canonical = (html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["'](.*?)["']/is) || [])[1]?.trim() || '';
+        const slug = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '/';
+        return { url, slug, title, meta_desc: metaDesc, h1, canonical, status: resp.status };
+      } catch (e) {
+        return { url, slug: new URL(url).pathname, title: '', meta_desc: '', h1: '', canonical: '', status: e.response?.status || 0 };
+      }
+    }));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) pages.push(r.value);
+    }
+  }
+
+  return pages;
+}
+
+// Phase 1: AI URL Matching — match old URLs to new URLs
+app.post('/api/projects/:id/migrations/:migrationId/match-urls', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    const oldPages = migration.old_crawl || [];
+    const newPages = migration.new_crawl || [];
+    if (oldPages.length === 0 || newPages.length === 0) return res.status(400).json({ error: 'Crawl both sites first' });
+
+    res.json({ status: 'matching', message: 'AI matching URLs...' });
+
+    (async () => {
+      try {
+        // Build summaries for AI
+        const oldSummary = oldPages.map(p => `${p.url} | ${p.title} | ${p.h1} | ${p.slug}`).join('\n');
+        const newSummary = newPages.map(p => `${p.url} | ${p.title} | ${p.h1} | ${p.slug}`).join('\n');
+
+        const prompt = `You are an SEO migration specialist. Match old website URLs to their equivalent new website URLs.
+
+OLD SITE PAGES:
+${oldSummary}
+
+NEW SITE PAGES:
+${newSummary}
+
+For each old URL, find the best matching new URL based on:
+1. Slug similarity (e.g., /plumbing-services → /services/plumbing)
+2. Title/H1 similarity
+3. Content purpose match
+
+Return ONLY a JSON array of objects:
+[{"old_url": "...", "new_url": "...", "confidence": 0.0-1.0, "reason": "brief reason"}]
+
+If no match exists for an old URL, set new_url to null and confidence to 0.
+Return valid JSON only, no markdown.`;
+
+        const aiResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: prompt }]
+        });
+
+        let text = aiResp.content[0].text.trim();
+        // Extract JSON from response
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) throw new Error('AI did not return valid JSON');
+
+        const matches = JSON.parse(jsonMatch[0]);
+        const urlMap = matches.filter(m => m.new_url && m.confidence > 0);
+        const unmatched = matches.filter(m => !m.new_url || m.confidence === 0);
+
+        await pool.query(
+          `UPDATE seo_migrations SET url_map = $1, unmatched_urls = $2, phase = 'matched', updated_at = NOW() WHERE id = $3`,
+          [JSON.stringify(urlMap), JSON.stringify(unmatched), migration.id]
+        );
+        console.log(`[migration] URL matching done: ${urlMap.length} matched, ${unmatched.length} unmatched`);
+      } catch (e) {
+        console.error('[migration] URL match error:', e.message);
+      }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 1: Update URL map manually (user edits matches)
+app.put('/api/projects/:id/migrations/:migrationId/url-map', async (req, res) => {
+  try {
+    const { url_map, unmatched_urls } = req.body;
+    await pool.query(
+      `UPDATE seo_migrations SET url_map = $1, unmatched_urls = COALESCE($2, unmatched_urls), updated_at = NOW() WHERE id = $3 AND project_id = $4`,
+      [JSON.stringify(url_map), unmatched_urls ? JSON.stringify(unmatched_urls) : null, req.params.migrationId, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 2: Generate and push redirects
+app.post('/api/projects/:id/migrations/:migrationId/push-redirects', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    const project = (await pool.query(`SELECT * FROM projects WHERE id=$1`, [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const urlMap = migration.url_map || [];
+    if (urlMap.length === 0) return res.status(400).json({ error: 'No URL matches to redirect' });
+
+    const wpUrl = project.wp_url?.replace(/\/$/, '');
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress URL not configured' });
+
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Push each redirect to the WP plugin
+    let pushed = 0;
+    const errors = [];
+    const axios = require('axios');
+
+    for (const match of urlMap) {
+      if (!match.old_url || !match.new_url) continue;
+      try {
+        // Extract paths from full URLs
+        const oldPath = new URL(match.old_url).pathname;
+        const newPath = match.new_url.startsWith('http') ? new URL(match.new_url).pathname : match.new_url;
+
+        await axios.post(`${wpUrl}/wp-json/seoroom/v1/redirects`, {
+          source_url: oldPath,
+          target_url: newPath,
+          redirect_type: 301,
+          notes: `Migration: ${match.reason || 'AI matched'}`
+        }, { headers: authHeaders, timeout: 10000 });
+        pushed++;
+      } catch (e) {
+        errors.push({ url: match.old_url, error: e.response?.data?.message || e.message });
+      }
+    }
+
+    await pool.query(
+      `UPDATE seo_migrations SET redirects_pushed = $1, phase = 'redirects_pushed', status = 'executing', updated_at = NOW() WHERE id = $2`,
+      [pushed, migration.id]
+    );
+
+    res.json({ pushed, total: urlMap.length, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 2: Transfer meta (titles/descriptions) from old to new pages
+app.post('/api/projects/:id/migrations/:migrationId/transfer-meta', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    const project = (await pool.query(`SELECT * FROM projects WHERE id=$1`, [req.params.id])).rows[0];
+    const wpUrl = project?.wp_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress not configured' });
+
+    const urlMap = migration.url_map || [];
+    const oldPages = migration.old_crawl || [];
+    const axios = require('axios');
+    let transferred = 0;
+    const errors = [];
+
+    for (const match of urlMap) {
+      const oldPage = oldPages.find(p => p.url === match.old_url);
+      if (!oldPage || (!oldPage.title && !oldPage.meta_desc)) continue;
+
+      try {
+        const newPath = match.new_url.startsWith('http') ? new URL(match.new_url).pathname : match.new_url;
+        const slug = newPath.replace(/\/$/, '').split('/').pop();
+        if (!slug || slug === '') continue;
+
+        // Find the WP page/post by slug
+        let wpPage = null;
+        try {
+          const pagesResp = await axios.get(`${wpUrl}/wp-json/wp/v2/pages?slug=${slug}&_fields=id,title`, { headers: authHeaders, timeout: 10000 });
+          if (pagesResp.data.length > 0) wpPage = { id: pagesResp.data[0].id, type: 'pages' };
+        } catch (e) { /* not a page */ }
+        if (!wpPage) {
+          try {
+            const postsResp = await axios.get(`${wpUrl}/wp-json/wp/v2/posts?slug=${slug}&_fields=id,title`, { headers: authHeaders, timeout: 10000 });
+            if (postsResp.data.length > 0) wpPage = { id: postsResp.data[0].id, type: 'posts' };
+          } catch (e) { /* not a post */ }
+        }
+
+        if (!wpPage) continue;
+
+        // Save to change history before writing
+        if (oldPage.title) {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+             VALUES ($1, $2, $3, $4, 'migration_meta', '_yoast_wpseo_title', '', $5)`,
+            [project.id, wpPage.id, match.new_url, oldPage.title, oldPage.title]
+          );
+        }
+        if (oldPage.meta_desc) {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+             VALUES ($1, $2, $3, $4, 'migration_meta', '_yoast_wpseo_metadesc', '', $5)`,
+            [project.id, wpPage.id, match.new_url, oldPage.title, oldPage.meta_desc]
+          );
+        }
+
+        // Write Yoast meta
+        const meta = {};
+        if (oldPage.title) meta['_yoast_wpseo_title'] = oldPage.title;
+        if (oldPage.meta_desc) meta['_yoast_wpseo_metadesc'] = oldPage.meta_desc;
+
+        await axios.post(`${wpUrl}/wp-json/wp/v2/${wpPage.type}/${wpPage.id}`, { meta }, { headers: authHeaders, timeout: 10000 });
+        transferred++;
+      } catch (e) {
+        errors.push({ url: match.new_url, error: e.message });
+      }
+    }
+
+    res.json({ transferred, total: urlMap.length, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 1: SEO Snapshot — capture current rankings as baseline
+app.post('/api/projects/:id/migrations/:migrationId/snapshot', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    // Get existing rank tracking data as snapshot
+    const rankings = await pool.query(
+      `SELECT rk.keyword, rk.location, rt.position, rt.maps_position, rt.url, rt.checked_at
+       FROM rank_keywords rk
+       LEFT JOIN LATERAL (
+         SELECT position, maps_position, url, checked_at FROM rank_tracking
+         WHERE keyword_id = rk.id ORDER BY checked_at DESC LIMIT 1
+       ) rt ON true
+       WHERE rk.project_id = $1`,
+      [req.params.id]
+    );
+
+    // Get GSC data if available
+    let gscData = [];
+    try {
+      const project = (await pool.query(`SELECT * FROM projects WHERE id=$1`, [req.params.id])).rows[0];
+      const userId = (await pool.query(`SELECT user_id FROM project_integrations WHERE project_id=$1 AND kind='gsc' LIMIT 1`, [req.params.id])).rows[0]?.user_id;
+      if (userId && project.gsc_property) {
+        const accessToken = await getGscAccessToken(userId);
+        if (accessToken) {
+          const axios = require('axios');
+          const endDate = new Date().toISOString().split('T')[0];
+          const startDate = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0];
+          const gscResp = await axios.post(
+            `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(project.gsc_property)}/searchAnalytics/query`,
+            { startDate, endDate, dimensions: ['page'], rowLimit: 500 },
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          gscData = gscResp.data.rows || [];
+        }
+      }
+    } catch (e) { console.log('[migration] GSC snapshot error:', e.message); }
+
+    const snapshot = {
+      taken_at: new Date().toISOString(),
+      rankings: rankings.rows,
+      gsc_pages: gscData.map(r => ({
+        page: r.keys[0],
+        clicks: r.clicks,
+        impressions: r.impressions,
+        ctr: r.ctr,
+        position: r.position
+      })),
+      total_keywords: rankings.rows.length,
+      avg_position: rankings.rows.length > 0
+        ? (rankings.rows.reduce((s, r) => s + (r.position || 0), 0) / rankings.rows.filter(r => r.position).length).toFixed(1)
+        : null
+    };
+
+    const snapshotField = req.body.type === 'post' ? 'post_snapshot' : 'seo_snapshot';
+    await pool.query(
+      `UPDATE seo_migrations SET ${snapshotField} = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(snapshot), migration.id]
+    );
+
+    res.json(snapshot);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Phase 3: Migration comparison report
+app.get('/api/projects/:id/migrations/:migrationId/report', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1 AND project_id=$2`, [req.params.migrationId, req.params.id])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+
+    const pre = migration.seo_snapshot || {};
+    const post = migration.post_snapshot || {};
+    const urlMap = migration.url_map || [];
+
+    const report = {
+      redirect_coverage: urlMap.length > 0 ? Math.round((urlMap.filter(m => m.new_url).length / (migration.old_crawl || []).length) * 100) : 0,
+      redirects_pushed: migration.redirects_pushed,
+      old_pages: (migration.old_crawl || []).length,
+      new_pages: (migration.new_crawl || []).length,
+      matched_urls: urlMap.length,
+      unmatched_urls: (migration.unmatched_urls || []).length,
+      pre_avg_position: pre.avg_position || null,
+      post_avg_position: post.avg_position || null,
+      pre_total_clicks: pre.gsc_pages?.reduce((s, p) => s + p.clicks, 0) || 0,
+      post_total_clicks: post.gsc_pages?.reduce((s, p) => s + p.clicks, 0) || 0,
+      ranking_changes: [],
+    };
+
+    // Compare rankings
+    if (pre.rankings && post.rankings) {
+      for (const preR of pre.rankings) {
+        const postR = post.rankings?.find(r => r.keyword === preR.keyword);
+        if (postR) {
+          report.ranking_changes.push({
+            keyword: preR.keyword,
+            pre_position: preR.position,
+            post_position: postR.position,
+            change: preR.position && postR.position ? preR.position - postR.position : null
+          });
+        }
+      }
+    }
+
+    res.json(report);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Haversine distance in km

@@ -15916,6 +15916,443 @@
       );
     }
 
+    // ============ SEO MIGRATION WIZARD ============
+    function SEOMigrationPage({ project }) {
+      var pid = project ? project.id : null;
+      var [migrations, setMigrations] = React.useState([]);
+      var [activeMigration, setActiveMigration] = React.useState(null);
+      var [loading, setLoading] = React.useState(false);
+      var [creating, setCreating] = React.useState(false);
+      var [showCreateModal, setShowCreateModal] = React.useState(false);
+      var [newName, setNewName] = React.useState('');
+      var [newOldUrl, setNewOldUrl] = React.useState('');
+      var [newNewUrl, setNewNewUrl] = React.useState('');
+      var [phase, setPhase] = React.useState('crawl');
+      var [crawlingOld, setCrawlingOld] = React.useState(false);
+      var [crawlingNew, setCrawlingNew] = React.useState(false);
+      var [matching, setMatching] = React.useState(false);
+      var [pushingRedirects, setPushingRedirects] = React.useState(false);
+      var [transferringMeta, setTransferringMeta] = React.useState(false);
+      var [pollTimer, setPollTimer] = React.useState(null);
+      var [report, setReport] = React.useState(null);
+      var [snapshotting, setSnapshotting] = React.useState(false);
+      var [editedMap, setEditedMap] = React.useState(null);
+      var [pushResult, setPushResult] = React.useState(null);
+      var [transferResult, setTransferResult] = React.useState(null);
+
+      var PHASES = ['crawl', 'match', 'redirects', 'monitor'];
+      var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor' };
+      var PHASE_ICONS = { crawl: 'fa-spider', match: 'fa-link', redirects: 'fa-directions', monitor: 'fa-chart-line' };
+
+      var accent = '#f97316';
+      var btnStyle = { padding: '10px 20px', borderRadius: 8, border: 'none', background: accent, color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' };
+      var btnSmall = { padding: '6px 14px', borderRadius: 6, border: 'none', background: accent, color: '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer' };
+      var btnOutline = { padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer' };
+      var thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)', borderBottom: '1px solid var(--border)', fontWeight: 700 };
+      var tdStyle = { padding: '8px 12px', fontSize: 13, color: 'var(--text)', borderBottom: '1px solid var(--border)' };
+
+      function loadMigrations() {
+        if (!pid) return;
+        setLoading(true);
+        api('/projects/' + pid + '/migrations').then(function(r) { setMigrations(r || []); }).catch(function() {}).finally(function() { setLoading(false); });
+      }
+
+      function loadMigration(mid) {
+        api('/projects/' + pid + '/migrations/' + mid).then(function(r) { setActiveMigration(r); if (editedMap === null && r.url_map) setEditedMap(r.url_map); }).catch(function() {});
+      }
+
+      React.useEffect(function() { loadMigrations(); return function() { if (pollTimer) clearInterval(pollTimer); }; }, [pid]);
+
+      function startPoll(mid) {
+        if (pollTimer) clearInterval(pollTimer);
+        var t = setInterval(function() { loadMigration(mid); }, 3000);
+        setPollTimer(t);
+      }
+
+      function stopPoll() { if (pollTimer) { clearInterval(pollTimer); setPollTimer(null); } }
+
+      React.useEffect(function() {
+        if (!activeMigration) return;
+        var m = activeMigration;
+        var needsPoll = (crawlingOld && (!m.old_crawl || m.old_crawl.length === 0)) || (crawlingNew && (!m.new_crawl || m.new_crawl.length === 0)) || (matching && (!m.url_map || m.url_map.length === 0));
+        if (!needsPoll) { stopPoll(); setCrawlingOld(false); setCrawlingNew(false); setMatching(false); }
+      }, [activeMigration]);
+
+      function handleCreate() {
+        if (!newName || !newOldUrl || !newNewUrl) return;
+        setCreating(true);
+        api('/projects/' + pid + '/migrations', { method: 'POST', body: { name: newName, old_site_url: newOldUrl, new_site_url: newNewUrl } }).then(function(r) {
+          setShowCreateModal(false); setNewName(''); setNewOldUrl(''); setNewNewUrl(''); loadMigrations();
+          if (r && r.id) { setActiveMigration(r); setPhase('crawl'); }
+        }).catch(function() {}).finally(function() { setCreating(false); });
+      }
+
+      function handleDelete(mid, e) {
+        e.stopPropagation();
+        if (!confirm('Delete this migration?')) return;
+        api('/projects/' + pid + '/migrations/' + mid, { method: 'DELETE' }).then(function() { loadMigrations(); if (activeMigration && activeMigration.id === mid) setActiveMigration(null); });
+      }
+
+      function handleCrawl(which) {
+        var mid = activeMigration.id;
+        var endpoint = which === 'old' ? '/crawl-old' : '/crawl-new';
+        if (which === 'old') setCrawlingOld(true); else setCrawlingNew(true);
+        api('/projects/' + pid + '/migrations/' + mid + endpoint, { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { if (which === 'old') setCrawlingOld(false); else setCrawlingNew(false); });
+      }
+
+      function handleMatch() {
+        var mid = activeMigration.id;
+        setMatching(true);
+        api('/projects/' + pid + '/migrations/' + mid + '/match-urls', { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { setMatching(false); });
+      }
+
+      function handleSaveMap() {
+        if (!editedMap) return;
+        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/url-map', { method: 'PUT', body: { url_map: editedMap } }).then(function(r) { setActiveMigration(Object.assign({}, activeMigration, { url_map: editedMap })); });
+      }
+
+      function handlePushRedirects() {
+        setPushingRedirects(true); setPushResult(null);
+        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/push-redirects', { method: 'POST' }).then(function(r) { setPushResult(r); loadMigration(activeMigration.id); }).catch(function() { setPushResult({ error: 'Failed' }); }).finally(function() { setPushingRedirects(false); });
+      }
+
+      function handleTransferMeta() {
+        setTransferringMeta(true); setTransferResult(null);
+        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/transfer-meta', { method: 'POST' }).then(function(r) { setTransferResult(r); }).catch(function() { setTransferResult({ error: 'Failed' }); }).finally(function() { setTransferringMeta(false); });
+      }
+
+      function handleSnapshot(type) {
+        setSnapshotting(true);
+        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/snapshot', { method: 'POST', body: { type: type } }).then(function() { loadMigration(activeMigration.id); }).catch(function() {}).finally(function() { setSnapshotting(false); });
+      }
+
+      function handleLoadReport() {
+        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/report').then(function(r) { setReport(r); }).catch(function() {});
+      }
+
+      function openMigration(m) {
+        setActiveMigration(m); setEditedMap(m.url_map || null); setPhase('crawl'); setPushResult(null); setTransferResult(null); setReport(null);
+        loadMigration(m.id);
+      }
+
+      function badge(text, color) {
+        return React.createElement('span', { style: { display: 'inline-block', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: color + '22', color: color } }, text);
+      }
+
+      function confBadge(conf) {
+        var c = conf >= 0.8 ? '#22c55e' : conf >= 0.5 ? '#f59e0b' : '#ef4444';
+        return badge(Math.round(conf * 100) + '%', c);
+      }
+
+      // --- Phase indicator ---
+      function renderPhaseBar() {
+        return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 0, marginBottom: 24, background: 'var(--bg2)', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' } },
+          PHASES.map(function(p, i) {
+            var active = p === phase;
+            var done = PHASES.indexOf(phase) > i;
+            return React.createElement('button', { key: p, onClick: function() { setPhase(p); }, style: { flex: 1, padding: '12px 0', border: 'none', background: active ? accent : 'transparent', color: active ? '#fff' : done ? accent : 'var(--text3)', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 } },
+              React.createElement('i', { className: 'fas ' + PHASE_ICONS[p] }),
+              PHASE_LABELS[p]
+            );
+          })
+        );
+      }
+
+      // --- Crawl Phase ---
+      function renderCrawlPhase() {
+        var m = activeMigration;
+        var oldPages = m.old_crawl || [];
+        var newPages = m.new_crawl || [];
+        function pageTable(pages) {
+          if (!pages.length) return React.createElement('div', { style: { color: 'var(--text3)', fontSize: 13, padding: 16 } }, 'No pages crawled yet');
+          return React.createElement('div', { style: { maxHeight: 300, overflowY: 'auto' } },
+            React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+              React.createElement('thead', null, React.createElement('tr', null,
+                React.createElement('th', { style: thStyle }, 'URL'),
+                React.createElement('th', { style: thStyle }, 'Title'),
+                React.createElement('th', { style: thStyle }, 'Status')
+              )),
+              React.createElement('tbody', null, pages.map(function(p, i) {
+                return React.createElement('tr', { key: i },
+                  React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, p.url),
+                  React.createElement('td', { style: tdStyle }, p.title || '-'),
+                  React.createElement('td', { style: tdStyle }, p.status ? badge(String(p.status), p.status === 200 ? '#22c55e' : '#ef4444') : '-')
+                );
+              }))
+            )
+          );
+        }
+        return React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 } },
+          // Old site
+          React.createElement('div', { className: 'card', style: { padding: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, React.createElement('i', { className: 'fas fa-globe', style: { marginRight: 8, color: accent } }), 'Old Site'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginBottom: 8 } }, m.old_site_url),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 12 } }, oldPages.length + ' pages discovered'),
+            React.createElement('button', { onClick: function() { handleCrawl('old'); }, disabled: crawlingOld, style: Object.assign({}, btnSmall, crawlingOld ? { opacity: 0.6 } : {}) },
+              crawlingOld ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Crawling...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-spider', style: { marginRight: 6 } }), 'Crawl')
+            ),
+            React.createElement('div', { style: { marginTop: 12 } }, pageTable(oldPages))
+          ),
+          // New site
+          React.createElement('div', { className: 'card', style: { padding: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, React.createElement('i', { className: 'fas fa-globe', style: { marginRight: 8, color: '#22c55e' } }), 'New Site'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginBottom: 8 } }, m.new_site_url),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 12 } }, newPages.length + ' pages discovered'),
+            React.createElement('button', { onClick: function() { handleCrawl('new'); }, disabled: crawlingNew, style: Object.assign({}, btnSmall, crawlingNew ? { opacity: 0.6 } : {}) },
+              crawlingNew ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Crawling...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-spider', style: { marginRight: 6 } }), 'Crawl')
+            ),
+            React.createElement('div', { style: { marginTop: 12 } }, pageTable(newPages))
+          ),
+          // Snapshot button
+          React.createElement('div', { style: { gridColumn: '1 / -1', textAlign: 'right' } },
+            React.createElement('button', { onClick: function() { handleSnapshot('pre'); }, disabled: snapshotting, style: Object.assign({}, btnOutline, { marginRight: 8 }) },
+              snapshotting ? 'Taking snapshot...' : React.createElement('span', null, React.createElement('i', { className: 'fas fa-camera', style: { marginRight: 6 } }), 'Take Pre-Migration SEO Snapshot')
+            )
+          )
+        );
+      }
+
+      // --- Match Phase ---
+      function renderMatchPhase() {
+        var m = activeMigration;
+        var urlMap = editedMap || m.url_map || [];
+        var matched = urlMap.filter(function(u) { return u.new_url; });
+        var unmatched = urlMap.filter(function(u) { return !u.new_url; });
+        var newPages = m.new_crawl || [];
+
+        function updateMapRow(idx, field, val) {
+          var copy = urlMap.slice();
+          copy[idx] = Object.assign({}, copy[idx]);
+          copy[idx][field] = val;
+          setEditedMap(copy);
+        }
+
+        return React.createElement('div', null,
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 20 } },
+            React.createElement('button', { onClick: handleMatch, disabled: matching, style: Object.assign({}, btnStyle, matching ? { opacity: 0.6 } : {}) },
+              matching ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'AI Matching...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Run AI Matching')
+            ),
+            urlMap.length > 0 ? React.createElement('button', { onClick: handleSaveMap, style: btnOutline }, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes') : null
+          ),
+          matched.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, 'Matched URLs (' + matched.length + ')'),
+            React.createElement('div', { style: { maxHeight: 400, overflowY: 'auto' } },
+              React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                React.createElement('thead', null, React.createElement('tr', null,
+                  React.createElement('th', { style: thStyle }, 'Old URL'),
+                  React.createElement('th', { style: Object.assign({}, thStyle, { width: 30, textAlign: 'center' }) }, ''),
+                  React.createElement('th', { style: thStyle }, 'New URL'),
+                  React.createElement('th', { style: thStyle }, 'Confidence'),
+                  React.createElement('th', { style: thStyle }, 'Reason')
+                )),
+                React.createElement('tbody', null, urlMap.map(function(row, i) {
+                  if (!row.new_url) return null;
+                  return React.createElement('tr', { key: i },
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, row.old_url),
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center', color: accent }) }, '→'),
+                    React.createElement('td', { style: tdStyle },
+                      React.createElement('select', { value: row.new_url || '', onChange: function(e) { updateMapRow(i, 'new_url', e.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, maxWidth: 220 } },
+                        React.createElement('option', { value: '' }, '— none —'),
+                        newPages.map(function(p) { return React.createElement('option', { key: p.url, value: p.url }, p.url); })
+                      )
+                    ),
+                    React.createElement('td', { style: tdStyle }, row.confidence != null ? confBadge(row.confidence) : '-'),
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 12, color: 'var(--text3)' }) }, row.reason || '')
+                  );
+                }))
+              )
+            )
+          ) : null,
+          unmatched.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 12, color: '#ef4444' } }, React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 8 } }), 'Unmatched URLs (' + unmatched.length + ')'),
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+              unmatched.map(function(row, i) {
+                return React.createElement('span', { key: i, style: { display: 'inline-block', padding: '4px 12px', borderRadius: 6, fontSize: 12, background: '#ef444422', color: '#ef4444' } }, row.old_url);
+              })
+            )
+          ) : null
+        );
+      }
+
+      // --- Redirects Phase ---
+      function renderRedirectsPhase() {
+        var m = activeMigration;
+        var urlMap = m.url_map || [];
+        var matched = urlMap.filter(function(u) { return u.new_url; });
+        return React.createElement('div', null,
+          React.createElement('div', { className: 'card', style: { padding: 24, marginBottom: 20 } },
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 8 } }, matched.length + ' matched URLs ready for redirect'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Push 301 redirects and transfer SEO metadata to the new site via WordPress.'),
+            React.createElement('div', { style: { display: 'flex', gap: 12 } },
+              React.createElement('button', { onClick: handlePushRedirects, disabled: pushingRedirects || matched.length === 0, style: Object.assign({}, btnStyle, (pushingRedirects || matched.length === 0) ? { opacity: 0.6 } : {}) },
+                pushingRedirects ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Pushing...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-directions', style: { marginRight: 6 } }), 'Push Redirects to WordPress')
+              ),
+              React.createElement('button', { onClick: handleTransferMeta, disabled: transferringMeta || matched.length === 0, style: Object.assign({}, btnOutline, (transferringMeta || matched.length === 0) ? { opacity: 0.6 } : {}) },
+                transferringMeta ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Transferring...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-exchange-alt', style: { marginRight: 6 } }), 'Transfer Meta (Titles & Descriptions)')
+              )
+            )
+          ),
+          pushResult ? React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 16 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 8 } }, 'Redirect Results'),
+            pushResult.pushed != null ? React.createElement('div', { style: { fontSize: 14, color: '#22c55e', marginBottom: 8 } }, React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), pushResult.pushed + ' redirects pushed') : null,
+            pushResult.errors && pushResult.errors.length > 0 ? React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 13, color: '#ef4444', marginBottom: 4 } }, 'Errors:'),
+              pushResult.errors.map(function(err, i) { return React.createElement('div', { key: i, style: { fontSize: 12, color: '#ef4444', paddingLeft: 12 } }, '• ' + (typeof err === 'string' ? err : err.url + ': ' + err.error)); })
+            ) : null,
+            pushResult.error ? React.createElement('div', { style: { color: '#ef4444' } }, pushResult.error) : null
+          ) : null,
+          transferResult ? React.createElement('div', { className: 'card', style: { padding: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 8 } }, 'Transfer Results'),
+            transferResult.transferred != null ? React.createElement('div', { style: { fontSize: 14, color: '#22c55e' } }, React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), transferResult.transferred + ' meta fields transferred') : null,
+            transferResult.error ? React.createElement('div', { style: { color: '#ef4444' } }, transferResult.error) : null
+          ) : null
+        );
+      }
+
+      // --- Monitor Phase ---
+      function renderMonitorPhase() {
+        var m = activeMigration;
+        return React.createElement('div', null,
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 20 } },
+            React.createElement('button', { onClick: function() { handleSnapshot('post'); }, disabled: snapshotting, style: btnStyle },
+              snapshotting ? 'Taking snapshot...' : React.createElement('span', null, React.createElement('i', { className: 'fas fa-camera', style: { marginRight: 6 } }), 'Take Post-Migration Snapshot')
+            ),
+            React.createElement('button', { onClick: handleLoadReport, style: btnOutline }, React.createElement('i', { className: 'fas fa-chart-bar', style: { marginRight: 6 } }), 'Load Report')
+          ),
+          report ? React.createElement('div', null,
+            // Scorecard
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 } },
+              [
+                { label: 'Redirect Coverage', value: report.redirect_coverage != null ? Math.round(report.redirect_coverage) + '%' : '-', color: accent },
+                { label: 'Ranking Retention', value: report.ranking_retention != null ? Math.round(report.ranking_retention) + '%' : '-', color: '#22c55e' },
+                { label: 'Traffic Change', value: report.traffic_change != null ? (report.traffic_change >= 0 ? '+' : '') + Math.round(report.traffic_change) + '%' : '-', color: report && report.traffic_change >= 0 ? '#22c55e' : '#ef4444' }
+              ].map(function(card) {
+                return React.createElement('div', { key: card.label, className: 'card', style: { padding: 20, textAlign: 'center' } },
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: card.color } }, card.value),
+                  React.createElement('div', { style: { fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700, marginTop: 4 } }, card.label)
+                );
+              })
+            ),
+            // Comparison cards
+            report.pre_snapshot && report.post_snapshot ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 } },
+              ['pre', 'post'].map(function(type) {
+                var snap = type === 'pre' ? report.pre_snapshot : report.post_snapshot;
+                return React.createElement('div', { key: type, className: 'card', style: { padding: 20 } },
+                  React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, type === 'pre' ? 'Pre-Migration' : 'Post-Migration'),
+                  React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)' } }, 'Avg Position: ', React.createElement('strong', null, snap.avg_position != null ? snap.avg_position.toFixed(1) : '-')),
+                  React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginTop: 4 } }, 'Keywords Tracked: ', React.createElement('strong', null, snap.keyword_count || '-')),
+                  React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginTop: 4 } }, 'Total Traffic: ', React.createElement('strong', null, snap.total_traffic || '-'))
+                );
+              })
+            ) : null,
+            // Ranking changes
+            report.ranking_changes && report.ranking_changes.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20 } },
+              React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, 'Ranking Changes'),
+              React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                React.createElement('thead', null, React.createElement('tr', null,
+                  React.createElement('th', { style: thStyle }, 'Keyword'),
+                  React.createElement('th', { style: thStyle }, 'Before'),
+                  React.createElement('th', { style: thStyle }, 'After'),
+                  React.createElement('th', { style: thStyle }, 'Change')
+                )),
+                React.createElement('tbody', null, report.ranking_changes.map(function(rc, i) {
+                  var diff = rc.before - rc.after;
+                  var color = diff > 0 ? '#22c55e' : diff < 0 ? '#ef4444' : 'var(--text3)';
+                  var arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '—';
+                  return React.createElement('tr', { key: i },
+                    React.createElement('td', { style: tdStyle }, rc.keyword),
+                    React.createElement('td', { style: tdStyle }, rc.before),
+                    React.createElement('td', { style: tdStyle }, rc.after),
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { color: color, fontWeight: 700 }) }, arrow + ' ' + Math.abs(diff))
+                  );
+                }))
+              )
+            ) : null
+          ) : React.createElement('div', { style: { color: 'var(--text3)', fontSize: 13 } }, 'Take a post-migration snapshot and load the report to see comparison data.')
+        );
+      }
+
+      // --- Create Modal ---
+      function renderCreateModal() {
+        if (!showCreateModal) return null;
+        var inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, marginBottom: 12, boxSizing: 'border-box' };
+        return React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }, onClick: function() { setShowCreateModal(false); } },
+          React.createElement('div', { style: { background: 'var(--bg2)', borderRadius: 12, padding: 28, width: 440, maxWidth: '90%', border: '1px solid var(--border)' }, onClick: function(e) { e.stopPropagation(); } },
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 20 } }, 'New Migration'),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'Migration Name'),
+            React.createElement('input', { value: newName, onChange: function(e) { setNewName(e.target.value); }, placeholder: 'e.g. Website Redesign 2026', style: inputStyle }),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'Old Site URL'),
+            React.createElement('input', { value: newOldUrl, onChange: function(e) { setNewOldUrl(e.target.value); }, placeholder: 'https://old-site.com', style: inputStyle }),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'New Site URL'),
+            React.createElement('input', { value: newNewUrl, onChange: function(e) { setNewNewUrl(e.target.value); }, placeholder: 'https://new-site.com', style: inputStyle }),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 } },
+              React.createElement('button', { onClick: function() { setShowCreateModal(false); }, style: btnOutline }, 'Cancel'),
+              React.createElement('button', { onClick: handleCreate, disabled: creating || !newName || !newOldUrl || !newNewUrl, style: Object.assign({}, btnStyle, (creating || !newName || !newOldUrl || !newNewUrl) ? { opacity: 0.6 } : {}) },
+                creating ? 'Creating...' : 'Create Migration'
+              )
+            )
+          )
+        );
+      }
+
+      // --- Main Render ---
+      if (!pid) return React.createElement('div', { style: { padding: 40, color: 'var(--text3)' } }, 'No project selected');
+
+      return React.createElement('div', { style: { padding: '0 0 40px' } },
+        // Header
+        React.createElement('div', { style: { marginBottom: 24 } },
+          React.createElement('h2', { style: { fontSize: 22, fontWeight: 800, color: 'var(--text)', margin: 0 } }, React.createElement('span', { style: { color: accent } }, '|'), ' SEO Migration'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 4 } }, 'Migrate from old site to new site without losing SEO')
+        ),
+        renderCreateModal(),
+        activeMigration ? React.createElement('div', null,
+          React.createElement('button', { onClick: function() { setActiveMigration(null); stopPoll(); setEditedMap(null); setReport(null); }, style: Object.assign({}, btnOutline, { marginBottom: 16 }) },
+            React.createElement('i', { className: 'fas fa-arrow-left', style: { marginRight: 6 } }), 'Back to Migrations'
+          ),
+          React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } }, activeMigration.name),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 16 } }, activeMigration.old_site_url + ' → ' + activeMigration.new_site_url),
+          renderPhaseBar(),
+          phase === 'crawl' ? renderCrawlPhase() : phase === 'match' ? renderMatchPhase() : phase === 'redirects' ? renderRedirectsPhase() : phase === 'monitor' ? renderMonitorPhase() : null
+        ) : React.createElement('div', null,
+          // Migration list
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 16 } },
+            React.createElement('button', { onClick: function() { setShowCreateModal(true); }, style: btnStyle },
+              React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'New Migration'
+            )
+          ),
+          loading ? React.createElement('div', { style: { textAlign: 'center', padding: 40 } }, React.createElement('div', { className: 'spinner' })) :
+          migrations.length === 0 ? React.createElement('div', { style: { textAlign: 'center', padding: '60px 20px' } },
+            React.createElement('i', { className: 'fas fa-exchange-alt', style: { fontSize: 48, color: 'var(--text3)', opacity: 0.3, marginBottom: 16, display: 'block' } }),
+            React.createElement('div', { style: { fontSize: 16, color: 'var(--text3)', marginBottom: 16 } }, 'No migrations yet'),
+            React.createElement('button', { onClick: function() { setShowCreateModal(true); }, style: btnStyle }, 'Create Your First Migration')
+          ) :
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+            migrations.map(function(m) {
+              return React.createElement('div', { key: m.id, className: 'card', style: { padding: 20, cursor: 'pointer', transition: 'border-color 0.15s' }, onClick: function() { openMigration(m); } },
+                React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
+                  React.createElement('div', null,
+                    React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } }, m.name),
+                    React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)' } }, m.old_site_url, ' → ', m.new_site_url)
+                  ),
+                  React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                    m.status ? badge(m.status, m.status === 'complete' ? '#22c55e' : m.status === 'in_progress' ? accent : 'var(--text3)') : null,
+                    React.createElement('button', { onClick: function(e) { handleDelete(m.id, e); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }, title: 'Delete' },
+                      React.createElement('i', { className: 'fas fa-trash' })
+                    )
+                  )
+                ),
+                React.createElement('div', { style: { display: 'flex', gap: 16, marginTop: 8, fontSize: 12, color: 'var(--text3)' } },
+                  m.old_crawl ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-file', style: { marginRight: 4 } }), (m.old_crawl.length || 0) + ' old pages') : null,
+                  m.new_crawl ? React.createElement('span', null, React.createElement('i', { className: 'fas fa-file', style: { marginRight: 4 } }), (m.new_crawl.length || 0) + ' new pages') : null,
+                  m.created_at ? React.createElement('span', null, new Date(m.created_at).toLocaleDateString()) : null
+                )
+              );
+            })
+          )
+        )
+      );
+    }
+
     // ============ NEW WEBSITE — SITE STAGING (Hierarchical Site Structure) ============
     function SiteStagingPage({ project }) {
       var pid = project ? project.id : null;
@@ -28206,6 +28643,8 @@ case 'action-plan':
             return <NewWebsitePipelinePage stage="review" project={buildMode ? buildProject : project} />;
           case 'nw-publish':
             return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} />;
+          case 'nw-migration':
+            return <SEOMigrationPage project={buildMode ? buildProject : project} />;
           case 'ow-project':
           case 'ow-sitemap':
             return <OptimiseWebsitePage project={project} view="sitemap" setPage={setActiveTab} />;
@@ -28413,6 +28852,20 @@ case 'action-plan':
                           onClick={() => { setActiveTab(item.id); setMobileMenuOpen(false); }}
                         >
                           <i className={item.icon} style={{ color: '#eab308', opacity: activeTab === item.id ? 1 : 0.5 }}></i>
+                          <span>{item.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="sidebar-section">
+                      <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: '#f97316' }}>SEO MIGRATION</div>
+                      {[
+                        { id: 'nw-migration', label: 'SEO Migration', icon: 'fas fa-exchange-alt' },
+                      ].map(item => (
+                        <div key={item.id} className={`sidebar-item ${activeTab === item.id ? 'active' : ''}`}
+                          style={activeTab === item.id ? { color: '#f97316', borderLeftColor: '#f97316', background: '#f9731618' } : {}}
+                          onClick={() => { setActiveTab(item.id); setMobileMenuOpen(false); }}
+                        >
+                          <i className={item.icon} style={{ color: '#f97316', opacity: activeTab === item.id ? 1 : 0.5 }}></i>
                           <span>{item.label}</span>
                         </div>
                       ))}
