@@ -544,6 +544,9 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_key TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_expires TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_active BOOLEAN DEFAULT true`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -2514,6 +2517,127 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const data = await callPluginApi(project, '/broken-links/clear', 'POST');
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Plugin Auto-Update + License System ────────────────────────────
+
+// GET /api/plugin/update-check — plugin checks for updates (no auth needed)
+app.get('/api/plugin/update-check', (req, res) => {
+  res.json({
+    version: '8.3.0',
+    download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
+    requires: '5.8',
+    tested: '6.7',
+    slug: 'seoroom',
+    changelog: '410 Gone support, auto-updates, license system'
+  });
+});
+
+// GET /api/plugin/download — serve the latest plugin zip
+app.get('/api/plugin/download', async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const zipPath = path.join(__dirname, 'seoroom-latest.zip');
+    if (!fs.existsSync(zipPath)) {
+      return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom.zip');
+    fs.createReadStream(zipPath).pipe(res);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/plugin/license-check — plugin validates its license key
+app.post('/api/plugin/license-check', async (req, res) => {
+  try {
+    const { license_key, domain } = req.body;
+    if (!license_key) return res.json({ valid: false, reason: 'No license key' });
+
+    const result = await pool.query(
+      `SELECT id, name, domain, plugin_license_expires, plugin_license_active
+       FROM projects WHERE plugin_license_key = $1`,
+      [license_key]
+    );
+    if (result.rows.length === 0) return res.json({ valid: false, reason: 'Invalid license key' });
+
+    const project = result.rows[0];
+    const now = new Date();
+    const expires = project.plugin_license_expires ? new Date(project.plugin_license_expires) : null;
+    const active = project.plugin_license_active !== false;
+    const expired = expires && expires < now;
+
+    // Log the check
+    console.log(`[license-check] key=${license_key.substring(0, 8)}... domain=${domain} project=${project.name} active=${active} expired=${expired}`);
+
+    if (!active) return res.json({ valid: false, reason: 'License deactivated', project_name: project.name });
+    if (expired) return res.json({ valid: false, reason: 'License expired', expires: expires.toISOString(), project_name: project.name });
+
+    res.json({
+      valid: true,
+      project_name: project.name,
+      project_domain: project.domain,
+      expires: expires ? expires.toISOString() : null,
+      days_remaining: expires ? Math.ceil((expires - now) / 86400000) : null
+    });
+  } catch (e) {
+    console.error('[license-check] Error:', e.message);
+    res.status(500).json({ valid: false, reason: 'Server error' });
+  }
+});
+
+// POST /api/projects/:id/license/generate — generate or regenerate license key
+app.post('/api/projects/:id/license/generate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { months } = req.body; // license duration in months, default 12
+    const crypto = require('crypto');
+    const key = 'SR-' + crypto.randomBytes(16).toString('hex').toUpperCase();
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + (months || 12));
+
+    await pool.query(
+      `UPDATE projects SET plugin_license_key = $1, plugin_license_expires = $2, plugin_license_active = true WHERE id = $3`,
+      [key, expiresAt, id]
+    );
+    res.json({ license_key: key, expires: expiresAt.toISOString() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/license/deactivate — deactivate license (client left)
+app.post('/api/projects/:id/license/deactivate', async (req, res) => {
+  try {
+    await pool.query(`UPDATE projects SET plugin_license_active = false WHERE id = $1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/projects/:id/license/renew — renew license for another period
+app.post('/api/projects/:id/license/renew', async (req, res) => {
+  try {
+    const { months } = req.body;
+    const project = (await pool.query('SELECT plugin_license_expires FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Extend from current expiry or from now, whichever is later
+    const baseDate = project.plugin_license_expires && new Date(project.plugin_license_expires) > new Date()
+      ? new Date(project.plugin_license_expires) : new Date();
+    baseDate.setMonth(baseDate.getMonth() + (months || 12));
+
+    await pool.query(
+      `UPDATE projects SET plugin_license_expires = $1, plugin_license_active = true WHERE id = $2`,
+      [baseDate, req.params.id]
+    );
+    res.json({ expires: baseDate.toISOString() });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

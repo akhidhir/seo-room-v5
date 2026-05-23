@@ -26409,6 +26409,9 @@
               cloudflareZoneId: data.project.cloudflare_zone_id || '',
               phone: data.project.phone || '',
               pluginConnectionCode: data.project.plugin_connection_code || '',
+              pluginLicenseKey: data.project.plugin_license_key || '',
+              pluginLicenseExpires: data.project.plugin_license_expires || '',
+              pluginLicenseActive: data.project.plugin_license_active !== false,
             });
           }
           // Load available GSC sites and GBP locations
@@ -26817,6 +26820,75 @@
                 onChange={(e) => setFormData(prev => ({ ...prev, cloudflareZoneId: e.target.value }))}
                 placeholder="32-char hex string from Cloudflare Overview" style={{ fontSize: 12 }} />
             </div>
+          </div>
+
+          {/* Plugin License */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fas fa-key" style={{ marginRight: 8, color: '#f59e0b' }} />Plugin License
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+              License key for the SEO Room WordPress plugin. Controls access to management features. Existing redirects and schema persist when expired.
+            </div>
+            {formData.pluginLicenseKey ? (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <code style={{ fontSize: 12, padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, color: 'var(--text)' }}>{formData.pluginLicenseKey}</code>
+                  <span style={{
+                    fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
+                    background: formData.pluginLicenseActive ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                    color: formData.pluginLicenseActive ? '#22c55e' : '#ef4444'
+                  }}>
+                    {formData.pluginLicenseActive ? '● Active' : '● Inactive'}
+                  </span>
+                  {formData.pluginLicenseExpires && (
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                      Expires: {new Date(formData.pluginLicenseExpires).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-sm" style={{ background: '#22c55e', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                    onClick={async () => {
+                      try {
+                        const r = await api('/projects/' + project.id + '/license/renew', { method: 'POST', body: { months: 12 } });
+                        setFormData(prev => ({ ...prev, pluginLicenseExpires: r.expires, pluginLicenseActive: true }));
+                        alert('License renewed until ' + new Date(r.expires).toLocaleDateString());
+                      } catch (err) { alert('Error: ' + err.message); }
+                    }}>
+                    <i className="fas fa-sync" style={{ marginRight: 4 }} />Renew 12 Months
+                  </button>
+                  <button className="btn btn-sm" style={{ background: formData.pluginLicenseActive ? '#ef4444' : '#22c55e', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                    onClick={async () => {
+                      var action = formData.pluginLicenseActive ? 'deactivate' : 'renew';
+                      if (action === 'deactivate' && !confirm('Deactivate license? Plugin management features will be disabled.')) return;
+                      try {
+                        if (action === 'deactivate') {
+                          await api('/projects/' + project.id + '/license/deactivate', { method: 'POST' });
+                          setFormData(prev => ({ ...prev, pluginLicenseActive: false }));
+                        } else {
+                          const r = await api('/projects/' + project.id + '/license/renew', { method: 'POST', body: { months: 12 } });
+                          setFormData(prev => ({ ...prev, pluginLicenseExpires: r.expires, pluginLicenseActive: true }));
+                        }
+                      } catch (err) { alert('Error: ' + err.message); }
+                    }}>
+                    <i className={formData.pluginLicenseActive ? 'fas fa-ban' : 'fas fa-check'} style={{ marginRight: 4 }} />
+                    {formData.pluginLicenseActive ? 'Deactivate' : 'Reactivate'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn btn-sm" style={{ background: '#f59e0b', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                onClick={async () => {
+                  try {
+                    const r = await api('/projects/' + project.id + '/license/generate', { method: 'POST', body: { months: 12 } });
+                    setFormData(prev => ({ ...prev, pluginLicenseKey: r.license_key, pluginLicenseExpires: r.expires, pluginLicenseActive: true }));
+                    alert('License key generated: ' + r.license_key + '\n\nCopy this key to the SEO Room plugin settings in WordPress.');
+                  } catch (err) { alert('Error: ' + err.message); }
+                }}>
+                <i className="fas fa-key" style={{ marginRight: 6 }} />Generate License Key
+              </button>
+            )}
           </div>
 
           {/* Google Connections — per-project property/location selection */}

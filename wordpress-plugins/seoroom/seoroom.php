@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.2.0');
+define('SEOROOM_VERSION', '8.3.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -60,6 +60,7 @@ function sropt_defaults() {
         'dashboard_url'        => 'https://seo-room-v5-production.up.railway.app',
         'project_id'           => '',
         'connection_code'      => '',
+        'license_key'          => '',
     );
 }
 
@@ -372,6 +373,76 @@ function sropt_settings_page() {
                             .catch(function(e) {
                                 result.innerHTML = '<span style="color:#ef4444;">✗ Push error: ' + e.message + '</span>';
                             })
+                            .finally(function() { btn.disabled = false; });
+                        });
+                        </script>
+                    </td>
+                </tr>
+
+                <!-- LICENSE -->
+                <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">🔑 License</h2></th></tr>
+                <tr>
+                    <th>License Key</th>
+                    <td>
+                        <input type="text" name="sropt_options[license_key]" value="<?php echo esc_attr($options['license_key'] ?? ''); ?>" class="regular-text" placeholder="SR-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
+                        <p class="description">Provided by The SEO Room. Required for management features.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>License Status</th>
+                    <td>
+                        <?php
+                        $lic_info = get_option('sropt_license_info', array());
+                        if (empty($options['license_key'])) {
+                            echo '<span style="color:#f59e0b;font-weight:600;">● No license key</span>';
+                            echo '<p class="description">Enter your license key above and save to activate.</p>';
+                        } elseif (!empty($lic_info['valid'])) {
+                            echo '<span style="color:#22c55e;font-weight:600;">● Active</span>';
+                            if (!empty($lic_info['project_name'])) echo ' <span style="color:#666;">— ' . esc_html($lic_info['project_name']) . '</span>';
+                            if (!empty($lic_info['expires'])) {
+                                $exp = date('j M Y', strtotime($lic_info['expires']));
+                                $days = $lic_info['days_remaining'] ?? '';
+                                echo '<br><span style="color:#666;font-size:12px;">Expires: ' . esc_html($exp);
+                                if ($days) echo ' (' . intval($days) . ' days remaining)';
+                                echo '</span>';
+                            }
+                        } else {
+                            echo '<span style="color:#ef4444;font-weight:600;">● ' . esc_html($lic_info['reason'] ?? 'Expired') . '</span>';
+                            echo '<p class="description" style="color:#ef4444;">Management features disabled. Existing redirects and schema continue working.</p>';
+                        }
+                        if (!empty($lic_info['checked_at'])) {
+                            echo '<br><span style="color:#999;font-size:11px;">Last checked: ' . esc_html($lic_info['checked_at']) . '</span>';
+                        }
+                        ?>
+                        <br><br>
+                        <button type="button" id="sropt_check_license" class="button button-secondary">Check License Now</button>
+                        <span id="sropt_license_result" style="margin-left:10px;"></span>
+                        <script>
+                        document.getElementById('sropt_check_license').addEventListener('click', function() {
+                            var btn = this;
+                            var result = document.getElementById('sropt_license_result');
+                            var url = document.getElementById('sropt_dashboard_url').value.replace(/\/$/, '');
+                            var key = document.querySelector('input[name="sropt_options[license_key]"]').value;
+                            if (!url || !key) { result.innerHTML = '<span style="color:#ef4444;">Enter dashboard URL and license key first.</span>'; return; }
+                            btn.disabled = true;
+                            result.innerHTML = '<span style="color:#666;">Checking...</span>';
+                            fetch(url + '/api/plugin/license-check', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ license_key: key, domain: '<?php echo esc_url(home_url()); ?>' })
+                            })
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) {
+                                if (data.valid) {
+                                    var msg = '✓ Active';
+                                    if (data.project_name) msg += ' — ' + data.project_name;
+                                    if (data.days_remaining) msg += ' (' + data.days_remaining + ' days remaining)';
+                                    result.innerHTML = '<span style="color:#22c55e;font-weight:600;">' + msg + '</span>';
+                                } else {
+                                    result.innerHTML = '<span style="color:#ef4444;font-weight:600;">✗ ' + (data.reason || 'Invalid') + '</span>';
+                                }
+                            })
+                            .catch(function(e) { result.innerHTML = '<span style="color:#ef4444;">✗ ' + e.message + '</span>'; })
                             .finally(function() { btn.disabled = false; });
                         });
                         </script>
@@ -3521,4 +3592,220 @@ function sropt_check_url_status($url) {
     }
 
     return wp_remote_retrieve_response_code($response);
+}
+
+
+// ================================================================
+// AUTO-UPDATE — Check Railway server for new versions
+// ================================================================
+
+add_filter('pre_set_site_transient_update_plugins', 'sropt_check_for_update');
+function sropt_check_for_update($transient) {
+    if (empty($transient->checked)) return $transient;
+
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'], '/');
+    if (empty($dashboard_url)) return $transient;
+
+    $response = wp_remote_get($dashboard_url . '/api/plugin/update-check', array(
+        'timeout' => 10,
+        'headers' => array('Accept' => 'application/json'),
+    ));
+
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) return $transient;
+
+    $data = json_decode(wp_remote_retrieve_body($response));
+    if (!$data || !isset($data->version)) return $transient;
+
+    $plugin_file = plugin_basename(__FILE__);
+
+    if (version_compare(SEOROOM_VERSION, $data->version, '<')) {
+        $transient->response[$plugin_file] = (object) array(
+            'slug'        => $data->slug ?? 'seoroom',
+            'plugin'      => $plugin_file,
+            'new_version' => $data->version,
+            'url'         => $dashboard_url,
+            'package'     => $data->download_url,
+            'requires'    => $data->requires ?? '5.8',
+            'tested'      => $data->tested ?? '6.7',
+        );
+    } else {
+        // No update — still register so WP doesn't show "update available" from wp.org
+        $transient->no_update[$plugin_file] = (object) array(
+            'slug'        => $data->slug ?? 'seoroom',
+            'plugin'      => $plugin_file,
+            'new_version' => SEOROOM_VERSION,
+            'url'         => $dashboard_url,
+        );
+    }
+
+    return $transient;
+}
+
+// Plugin info popup (when user clicks "View details")
+add_filter('plugins_api', 'sropt_plugin_info', 20, 3);
+function sropt_plugin_info($result, $action, $args) {
+    if ($action !== 'plugin_information' || ($args->slug ?? '') !== 'seoroom') return $result;
+
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'], '/');
+    if (empty($dashboard_url)) return $result;
+
+    $response = wp_remote_get($dashboard_url . '/api/plugin/update-check', array('timeout' => 10));
+    if (is_wp_error($response)) return $result;
+
+    $data = json_decode(wp_remote_retrieve_body($response));
+    if (!$data) return $result;
+
+    return (object) array(
+        'name'          => 'SEO Room',
+        'slug'          => 'seoroom',
+        'version'       => $data->version,
+        'author'        => '<a href="https://theseoroom.com.au">The SEO Room</a>',
+        'homepage'      => 'https://theseoroom.com.au',
+        'download_link' => $data->download_url,
+        'requires'      => $data->requires ?? '5.8',
+        'tested'        => $data->tested ?? '6.7',
+        'sections'      => array(
+            'description' => 'SEO Room — Local SEO automation plugin. Schema, 404 monitor, redirects, speed optimizations, dashboard connector.',
+            'changelog'   => $data->changelog ?? 'See dashboard for changelog.',
+        ),
+    );
+}
+
+// After update, clear transient so next check is fresh
+add_action('upgrader_process_complete', 'sropt_after_update', 10, 2);
+function sropt_after_update($upgrader, $options) {
+    if ($options['action'] === 'update' && $options['type'] === 'plugin') {
+        delete_site_transient('update_plugins');
+    }
+}
+
+
+// ================================================================
+// LICENSE SYSTEM — Yearly renewal, read-only on expire
+// ================================================================
+
+// Check if license is valid (cached for 24 hours)
+function sropt_is_license_valid() {
+    $cached = get_transient('sropt_license_status');
+    if ($cached !== false) return $cached === 'valid';
+
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'], '/');
+    $license_key = $options['license_key'] ?? '';
+
+    if (empty($dashboard_url) || empty($license_key)) {
+        set_transient('sropt_license_status', 'no_key', DAY_IN_SECONDS);
+        return false;
+    }
+
+    $response = wp_remote_post($dashboard_url . '/api/plugin/license-check', array(
+        'timeout' => 10,
+        'headers' => array('Content-Type' => 'application/json'),
+        'body'    => json_encode(array(
+            'license_key' => $license_key,
+            'domain'      => home_url(),
+        )),
+    ));
+
+    if (is_wp_error($response)) {
+        // Network error — grace period, assume valid
+        set_transient('sropt_license_status', 'valid', HOUR_IN_SECONDS);
+        return true;
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    $valid = !empty($data['valid']);
+
+    set_transient('sropt_license_status', $valid ? 'valid' : 'expired', DAY_IN_SECONDS);
+
+    // Store extra info for admin display
+    if ($data) {
+        update_option('sropt_license_info', array(
+            'valid'          => $valid,
+            'reason'         => $data['reason'] ?? '',
+            'project_name'   => $data['project_name'] ?? '',
+            'expires'        => $data['expires'] ?? '',
+            'days_remaining' => $data['days_remaining'] ?? null,
+            'checked_at'     => current_time('mysql'),
+        ));
+    }
+
+    return $valid;
+}
+
+// Schedule daily license check via wp_cron
+add_action('wp', 'sropt_schedule_license_check');
+function sropt_schedule_license_check() {
+    if (!wp_next_scheduled('sropt_daily_license_check')) {
+        wp_schedule_event(time(), 'daily', 'sropt_daily_license_check');
+    }
+}
+add_action('sropt_daily_license_check', 'sropt_run_license_check');
+function sropt_run_license_check() {
+    delete_transient('sropt_license_status');
+    sropt_is_license_valid();
+}
+
+// Admin notice when license is expired
+add_action('admin_notices', 'sropt_license_admin_notice');
+function sropt_license_admin_notice() {
+    $options = sropt_get_options();
+    if (empty($options['license_key'])) return; // No key set yet, don't nag
+
+    if (!sropt_is_license_valid()) {
+        $info = get_option('sropt_license_info', array());
+        $reason = $info['reason'] ?? 'expired';
+        echo '<div class="notice notice-error"><p>';
+        echo '<strong>SEO Room:</strong> License ' . esc_html($reason) . '. ';
+        echo 'The plugin is in read-only mode — existing redirects and schema continue working, but management features are disabled. ';
+        echo 'Contact <a href="https://theseoroom.com.au">The SEO Room</a> to renew.';
+        echo '</p></div>';
+    } else {
+        $info = get_option('sropt_license_info', array());
+        $days = $info['days_remaining'] ?? null;
+        if ($days !== null && $days <= 30 && $days > 0) {
+            echo '<div class="notice notice-warning"><p>';
+            echo '<strong>SEO Room:</strong> License expires in ' . intval($days) . ' days. Contact The SEO Room to renew.';
+            echo '</p></div>';
+        }
+    }
+}
+
+// Gate management features behind license check
+// These functions return true if the feature should be BLOCKED
+function sropt_is_management_blocked() {
+    $options = sropt_get_options();
+    if (empty($options['license_key'])) return false; // No license system yet, don't block
+    return !sropt_is_license_valid();
+}
+
+// Block REST API management endpoints when license expired
+add_filter('rest_pre_dispatch', 'sropt_license_gate_rest', 10, 3);
+function sropt_license_gate_rest($result, $server, $request) {
+    $route = $request->get_route();
+
+    // Only gate seoroom management endpoints (not read-only ones)
+    if (strpos($route, 'seoroom-opt/v1/') === false) return $result;
+
+    // Allow read-only endpoints always
+    $read_only_patterns = array('/status', '/update-check');
+    foreach ($read_only_patterns as $p) {
+        if (strpos($route, $p) !== false) return $result;
+    }
+
+    // Allow GET requests (reading data is always OK)
+    if ($request->get_method() === 'GET') return $result;
+
+    // Block write operations when license expired
+    if (sropt_is_management_blocked()) {
+        return new WP_Error(
+            'license_expired',
+            'SEO Room license expired. Management features are disabled. Existing redirects and schema continue working. Contact The SEO Room to renew.',
+            array('status' => 403)
+        );
+    }
+
+    return $result;
 }
