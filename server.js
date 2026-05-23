@@ -23349,7 +23349,7 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
       added++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY keyword', [projectId]);
-    res.json({ ok: true, added, total: rows.length, limit });
+    res.json({ ok: true, added, total: rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
