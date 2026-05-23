@@ -9692,6 +9692,46 @@
         else alert('Could not find the broken link in page content. It may be in a menu, widget, or page builder element.');
       };
 
+      const handle410Gone = async (fid) => {
+        try {
+          await api('/projects/' + project.id + '/plugin/404s/' + fid + '/redirect', {
+            method: 'POST',
+            body: { target_url: '', redirect_type: 410 }
+          });
+          load404s();
+        } catch (err) { console.error('410 error:', err); }
+      };
+
+      const bulkRedirectOrphans = async (mode) => {
+        // mode: 'homepage' or '410'
+        var orphanItems = fourOhFours.filter(function(f) {
+          var key = f.url || f.url_path || '';
+          var diag = diagnoses[key];
+          return !diag || (diag.causes && diag.causes.includes('orphan'));
+        });
+        if (!orphanItems.length) return;
+        var label = mode === '410' ? '410 Gone' : 'redirect to homepage';
+        if (!confirm('Apply ' + label + ' to ' + orphanItems.length + ' orphan 404(s)?')) return;
+        setAutoRedirecting(true);
+        setAutoProgress({ done: 0, total: orphanItems.length });
+        var done = 0;
+        for (var oi = 0; oi < orphanItems.length; oi++) {
+          try {
+            var body = mode === '410'
+              ? { target_url: '', redirect_type: 410 }
+              : { target_url: domainBase + '/' };
+            await api('/projects/' + project.id + '/plugin/404s/' + orphanItems[oi].id + '/redirect', {
+              method: 'POST', body: body
+            });
+            done++;
+            setAutoProgress({ done: done, total: orphanItems.length });
+          } catch (err) { console.error('Bulk redirect error:', err); }
+        }
+        setAutoRedirecting(false);
+        setAutoProgress(null);
+        await load404s();
+      };
+
       const handleAddRedirect = async () => {
         if (!addSource.trim() || !addTarget.trim()) return;
         setAddSaving(true);
@@ -9823,7 +9863,30 @@
                 if (or) parts.push(or + ' orphan');
                 return parts.join(', ');
               })()
-            )
+            ),
+            // Bulk orphan actions — show when diagnoses have orphans
+            (() => {
+              var orphanCount = Object.values(diagnoses).filter(function(d) { return d.causes && d.causes.includes('orphan'); }).length;
+              if (!orphanCount) return null;
+              return e(React.Fragment, null,
+                e('button', {
+                  style: { ...btnStyle('#6366f1'), padding: '5px 12px', fontSize: 12 },
+                  onClick: function() { bulkRedirectOrphans('homepage'); },
+                  disabled: autoRedirecting
+                },
+                  autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-home' }),
+                  ' All Orphans → Homepage'
+                ),
+                e('button', {
+                  style: { ...btnStyle('#94a3b8'), padding: '5px 12px', fontSize: 12 },
+                  onClick: function() { bulkRedirectOrphans('410'); },
+                  disabled: autoRedirecting
+                },
+                  autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-ban' }),
+                  ' All Orphans → 410 Gone'
+                )
+              );
+            })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             botFiltered > 0 && e('span', { style: { fontSize: 12, color: 'var(--text3)', background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 } },
@@ -9907,6 +9970,11 @@
                             style: { ...btnStyle(sug ? '#22c55e' : '#6366f1'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
                             onClick: () => { setRedirectingId(item.id); setRedirectTarget(sug ? sug.url : ''); }
                           }, e('i', { className: sug ? 'fas fa-check' : 'fas fa-arrow-right' }), sug ? ' Apply' : ' Redirect'),
+                          // 410 Gone button (for orphans)
+                          isOrphan && e('button', {
+                            style: { ...btnStyle('#94a3b8'), marginRight: 6, padding: '5px 10px', fontSize: 12 },
+                            onClick: () => { if (confirm('Return 410 Gone for this URL? Google will de-index it faster.')) handle410Gone(item.id); }
+                          }, e('i', { className: 'fas fa-ban' }), ' 410'),
                           e('button', {
                             style: { ...btnStyle('#ef4444'), padding: '5px 10px', fontSize: 12 },
                             onClick: () => handle404Delete(item.id),
