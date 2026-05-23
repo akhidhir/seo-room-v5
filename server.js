@@ -23927,7 +23927,6 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           for (const page of pages) {
             const slug = (page.slug || '').toLowerCase().replace(/-/g, ' ').trim();
             if (slug.length > 3 && !slug.includes('contact') && !slug.includes('about') && !slug.includes('blog') && !slug.includes('privacy') && !slug.includes('terms')) {
-              // Strip suburb names from slug to get service
               let svc = slug;
               const allSubs = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length);
               for (const sub of allSubs) {
@@ -23938,6 +23937,29 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             }
           }
         } catch (e) { console.log('[maps-discovery] Page crawl skipped:', e.message); }
+
+        // From organic keywords (DataForSEO ranked_keywords) — the main source
+        // This matches what the old "Discovered Local Keywords" modal did
+        try {
+          const orgResult = await dataForSeoRankedKeywords({ domain, locationCode: 2036, limit: 200, offset: 0 });
+          const localSignals = ['near me', 'repair', 'fix', 'shop', 'store', 'service', 'services'];
+          const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas : [];
+          for (const area of serviceAreas) {
+            const areaLower = (typeof area === 'string' ? area : area.name || '').toLowerCase().trim();
+            if (areaLower && !localSignals.includes(areaLower)) localSignals.push(areaLower);
+          }
+          const locParts = (project.location || '').split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 2);
+          for (const part of locParts) { if (!localSignals.includes(part)) localSignals.push(part); }
+          // Add all suburb names as local signals
+          for (const sub of Object.keys(SUBURB_GPS)) { if (!localSignals.includes(sub)) localSignals.push(sub); }
+
+          for (const kw of orgResult.keywords) {
+            const kwLow = (kw.keyword || '').toLowerCase();
+            const isLocal = localSignals.some(sig => kwLow.includes(sig));
+            if (isLocal) serviceSet.add(kwLow);
+          }
+          console.log(`[maps-discovery] Added organic keywords, total now: ${serviceSet.size}`);
+        } catch (e) { console.log('[maps-discovery] Organic keywords skipped:', e.message); }
 
         const services = [...serviceSet].filter(s => s.length > 2);
         console.log(`[maps-discovery] ${services.length} service keywords to scan: ${services.slice(0, 15).join(', ')}`);
