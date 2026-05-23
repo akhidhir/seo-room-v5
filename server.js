@@ -6399,27 +6399,57 @@ app.get('/api/projects/:projectId/plugin-status', async (req, res) => {
       }
     } catch (e) { console.log(`[plugin-status] /wp-json index error: ${e.message}`); }
 
-    // 2. Probe seoroom endpoints WITH auth headers
-    // If route exists: WP returns JSON (200, 401, 403 with rest error code)
-    // If route missing: WP returns 404 with {"code":"rest_no_route"}
+    // 2. Check for seoroom-schema plugin via WP plugins endpoint (needs auth)
+    if (authHeaders) {
+      try {
+        const pluginsResp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins`, {
+          signal: AbortSignal.timeout(6000),
+          headers: { ...pluginCheckUA, ...authHeaders },
+        });
+        if (pluginsResp.ok) {
+          const plugins = await pluginsResp.json();
+          const hasSeoroom = plugins.some(p => (p.plugin || '').includes('seoroom') && p.status === 'active');
+          console.log(`[plugin-status] WP plugins check: ${hasSeoroom}, plugins: ${plugins.map(p => p.plugin).filter(p => p.includes('seo')).join(', ')}`);
+          if (hasSeoroom) return res.json({ installed: true });
+        } else {
+          console.log(`[plugin-status] WP plugins endpoint: ${pluginsResp.status}`);
+        }
+      } catch (e) { console.log(`[plugin-status] WP plugins check error: ${e.message}`); }
+    }
+
+    // 3. Probe seoroom REST endpoints (old seoroom-helper plugin)
     for (const ep of endpoints) {
       try {
         const resp = await fetch(ep, {
           signal: AbortSignal.timeout(6000),
           headers: { ...pluginCheckUA, ...(authHeaders || {}) },
         });
-        // 404 with rest_no_route = plugin not installed
         if (resp.status === 404) {
           try {
             const body = await resp.json();
-            if (body.code === 'rest_no_route') continue; // route doesn't exist
+            if (body.code === 'rest_no_route') continue;
           } catch {}
           continue;
         }
-        // Any other response (200, 401, 403, 500) = route exists = plugin active
         return res.json({ installed: true });
       } catch {}
     }
+
+    // 4. Check if _seoroom_schema meta is registered (seoroom-schema plugin)
+    try {
+      const pagesResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages?per_page=1&_fields=id,meta`, {
+        signal: AbortSignal.timeout(6000),
+        headers: { ...pluginCheckUA, ...(authHeaders || {}) },
+      });
+      if (pagesResp.ok) {
+        const pages = await pagesResp.json();
+        if (pages.length > 0 && pages[0].meta && '_seoroom_schema' in pages[0].meta) {
+          console.log(`[plugin-status] Found _seoroom_schema meta field — plugin active`);
+          return res.json({ installed: true });
+        }
+      }
+    } catch (e) { console.log(`[plugin-status] meta check error: ${e.message}`); }
+
     return res.json({ installed: false, reason: 'not_found' });
   } catch (err) {
     console.error('[plugin-status]', err);
