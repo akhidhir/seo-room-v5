@@ -2118,7 +2118,7 @@ function isValid404Url(url) {
     '/config', '/env', '/phpinfo', '/server-status', '/actuator',
     '/xmlrpc.php', '/xmlrpc', '/wp-json',
   ];
-  if (botPaths.includes(path)) return false;
+  if (botPaths.includes(path) || botPaths.some(bp => path.startsWith(bp + '/') || path.startsWith(bp + '?'))) return false;
   // Elementor internal IDs (e.g. /elementor-2561035482)
   if (/\/elementor-\d+/.test(path)) return false;
   // URL.createObjectURL blobs
@@ -2134,7 +2134,14 @@ app.get('/api/projects/:id/plugin/404s', async (req, res) => {
     const data = await callPluginApi(project, '/404s');
     // Filter out garbage/bot URLs
     if (Array.isArray(data)) {
-      const filtered = data.filter(item => isValid404Url(item.url || item.url_path || ''));
+      // Debug: log first 3 raw URLs to see format
+      if (data.length > 0) console.log(`[plugin-404s] Sample raw URLs:`, data.slice(0, 3).map(x => x.url || x.url_path || x.request_url || 'NO_URL_FIELD'));
+      const filtered = data.filter(item => {
+        const u = item.url || item.url_path || '';
+        const valid = isValid404Url(u);
+        if (!valid) console.log(`[plugin-404s] Filtered: ${u}`);
+        return valid;
+      });
       const removed = data.length - filtered.length;
       if (removed > 0) console.log(`[plugin-404s] Filtered out ${removed} garbage URLs`);
       return res.json(filtered);
