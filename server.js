@@ -18282,8 +18282,8 @@ function humanizeText(text) {
 
 // AI Optimise a site page — takes score tips + content, returns improved version
 app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
-  req.setTimeout(120000);
-  res.setTimeout(120000);
+  req.setTimeout(300000);
+  res.setTimeout(300000);
   const { projectId, buildId, pageId } = req.params;
   const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
   try {
@@ -18443,7 +18443,10 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
                 mode: 'Enhanced'
               })
             });
-            const ghData = await ghResp.json();
+            const ghRawText = await ghResp.text();
+            console.log(`[humanizer] GPTHuman response status: ${ghResp.status}, body preview: ${ghRawText.substring(0, 200)}`);
+            let ghData;
+            try { ghData = JSON.parse(ghRawText); } catch(pe) { ghData = { error: ghRawText }; }
             if (ghData.output) {
               humanizedText += (i > 0 ? ' ' : '') + ghData.output;
               console.log(`[humanizer] Chunk ${i+1}/${chunks.length}: ${ghData.creditUsage} credits used, balance: ${ghData.creditBalance}, humanScore: ${ghData.humanScore}`);
