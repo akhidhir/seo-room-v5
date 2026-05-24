@@ -18317,7 +18317,53 @@ function humanizeText(text) {
     return alts[Math.floor(Math.random() * alts.length)];
   });
 
-  // 7. CLEAN UP — fix double spaces, orphaned punctuation
+  // 7. CORPORATE PLATITUDE KILLER — phrases that score 26% human
+  const platitudes = {
+    'with care and attention': ['properly', 'the right way', 'like it should be done'],
+    'that means something to us': ['and we don\'t take that lightly', 'we actually give a damn', 'and we back it up'],
+    'you\'re never left wondering': ['you\'ll always know', 'no guessing games', 'we keep you in the loop'],
+    'means something to us': ['matters to us', 'we take seriously', 'we don\'t mess around with'],
+    'with the utmost': ['with proper', 'with real', 'with genuine'],
+    'to the highest standard': ['properly', 'right', 'the way it should be'],
+    'we go above and beyond': ['we do more than the bare minimum', 'we don\'t cut corners', 'we actually finish the job'],
+    'tailored to your': ['built around your', 'matched to your', 'set up for your'],
+    'exceed expectations': ['do better than expected', 'surprise you with how good it is', 'actually deliver'],
+    'at the heart of': ['at the core of', 'central to', 'what drives'],
+    'second to none': ['hard to beat', 'up there with the best', 'among the best around'],
+    'attention to detail': ['getting the small stuff right', 'sweating the details', 'not cutting corners'],
+    'customer satisfaction': ['happy customers', 'people who\'d use us again', 'clients who come back'],
+    'peace of mind': ['one less thing to worry about', 'you can stop stressing', 'less to lose sleep over'],
+    'no stone unturned': ['everything covered', 'nothing missed', 'the full job done'],
+    'hand over the paperwork': ['give you the paperwork', 'sort the paperwork', 'get the admin done'],
+    'zero obligation': ['no pressure', 'no strings', 'walk away if you want'],
+  };
+  for (const [plat, alts] of Object.entries(platitudes)) {
+    const regex = new RegExp(plat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    result = result.replace(regex, () => alts[Math.floor(Math.random() * alts.length)]);
+  }
+
+  // 8. THREE-PART LIST BREAKER — "X, Y, and Z" parallel structure is AI's fingerprint
+  // Match "verb1 X, verb2 Y, and verb3 Z" patterns and break them
+  result = result.replace(/(\w+) ([^,]{5,30}), (\w+) ([^,]{5,30}),? and (\w+) ([^.]{5,30})\./gi, (m, v1, o1, v2, o2, v3, o3) => {
+    // Only trigger if verbs are different (parallel list structure)
+    if (v1.toLowerCase() !== v2.toLowerCase() && v2.toLowerCase() !== v3.toLowerCase()) {
+      const formats = [
+        `${v1} ${o1}. Then ${v2} ${o2}. And ${v3} ${o3}.`,
+        `First we ${v1} ${o1}. ${v2.charAt(0).toUpperCase() + v2.slice(1)} ${o2} comes next — then ${v3} ${o3}.`,
+        `${v1} ${o1} and ${v2} ${o2}. ${v3.charAt(0).toUpperCase() + v3.slice(1)} ${o3} after that.`,
+      ];
+      return formats[Math.floor(Math.random() * formats.length)];
+    }
+    return m;
+  });
+
+  // 9. "done with X and Y" / "with X and Y" balanced pair breaker
+  result = result.replace(/(?:done )?with ([a-z]+) and ([a-z]+)/gi, (m, first, second) => {
+    const alts = [`with real ${first}. And ${second} too`, `with ${first} — and proper ${second}`, `the ${first} way, with ${second} to match`];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+
+  // 10. CLEAN UP — fix double spaces, orphaned punctuation
   result = result.replace(/\s{2,}/g, ' ');
   result = result.replace(/\s+([.,;:!?])/g, '$1');
   result = result.replace(/\.\./g, '.');
