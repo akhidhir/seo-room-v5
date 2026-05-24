@@ -18165,47 +18165,6 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
       result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
     }
 
-    // Second pass: humanize the content to bypass AI detection
-    if (result.content_html) {
-      console.log('[site-pages] Running humanization pass...');
-      const humanizeResponse = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 8192,
-        messages: [{
-          role: 'user',
-          content: `Rewrite this HTML content to sound like a real human wrote it. The content is good — keep the meaning, keywords, headings, links, and structure EXACTLY the same. Only change HOW it's written.
-
-RULES:
-- Keep ALL <h2>, <h3>, <a href>, <img>, <ul>, <li> tags and structure intact
-- Keep ALL keywords and keyword density the same
-- Keep the same word count (within 10%)
-- Australian English only
-
-CHANGES TO MAKE:
-1. Replace any robotic/generic sentences with specific, conversational ones
-2. Add contractions everywhere natural (we're, you'll, it's, don't, can't, won't, there's, that's, here's, we've)
-3. Start 3-4 sentences with "And", "But", "So", "Or"
-4. Add 2-3 one-sentence paragraphs or sentence fragments
-5. Break up any 3+ sentences that follow the same pattern
-6. Replace any of these phrases if found: "Whether you're looking for", "When it comes to", "dedicated to", "committed to", "your trusted", "look no further", "comprehensive", "innovative", "Furthermore", "Moreover", "Additionally", "In conclusion"
-7. Add 1-2 casual asides using dashes — like this — mid-sentence
-8. Make some sentences very short. 4-6 words. Then follow with a longer one.
-9. Use "we" and "you" more often, make it feel like a conversation
-
-Return ONLY the rewritten HTML. No JSON wrapping, no explanation.
-
-CONTENT TO HUMANIZE:
-${result.content_html}`
-        }]
-      });
-      const humanized = humanizeResponse.content[0].text.trim();
-      // Only use if it still has HTML structure
-      if (humanized.includes('<h2') || humanized.includes('<p>')) {
-        result.content_html = humanized.replace(/^```html?\n?/, '').replace(/\n?```$/, '');
-        result.ai_notes = (result.ai_notes || '') + ' + humanized';
-      }
-    }
-
     res.json(result);
   } catch (e) {
     console.error('[site-pages] Optimise error:', e.message, e.stack);
