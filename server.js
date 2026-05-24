@@ -6692,7 +6692,7 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const baseUrl = `https://${domain}`;
     const businessName = project.business_name || project.name || '';
-    const location = project.location || '';
+    const location = resolveDataForSeoLocation(project.location);
 
     // Create audit record
     const auditRes = await pool.query(
@@ -17452,6 +17452,122 @@ const AU_STATE_POP = {
   'Northern Territory': 250000, 'Australian Capital Territory': 470000,
 };
 
+// ── Resolve free-text project location to DataForSEO location_name ──
+// Maps inputs like "Warner, QLD", "Brisbane", "North Brisbane, Queensland"
+// to proper DataForSEO format: "Brisbane,Queensland,Australia"
+const AU_STATE_ABBREV = {
+  'nsw': 'New South Wales', 'new south wales': 'New South Wales',
+  'vic': 'Victoria', 'victoria': 'Victoria',
+  'qld': 'Queensland', 'queensland': 'Queensland',
+  'wa': 'Western Australia', 'western australia': 'Western Australia',
+  'sa': 'South Australia', 'south australia': 'South Australia',
+  'tas': 'Tasmania', 'tasmania': 'Tasmania',
+  'nt': 'Northern Territory', 'northern territory': 'Northern Territory',
+  'act': 'Australian Capital Territory', 'australian capital territory': 'Australian Capital Territory',
+};
+
+function resolveDataForSeoLocation(projectLocation) {
+  const raw = (projectLocation || '').trim();
+  if (!raw) return 'Australia';
+
+  // Already in correct format? e.g. "Brisbane,Queensland,Australia"
+  if (raw.includes(',') && raw.toLowerCase().includes('australia') && raw.split(',').length >= 3) {
+    return raw;
+  }
+
+  const parts = raw.split(/[,\s]+/).map(p => p.trim()).filter(Boolean);
+  const lower = raw.toLowerCase().replace(/[,]/g, ' ').trim();
+
+  // Try to detect state from abbreviation or full name
+  let detectedState = null;
+  for (const part of parts) {
+    const stateMatch = AU_STATE_ABBREV[part.toLowerCase()];
+    if (stateMatch) { detectedState = stateMatch; break; }
+  }
+  // Also check multi-word state names in the full string
+  if (!detectedState) {
+    for (const [key, val] of Object.entries(AU_STATE_ABBREV)) {
+      if (key.length > 3 && lower.includes(key)) { detectedState = val; break; }
+    }
+  }
+
+  // Try to match a city from AU_LOCATIONS
+  let detectedCity = null;
+  const allCities = {};
+  for (const [stateName, stateData] of Object.entries(AU_LOCATIONS.states)) {
+    for (const cityName of Object.keys(stateData.cities)) {
+      allCities[cityName.toLowerCase()] = { city: cityName, state: stateName };
+    }
+  }
+
+  // Direct city match in the location string
+  for (const [cityLower, info] of Object.entries(allCities)) {
+    if (lower.includes(cityLower)) {
+      detectedCity = info.city;
+      if (!detectedState) detectedState = info.state;
+      break;
+    }
+  }
+
+  // If no city found, check SUBURB_GPS for suburb → nearest city mapping
+  if (!detectedCity) {
+    for (const part of parts) {
+      const subLower = part.toLowerCase();
+      if (SUBURB_GPS[subLower]) {
+        const subGps = SUBURB_GPS[subLower];
+        // Find nearest city by GPS distance
+        let bestCity = null, bestDist = Infinity;
+        for (const [cityLower, info] of Object.entries(allCities)) {
+          if (SUBURB_GPS[cityLower]) {
+            const cGps = SUBURB_GPS[cityLower];
+            const dist = Math.sqrt(Math.pow(subGps.lat - cGps.lat, 2) + Math.pow(subGps.lng - cGps.lng, 2));
+            if (dist < bestDist) { bestDist = dist; bestCity = info; }
+          }
+        }
+        if (bestCity) {
+          detectedCity = bestCity.city;
+          if (!detectedState) detectedState = bestCity.state;
+        }
+        break;
+      }
+    }
+    // Try multi-word suburb match (e.g. "north brisbane")
+    if (!detectedCity) {
+      const words = lower.split(/\s+/);
+      for (let len = Math.min(3, words.length); len >= 2; len--) {
+        for (let i = 0; i <= words.length - len; i++) {
+          const candidate = words.slice(i, i + len).join(' ');
+          if (SUBURB_GPS[candidate]) {
+            const subGps = SUBURB_GPS[candidate];
+            let bestCity = null, bestDist = Infinity;
+            for (const [cityLower, info] of Object.entries(allCities)) {
+              if (SUBURB_GPS[cityLower]) {
+                const cGps = SUBURB_GPS[cityLower];
+                const dist = Math.sqrt(Math.pow(subGps.lat - cGps.lat, 2) + Math.pow(subGps.lng - cGps.lng, 2));
+                if (dist < bestDist) { bestDist = dist; bestCity = info; }
+              }
+            }
+            if (bestCity) {
+              detectedCity = bestCity.city;
+              if (!detectedState) detectedState = bestCity.state;
+            }
+            break;
+          }
+        }
+        if (detectedCity) break;
+      }
+    }
+  }
+
+  // Build DataForSEO location string
+  if (detectedCity && detectedState) return `${detectedCity},${detectedState},Australia`;
+  if (detectedCity) return `${detectedCity},Australia`;
+  if (detectedState) return `${detectedState},Australia`;
+
+  // Last resort: just use Australia-level targeting
+  return 'Australia';
+}
+
 app.post(['/api/projects/:projectId/keyword-research', '/api/builds/:buildId/keyword-research'], async (req, res) => {
   const projectId = req.params.projectId || req.params.buildId;
   const { seeds, country, state, city, is_local, package_size, exclude_keywords, min_volume } = req.body;
@@ -25823,7 +25939,7 @@ app.post('/api/projects/:projectId/discover-keywords', async (req, res) => {
     // Step 3 (optional): Check Maps positions for local keywords
     let mapsResults = null;
     if (checkMaps && localKeywords.length > 0) {
-      const location = project.location || 'Perth,Western Australia,Australia';
+      const location = resolveDataForSeoLocation(project.location);
       const businessName = (project.business_name || project.name || '').toLowerCase();
       mapsResults = [];
       const mapsKws = localKeywords.slice(0, 50); // Cap at 50 to control cost
@@ -26330,7 +26446,7 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         const bizNoSpaces = businessName.replace(/\s+/g, '');
         const domainLower = domain.toLowerCase();
         const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
-        const location = project.location || 'Perth,Western Australia,Australia';
+        const location = resolveDataForSeoLocation(project.location);
         const locLower = location.toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
         const locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
@@ -26910,39 +27026,19 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
     );
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No maps keywords. Generate keywords first.' });
 
-    console.log(`[maps-serpapi] Starting sync for ${kwRes.rows.length} keywords, business="${businessName}"`);
+    const mapsLoc = resolveDataForSeoLocation(project.location);
+    console.log(`[maps-serpapi] Starting sync for ${kwRes.rows.length} keywords, business="${businessName}", location="${mapsLoc}"`);
 
-    // GPS coordinates for Perth suburbs — used for location-accurate local pack results
-    const suburbGPS = {
-      'leeming': { lat: -32.0728, lng: 115.8640 }, 'murdoch': { lat: -32.0660, lng: 115.8430 },
-      'cannington': { lat: -32.0170, lng: 115.9340 }, 'east cannington': { lat: -32.0100, lng: 115.9500 },
-      'ferndale': { lat: -32.0300, lng: 115.9500 }, 'lynwood': { lat: -32.0400, lng: 115.9300 },
-      'parkwood': { lat: -32.0450, lng: 115.9150 }, 'queens park': { lat: -32.0050, lng: 115.9400 },
-      'riverton': { lat: -32.0350, lng: 115.8940 }, 'rossmoyne': { lat: -32.0380, lng: 115.8700 },
-      'shelley': { lat: -32.0280, lng: 115.8800 }, 'willetton': { lat: -32.0530, lng: 115.8890 },
-      'wilson': { lat: -32.0230, lng: 115.9100 }, 'canning vale': { lat: -32.0580, lng: 115.9180 },
-      'bentley': { lat: -32.0000, lng: 115.9200 }, 'welshpool': { lat: -31.9930, lng: 115.9450 },
-      'atwell': { lat: -32.1440, lng: 115.8640 }, 'aubin grove': { lat: -32.1640, lng: 115.8660 },
-      'bibra lake': { lat: -32.0930, lng: 115.8200 }, 'cockburn': { lat: -32.1300, lng: 115.8500 },
-      'coogee': { lat: -32.1190, lng: 115.7650 }, 'coolbellup': { lat: -32.0830, lng: 115.8030 },
-      'hamilton hill': { lat: -32.0820, lng: 115.7770 }, 'jandakot': { lat: -32.1050, lng: 115.8700 },
-      'spearwood': { lat: -32.1050, lng: 115.7830 }, 'success': { lat: -32.1440, lng: 115.8490 },
-      'banjup': { lat: -32.1290, lng: 115.8580 }, 'beeliar': { lat: -32.1350, lng: 115.8150 },
-      'hammond park': { lat: -32.1620, lng: 115.8470 }, 'henderson': { lat: -32.1490, lng: 115.7730 },
-      'lake coogee': { lat: -32.1280, lng: 115.7800 }, 'munster': { lat: -32.1310, lng: 115.7870 },
-      'north coogee': { lat: -32.1100, lng: 115.7640 }, 'north lake': { lat: -32.0770, lng: 115.8330 },
-      'south lake': { lat: -32.0870, lng: 115.8350 }, 'treeby': { lat: -32.1500, lng: 115.8630 },
-      'wattleup': { lat: -32.1470, lng: 115.7990 }, 'yangebup': { lat: -32.1220, lng: 115.8140 }
-    };
+    // Use global SUBURB_GPS (200+ suburbs across Australia)
 
     // DataForSEO helper — Google SERP with GPS coordinates for accurate local pack
     async function dfsSearch(keyword, suburb) {
       const query = suburb ? `${keyword} ${suburb}` : keyword;
-      const gps = suburb ? suburbGPS[suburb.toLowerCase()] : null;
+      const gps = suburb ? SUBURB_GPS[suburb.toLowerCase()] : null;
       // Use DataForSEO organic SERP (includes local pack in results)
       const data = await dataForSeoSerp({
         keyword: query,
-        location: 'Perth,Western Australia,Australia',
+        location: mapsLoc,
         depth: 20,
       });
       return data;
@@ -27563,7 +27659,8 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
 
-    console.log(`[rank-sync] Starting SerpAPI sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}"`);
+    const resolvedLoc = resolveDataForSeoLocation(project.location);
+    console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}", project.location="${project.location}", resolved="${resolvedLoc}"`);
 
     // Uses global SUBURB_GPS for GPS coordinates (all AU suburbs)
 
@@ -27599,7 +27696,7 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
               if (found) break;
             }
           }
-          const loc = (project.location || 'Perth,Western Australia,Australia').trim();
+          const loc = resolvedLoc;
           if (idx < 3) console.log(`[rank-sync] "${query}" using location "${loc}" (DataForSEO)`);
 
           const data = await dataForSeoSerp({ keyword: query, location: loc, depth: 30 });
@@ -27755,7 +27852,7 @@ app.post('/api/projects/:projectId/rank-tracking/debug-serp', async (req, res) =
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = projRes.rows[0];
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
-    const loc = (project.location || 'Perth,Western Australia,Australia').trim();
+    const loc = resolveDataForSeoLocation(project.location);
     // Raw DataForSEO call to see full response
     const task = {
       keyword,
