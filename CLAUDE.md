@@ -46,6 +46,7 @@ Sandbox can't git push. The workflow is:
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
 - **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery). Could be used for richer GBP/backlink data
 - **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
+- **Copyleaks**: COPYLEAKS_EMAIL/COPYLEAKS_API_KEY — plagiarism detection for copywriter content. Async webhook-based flow: submit → webhook callback → results stored in `plagiarism_checks` table. Token cached 47h.
 - **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
 
 ## Google Cloud Project
@@ -118,7 +119,7 @@ Sandbox can't git push. The workflow is:
 
 ## Database Tables
 
-projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**, **discovery_cache**
+projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**, **discovery_cache**, **plagiarism_checks**, **seo_migrations**
 
 ### wp_change_history (Universal WordPress Rollback)
 ```sql
@@ -277,6 +278,9 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
+- **Copyleaks Plagiarism Check** — Integrated Copyleaks API for plagiarism detection in copywriter. `plagiarism_checks` DB table, async webhook flow (submit → Copyleaks webhook → results stored). Auth token cached 47h. "Plagiarism Check" button in copywriter action bar with polling UI, results panel showing score %, word counts (identical/similar), matched sources with percentages, color-coded badges. Env vars: `COPYLEAKS_EMAIL`, `COPYLEAKS_API_KEY`.
+- **SEO Migration page** — 4-phase wizard (Crawl → Match → Redirects → Monitor) under main sidebar. `seo_migrations` table. Crawl old/new sites via sitemap, AI URL matching via Haiku, push 301 redirects to WP plugin, pre/post migration SEO snapshots, comparison report.
+- **License key system** — Plugin license validation, yearly renewal (no stacking), AJAX-based license check, auto-update system.
 - **Discover Local Keywords — Dual Tab (SERP + Maps)** — Rewrote `DiscoverLocalPage` component with two tabs: "Discover SERP" (organic keywords via DataForSEO ranked_keywords) and "Discover Maps" (keywords business ranks for on Google Maps via DataForSEO Maps API). Separate state, loading, and polling for each tab. Per-row delete + bulk delete. Re-scan button.
 - **Smart Generate competitor filtering** — Added 3-layer brand name filtering: (1) competitor name blacklist from `projects.competitors` + `grid_scans.competitors`, (2) SERVICE_ACTION_WORDS whitelist, (3) TRADE_SUFFIXES pattern filter (e.g., "hilton plumbing" = competitor).
 - **SUBURB_GPS expansion** — Expanded from ~50 to 200+ Perth suburbs with GPS coordinates. Used for stripping suburb names from keywords in Smart Generate and Maps grid center lookups.

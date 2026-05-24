@@ -15276,6 +15276,34 @@
       var [importingCurrent, setImportingCurrent] = React.useState(false);
       var [editorKey, setEditorKey] = React.useState(0);
       var [pageUrl, setPageUrl] = React.useState(page.page_url || page.published_url || '');
+      // Plagiarism check
+      var [plagiarismChecking, setPlagiarismChecking] = React.useState(false);
+      var [plagiarismResult, setPlagiarismResult] = React.useState(null);
+      var [plagiarismError, setPlagiarismError] = React.useState(null);
+
+      var handlePlagiarismCheck = async function() {
+        if (!editContent || plagiarismChecking) return;
+        setPlagiarismChecking(true);
+        setPlagiarismError(null);
+        setPlagiarismResult(null);
+        try {
+          var plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (plainText.length < 50) { setPlagiarismError('Content too short (min 50 chars)'); setPlagiarismChecking(false); return; }
+          var data = await api('/projects/' + pid + '/plagiarism-check', { method: 'POST', body: { content: plainText, title: page.title || page.slug || 'Untitled' } });
+          if (data.error) { setPlagiarismError(data.error); setPlagiarismChecking(false); return; }
+          var scanId = data.scanId;
+          var attempts = 0;
+          var poll = setInterval(async function() {
+            attempts++;
+            try {
+              var result = await api('/projects/' + pid + '/plagiarism-check/' + scanId);
+              if (result.status === 'completed') { clearInterval(poll); setPlagiarismResult(result); setPlagiarismChecking(false); }
+              else if (result.status === 'error') { clearInterval(poll); setPlagiarismError(result.error || 'Scan failed'); setPlagiarismChecking(false); }
+              else if (attempts > 60) { clearInterval(poll); setPlagiarismError('Timed out'); setPlagiarismChecking(false); }
+            } catch(e) { if (attempts > 60) { clearInterval(poll); setPlagiarismError(e.message); setPlagiarismChecking(false); } }
+          }, 2000);
+        } catch(e) { setPlagiarismError(e.message); setPlagiarismChecking(false); }
+      };
 
       var hasDraft = !!editContent;
 
@@ -15590,6 +15618,13 @@
             style: { padding: '8px 16px', background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 16px', fontWeight: 700,
               border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer', boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
           }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), optimising ? 'Rewriting...' : 'Rewrite'),
+          // Plagiarism Check
+          hasDraft && React.createElement('button', {
+            disabled: plagiarismChecking || !editContent,
+            onClick: handlePlagiarismCheck,
+            title: 'Check content for plagiarism via Copyleaks',
+            style: { padding: '8px 16px', background: plagiarismChecking ? 'var(--bg3)' : '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: plagiarismChecking ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism Check'),
           // Reset
           !isPublished && React.createElement('button', {
             onClick: function() {
@@ -15624,6 +15659,56 @@
           onUpdate: setOptimisePreview,
           apiPrefix: 'site-pages'
         }),
+
+        // Plagiarism Results (Build mode)
+        (plagiarismResult || plagiarismError) && React.createElement('div', {
+          style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid ' + (plagiarismResult && plagiarismResult.score > 15 ? '#ef444440' : plagiarismResult ? '#22c55e40' : '#ef444440') }
+        },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5 } },
+              React.createElement('i', { className: 'fas fa-shield-halved', style: { marginRight: 6 } }), 'Plagiarism Check'
+            ),
+            React.createElement('button', {
+              onClick: function() { setPlagiarismResult(null); setPlagiarismError(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }
+            }, '×')
+          ),
+          plagiarismError && React.createElement('div', { style: { padding: '10px 14px', background: '#ef444415', borderRadius: 8, color: '#ef4444', fontSize: 13 } },
+            React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 6 } }), plagiarismError
+          ),
+          plagiarismResult && React.createElement('div', null,
+            React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: plagiarismResult.score <= 5 ? '#22c55e15' : plagiarismResult.score <= 15 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: plagiarismResult.score <= 5 ? '#22c55e' : plagiarismResult.score <= 15 ? '#f59e0b' : '#ef4444' } }, (plagiarismResult.score || 0) + '%'),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Plagiarism')
+              ),
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, plagiarismResult.totalWords || 0),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Words')
+              ),
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#ef4444' } }, plagiarismResult.identicalWords || 0),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Identical')
+              ),
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#f59e0b' } }, (plagiarismResult.minorChangedWords || 0) + (plagiarismResult.paraphrasedWords || 0)),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Similar')
+              )
+            ),
+            plagiarismResult.matchedSources && plagiarismResult.matchedSources.length > 0 && React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase' } }, 'Matched Sources'),
+              plagiarismResult.matchedSources.map(function(s, i) { return React.createElement('div', {
+                key: i, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 4, fontSize: 13 }
+              },
+                React.createElement('a', { href: s.url, target: '_blank', rel: 'noopener', style: { color: '#3b82f6', textDecoration: 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 12 } }, s.title || s.url),
+                React.createElement('span', { style: { color: s.percentage > 10 ? '#ef4444' : '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap' } }, (s.percentage || 0) + '%')
+              ); })
+            ),
+            plagiarismResult.matchedSources && plagiarismResult.matchedSources.length === 0 && React.createElement('div', { style: { padding: '10px 14px', background: '#22c55e15', borderRadius: 8, color: '#22c55e', fontSize: 13, textAlign: 'center' } },
+              React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'No plagiarism detected — content is original'
+            )
+          )
+        ),
 
         // Page Wireframe (matches CopywriterPage wireframe section)
         React.createElement('div', { style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid var(--border)' } },
@@ -19327,6 +19412,10 @@
       const [sectionEditing, setSectionEditing] = useState(null); // section_id in edit mode
       const [sectionDrafts, setSectionDrafts] = useState({}); // {section_id: html}
       const [rewritingSection, setRewritingSection] = useState(null); // section_id being AI rewritten
+      // Plagiarism check (Copyleaks)
+      const [plagiarismChecking, setPlagiarismChecking] = useState(false);
+      const [plagiarismResult, setPlagiarismResult] = useState(null);
+      const [plagiarismError, setPlagiarismError] = useState(null);
 
       // Highlight changed paragraphs — POSITIONAL comparison (same logic as preview page)
       // Compares draft blocks vs original blocks by position. If text differs → orange highlight.
@@ -19433,6 +19522,63 @@
           loadWpHistory();
         } catch (e) { alert('Rollback failed: ' + e.message); }
         setRollingBack(null);
+      };
+
+      // Plagiarism check handler
+      const handlePlagiarismCheck = async () => {
+        if (!selectedItem || !editContent || plagiarismChecking) return;
+        setPlagiarismChecking(true);
+        setPlagiarismError(null);
+        setPlagiarismResult(null);
+        try {
+          // Strip HTML tags to get plain text
+          const plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (plainText.length < 50) {
+            setPlagiarismError('Content too short (minimum 50 characters)');
+            setPlagiarismChecking(false);
+            return;
+          }
+          const data = await api(`/projects/${pid}/plagiarism-check`, {
+            method: 'POST',
+            body: { content: plainText, title: selectedItem.page_title || selectedItem.slug || 'Untitled' }
+          });
+          if (data.error) {
+            setPlagiarismError(data.error);
+            setPlagiarismChecking(false);
+            return;
+          }
+          // Poll for results (Copyleaks is async)
+          const scanId = data.scanId;
+          let attempts = 0;
+          const poll = setInterval(async () => {
+            attempts++;
+            try {
+              const result = await api(`/projects/${pid}/plagiarism-check/${scanId}`);
+              if (result.status === 'completed') {
+                clearInterval(poll);
+                setPlagiarismResult(result);
+                setPlagiarismChecking(false);
+              } else if (result.status === 'error') {
+                clearInterval(poll);
+                setPlagiarismError(result.error || 'Scan failed');
+                setPlagiarismChecking(false);
+              } else if (attempts > 60) { // 2 min timeout
+                clearInterval(poll);
+                setPlagiarismError('Scan timed out — check back later');
+                setPlagiarismChecking(false);
+              }
+            } catch (e) {
+              if (attempts > 60) {
+                clearInterval(poll);
+                setPlagiarismError('Poll failed: ' + e.message);
+                setPlagiarismChecking(false);
+              }
+            }
+          }, 2000);
+        } catch (e) {
+          setPlagiarismError(e.message);
+          setPlagiarismChecking(false);
+        }
       };
 
       const counts = {
@@ -20211,6 +20357,13 @@
                 title: 'AI rewrites content using accepted competitor topics & keywords',
                 style: { padding: '8px 16px', background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', color: '#fff', border: 'none', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer', fontSize: 14, fontWeight: 700, boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
               }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), optimising ? 'Rewriting...' : 'Rewrite'),
+              // Plagiarism Check button
+              React.createElement('button', {
+                disabled: plagiarismChecking || !editContent,
+                onClick: handlePlagiarismCheck,
+                title: 'Check content for plagiarism via Copyleaks',
+                style: { padding: '8px 16px', background: plagiarismChecking ? 'var(--bg3)' : '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: plagiarismChecking ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism Check'),
               // Reset — clear all draft data, sections, meta, AI notes back to clean state
               !isPublished && React.createElement('button', {
                 onClick: async () => {
@@ -20235,6 +20388,59 @@
             )
           ),
 
+
+          // Plagiarism Check Results
+          (plagiarismResult || plagiarismError) && React.createElement('div', {
+            style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: `1px solid ${plagiarismResult && plagiarismResult.score > 15 ? '#ef444440' : plagiarismResult ? '#22c55e40' : '#ef444440'}` }
+          },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5 } },
+                React.createElement('i', { className: 'fas fa-shield-halved', style: { marginRight: 6 } }), 'Plagiarism Check'
+              ),
+              React.createElement('button', {
+                onClick: () => { setPlagiarismResult(null); setPlagiarismError(null); },
+                style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }
+              }, '×')
+            ),
+            plagiarismError && React.createElement('div', { style: { padding: '10px 14px', background: '#ef444415', borderRadius: 8, color: '#ef4444', fontSize: 13 } },
+              React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 6 } }), plagiarismError
+            ),
+            plagiarismResult && React.createElement('div', null,
+              // Score badge
+              React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: plagiarismResult.score <= 5 ? '#22c55e15' : plagiarismResult.score <= 15 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: plagiarismResult.score <= 5 ? '#22c55e' : plagiarismResult.score <= 15 ? '#f59e0b' : '#ef4444' } }, (plagiarismResult.score || 0) + '%'),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Plagiarism')
+                ),
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, plagiarismResult.totalWords || 0),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Words')
+                ),
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#ef4444' } }, plagiarismResult.identicalWords || 0),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Identical')
+                ),
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#f59e0b' } }, (plagiarismResult.minorChangedWords || 0) + (plagiarismResult.paraphrasedWords || 0)),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Similar')
+                )
+              ),
+              // Matched sources
+              plagiarismResult.matchedSources && plagiarismResult.matchedSources.length > 0 && React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase' } }, 'Matched Sources'),
+                plagiarismResult.matchedSources.map((s, i) => React.createElement('div', {
+                  key: i,
+                  style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 4, fontSize: 13 }
+                },
+                  React.createElement('a', { href: s.url, target: '_blank', rel: 'noopener', style: { color: '#3b82f6', textDecoration: 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 12 } }, s.title || s.url),
+                  React.createElement('span', { style: { color: s.percentage > 10 ? '#ef4444' : '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap' } }, (s.percentage || 0) + '%')
+                ))
+              ),
+              plagiarismResult.matchedSources && plagiarismResult.matchedSources.length === 0 && React.createElement('div', { style: { padding: '10px 14px', background: '#22c55e15', borderRadius: 8, color: '#22c55e', fontSize: 13, textAlign: 'center' } },
+                React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'No plagiarism sources detected — content is original'
+              )
+            )
+          ),
 
           // Client Feedback — comments + client draft edits + inline comments
           selectedItem && (
