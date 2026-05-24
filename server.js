@@ -18052,6 +18052,8 @@ app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res)
 
 // AI Optimise a site page — takes score tips + content, returns improved version
 app.post('/api/projects/:projectId/site-pages/:pageId/optimise', async (req, res) => {
+  req.setTimeout(120000);
+  res.setTimeout(120000);
   const { projectId, pageId } = req.params;
   const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
   try {
