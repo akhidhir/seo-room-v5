@@ -3357,7 +3357,8 @@ app.post('/api/projects/:id/ai-detection', async (req, res) => {
     }
 
     const data = await resp.json();
-    console.log(`[winston] AI detection complete: human=${data.score}%`);
+    console.log(`[winston] AI detection complete: human=${data.score}%, readability=${data.readability_score}, sentences=${(data.sentences || []).length}, raw keys: ${Object.keys(data).join(',')}`);
+    console.log(`[winston] Sentence scores: ${(data.sentences || []).map(s => Math.round(s.score) + '%').join(', ')}`);
 
     // Score is "human score" — 100 = fully human, 0 = fully AI
     const humanScore = data.score || 0;
@@ -18270,7 +18271,53 @@ function humanizeText(text) {
     result = modded.join('');
   }
 
-  // 6. CLEAN UP — fix double spaces, orphaned punctuation
+  // 6. AI PARALLEL STRUCTURE BREAKING — target patterns that score <70% human
+  // "Whether X or Y" → split into two thoughts
+  result = result.replace(/Whether (?:it is |it's |for )?(a |an )?([^,]+),?\s*or\s+(a |an )?([^,\.]+),?\s*/gi, (match, a1, first, a2, second) => {
+    const openers = ['Got ', 'Need ', 'Have ', 'Dealing with ', 'Working on '];
+    const opener = openers[Math.floor(Math.random() * openers.length)];
+    return opener + (a1 || '') + first.trim() + '? Or maybe ' + (a2 || '') + second.trim() + '? ';
+  });
+  // "for any situation/need/requirement/occasion" → specific
+  result = result.replace(/for any (situation|need|requirement|occasion|purpose|project|application)/gi, () => {
+    const alts = ['no matter what you\'re dealing with', 'whatever the job looks like', 'big or small', 'whatever you need done', 'regardless of the setup'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // "we design and install/build and maintain/supply and fit" → break verb pairs
+  result = result.replace(/we (design|build|supply|plan|create|construct) and (install|maintain|fit|deliver|execute|manage)/gi, (m, v1, v2) => {
+    const alts = [`we ${v1} it, then ${v2} it`, `we handle the ${v1} side and the ${v2} too`, `we'll ${v1} it and get it ${v2}ed properly`];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // "from X to Y" parallel → break it
+  result = result.replace(/from ([a-z]+ [a-z]+) to ([a-z]+ [a-z]+)/gi, (m, first, second) => {
+    return Math.random() < 0.5 ? first + ' all the way through to ' + second : first + ' — and yes, ' + second + ' too';
+  });
+  // "both X and Y" → more casual
+  result = result.replace(/both ([^,]+) and ([^,\.]+)/gi, (m, first, second) => {
+    return first.trim() + ' and ' + second.trim() + ' — we do both';
+  });
+  // "range of services/products/solutions" → specific
+  result = result.replace(/(?:a |wide |full |complete )*range of (services|products|solutions|options)/gi, () => {
+    const alts = ['everything you\'d need', 'the lot', 'all of it', 'plenty of options'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // "designed to meet your needs" and similar
+  result = result.replace(/designed to (meet|suit|fit|match|exceed) (your|all|every|any) (needs|requirements|expectations)/gi, () => {
+    const alts = ['built to actually work for you', 'made to do the job properly', 'set up the way you want it'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // "our team of experienced/qualified/skilled professionals"
+  result = result.replace(/our team of (experienced|qualified|skilled|trained|dedicated|expert) (professionals|specialists|experts|technicians|tradespeople)/gi, () => {
+    const alts = ['our crew', 'our guys', 'the team', 'our tradies'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // "we pride ourselves on" / "we are committed to" / "we strive to"
+  result = result.replace(/we (pride ourselves on|are committed to|strive to|are dedicated to|aim to provide)/gi, () => {
+    const alts = ['we actually care about', 'we\'re serious about', 'we focus on', 'the big thing for us is'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+
+  // 7. CLEAN UP — fix double spaces, orphaned punctuation
   result = result.replace(/\s{2,}/g, ' ');
   result = result.replace(/\s+([.,;:!?])/g, '$1');
   result = result.replace(/\.\./g, '.');
