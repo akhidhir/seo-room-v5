@@ -3186,83 +3186,85 @@ app.get('/api/projects/:id/migrations/:migrationId/report', async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ==================== PLAGIARISM CHECK (Originality.ai) ====================
+// ==================== PLAGIARISM CHECK (Winston AI) ====================
 
 // Synchronous API — no webhooks needed, instant results
 app.post('/api/projects/:id/plagiarism-check', async (req, res) => {
   try {
     const { content, title } = req.body;
-    if (!content || content.trim().length < 50) {
-      return res.status(400).json({ error: 'Content must be at least 50 characters' });
+    if (!content || content.trim().length < 100) {
+      return res.status(400).json({ error: 'Content must be at least 100 characters' });
     }
 
-    const apiKey = process.env.ORIGINALITY_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: 'ORIGINALITY_API_KEY env var required' });
+    const apiKey = process.env.WINSTON_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'WINSTON_API_KEY env var required' });
 
     const scanId = `seoroom-${req.params.id}-${Date.now()}`;
 
-    // Call Originality.ai API (synchronous — returns results immediately)
-    console.log(`[originality] Scanning ${scanId} (${content.length} chars)...`);
-    const scanResp = await fetch('https://api.originality.ai/api/v2/scan/plag', {
+    // Call Winston AI plagiarism API (synchronous)
+    console.log(`[winston] Scanning ${scanId} (${content.length} chars)...`);
+    const scanResp = await fetch('https://api.gowinston.ai/v2/plagiarism', {
       method: 'POST',
       headers: {
-        'X-OAI-API-KEY': apiKey,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        content: content,
-        title: title || 'Untitled',
-        aiModelVersion: '1',
-        storeScan: true
+        text: content,
+        language: 'auto',
+        country: 'au'
       })
     });
 
     if (!scanResp.ok) {
       const errText = await scanResp.text();
-      console.error(`[originality] Scan failed (${scanResp.status}):`, errText);
-      return res.status(scanResp.status).json({ error: `Originality.ai scan failed: ${errText}` });
+      console.error(`[winston] Scan failed (${scanResp.status}):`, errText);
+      return res.status(scanResp.status).json({ error: `Winston AI scan failed: ${errText}` });
     }
 
     const data = await scanResp.json();
-    console.log(`[originality] Scan ${scanId} complete:`, JSON.stringify(data).slice(0, 200));
+    console.log(`[winston] Scan ${scanId} complete:`, JSON.stringify(data).slice(0, 300));
 
-    // Extract plagiarism results
-    const plagResult = data.plagiarism || {};
-    const totalWords = data.total_words || data.totalWords || 0;
-    const plagiarismScore = Math.round((plagResult.total_text_score || plagResult.score || 0) * 100);
+    // Extract results from Winston response
+    const result = data.result || {};
+    const plagiarismScore = Math.round(result.score || 0);
+    const totalWords = result.textWordCounts || 0;
+    const identicalWords = result.identicalWordCounts || 0;
+    const similarWords = result.similarWordCounts || 0;
+    const totalPlagWords = result.totalPlagiarismWords || 0;
 
-    // Build matched sources from plagiarism results
-    const sources = plagResult.sources || [];
-    const matchedSources = sources.slice(0, 20).map(s => ({
+    // Build matched sources
+    const sources = data.sources || [];
+    const matchedSources = sources.filter(s => !s.is_excluded).slice(0, 20).map(s => ({
       url: s.url || '',
       title: s.title || s.url || '',
-      matchedWords: s.totalMatchedWords || s.matched_words || 0,
-      percentage: Math.round((s.totalMatchScore || s.score || 0) * 100)
+      matchedWords: s.plagiarismWords || 0,
+      percentage: Math.round(s.score || 0)
     }));
 
     // Save to DB
     await pool.query(
-      `INSERT INTO plagiarism_checks (project_id, scan_id, content_title, content_text, status, score, total_words, matched_sources, completed_at)
-       VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, NOW())
-       ON CONFLICT (scan_id) DO UPDATE SET status='completed', score=$5, total_words=$6, matched_sources=$7, completed_at=NOW()`,
-      [req.params.id, scanId, title || 'Untitled', content, plagiarismScore, totalWords, JSON.stringify(matchedSources)]
+      `INSERT INTO plagiarism_checks (project_id, scan_id, content_title, content_text, status, score, total_words, identical_words, minor_changed_words, matched_sources, completed_at)
+       VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (scan_id) DO UPDATE SET status='completed', score=$5, total_words=$6, identical_words=$7, minor_changed_words=$8, matched_sources=$9, completed_at=NOW()`,
+      [req.params.id, scanId, title || 'Untitled', content, plagiarismScore, totalWords, identicalWords, similarWords, JSON.stringify(matchedSources)]
     );
 
-    // Return results immediately (no polling needed)
+    // Return results immediately
     res.json({
       scanId,
       status: 'completed',
       score: plagiarismScore,
       totalWords,
-      identicalWords: 0,
-      minorChangedWords: 0,
+      identicalWords,
+      minorChangedWords: similarWords,
       paraphrasedWords: 0,
       matchedSources,
-      aiScore: data.ai ? Math.round((data.ai.score || 0) * 100) : null
+      creditsUsed: data.credits_used || 0,
+      creditsRemaining: data.credits_remaining || 0
     });
   } catch (e) {
-    console.error('[originality] Scan error:', e.message);
+    console.error('[winston] Scan error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

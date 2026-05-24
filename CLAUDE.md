@@ -46,7 +46,7 @@ Sandbox can't git push. The workflow is:
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
 - **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery). Could be used for richer GBP/backlink data
 - **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
-- **Originality.ai**: ORIGINALITY_API_KEY — plagiarism detection for copywriter content. Synchronous API (no webhooks). POST to `/api/v2/scan/plag` → instant results. Also returns AI detection score. Results saved to `plagiarism_checks` table.
+- **Winston AI**: WINSTON_API_KEY — plagiarism detection for copywriter content. Synchronous API (no webhooks). POST to `https://api.gowinston.ai/v2/plagiarism` with Bearer token → instant results. 2 credits per word. Results saved to `plagiarism_checks` table.
 - **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
 
 ## Google Cloud Project
@@ -278,7 +278,7 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Originality.ai Plagiarism Check** — Integrated Originality.ai API for plagiarism detection in copywriter + build mode. `plagiarism_checks` DB table, synchronous API (no webhooks — instant results). "Plagiarism Check" button in both Build mode and Copywriter action bars, results panel showing score %, word counts, matched sources with percentages, color-coded badges. Also returns AI detection score. Env var: `ORIGINALITY_API_KEY`.
+- **Winston AI Plagiarism Check** — Integrated Winston AI API for plagiarism detection in copywriter + build mode. `plagiarism_checks` DB table, synchronous API (no webhooks — instant results). "Plagiarism Check" button in both Build mode and Copywriter action bars, results panel showing score %, word counts (identical/similar), matched sources with percentages, color-coded badges. Credits tracking shown. Env var: `WINSTON_API_KEY`.
 - **SEO Migration page** — 4-phase wizard (Crawl → Match → Redirects → Monitor) under main sidebar. `seo_migrations` table. Crawl old/new sites via sitemap, AI URL matching via Haiku, push 301 redirects to WP plugin, pre/post migration SEO snapshots, comparison report.
 - **License key system** — Plugin license validation, yearly renewal (no stacking), AJAX-based license check, auto-update system.
 - **Discover Local Keywords — Dual Tab (SERP + Maps)** — Rewrote `DiscoverLocalPage` component with two tabs: "Discover SERP" (organic keywords via DataForSEO ranked_keywords) and "Discover Maps" (keywords business ranks for on Google Maps via DataForSEO Maps API). Separate state, loading, and polling for each tab. Per-row delete + bulk delete. Re-scan button.
