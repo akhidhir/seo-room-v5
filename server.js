@@ -2363,26 +2363,39 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
         details.linked_from = Array.from(sources).slice(0, 5);
       }
 
-      // Check referrer (from plugin data) — must check hostname AND referrer must not itself be a 404
+      // Check referrer (from plugin data) — must check hostname AND referrer must be a real page
       const referrer = referrers ? referrers[url] : null;
       if (referrer) {
         let referrerHost = '';
         try { referrerHost = new URL(referrer).hostname.replace(/^www\./, ''); } catch {}
         const isDomainReferrer = referrerHost === domain.replace(/^www\./, '');
-        // Skip if the referrer itself is also in the 404 list (bot chain, not real internal link)
-        const referrerPath = referrer.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
-        const referrerIsAlso404 = urls.some(u => {
-          const uNorm = u.replace(/\/$/, '');
-          return uNorm === referrerPath || uNorm === referrer.replace(/\/$/, '');
+        // Normalize referrer path for comparison
+        const referrerPath = referrer.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '').toLowerCase();
+        // Skip if the referrer path matches ANY 404 URL path (normalize both sides)
+        const allPaths = urls.map(u => {
+          if (u.startsWith('http')) return u.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '').toLowerCase();
+          return u.replace(/\/$/, '').toLowerCase();
         });
-        // Also skip common non-page referrer paths
-        const junkPaths = ['/wp/', '/wp-admin', '/backup', '/old/', '/login', '/admin', '/xmlrpc', '/wp-login', '/wp-cron'];
+        const referrerIsAlso404 = allPaths.some(p => p === referrerPath || p === referrerPath + '/' || referrerPath === p + '/');
+        // Skip common bot-probing / non-page paths
+        const junkPaths = ['/wp/', '/wp-admin', '/backup', '/old/', '/login', '/admin', '/xmlrpc', '/wp-login', '/wp-cron',
+          '/api/', '/api/config', '/api/settings', '/api/health', '/api/v1', '/elementor-', '/graphql', '/config', '/env',
+          '/.env', '/.git', '/.well-known', '/debug', '/test', '/phpinfo', '/server-status', '/actuator'];
         const isJunkReferrer = junkPaths.some(jp => referrerPath.toLowerCase().startsWith(jp));
         if (isDomainReferrer && !referrerIsAlso404 && !isJunkReferrer && !causes.includes('internal_link')) {
-          causes.push('internal_link');
-          details.linked_from = [referrer];
-        } else if (isDomainReferrer && !referrerIsAlso404 && !isJunkReferrer && details.linked_from && !details.linked_from.includes(referrer)) {
-          details.linked_from.push(referrer);
+          // Extra check: verify the referrer was found in the crawl scan (it's a real live page)
+          const referrerFull = referrer.replace(/^http:/, 'https:').replace(/\/$/, '');
+          const referrerInCrawl = linkSources.size > 0 && [...linkSources.values()].some(srcSet => {
+            for (const s of srcSet) { if (s.replace(/\/$/, '') === referrerFull) return true; }
+            return false;
+          });
+          // Only trust referrer as internal link if it was in the crawl scan OR exists in sitemap
+          const referrerNorm = referrerFull.replace(/^https?:\/\/www\./, 'https://');
+          const referrerInSitemap = sitemapUrlSet.has(referrerFull) || sitemapUrlSet.has(referrerNorm);
+          if (referrerInCrawl || referrerInSitemap) {
+            causes.push('internal_link');
+            details.linked_from = [referrer];
+          }
         }
       }
 
