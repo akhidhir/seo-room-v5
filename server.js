@@ -1067,6 +1067,34 @@ async function initDb() {
       )
     `);
 
+    // API cost tracking
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS api_costs (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+        feature TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        api_calls INTEGER DEFAULT 0,
+        cost NUMERIC(10,4) DEFAULT 0,
+        details JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_api_costs_project ON api_costs(project_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_api_costs_created ON api_costs(created_at)`);
+
+    // Budget columns
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_budget NUMERIC(10,2)`).catch(() => {});
+
+    // Agency settings (key-value store for global config)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS agency_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT DEFAULT ''
+      )
+    `);
+    await client.query(`INSERT INTO agency_settings (key, value) VALUES ('monthly_budget', '0') ON CONFLICT DO NOTHING`).catch(() => {});
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
@@ -4935,6 +4963,147 @@ app.get('/api/projects/:projectId/orchestrator/status', (req, res) => {
 
 // Legacy sync-all removed — orchestrator is the sole source of truth for action items
 
+// ==================== API COST TRACKING ====================
+
+// Cost per API call estimates (USD)
+const API_COST_RATES = {
+  serpapi: { google: 0.01, google_maps: 0.01 },        // ~$50/5000 searches
+  dataforseo: { serp: 0.004, maps: 0.002, ranked_keywords: 0.04, search_volume: 0.002 },
+  anthropic: { haiku: 0.003 },                          // ~$0.003 per audit call (est. 3K tokens)
+  pagespeed: { check: 0 },                              // free
+  gsc: { query: 0 },                                    // free (OAuth)
+};
+
+// Log an API cost to the database
+async function logApiCost(projectId, feature, provider, apiCalls, cost, details = {}) {
+  try {
+    await pool.query(
+      `INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [projectId, feature, provider, apiCalls, cost, JSON.stringify(details)]
+    );
+  } catch (e) {
+    console.error('[cost-log] Error:', e.message);
+  }
+}
+
+// Estimate cost for a feature before running
+function estimateFeatureCost(feature, params = {}) {
+  switch (feature) {
+    case 'serp_sync': {
+      const kwCount = params.keywords || 0;
+      const provider = params.provider || 'serpapi';
+      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google : API_COST_RATES.dataforseo.serp;
+      const volumeCost = API_COST_RATES.dataforseo.search_volume * Math.min(kwCount, 1); // 1 batch call
+      return { calls: kwCount, cost: +(kwCount * rate + volumeCost).toFixed(4), provider };
+    }
+    case 'maps_sync': {
+      const kwCount = params.keywords || 0;
+      const provider = params.provider || 'serpapi';
+      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google : API_COST_RATES.dataforseo.serp;
+      return { calls: kwCount, cost: +(kwCount * rate).toFixed(4), provider };
+    }
+    case 'grid_scan': {
+      const kwCount = params.keywords || 0;
+      const gridPoints = (params.gridSize || 5) * (params.gridSize || 5);
+      const totalCalls = kwCount * gridPoints;
+      return { calls: totalCalls, cost: +(totalCalls * API_COST_RATES.serpapi.google_maps).toFixed(4), provider: 'serpapi' };
+    }
+    case 'discover_serp': {
+      return { calls: 1, cost: +(API_COST_RATES.dataforseo.ranked_keywords).toFixed(4), provider: 'dataforseo' };
+    }
+    case 'discover_maps': {
+      const kwCount = params.keywords || 30; // estimated service keywords
+      const provider = params.provider || 'dataforseo';
+      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google_maps : API_COST_RATES.dataforseo.maps;
+      const volumeCost = API_COST_RATES.dataforseo.search_volume;
+      return { calls: kwCount, cost: +(kwCount * rate + volumeCost).toFixed(4), provider };
+    }
+    case 'gbp_audit': {
+      return { calls: 2, cost: +(API_COST_RATES.serpapi.google_maps + API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'serpapi+anthropic' };
+    }
+    case 'gsc_audit': {
+      return { calls: 1, cost: +(API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'anthropic' };
+    }
+    case 'website_audit': {
+      const pages = params.pages || 15;
+      return { calls: pages + 1, cost: +(API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'anthropic' };
+    }
+    case 'pagespeed': {
+      return { calls: params.pages || 15, cost: 0, provider: 'google' };
+    }
+    case 'handshake': {
+      return { calls: 6, cost: +(API_COST_RATES.serpapi.google_maps * 3 + API_COST_RATES.anthropic.haiku * 2 + 0.01).toFixed(4), provider: 'serpapi+anthropic' };
+    }
+    default:
+      return { calls: 0, cost: 0, provider: 'unknown' };
+  }
+}
+
+// Get current month's spend for a project
+async function getProjectMonthSpend(projectId) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(cost), 0) as total_cost, COALESCE(SUM(api_calls), 0) as total_calls,
+     json_agg(json_build_object('feature', feature, 'provider', provider, 'calls', api_calls, 'cost', cost, 'date', created_at) ORDER BY created_at DESC) as breakdown
+     FROM api_costs WHERE project_id=$1 AND created_at >= $2`,
+    [projectId, monthStart]
+  );
+  return { totalCost: parseFloat(r.rows[0].total_cost), totalCalls: parseInt(r.rows[0].total_calls), breakdown: r.rows[0].breakdown || [] };
+}
+
+// Get current month's spend across all projects (agency level)
+async function getAgencyMonthSpend() {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(cost), 0) as total_cost, COALESCE(SUM(api_calls), 0) as total_calls FROM api_costs WHERE created_at >= $1`,
+    [monthStart]
+  );
+  const byProject = await pool.query(
+    `SELECT ac.project_id, p.name as project_name, COALESCE(SUM(ac.cost), 0) as cost, COALESCE(SUM(ac.api_calls), 0) as calls
+     FROM api_costs ac LEFT JOIN projects p ON p.id = ac.project_id
+     WHERE ac.created_at >= $1 GROUP BY ac.project_id, p.name ORDER BY cost DESC`,
+    [monthStart]
+  );
+  const byFeature = await pool.query(
+    `SELECT feature, provider, COALESCE(SUM(cost), 0) as cost, COALESCE(SUM(api_calls), 0) as calls
+     FROM api_costs WHERE created_at >= $1 GROUP BY feature, provider ORDER BY cost DESC`,
+    [monthStart]
+  );
+  return {
+    totalCost: parseFloat(r.rows[0].total_cost),
+    totalCalls: parseInt(r.rows[0].total_calls),
+    byProject: byProject.rows.map(r => ({ ...r, cost: parseFloat(r.cost), calls: parseInt(r.calls) })),
+    byFeature: byFeature.rows.map(r => ({ ...r, cost: parseFloat(r.cost), calls: parseInt(r.calls) })),
+  };
+}
+
+// Check budget before running — returns { ok, warning }
+async function checkBudget(projectId) {
+  const spend = await getProjectMonthSpend(projectId);
+  const projRes = await pool.query('SELECT monthly_budget FROM projects WHERE id=$1', [projectId]);
+  const projectBudget = parseFloat(projRes.rows[0]?.monthly_budget) || 0;
+
+  const agencyRes = await pool.query("SELECT value FROM agency_settings WHERE key='monthly_budget'");
+  const agencyBudget = parseFloat(agencyRes.rows[0]?.value) || 0;
+
+  const agencySpend = await getAgencyMonthSpend();
+
+  const warnings = [];
+  if (projectBudget > 0 && spend.totalCost >= projectBudget) {
+    warnings.push(`Project budget exceeded: $${spend.totalCost.toFixed(2)} / $${projectBudget.toFixed(2)}`);
+  } else if (projectBudget > 0 && spend.totalCost >= projectBudget * 0.8) {
+    warnings.push(`Project budget at ${Math.round(spend.totalCost / projectBudget * 100)}%: $${spend.totalCost.toFixed(2)} / $${projectBudget.toFixed(2)}`);
+  }
+  if (agencyBudget > 0 && agencySpend.totalCost >= agencyBudget) {
+    warnings.push(`Agency budget exceeded: $${agencySpend.totalCost.toFixed(2)} / $${agencyBudget.toFixed(2)}`);
+  } else if (agencyBudget > 0 && agencySpend.totalCost >= agencyBudget * 0.8) {
+    warnings.push(`Agency budget at ${Math.round(agencySpend.totalCost / agencyBudget * 100)}%: $${agencySpend.totalCost.toFixed(2)} / $${agencyBudget.toFixed(2)}`);
+  }
+  return { ok: warnings.length === 0, warnings, projectSpend: spend.totalCost, agencySpend: agencySpend.totalCost, projectBudget, agencyBudget };
+}
+
 // ==================== SERPAPI HELPER ====================
 
 async function serpApiSearch(params) {
@@ -6700,6 +6869,8 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
       [parseInt(projectId), JSON.stringify({ stage: 'Starting...' })]
     );
     const auditId = auditRes.rows[0].id;
+    const handshakeCost = API_COST_RATES.serpapi.google_maps * 3 + API_COST_RATES.anthropic.haiku * 2 + 0.01;
+    logApiCost(parseInt(projectId), 'handshake', 'serpapi+anthropic', 6, handshakeCost);
     res.json({ auditId, status: 'running' });
 
     // Background processing
@@ -21047,6 +21218,9 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
+    // Log cost: SerpAPI maps + Anthropic Haiku
+    const gbpCost = API_COST_RATES.serpapi.google_maps + API_COST_RATES.anthropic.haiku;
+    logApiCost(parseInt(projectId), 'gbp_audit', 'serpapi+anthropic', 2, gbpCost);
 
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const businessName = project.business_name || project.name || '';
@@ -21610,6 +21784,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
+    logApiCost(parseInt(projectId), 'website_audit', 'rule-based', 0, 0); // rule-based = free
 
     console.log(`[website-audit] Starting code-based audit for ${domain}`);
 
@@ -22724,6 +22899,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
+    logApiCost(parseInt(projectId), 'website_audit_ai', 'anthropic', 1, API_COST_RATES.anthropic.haiku);
 
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const businessName = project.business_name || project.name || '';
@@ -22845,6 +23021,7 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
       [projectId]
     );
     const auditId = auditRes.rows[0].id;
+    logApiCost(parseInt(projectId), 'gsc_audit', 'anthropic', 1, API_COST_RATES.anthropic.haiku);
 
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const gscProperty = project.gsc_property || '';
@@ -26363,6 +26540,7 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
           `UPDATE discovery_cache SET status='done', keywords=$2, total_count=$3, cost=$4, updated_at=NOW() WHERE project_id=$1`,
           [projectId, JSON.stringify(localKeywords), localKeywords.length, result.cost || 0]
         );
+        await logApiCost(parseInt(projectId), 'discover_serp', 'dataforseo', 1, API_COST_RATES.dataforseo.ranked_keywords, { keywords: localKeywords.length });
         console.log(`[discovery] Done. Saved ${localKeywords.length} keywords.`);
       } catch (e) {
         console.error(`[discovery] Background error:`, e.message);
@@ -26655,7 +26833,9 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         // Sort by position
         foundKeywords.sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99));
 
-        console.log(`[maps-discovery] Done. Found ${foundKeywords.length} keywords where business ranks on Maps. Cost: $${totalCost.toFixed(4)}`);
+        const discMapsCost = mapsProvider === 'serpapi' ? services.length * API_COST_RATES.serpapi.google_maps : totalCost;
+        await logApiCost(parseInt(projectId), 'discover_maps', mapsProvider, services.length, discMapsCost, { found: foundKeywords.length });
+        console.log(`[maps-discovery] Done. Found ${foundKeywords.length} keywords where business ranks on Maps. Cost: $${discMapsCost.toFixed(4)}`);
 
         // Save to DB
         await pool.query(
@@ -27212,8 +27392,10 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
       await Promise.all(promises);
     }
 
-    console.log(`[maps-serpapi] Done. Synced ${results.filter(r => r && !r.error).length}/${kwRes.rows.length} keywords.`);
-    res.json({ ok: true, synced: results.filter(r => r && !r.error).length, total: kwRes.rows.length, results: results.filter(Boolean) });
+    const mapsCost = provider === 'serpapi' ? kwRes.rows.length * API_COST_RATES.serpapi.google : kwRes.rows.length * API_COST_RATES.dataforseo.serp;
+    await logApiCost(parseInt(projectId), 'maps_sync', provider, kwRes.rows.length, mapsCost);
+    console.log(`[maps-sync] Done. Synced ${results.filter(r => r && !r.error).length}/${kwRes.rows.length} keywords. Cost: $${mapsCost.toFixed(4)}`);
+    res.json({ ok: true, synced: results.filter(r => r && !r.error).length, total: kwRes.rows.length, results: results.filter(Boolean), cost: mapsCost });
   } catch (e) {
     console.error('[maps-serpapi] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -27575,8 +27757,10 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
       console.log(`[grid-scan] "${kwLabel}" → ARP=${arp || 'N/A'}, ATRP=${atrp || 'N/A'}, SOLV=${solv}%, found=${foundCount}/${totalScanned}`);
     }
 
-    console.log(`[grid-scan] Done. Scanned ${keywords.length} keywords, ${totalCalls} API calls.`);
-    res.json({ ok: true, scanned: keywords.length, total_api_calls: totalCalls, results });
+    const gridCost = totalCalls * API_COST_RATES.serpapi.google_maps;
+    await logApiCost(parseInt(projectId), 'grid_scan', 'serpapi', totalCalls, gridCost, { keywords: keywords.length, gridSize: grid_size });
+    console.log(`[grid-scan] Done. Scanned ${keywords.length} keywords, ${totalCalls} API calls. Cost: $${gridCost.toFixed(4)}`);
+    res.json({ ok: true, scanned: keywords.length, total_api_calls: totalCalls, results, cost: gridCost });
   } catch (e) {
     console.error('[grid-scan] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -27996,8 +28180,10 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     }
 
     const synced = results.filter(r => r && !r.error).length;
-    console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords.`);
-    res.json({ ok: true, synced, results: results.filter(Boolean) });
+    const serpCost = provider === 'serpapi' ? kwRes.rows.length * API_COST_RATES.serpapi.google : kwRes.rows.length * API_COST_RATES.dataforseo.serp;
+    await logApiCost(parseInt(projectId), 'serp_sync', provider, kwRes.rows.length, serpCost, { synced });
+    console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords. Cost: $${serpCost.toFixed(4)}`);
+    res.json({ ok: true, synced, results: results.filter(Boolean), cost: serpCost });
   } catch (e) {
     console.error('[rank-sync] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -32826,6 +33012,78 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false 
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.type('html').send(INDEX_HTML);
+});
+
+// ==================== API COST & BUDGET ENDPOINTS ====================
+
+// Get cost estimate before running a feature
+app.post('/api/costs/estimate', async (req, res) => {
+  try {
+    const { feature, projectId, params } = req.body;
+    const estimate = estimateFeatureCost(feature, params || {});
+    const budget = projectId ? await checkBudget(projectId) : { ok: true, warnings: [] };
+    res.json({ ...estimate, budget });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get project month spend
+app.get('/api/projects/:projectId/costs', async (req, res) => {
+  try {
+    const spend = await getProjectMonthSpend(req.params.projectId);
+    const projRes = await pool.query('SELECT monthly_budget FROM projects WHERE id=$1', [req.params.projectId]);
+    const budget = parseFloat(projRes.rows[0]?.monthly_budget) || 0;
+    res.json({ ...spend, budget });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get project cost history (last N months)
+app.get('/api/projects/:projectId/costs/history', async (req, res) => {
+  try {
+    const months = parseInt(req.query.months) || 6;
+    const r = await pool.query(
+      `SELECT DATE_TRUNC('month', created_at) as month, feature, provider,
+       COALESCE(SUM(cost), 0) as cost, COALESCE(SUM(api_calls), 0) as calls
+       FROM api_costs WHERE project_id=$1 AND created_at >= NOW() - INTERVAL '${months} months'
+       GROUP BY month, feature, provider ORDER BY month DESC`,
+      [req.params.projectId]
+    );
+    res.json(r.rows.map(r => ({ ...r, cost: parseFloat(r.cost), calls: parseInt(r.calls) })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get agency-level spend
+app.get('/api/costs/agency', async (req, res) => {
+  try {
+    const spend = await getAgencyMonthSpend();
+    const budgetRes = await pool.query("SELECT value FROM agency_settings WHERE key='monthly_budget'");
+    const budget = parseFloat(budgetRes.rows[0]?.value) || 0;
+    res.json({ ...spend, budget });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update project budget
+app.put('/api/projects/:projectId/budget', async (req, res) => {
+  try {
+    const budget = parseFloat(req.body.monthly_budget) || 0;
+    await pool.query('UPDATE projects SET monthly_budget=$1 WHERE id=$2', [budget, req.params.projectId]);
+    res.json({ ok: true, monthly_budget: budget });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get/update agency budget
+app.get('/api/agency/budget', async (req, res) => {
+  try {
+    const r = await pool.query("SELECT value FROM agency_settings WHERE key='monthly_budget'");
+    res.json({ monthly_budget: parseFloat(r.rows[0]?.value) || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/agency/budget', async (req, res) => {
+  try {
+    const budget = parseFloat(req.body.monthly_budget) || 0;
+    await pool.query("INSERT INTO agency_settings (key, value) VALUES ('monthly_budget', $1) ON CONFLICT (key) DO UPDATE SET value=$1", [budget.toString()]);
+    res.json({ ok: true, monthly_budget: budget });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== 16. STARTUP ====================
