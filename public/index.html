@@ -9799,7 +9799,7 @@
       // ---- Styles ----
       const cardStyle = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16 };
       const statCard = (val, label, color) => e('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 140 } },
-        e('div', { style: { fontSize: 28, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 } }, val),
+        e('div', { style: { fontSize: 28, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 } }, typeof val === 'number' ? val.toLocaleString() : val),
         e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', marginTop: 4, letterSpacing: '0.5px' } }, label)
       );
       const btnStyle = (bg, fg) => ({ padding: '8px 14px', borderRadius: 8, border: 'none', background: bg || '#6366f1', color: fg || '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 });
@@ -9817,7 +9817,7 @@
       ];
 
       const unique404Urls = new Set(fourOhFours.map(x => x.url)).size;
-      const last24h = fourOhFours.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + (x.hit_count || 0), 0);
+      const last24h = fourOhFours.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + parseInt(x.hit_count || 0, 10), 0);
       const count301 = redirects.filter(x => x.redirect_type === 301 || x.redirect_type === '301').length;
       const count302 = redirects.filter(x => x.redirect_type === 302 || x.redirect_type === '302').length;
       const blInternal = brokenLinks.filter(x => x.link_type === 'internal').length;
