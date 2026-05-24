@@ -26427,6 +26427,7 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
 
 // POST: start background Maps discovery
 app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
+  const mapsProvider = (req.body?.provider || 'dataforseo').toLowerCase();
   const { projectId } = req.params;
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
@@ -26556,7 +26557,7 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         } catch (e) { console.log('[maps-discovery] Organic keywords skipped:', e.message); }
 
         const services = [...serviceSet].filter(s => s.length > 2);
-        console.log(`[maps-discovery] ${services.length} service keywords to scan: ${services.slice(0, 15).join(', ')}`);
+        console.log(`[maps-discovery] ${services.length} service keywords to scan (provider=${mapsProvider}): ${services.slice(0, 15).join(', ')}`);
 
         // Step 2: Check each service on Maps from business location
         const foundKeywords = [];
@@ -26574,11 +26575,38 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             || titleNoSpaces.includes(domainBase);
         };
 
+        // Maps search helper — SerpAPI or DataForSEO
+        async function discoverMapsSearch(keyword) {
+          if (mapsProvider === 'serpapi') {
+            const data = await serpApiSearch({
+              engine: 'google_maps',
+              q: keyword,
+              ll: `@${locGps.lat},${locGps.lng},14z`,
+              google_domain: 'google.com.au',
+              hl: 'en',
+            });
+            // Normalize SerpAPI google_maps response to match expected shape
+            const results = (data.local_results || []).map((r, idx) => ({
+              position: r.position || (idx + 1),
+              title: r.title || '',
+              rating: r.rating || null,
+              reviews: r.reviews || 0,
+              type: r.type || '',
+              address: r.address || '',
+              website: r.website || '',
+              domain: r.website ? r.website.replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '') : '',
+            }));
+            return { local_results: results, cost: 0 };
+          } else {
+            return dataForSeoMaps({ keyword, lat: locGps.lat, lng: locGps.lng });
+          }
+        }
+
         for (let i = 0; i < services.length; i += 5) {
           const batch = services.slice(i, i + 5);
           const promises = batch.map(async (keyword) => {
             try {
-              const data = await dataForSeoMaps({ keyword, lat: locGps.lat, lng: locGps.lng });
+              const data = await discoverMapsSearch(keyword);
               totalCost += data.cost || 0;
               const results = data.local_results || [];
               for (const r of results) {
@@ -27033,7 +27061,9 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
 
 // SERPapi-powered Maps/Local Pack sync
 app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
+  const provider = (req.body?.provider || 'serpapi').toLowerCase();
+  if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
+  if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -27064,21 +27094,36 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No maps keywords. Generate keywords first.' });
 
     const mapsLoc = resolveDataForSeoLocation(project.location);
-    console.log(`[maps-serpapi] Starting sync for ${kwRes.rows.length} keywords, business="${businessName}", location="${mapsLoc}"`);
+    console.log(`[maps-sync] Starting sync for ${kwRes.rows.length} keywords, provider="${provider}", business="${businessName}", location="${mapsLoc}"`);
 
-    // Use global SUBURB_GPS (200+ suburbs across Australia)
-
-    // DataForSEO helper — Google SERP with GPS coordinates for accurate local pack
-    async function dfsSearch(keyword, suburb) {
+    // Search helper — returns unified shape with local_results + organic_results
+    async function mapsSearch(keyword, suburb) {
       const query = suburb ? `${keyword} ${suburb}` : keyword;
       const gps = suburb ? SUBURB_GPS[suburb.toLowerCase()] : null;
-      // Use DataForSEO organic SERP (includes local pack in results)
-      const data = await dataForSeoSerp({
-        keyword: query,
-        location: mapsLoc,
-        depth: 20,
-      });
-      return data;
+      if (provider === 'serpapi') {
+        // SerpAPI organic search (includes local pack)
+        const locLower = mapsLoc.toLowerCase().split(',')[0].trim();
+        const projGps = SUBURB_GPS[locLower] || (gps ? gps : null);
+        const serpParams = {
+          engine: 'google',
+          q: query,
+          gl: 'au',
+          google_domain: 'google.com.au',
+          num: 20,
+        };
+        // Use suburb-specific location if available
+        if (suburb) {
+          const locParts = mapsLoc.split(',');
+          const state = locParts.length >= 2 ? locParts[1] : '';
+          serpParams.location = `${suburb.charAt(0).toUpperCase() + suburb.slice(1)}, ${state}, Australia`;
+        } else {
+          serpParams.location = mapsLoc.replace(/,/g, ', ');
+        }
+        return serpApiSearch(serpParams);
+      } else {
+        // DataForSEO organic SERP (includes local pack in results)
+        return dataForSeoSerp({ keyword: query, location: mapsLoc, depth: 20 });
+      }
     }
 
     // Process keywords in parallel (5 at a time)
@@ -27090,8 +27135,8 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
         const idx = i + j;
         const query = `${kw.keyword} ${kw.location}`;
         try {
-          const data = await dfsSearch(kw.keyword, kw.location);
-          if (idx === 0) console.log(`[maps-dataforseo] Raw response keys for "${query}":`, Object.keys(data), 'local_results.places count:', (data.local_results?.places || []).length);
+          const data = await mapsSearch(kw.keyword, kw.location);
+          if (idx === 0) console.log(`[maps-sync] Raw response keys for "${query}" (${provider}):`, Object.keys(data), 'local_results.places count:', (data.local_results?.places || []).length);
 
           // Extract local pack results
           const localResults = data.local_results?.places || data.local_results || [];
