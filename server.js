@@ -18327,6 +18327,94 @@ function humanizeText(text) {
   return result;
 }
 
+// Document-level humanization — breaks structural patterns Winston detects at the full-text level
+function humanizeDocument(html) {
+  if (!html) return html;
+
+  // 1. PARAGRAPH LENGTH VARIATION — humans write messy, uneven paragraphs
+  // Split into paragraphs, randomly merge short ones or split long ones
+  let paragraphs = html.split(/(<\/p>\s*<p[^>]*>|<br\s*\/?>\s*<br\s*\/?>)/gi);
+  if (paragraphs.length < 3) return humanizeHTML(html); // too short, just do sentence-level
+
+  // 2. INTENTIONAL IMPERFECTIONS — things humans do that AI doesn't
+  let result = html;
+
+  // Double space after period (some humans do this) — ~10% of sentences
+  result = result.replace(/\. ([A-Z])/g, (m, letter) => {
+    return Math.random() < 0.1 ? '.  ' + letter : m;
+  });
+
+  // Occasional comma before "and" in lists (Oxford comma inconsistency)
+  result = result.replace(/, ([a-z]+) and /g, (m, word) => {
+    return Math.random() < 0.3 ? ', ' + word + ', and ' : m;
+  });
+
+  // Occasional em-dash instead of comma
+  result = result.replace(/, (which|where|when|because|since|although|but) /g, (m, word) => {
+    return Math.random() < 0.15 ? ' — ' + word + ' ' : m;
+  });
+
+  // 3. DISCOURSE MARKERS — humans connect paragraphs with casual transitions
+  const discourseMarkers = [
+    'And look — ', 'Now here\'s the thing. ', 'So. ', 'Right. ', 'But wait. ',
+    'And honestly? ', 'Here\'s what most people miss. ', 'Quick story. ',
+    'This one\'s important. ', 'Let me put it this way. ', 'Fair warning though. ',
+    'Real talk for a second. ', 'One more thing. '
+  ];
+
+  // Insert a discourse marker at ~8% of paragraph starts
+  result = result.replace(/<p>/g, (match) => {
+    if (Math.random() < 0.08) {
+      const marker = discourseMarkers[Math.floor(Math.random() * discourseMarkers.length)];
+      return '<p>' + marker;
+    }
+    return match;
+  });
+
+  // 4. SENTENCE FRAGMENT INJECTION — humans use fragments, AI doesn't
+  const fragments = [
+    ' Big difference.', ' Seriously.', ' Not even close.', ' Every single time.',
+    ' Full stop.', ' That simple.', ' No question.', ' Worth knowing.',
+    ' True story.', ' And it shows.', ' Guaranteed.', ' No shortcuts.',
+    ' End of story.', ' Huge.', ' Game changer.'
+  ];
+
+  // Add a fragment after ~5% of sentences ending with period
+  result = result.replace(/\. ([A-Z])/g, (m, letter) => {
+    if (Math.random() < 0.05) {
+      const frag = fragments[Math.floor(Math.random() * fragments.length)];
+      return '.' + frag + ' ' + letter;
+    }
+    return m;
+  });
+
+  // 5. VARIED HEADING STYLE — AI makes all headings uniform
+  // Occasionally add a casual subheading variant
+  result = result.replace(/<h2>([^<]+)<\/h2>/g, (m, text) => {
+    if (Math.random() < 0.2) {
+      return '<h2>' + text + ' (And Why It Matters)</h2>';
+    }
+    if (Math.random() < 0.15) {
+      return '<h2>So, ' + text.charAt(0).toLowerCase() + text.slice(1) + '</h2>';
+    }
+    return m;
+  });
+
+  // 6. BREAK UNIFORM SENTENCE OPENINGS — at document level
+  // If two consecutive sentences start the same way, rewrite the second opener
+  const altOpeners = ['Thing is, ', 'See, ', 'Basically, ', 'What happens is ', 'The way we see it, ', 'Truth is, ', 'Bottom line — '];
+  result = result.replace(/(\. )(We |Our |The |This |It |They )\1(We |Our |The |This |It |They )/g, (m, dot, first, dot2, second) => {
+    if (first.trim() === second.trim()) {
+      const alt = altOpeners[Math.floor(Math.random() * altOpeners.length)];
+      return dot + first + dot2 + alt.toLowerCase();
+    }
+    return m;
+  });
+
+  // Now apply sentence-level humanization
+  return humanizeHTML(result);
+}
+
 // AI Optimise a site page — takes score tips + content, returns improved version
 app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
   req.setTimeout(300000);
@@ -18566,8 +18654,8 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
             }
           }
 
-          // Apply rule-based humanizer ON TOP of GPTHuman for extra disruption
-          result.content_html = humanizeHTML(htmlResult);
+          // Apply document-level + sentence-level humanizer ON TOP of GPTHuman
+          result.content_html = humanizeDocument(htmlResult);
           result.ai_notes = (result.ai_notes || '') + ' | GPTHuman API + rule-based post-processing';
           result.gpthuman_credits = lastCreditBalance;
         } else {
