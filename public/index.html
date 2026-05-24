@@ -15283,6 +15283,7 @@
       // AI detection — load saved results from DB
       var [aiDetecting, setAiDetecting] = React.useState(false);
       var [aiResult, setAiResult] = React.useState(page.ai_detection_result || null);
+      var [gpthumanCredits, setGpthumanCredits] = React.useState(null);
       var [aiError, setAiError] = React.useState(null);
 
       var handlePlagiarismCheck = async function() {
@@ -15380,6 +15381,7 @@
               }
             }
           });
+          if (data.gpthuman_credits != null) setGpthumanCredits(data.gpthuman_credits);
           if (data.error) { alert('Optimise failed: ' + data.error); }
           else if (data.preview || data.content_html) {
             var html = data.content_html || (data.proposed && data.proposed.content_html);
@@ -15757,7 +15759,11 @@
               ),
               React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
                 React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text3)' } }, aiResult.creditsRemaining || 0),
-                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Credits Left')
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Winston Credits')
+              ),
+              gpthumanCredits != null && React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#14b8a6' } }, gpthumanCredits.toLocaleString()),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Humanizer Credits')
               )
             ),
             // Sentence breakdown

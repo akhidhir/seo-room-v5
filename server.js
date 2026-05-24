@@ -18430,6 +18430,7 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
           console.log(`[humanizer] Processing ${chunks.length} chunk(s) via GPTHuman API (${wordCount} words total)`);
 
           let humanizedText = '';
+          let lastCreditBalance = null;
           for (let i = 0; i < chunks.length; i++) {
             const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
               method: 'POST',
@@ -18474,6 +18475,7 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
 
             if (ghData.output) {
               humanizedText += (i > 0 ? ' ' : '') + ghData.output;
+              lastCreditBalance = ghData.creditBalance;
               console.log(`[humanizer] Chunk ${i+1}/${chunks.length}: ${ghData.creditUsage} credits used, balance: ${ghData.creditBalance}, humanScore: ${ghData.humanScore}`);
             } else {
               console.error('[humanizer] GPTHuman error on chunk', i, ghData);
@@ -18517,8 +18519,10 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
             }
           }
 
-          result.content_html = htmlResult;
-          result.ai_notes = (result.ai_notes || '') + ' | Humanized via GPTHuman API';
+          // Apply rule-based humanizer ON TOP of GPTHuman for extra disruption
+          result.content_html = humanizeHTML(htmlResult);
+          result.ai_notes = (result.ai_notes || '') + ' | GPTHuman API + rule-based post-processing';
+          result.gpthuman_credits = lastCreditBalance;
         } else {
           // Text too short for GPTHuman — apply rule-based fallback
           result.content_html = humanizeHTML(result.content_html);
