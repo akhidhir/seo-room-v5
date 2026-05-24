@@ -26217,11 +26217,22 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
     if (!domain) return res.status(400).json({ error: 'No domain configured' });
 
     // Check if already running (but allow re-run if stuck for >5 minutes)
-    const existing = (await pool.query('SELECT status, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    const existing = (await pool.query('SELECT status, discovered_at, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
     if (existing?.status === 'running') {
       const ageMinutes = (Date.now() - new Date(existing.updated_at).getTime()) / 60000;
       if (ageMinutes < 5) return res.json({ status: 'running', message: 'Already running' });
       console.log(`[discovery] Stale running status (${ageMinutes.toFixed(0)}min old), restarting...`);
+    }
+
+    // ── Monthly rate limit: 1 SERP discovery per project per calendar month ──
+    if (existing?.discovered_at && existing.status === 'done') {
+      const last = new Date(existing.discovered_at);
+      const now = new Date();
+      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+        return res.status(429).json({
+          error: `SERP Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+        });
+      }
     }
 
     // Mark as running
@@ -26424,10 +26435,21 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
     if (!domain) return res.status(400).json({ error: 'No domain configured' });
 
     // Check if already running (with 5min timeout)
-    const existing = (await pool.query('SELECT maps_status, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    const existing = (await pool.query('SELECT maps_status, maps_count, updated_at FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
     if (existing?.maps_status === 'running') {
       const ageMinutes = (Date.now() - new Date(existing.updated_at).getTime()) / 60000;
       if (ageMinutes < 5) return res.json({ maps_status: 'running', message: 'Already running' });
+    }
+
+    // ── Monthly rate limit: 1 Maps discovery per project per calendar month ──
+    if (existing?.maps_status === 'done' && existing.maps_count > 0) {
+      const last = new Date(existing.updated_at);
+      const now = new Date();
+      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+        return res.status(429).json({
+          error: `Maps Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+        });
+      }
     }
 
     // Ensure discovery_cache row exists, mark maps as running
@@ -27019,6 +27041,21 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
     const project = projRes.rows[0];
     const businessName = project.business_name || project.name || '';
 
+    // ── Monthly rate limit: 1 Maps sync per project per calendar month ──
+    const lastMapsCheck = await pool.query(
+      `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL`,
+      [projectId]
+    );
+    if (lastMapsCheck.rows[0]?.last_checked) {
+      const last = new Date(lastMapsCheck.rows[0].last_checked);
+      const now = new Date();
+      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+        return res.status(429).json({
+          error: `Maps Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+        });
+      }
+    }
+
     // Get maps keywords (those with a location)
     const kwRes = await pool.query(
       `SELECT * FROM rank_keywords WHERE project_id=$1 AND location IS NOT NULL AND location != '' ORDER BY keyword`,
@@ -27268,6 +27305,21 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
 
     if (!businessName) return res.status(400).json({ error: 'Business name not set in Project Settings' });
+
+    // ── Monthly rate limit: 1 grid scan per project per calendar month ──
+    const lastGridScan = await pool.query(
+      `SELECT MAX(scanned_at) as last_scanned FROM grid_scans WHERE project_id=$1`,
+      [projectId]
+    );
+    if (lastGridScan.rows[0]?.last_scanned) {
+      const last = new Date(lastGridScan.rows[0].last_scanned);
+      const now = new Date();
+      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+        return res.status(429).json({
+          error: `Grid scan already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next scan available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+        });
+      }
+    }
 
     // Get business center GPS from project location
     const rawLocation = (project.location || '').trim();
@@ -27655,6 +27707,21 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const project = projRes.rows[0];
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
     const businessName = project.business_name || project.name || domain;
+
+    // ── Monthly rate limit: 1 SERP check per project per calendar month ──
+    const lastCheck = await pool.query(
+      `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1`,
+      [projectId]
+    );
+    if (lastCheck.rows[0]?.last_checked) {
+      const last = new Date(lastCheck.rows[0].last_checked);
+      const now = new Date();
+      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+        return res.status(429).json({
+          error: `SERP Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+        });
+      }
+    }
 
     const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });

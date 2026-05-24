@@ -23753,7 +23753,14 @@
             if (r.ok && r.results) {
               r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
               setGridScans({ ...scanMap });
-            } else if (r.error) { console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++; }
+            } else if (r.error) {
+              // Monthly rate limit — show message and stop immediately
+              if (r.error.includes('already run this month') || r.error.includes('already checked this month')) {
+                alert(r.error);
+                break;
+              }
+              console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++;
+            }
           } catch (e) { console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++; }
         }
         if (failed > 0) alert(`${failed} of ${mapKws.length} keywords failed to scan. Check console for details.`);
