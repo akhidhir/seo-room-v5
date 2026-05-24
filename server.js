@@ -18457,6 +18457,51 @@ function humanizeDocument(html) {
     return m;
   });
 
+  // 7. STEP FORMAT BREAKER — "Step 1:", "Step 2:" etc.
+  result = result.replace(/Step \d+:?\s*/gi, () => {
+    const alts = ['First up — ', 'Next — ', 'Then — ', 'After that — ', 'From there — ', 'And finally — ', 'Once that\'s sorted — ', ''];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+
+  // 8. FAQ PATTERN BREAKER — "Question? Answer." back-to-back
+  // Detect heading-style questions followed by short generic answers
+  result = result.replace(/(What|How|Do|Can|Is|Should|Why|When|Where) ([^?]+)\? (There's no single|It depends|The answer is|The short answer|Simply put|In short)/gi, (m, qword, question, answer) => {
+    const alts = [
+      `People ask us about ${question.toLowerCase()} all the time. `,
+      `${question}? Yeah, we get this one a lot. `,
+      `So, ${question.toLowerCase()}. `,
+    ];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+
+  // 9. PAIRED OPPOSITES BREAKER — "X or Y, big or small, simple or complex"
+  result = result.replace(/(home|residential) or (business|commercial), (big|large) or (small|little), (simple|straightforward|easy) or (complex|complicated|difficult)/gi, () => {
+    const alts = ['any kind of property', 'whatever you\'ve got going on', 'doesn\'t matter the size or type'];
+    return alts[Math.floor(Math.random() * alts.length)];
+  });
+  // Simpler paired opposites
+  result = result.replace(/(big|large) or (small|little)/gi, 'any size');
+  result = result.replace(/(simple|straightforward) or (complex|complicated)/gi, 'whatever the scope');
+  result = result.replace(/(home|residential) or (business|commercial)/gi, () => {
+    return Math.random() < 0.5 ? 'residential or commercial' : 'houses and businesses alike';
+  });
+
+  // 10. PARALLEL FRAGMENT SERIES — "X done. Y sorted. Z locked." → merge into sentence
+  // Detect 3+ consecutive short fragments (under 30 chars each)
+  const fragPattern = /([A-Z][^.]{3,25}\.) ([A-Z][^.]{3,25}\.) ([A-Z][^.]{3,25}\.)/g;
+  result = result.replace(fragPattern, (m, f1, f2, f3) => {
+    // Merge into one flowing sentence
+    const s1 = f1.replace(/\.$/, '').toLowerCase();
+    const s2 = f2.replace(/\.$/, '').toLowerCase();
+    const s3 = f3.replace(/\.$/, '');
+    return s1.charAt(0).toUpperCase() + s1.slice(1) + ', ' + s2 + ', and ' + s3;
+  });
+
+  // 11. TRIPLE CTA BREAKER — "call us, email, or visit"
+  result = result.replace(/(call|ring|phone) ([^,]+), (fill out|complete|submit) ([^,]+),? (or|and) (drop by|visit|come in|stop by)([^.]*)\./gi, (m, v1, o1) => {
+    return `Give us a ring on ${o1.trim()} and we'll take it from there.`;
+  });
+
   // Now apply sentence-level humanization
   return humanizeHTML(result);
 }
@@ -18560,8 +18605,19 @@ HUMAN VOICE:
 - Write like a tradie explaining their work to a homeowner over a coffee — not like a brochure
 - Use Australian English: "colour", "centre", "organise", "specialise"
 
+BANNED STRUCTURES (these trigger AI detection at the document level):
+- NEVER use numbered steps format ("Step 1:", "Step 2:"). Describe the process as a flowing narrative instead.
+- NEVER use FAQ format ("Question? Answer.") for more than ONE question in the whole page. Weave info into paragraphs.
+- NEVER use paired opposites in the same sentence ("home or business, big or small, simple or complex"). Pick ONE and talk about it.
+- NEVER use three parallel fragments in a row ("Materials sorted. Labour covered. Timeline locked."). Write them as a normal sentence.
+- NEVER list three CTA options ("call us, fill out our form, or drop by"). Give ONE call to action per paragraph.
+- NEVER start consecutive paragraphs with the same word or structure.
+- NEVER use "there is/are no" + noun + "answer" pattern ("There's no single answer").
+- NEVER write "it depends on your situation/needs/property" — give a REAL answer with specifics.
+- NEVER use "whether it's X or Y" or "be it X or Y" balanced constructions.
+
 BANNED PHRASES (using ANY of these will trigger AI detection):
-"Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note"
+"Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note", "with care and attention", "that means something to us", "zero obligation", "attention to detail", "transparent pricing", "honest assessment", "straightforward service"
 
 Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
       }]
