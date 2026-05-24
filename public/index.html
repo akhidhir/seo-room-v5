@@ -9688,8 +9688,8 @@
         setFixLinkSaving(false);
         setFixingLinkId(null);
         setFixLinkTarget('');
-        if (successCount > 0) alert('Fixed broken link on ' + successCount + ' page(s). The 404 should stop recurring.');
-        else alert('Could not find the broken link in page content. It may be in a menu, widget, or page builder element.');
+        if (successCount > 0) alert('Fixed broken link on ' + successCount + ' location(s) (page content, Elementor, or menu). The 404 should stop recurring.');
+        else alert('Could not find the broken link in page content, Elementor data, or menus. It may be in a theme template, widget, or custom shortcode.');
       };
 
       const handle410Gone = async (fid) => {
@@ -9729,6 +9729,45 @@
         }
         setAutoRedirecting(false);
         setAutoProgress(null);
+        await load404s();
+      };
+
+      const bulkFixInternalLinks = async () => {
+        // Find all 404s diagnosed as internal_link that have a suggestion
+        var internalItems = fourOhFours.filter(function(f) {
+          var key = f.url || f.url_path || '';
+          var diag = diagnoses[key];
+          return diag && diag.causes && diag.causes.includes('internal_link') && diag.linked_from && diag.linked_from.length > 0;
+        });
+        if (!internalItems.length) { alert('No internal link 404s to fix. Run Diagnose first.'); return; }
+
+        // For each internal link 404, try to fix: use suggestion URL if available, otherwise remove the link
+        var totalLabel = internalItems.length + ' internal link 404(s)';
+        if (!confirm('Fix ' + totalLabel + '? Links with a matching page will be updated, others will be removed.')) return;
+        setAutoRedirecting(true);
+        setAutoProgress({ done: 0, total: internalItems.length });
+        var done = 0;
+        var fixed = 0;
+        for (var ii = 0; ii < internalItems.length; ii++) {
+          var item = internalItems[ii];
+          var key = item.url || item.url_path || '';
+          var diag = diagnoses[key];
+          var sug = suggestions[key];
+          var brokenUrl = key.startsWith('http') ? key : domainBase + (key.startsWith('/') ? '' : '/') + key;
+          for (var si = 0; si < diag.linked_from.length; si++) {
+            try {
+              var body = { source_url: diag.linked_from[si], broken_url: brokenUrl, action: sug ? 'replace' : 'remove' };
+              if (sug) body.replacement_url = sug.url;
+              var result = await api('/projects/' + project.id + '/plugin/404s/fix-link', { method: 'POST', body: body });
+              if (result.success) fixed++;
+            } catch (err) { console.error('Bulk fix error:', err); }
+          }
+          done++;
+          setAutoProgress({ done: done, total: internalItems.length });
+        }
+        setAutoRedirecting(false);
+        setAutoProgress(null);
+        alert('Fixed ' + fixed + ' broken link(s) across ' + done + ' 404 URL(s).');
         await load404s();
       };
 
@@ -9864,6 +9903,19 @@
                 return parts.join(', ');
               })()
             ),
+            // Bulk internal link fix — show when diagnoses have internal_link
+            (() => {
+              var internalCount = Object.values(diagnoses).filter(function(d) { return d.causes && d.causes.includes('internal_link'); }).length;
+              if (!internalCount) return null;
+              return e('button', {
+                style: { ...btnStyle('#f59e0b'), padding: '5px 12px', fontSize: 12 },
+                onClick: bulkFixInternalLinks,
+                disabled: autoRedirecting
+              },
+                autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-wrench' }),
+                ' Fix All ' + internalCount + ' Internal Links'
+              );
+            })(),
             // Bulk orphan actions — show when diagnoses have orphans
             (() => {
               var orphanCount = Object.values(diagnoses).filter(function(d) { return d.causes && d.causes.includes('orphan'); }).length;

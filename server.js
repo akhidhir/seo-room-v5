@@ -2078,12 +2078,41 @@ async function callPluginApi(project, path, method = 'GET', body = null) {
   return resp.json();
 }
 
+// Helper: filter out garbage/bot 404 URLs (XPath selectors, encoded junk, etc.)
+function isValid404Url(url) {
+  if (!url || typeof url !== 'string') return false;
+  // XPath selectors (e.g. /HTML/BODY/HEADER/*[2][self::NAV])
+  if (/\/HTML\//i.test(url)) return false;
+  if (/\[self::/i.test(url)) return false;
+  // CSS selectors or DOM paths
+  if (/\*\[\d+\]/.test(url)) return false;
+  // Data URIs
+  if (/^data:/i.test(url)) return false;
+  // JavaScript URIs
+  if (/^javascript:/i.test(url)) return false;
+  // Extremely long paths (likely bot junk)
+  if (url.length > 500) return false;
+  // Encoded binary/null bytes
+  if (/%00|%01|%02/.test(url)) return false;
+  return true;
+}
+
 // GET /api/projects/:id/plugin/404s — fetch 404 log from WP plugin
 app.get('/api/projects/:id/plugin/404s', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const data = await callPluginApi(project, '/404s');
+    // Filter out garbage/bot URLs
+    if (Array.isArray(data)) {
+      const filtered = data.filter(item => isValid404Url(item.url || item.url_path || ''));
+      const removed = data.length - filtered.length;
+      if (removed > 0) console.log(`[plugin-404s] Filtered out ${removed} garbage URLs`);
+      return res.json(filtered);
+    }
+    if (data && Array.isArray(data.items)) {
+      data.items = data.items.filter(item => isValid404Url(item.url || item.url_path || ''));
+    }
     res.json(data);
   } catch (e) {
     console.error(`[plugin-404s] Error:`, e.message);
@@ -2401,82 +2430,214 @@ app.post('/api/projects/:id/plugin/404s/fix-link', async (req, res) => {
       } catch {}
     }
 
-    if (!wpPageId) return res.status(404).json({ error: 'Could not find source page in WordPress: ' + sourceSlug });
-
-    // Fetch raw content (rendered may differ from raw)
-    try {
-      const rawResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}?context=edit&_fields=content`, {
-        headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
-        signal: AbortSignal.timeout(15000)
-      });
-      if (rawResp.ok) {
-        const rawData = await rawResp.json();
-        wpPageContent = rawData.content?.raw || wpPageContent;
-      }
-    } catch {}
-
     // Build the broken href patterns to search for (handle relative and absolute)
     const brokenPath = broken_url.replace(/^https?:\/\/[^/]+/, '');
     const brokenPatterns = [broken_url, brokenPath];
     if (!brokenPath.endsWith('/')) brokenPatterns.push(brokenPath + '/');
     if (brokenPath.endsWith('/')) brokenPatterns.push(brokenPath.replace(/\/$/, ''));
-    // Also try with baseUrl prefix
     if (!broken_url.startsWith('http')) {
       brokenPatterns.push(baseUrl + brokenPath);
       brokenPatterns.push(baseUrl + brokenPath + '/');
     }
+    const brokenSet = new Set(brokenPatterns.map(p => p.toLowerCase()));
 
-    let updatedContent = wpPageContent;
-    let fixCount = 0;
+    let totalFixes = 0;
+    const fixDetails = [];
 
-    if (action === 'remove') {
-      // Remove <a> tags with the broken href but keep the inner text
-      for (const pattern of brokenPatterns) {
-        const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
-        const regex = new RegExp(`<a[^>]*href=["']${escaped}["'][^>]*>(.*?)<\\/a>`, 'gi');
-        const before = updatedContent;
-        updatedContent = updatedContent.replace(regex, '$1');
-        if (updatedContent !== before) fixCount++;
+    // ── Strategy 1: Fix in page/post content ──
+    if (wpPageId) {
+      // Fetch raw content (rendered may differ from raw)
+      try {
+        const rawResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}?context=edit&_fields=content`, {
+          headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (rawResp.ok) {
+          const rawData = await rawResp.json();
+          wpPageContent = rawData.content?.raw || wpPageContent;
+        }
+      } catch {}
+
+      if (wpPageContent) {
+        let updatedContent = wpPageContent;
+        let fixCount = 0;
+        if (action === 'remove') {
+          for (const pattern of brokenPatterns) {
+            const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+            const regex = new RegExp(`<a[^>]*href=["']${escaped}["'][^>]*>(.*?)<\\/a>`, 'gi');
+            const before = updatedContent;
+            updatedContent = updatedContent.replace(regex, '$1');
+            if (updatedContent !== before) fixCount++;
+          }
+        } else {
+          for (const pattern of brokenPatterns) {
+            const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+            const regex = new RegExp(`(href=["'])${escaped}(["'])`, 'gi');
+            const before = updatedContent;
+            updatedContent = updatedContent.replace(regex, `$1${replacement_url}$2`);
+            if (updatedContent !== before) fixCount++;
+          }
+        }
+        if (fixCount > 0) {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [project.id, wpPageId, source_url, sourceSlug, 'fix_broken_link', 'content', broken_url, action === 'remove' ? '[link removed]' : replacement_url]
+          );
+          const updateResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}`, {
+            method: 'POST',
+            headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
+            body: JSON.stringify({ content: updatedContent }),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (updateResp.ok) {
+            totalFixes += fixCount;
+            fixDetails.push({ location: 'page_content', slug: sourceSlug, fixes: fixCount });
+          }
+        }
       }
-    } else {
-      // Replace: swap href to replacement_url
-      if (!replacement_url) return res.status(400).json({ error: 'replacement_url required for replace action' });
-      for (const pattern of brokenPatterns) {
-        const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
-        const regex = new RegExp(`(href=["'])${escaped}(["'])`, 'gi');
-        const before = updatedContent;
-        updatedContent = updatedContent.replace(regex, `$1${replacement_url}$2`);
-        if (updatedContent !== before) fixCount++;
-      }
     }
 
-    if (fixCount === 0) {
-      return res.json({ success: false, message: 'Broken link not found in page content. It may be in a widget, menu, or page builder element.' });
+    // ── Strategy 2: Fix in Elementor data (_elementor_data post meta) ──
+    if (wpPageId && totalFixes === 0) {
+      try {
+        // Fetch Elementor JSON from post meta
+        const metaResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}?context=edit&_fields=meta`, {
+          headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (metaResp.ok) {
+          const metaData = await metaResp.json();
+          let elementorJson = metaData.meta?._elementor_data || metaData.meta?.['_elementor_data'] || '';
+          if (typeof elementorJson === 'string' && elementorJson.length > 10) {
+            let changed = false;
+            for (const pattern of brokenPatterns) {
+              const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+              if (action === 'remove') {
+                // In Elementor JSON, links are in "url" fields — set to empty
+                const regex = new RegExp(escaped.replace(/\//g, '\\\\/'), 'gi');
+                const before = elementorJson;
+                elementorJson = elementorJson.replace(regex, '');
+                if (elementorJson !== before) changed = true;
+              } else {
+                const regex = new RegExp(escaped.replace(/\//g, '\\\\/'), 'gi');
+                const before = elementorJson;
+                elementorJson = elementorJson.replace(regex, replacement_url.replace(/\//g, '\\/'));
+                if (elementorJson !== before) changed = true;
+              }
+            }
+            if (changed) {
+              const elUpdateResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}`, {
+                method: 'POST',
+                headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
+                body: JSON.stringify({ meta: { _elementor_data: elementorJson } }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (elUpdateResp.ok) {
+                totalFixes++;
+                fixDetails.push({ location: 'elementor_data', slug: sourceSlug, fixes: 1 });
+                await pool.query(
+                  `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                  [project.id, wpPageId, source_url, sourceSlug, 'fix_broken_link', 'elementor_data', broken_url, action === 'remove' ? '[link removed]' : replacement_url]
+                );
+              }
+            }
+          }
+        }
+      } catch (elErr) { console.log(`[fix-link] Elementor check skipped:`, elErr.message); }
     }
 
-    // Save change history before writing
-    await pool.query(
-      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [project.id, wpPageId, source_url, sourceSlug, 'fix_broken_link', 'content',
-       broken_url, action === 'remove' ? '[link removed]' : replacement_url]
-    );
-
-    // Write updated content back to WordPress
-    const updateResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPostType}/${wpPageId}`, {
-      method: 'POST',
-      headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
-      body: JSON.stringify({ content: updatedContent }),
-      signal: AbortSignal.timeout(15000)
-    });
-
-    if (!updateResp.ok) {
-      const errText = await updateResp.text().catch(() => '');
-      return res.status(500).json({ error: 'Failed to update WordPress page: ' + updateResp.status + ' ' + errText.substring(0, 200) });
+    // ── Strategy 3: Fix in WordPress navigation menus ──
+    if (totalFixes === 0) {
+      try {
+        // WP 5.9+ exposes menu items via REST API
+        // Try /wp/v2/menu-items first, fall back to /menus/v1/menus
+        const menuResp = await fetch(`${wpUrl}/wp-json/wp/v2/menu-items?per_page=100&_fields=id,url,title,status`, {
+          headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+          signal: AbortSignal.timeout(15000)
+        });
+        if (menuResp.ok) {
+          const menuItems = await menuResp.json();
+          for (const mi of menuItems) {
+            const miUrl = (mi.url || '').toLowerCase().replace(/\/$/, '');
+            if (brokenSet.has(miUrl) || brokenSet.has(miUrl + '/')) {
+              const newUrl = action === 'remove' ? '#' : replacement_url;
+              const fixResp = await fetch(`${wpUrl}/wp-json/wp/v2/menu-items/${mi.id}`, {
+                method: 'POST',
+                headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
+                body: JSON.stringify({ url: newUrl }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (fixResp.ok) {
+                totalFixes++;
+                fixDetails.push({ location: 'nav_menu', menu_item_id: mi.id, old_url: mi.url, fixes: 1 });
+                await pool.query(
+                  `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                  [project.id, mi.id, mi.url, 'Menu: ' + (mi.title?.rendered || mi.title || ''), 'fix_broken_link', 'menu_url', broken_url, newUrl]
+                );
+              }
+            }
+          }
+        }
+      } catch (menuErr) { console.log(`[fix-link] Menu check skipped:`, menuErr.message); }
     }
 
-    console.log(`[fix-link] Fixed ${fixCount} broken link(s) on ${sourceSlug}: ${broken_url} → ${action === 'remove' ? 'removed' : replacement_url}`);
-    res.json({ success: true, fixes: fixCount, page_id: wpPageId, source_slug: sourceSlug });
+    // ── Strategy 4: Search ALL pages/posts for the broken link ──
+    if (totalFixes === 0 && !wpPageId) {
+      // Source page not found by slug — try search across all content
+      try {
+        for (const postType of ['pages', 'posts']) {
+          const searchResp = await fetch(`${wpUrl}/wp-json/wp/v2/${postType}?per_page=50&search=${encodeURIComponent(brokenPath)}&context=edit&_fields=id,content,slug,link`, {
+            headers: { ...authHeaders, 'User-Agent': 'SEORoom-Dashboard/5.0' },
+            signal: AbortSignal.timeout(20000)
+          });
+          if (!searchResp.ok) continue;
+          const items = await searchResp.json();
+          for (const item of items) {
+            const raw = item.content?.raw || item.content?.rendered || '';
+            if (!raw) continue;
+            let updated = raw;
+            let found = false;
+            for (const pattern of brokenPatterns) {
+              const escaped = pattern.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+              if (action === 'remove') {
+                const regex = new RegExp(`<a[^>]*href=["']${escaped}["'][^>]*>(.*?)<\\/a>`, 'gi');
+                const before = updated;
+                updated = updated.replace(regex, '$1');
+                if (updated !== before) found = true;
+              } else {
+                const regex = new RegExp(`(href=["'])${escaped}(["'])`, 'gi');
+                const before = updated;
+                updated = updated.replace(regex, `$1${replacement_url}$2`);
+                if (updated !== before) found = true;
+              }
+            }
+            if (found) {
+              await pool.query(
+                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [project.id, item.id, item.link || source_url, item.slug || '', 'fix_broken_link', 'content', broken_url, action === 'remove' ? '[link removed]' : replacement_url]
+              );
+              const updateResp = await fetch(`${wpUrl}/wp-json/wp/v2/${postType}/${item.id}`, {
+                method: 'POST',
+                headers: { ...authHeaders, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0' },
+                body: JSON.stringify({ content: updated }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (updateResp.ok) {
+                totalFixes++;
+                fixDetails.push({ location: 'search_' + postType, slug: item.slug, page_id: item.id, fixes: 1 });
+              }
+            }
+          }
+        }
+      } catch (searchErr) { console.log(`[fix-link] Content search error:`, searchErr.message); }
+    }
+
+    if (totalFixes === 0) {
+      return res.json({ success: false, message: 'Broken link not found in page content, Elementor data, or navigation menus. It may be in a theme template, widget, or custom shortcode.' });
+    }
+
+    console.log(`[fix-link] Fixed ${totalFixes} broken link(s): ${broken_url} → ${action === 'remove' ? 'removed' : replacement_url}`, fixDetails);
+    res.json({ success: true, fixes: totalFixes, details: fixDetails });
   } catch (e) {
     console.error(`[fix-link] Error:`, e.message);
     res.status(500).json({ error: e.message });
