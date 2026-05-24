@@ -18395,10 +18395,112 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
       result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
     }
 
-    // Post-process: rule-based humanization to defeat AI detection
+    // Post-process: GPTHuman API humanization to defeat AI detection
     if (result.content_html) {
-      result.content_html = humanizeHTML(result.content_html);
-      result.ai_notes = (result.ai_notes || '') + ' | Post-processed with rule-based humanizer (synonym swap, sentence disruption, contraction toggling, filler injection)';
+      try {
+        // Strip HTML tags for GPTHuman (it works on plain text), then re-apply
+        const plainText = result.content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const wordCount = plainText.split(/\s+/).length;
+
+        if (plainText.length >= 300) {
+          // GPTHuman has 2000 word limit — split into chunks if needed
+          const chunks = [];
+          if (wordCount > 1800) {
+            // Split into ~1500 word chunks by sentences
+            const sentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
+            let chunk = '';
+            let chunkWords = 0;
+            for (const s of sentences) {
+              const sWords = s.trim().split(/\s+/).length;
+              if (chunkWords + sWords > 1500 && chunk.length >= 300) {
+                chunks.push(chunk.trim());
+                chunk = '';
+                chunkWords = 0;
+              }
+              chunk += s;
+              chunkWords += sWords;
+            }
+            if (chunk.trim().length >= 300) chunks.push(chunk.trim());
+            else if (chunks.length > 0) chunks[chunks.length - 1] += ' ' + chunk.trim();
+            else chunks.push(chunk.trim());
+          } else {
+            chunks.push(plainText);
+          }
+
+          console.log(`[humanizer] Processing ${chunks.length} chunk(s) via GPTHuman API (${wordCount} words total)`);
+
+          let humanizedText = '';
+          for (let i = 0; i < chunks.length; i++) {
+            const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Bearer ' + (process.env.GPTHUMAN_API_KEY || ''),
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                text: chunks[i],
+                tone: 'Standard',
+                mode: 'Enhanced'
+              })
+            });
+            const ghData = await ghResp.json();
+            if (ghData.output) {
+              humanizedText += (i > 0 ? ' ' : '') + ghData.output;
+              console.log(`[humanizer] Chunk ${i+1}/${chunks.length}: ${ghData.creditUsage} credits used, balance: ${ghData.creditBalance}, humanScore: ${ghData.humanScore}`);
+            } else {
+              console.error('[humanizer] GPTHuman error on chunk', i, ghData);
+              humanizedText += (i > 0 ? ' ' : '') + chunks[i]; // fallback to original
+            }
+          }
+
+          // Re-inject humanized text into original HTML structure
+          // Strategy: replace text content while keeping HTML tags
+          let htmlResult = result.content_html;
+          const humanSentences = humanizedText.match(/[^.!?]+[.!?]+/g) || [humanizedText];
+          const origSentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
+
+          // Simple approach: replace each original sentence with humanized version
+          for (let i = 0; i < Math.min(origSentences.length, humanSentences.length); i++) {
+            const orig = origSentences[i].trim();
+            const human = humanSentences[i].trim();
+            if (orig.length > 20 && human.length > 10) {
+              // Escape regex special chars in original
+              const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              try {
+                htmlResult = htmlResult.replace(new RegExp(escaped.substring(0, Math.min(escaped.length, 100))), human);
+              } catch(e) { /* skip if regex fails */ }
+            }
+          }
+
+          // If sentence-level replacement didn't work well, fall back to paragraph replacement
+          if (htmlResult === result.content_html) {
+            // Just wrap humanized text in the same tag structure
+            const tagMatch = result.content_html.match(/^(<[^>]+>)/);
+            const openTag = tagMatch ? tagMatch[1] : '';
+            const closeTagMatch = result.content_html.match(/(<\/[^>]+>)$/);
+            const closeTag = closeTagMatch ? closeTagMatch[1] : '';
+
+            // Split humanized text into paragraphs and wrap in <p> tags
+            const paragraphs = humanizedText.split(/\n\n+/).filter(p => p.trim());
+            if (paragraphs.length > 1) {
+              htmlResult = paragraphs.map(p => '<p>' + p.trim() + '</p>').join('\n');
+            } else {
+              htmlResult = humanizedText;
+            }
+          }
+
+          result.content_html = htmlResult;
+          result.ai_notes = (result.ai_notes || '') + ' | Humanized via GPTHuman API';
+        } else {
+          // Text too short for GPTHuman — apply rule-based fallback
+          result.content_html = humanizeHTML(result.content_html);
+          result.ai_notes = (result.ai_notes || '') + ' | Rule-based humanizer (text too short for API)';
+        }
+      } catch (humanErr) {
+        console.error('[humanizer] GPTHuman API error, falling back to rule-based:', humanErr.message);
+        result.content_html = humanizeHTML(result.content_html);
+        result.ai_notes = (result.ai_notes || '') + ' | Rule-based humanizer (API fallback)';
+      }
     }
 
     res.json(result);
