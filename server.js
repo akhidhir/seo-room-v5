@@ -2121,8 +2121,15 @@ function isValid404Url(url) {
   if (botPaths.includes(path) || botPaths.some(bp => path.startsWith(bp + '/') || path.startsWith(bp + '?'))) return false;
   // Elementor internal IDs (e.g. /elementor-2561035482)
   if (/\/elementor-\d+/.test(path)) return false;
-  // URL.createObjectURL blobs
+  // URL.createObjectURL blobs (raw or URL-encoded)
   if (/createobjecturl|blob:/i.test(url)) return false;
+  if (/createObjectURL|blob%3A/i.test(decodeURIComponent(url))) return false;
+  // tel: links treated as relative paths (e.g. /plumber-hilton/tel:0864005390)
+  if (/\/tel:/i.test(path)) return false;
+  // Encoded Google Maps URLs leaking into href (e.g. /plumber-X/%26quot%3Bhttps%3A//maps.google.com)
+  if (/maps\.google\.com|google\.com\/maps/i.test(decodeURIComponent(url))) return false;
+  // /author/ followed by hex hash (bot/spam patterns)
+  if (/\/author\/[0-9a-f]{8,}/i.test(path)) return false;
   return true;
 }
 
