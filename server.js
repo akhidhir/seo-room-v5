@@ -12251,6 +12251,21 @@ RULES:
 - Include 2-3 internal links to other relevant pages naturally within the content
 - If given target keywords, weave them in naturally throughout the content
 
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
+- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
+- Include occasional sentence fragments for emphasis. Like this.
+- Start some sentences with "And", "But", "So", "Or" — real people do this
+- Use first person ("we", "our team") and second person ("you", "your") conversationally
+- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "explore", "dive into"
+- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
+- Vary paragraph length — some short (1-2 sentences), some longer
+- Use dashes — like this — for asides instead of always using commas
+- Include colloquial/conversational phrases natural to Australian English
+- Don't be overly formal or polished. A slight roughness reads as human.
+- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
+- Skip the generic "conclusion" paragraph that summarises everything — just end naturally
+
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}
 ${buildCopywriterContext(project, item)}`;
 
@@ -12294,6 +12309,21 @@ RULES:
 - Include 2-3 internal links to other relevant pages
 - Use target keywords naturally throughout
 - If any schema markup data is provided, include appropriate structured data
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
+- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
+- Include occasional sentence fragments for emphasis. Like this.
+- Start some sentences with "And", "But", "So", "Or" — real people do this
+- Use first person ("we", "our team") and second person ("you", "your") conversationally
+- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "explore", "dive into"
+- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
+- Vary paragraph length — some short (1-2 sentences), some longer
+- Use dashes — like this — for asides instead of always using commas
+- Include colloquial/conversational phrases natural to Australian English
+- Don't be overly formal or polished. A slight roughness reads as human.
+- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
+- Skip the generic "conclusion" paragraph that summarises everything — just end naturally
 
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}
 ${buildCopywriterContext(project, item)}`;
@@ -12837,6 +12867,15 @@ RULES:
 - Include internal links where relevant
 - Write engaging, informative content
 - Target total page length: ${target_words || 1500} words
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length: mix short punchy sentences with longer ones
+- Use contractions (we're, you'll, it's, don't, won't, can't)
+- Start sentences with "And", "But", "So" sometimes
+- NEVER use: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "Furthermore", "Moreover", "Additionally"
+- Be specific over generic — concrete details, real examples
+- Vary paragraph length, avoid parallel structures
+- Write like you're talking to a mate, then polish for a website
 
 OUTPUT FORMAT (respond in valid JSON only):
 {
@@ -13447,8 +13486,15 @@ RULES:
 - If the user asks to add new content (e.g. "add a section about X"), set find_text to "" and revised_html to the new HTML to append
 - If no content changes needed (just answering a question), skip the JSON block entirely
 - Australian English ONLY (optimise, colour, centre, favour, labour — NEVER American spellings)
-- Write like a human, not an AI. No filler phrases, no "Furthermore", no "In today's"
 - Keep existing formatting (h2, h3, p, ul, a tags)
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length: mix short punchy (3-6 words) with longer ones
+- Use contractions (we're, you'll, it's, don't, won't, can't)
+- NEVER use: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "Furthermore", "Moreover", "Additionally", "dedicated to", "committed to", "look no further", "your trusted partner", "cutting-edge", "seamless", "hassle-free"
+- Start some sentences with "And", "But", "So"
+- Be specific — concrete details beat vague claims
+- Vary paragraph length, avoid parallel sentence structures
 
 CURRENT CONTENT (first 4000 chars):
 ${htmlContent.slice(0, 4000)}
@@ -13956,11 +14002,23 @@ RULES:
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
 - Focus keyword must appear 3-8 times naturally in the content
-- Write like a human, not AI — no banned phrases
 - ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
 - ALWAYS return target_keywords — 3-5 secondary keywords/phrases relevant to the page
 - Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
 - Use target keywords naturally 1-2 times each in the content
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
+- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
+- Include occasional sentence fragments for emphasis. Like this.
+- Start some sentences with "And", "But", "So", "Or" — real people do this
+- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner"
+- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
+- Vary paragraph length — some short (1-2 sentences), some longer
+- Use dashes — like this — for asides instead of always using commas
+- Include colloquial/conversational phrases natural to Australian English
+- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
+- Skip the generic "conclusion" paragraph — just end naturally
 
 SCORING SYSTEM (how the dashboard calculates score — match EXACTLY):
 - Words >= word_target: 20 pts | >= 50%: 12 pts | >= 25%: 6 pts
@@ -14194,11 +14252,23 @@ RULES:
 - Keep all existing SEO improvements (keywords, headings, links)
 - Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
 - Focus keyword must appear 3-8 times naturally in the content
-- Write like a human, not AI — no banned phrases
 - ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
 - ALWAYS return target_keywords — 3-5 secondary keywords/phrases relevant to the page
 - Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
 - Use target keywords naturally 1-2 times each in the content
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
+- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
+- Include occasional sentence fragments for emphasis. Like this.
+- Start some sentences with "And", "But", "So", "Or" — real people do this
+- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner"
+- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
+- Vary paragraph length — some short (1-2 sentences), some longer
+- Use dashes — like this — for asides instead of always using commas
+- Include colloquial/conversational phrases natural to Australian English
+- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
+- Skip the generic "conclusion" paragraph — just end naturally
 
 SCORING SYSTEM (how the dashboard calculates score — match EXACTLY):
 - Words >= word_target: 20 pts | >= 50%: 12 pts | >= 25%: 6 pts
@@ -15242,7 +15312,16 @@ Return ONLY a JSON array matching the section order:
   ...
 ]
 
-Write in Australian English. Never use banned AI phrases.
+Write in Australian English.
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length: mix short punchy sentences (3-6 words) with longer ones
+- Use contractions (we're, you'll, it's, don't, won't, can't)
+- Start sentences with "And", "But", "So" sometimes
+- NEVER use: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "Furthermore", "Moreover", "Additionally"
+- Be specific — concrete details beat vague claims
+- Vary paragraph length, avoid parallel sentence structures
+- Write like you're talking to a mate, then polish for a website
 ${buildCopywriterContext(project, item)}`;
 
     // Build competitor intelligence context
@@ -15721,6 +15800,15 @@ ${hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instructi
 Return ONLY JSON: { "heading": "heading text", "content_html": "<p>the full modified section HTML</p>", "word_count": N, "changes_summary": "1-line what changed" }
 
 Rules: proper HTML (p, h3, ul/li, strong, em, a), Australian English, natural tone, include focus keyword.
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length: mix short punchy sentences with longer ones
+- Use contractions (we're, you'll, it's, don't, won't, can't)
+- Sentence fragments OK. Like this.
+- Start sentences with "And", "But", "So" sometimes
+- NEVER use: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner"
+- Use dashes — like this — for asides
+- Vary paragraph length, avoid parallel structures
 ${buildCopywriterContext(project, item)}`;
 
     const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${item.page_title}" (${item.page_url})
@@ -16030,6 +16118,15 @@ ${hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instructi
 Return ONLY JSON: { "heading": "heading text", "content_html": "<p>the full modified section HTML</p>", "word_count": N, "changes_summary": "1-line what changed" }
 
 Rules: proper HTML (p, h3, ul/li, strong, em, a), Australian English, natural tone, include focus keyword.
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length: mix short punchy sentences with longer ones
+- Use contractions (we're, you'll, it's, don't, won't, can't)
+- Sentence fragments OK. Like this.
+- Start sentences with "And", "But", "So" sometimes
+- NEVER use: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner"
+- Use dashes — like this — for asides
+- Vary paragraph length, avoid parallel structures
 ${buildCopywriterContext(project, item)}`;
 
       const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${pageTitle}" (${item.page_url || ''})
@@ -18001,6 +18098,21 @@ REQUIREMENTS:
 - Keep the same overall structure and tone, just improve
 - Return ONLY the optimized HTML content (no wrapping markdown)
 - Also return updated meta title (max 60 chars) and meta description (max 155 chars)
+
+CRITICAL — WRITE LIKE A HUMAN, NOT AI:
+- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
+- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
+- Include occasional sentence fragments for emphasis. Like this.
+- Start some sentences with "And", "But", "So", "Or" — real people do this
+- Use first person ("we", "our team", "I") and second person ("you", "your") conversationally
+- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "explore", "dive into"
+- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
+- Vary paragraph length — some short (1-2 sentences), some longer
+- Use dashes — like this — for asides instead of always using commas
+- Include colloquial/conversational phrases natural to Australian English
+- Don't be overly formal or polished. A slight roughness reads as human.
+- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
+- Skip the generic "conclusion" paragraph that summarises everything — just end naturally
 
 Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
       }]
