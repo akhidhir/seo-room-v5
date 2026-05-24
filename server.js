@@ -714,6 +714,8 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS current_focus_keyword TEXT`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS target_keywords JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS plagiarism_result JSONB DEFAULT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
 
     // Website builds — standalone new website projects (not tied to existing projects)
     await client.query(`
@@ -3250,8 +3252,7 @@ app.post('/api/projects/:id/plagiarism-check', async (req, res) => {
       [req.params.id, scanId, title || 'Untitled', content, plagiarismScore, totalWords, identicalWords, similarWords, JSON.stringify(matchedSources)]
     );
 
-    // Return results immediately
-    res.json({
+    const resultObj = {
       scanId,
       status: 'completed',
       score: plagiarismScore,
@@ -3261,8 +3262,16 @@ app.post('/api/projects/:id/plagiarism-check', async (req, res) => {
       paraphrasedWords: 0,
       matchedSources,
       creditsUsed: data.credits_used || 0,
-      creditsRemaining: data.credits_remaining || 0
-    });
+      creditsRemaining: data.credits_remaining || 0,
+      checkedAt: new Date().toISOString()
+    };
+
+    // Save to site_pages if page_id provided
+    if (req.body.page_id) {
+      await pool.query('UPDATE site_pages SET plagiarism_result=$1 WHERE id=$2', [JSON.stringify(resultObj), req.body.page_id]).catch(() => {});
+    }
+
+    res.json(resultObj);
   } catch (e) {
     console.error('[winston] Scan error:', e.message);
     res.status(500).json({ error: e.message });
@@ -3360,14 +3369,22 @@ app.post('/api/projects/:id/ai-detection', async (req, res) => {
       humanScore: s.score || 0
     }));
 
-    res.json({
+    const resultObj = {
       humanScore,
       aiScore,
       readabilityScore: data.readability_score || null,
       sentences,
       creditsUsed: data.credits_used || 0,
-      creditsRemaining: data.credits_remaining || 0
-    });
+      creditsRemaining: data.credits_remaining || 0,
+      checkedAt: new Date().toISOString()
+    };
+
+    // Save to site_pages if page_id provided
+    if (req.body.page_id) {
+      await pool.query('UPDATE site_pages SET ai_detection_result=$1 WHERE id=$2', [JSON.stringify(resultObj), req.body.page_id]).catch(() => {});
+    }
+
+    res.json(resultObj);
   } catch (e) {
     console.error('[winston] AI detection error:', e.message);
     res.status(500).json({ error: e.message });
@@ -18066,13 +18083,23 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     }
     if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
     const page = pageResult.rows[0];
-    const resolvedProjectId = page.project_id || projectId;
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [resolvedProjectId])).rows[0];
+
+    // Resolve project — from projects table, website_builds table, or fallback
+    let project;
+    if (page.project_id) {
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [page.project_id])).rows[0];
+    }
+    if (!project && (buildId || page.build_id)) {
+      const bid = buildId || page.build_id;
+      const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
+      if (build) project = build;
+    }
+    if (!project) project = { name: 'Website Build', business_name: 'Business', industry: 'services', location: 'Australia' };
 
     // Get all pages for internal linking
     const allPages = buildId
       ? await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE build_id=$1 AND id != $2', [buildId, pageId])
-      : await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [resolvedProjectId, pageId]);
+      : await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [page.project_id || projectId, pageId]);
 
     const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
