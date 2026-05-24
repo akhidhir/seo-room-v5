@@ -18137,20 +18137,37 @@ REQUIREMENTS:
 - Return ONLY the optimized HTML content (no wrapping markdown)
 - Also return updated meta title (max 60 chars) and meta description (max 155 chars)
 
-CRITICAL — WRITE LIKE A HUMAN, NOT AI:
-- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
-- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
-- Include occasional sentence fragments for emphasis. Like this.
-- Start some sentences with "And", "But", "So", "Or" — real people do this
-- Use first person ("we", "our team", "I") and second person ("you", "your") conversationally
-- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner", "explore", "dive into"
-- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
-- Vary paragraph length — some short (1-2 sentences), some longer
-- Use dashes — like this — for asides instead of always using commas
-- Include colloquial/conversational phrases natural to Australian English
-- Don't be overly formal or polished. A slight roughness reads as human.
-- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
-- Skip the generic "conclusion" paragraph that summarises everything — just end naturally
+CRITICAL — DEFEAT AI DETECTION (this content will be scanned by AI detectors — you MUST pass as human-written):
+
+PERPLEXITY (make word choices UNPREDICTABLE):
+- Do NOT pick the most obvious/common word. Instead of "professional" try "proper". Instead of "solutions" try "work". Instead of "ensure" try "make sure". Instead of "utilize" try "use". Instead of "provide" try "do" or "handle". Instead of "residential" try "home" sometimes. Instead of "commercial" try "business" or "corporate".
+- Swap formal vocabulary for everyday words: "approximately" → "about", "numerous" → "lots of", "purchase" → "buy", "commence" → "start", "assist" → "help", "regarding" → "about", "prior to" → "before", "in order to" → "to"
+- NEVER use these AI-giveaway words anywhere in the content: comprehensive, innovative, leverage, streamline, cutting-edge, state-of-the-art, seamless, robust, navigate, landscape, delve, crucial, optimal, facilitate, enhance, utilize, diverse, realm, multifaceted, elevate, foster, harness, pivotal, dynamic, testament, cornerstone, holistic
+
+BURSTINESS (vary sentence length WILDLY):
+- Write some sentences that are only 3-5 words long. "We fix fences." "That's the difference." "Full stop."
+- Then write one really long sentence that goes on for 30-40 words with multiple clauses joined by commas and dashes
+- NEVER write 3+ consecutive sentences of similar length — check yourself
+- Some paragraphs should be just ONE sentence. Others can be 5-6 sentences.
+- At least 20% of sentences must be under 8 words
+
+ENTROPY (break patterns, add randomness):
+- Start paragraphs differently every time — NEVER start two paragraphs the same way
+- Mix up sentence openers: questions, statements, fragments, "And" / "But" / "So", imperatives ("Call us"), personal ("We've seen")
+- NEVER use formulaic transitions: "Moreover", "Furthermore", "Additionally", "In addition", "It's worth noting", "In conclusion", "Ultimately"
+- Break parallel structure in lists — each item should have different grammar
+- Use parenthetical asides (like this one) and dashes — for interruptions — randomly
+
+HUMAN VOICE:
+- Use contractions EVERYWHERE: we're, you'll, it's, don't, won't, can't, there's, that's, here's, we've, they're, we'd
+- Include 2-3 opinionated statements: "honestly", "the truth is", "most people don't realise"
+- Add specific local details: Perth suburb names, WA weather references, Australian slang
+- Include at least one rhetorical question per section
+- Write like a tradie explaining their work to a homeowner over a coffee — not like a brochure
+- Use Australian English: "colour", "centre", "organise", "specialise"
+
+BANNED PHRASES (using ANY of these will trigger AI detection):
+"Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note"
 
 Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
       }]
