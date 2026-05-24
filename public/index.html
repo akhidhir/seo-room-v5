@@ -15280,6 +15280,10 @@
       var [plagiarismChecking, setPlagiarismChecking] = React.useState(false);
       var [plagiarismResult, setPlagiarismResult] = React.useState(null);
       var [plagiarismError, setPlagiarismError] = React.useState(null);
+      // AI detection
+      var [aiDetecting, setAiDetecting] = React.useState(false);
+      var [aiResult, setAiResult] = React.useState(null);
+      var [aiError, setAiError] = React.useState(null);
 
       var handlePlagiarismCheck = async function() {
         if (!editContent || plagiarismChecking) return;
@@ -15294,6 +15298,21 @@
           else { setPlagiarismResult(result); }
         } catch(e) { setPlagiarismError(e.message); }
         setPlagiarismChecking(false);
+      };
+
+      var handleAiDetection = async function() {
+        if (!editContent || aiDetecting) return;
+        setAiDetecting(true);
+        setAiError(null);
+        setAiResult(null);
+        try {
+          var plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (plainText.length < 300) { setAiError('Content too short (min 300 chars)'); setAiDetecting(false); return; }
+          var result = await api('/projects/' + pid + '/ai-detection', { method: 'POST', body: { content: plainText } });
+          if (result.error) { setAiError(result.error); }
+          else { setAiResult(result); }
+        } catch(e) { setAiError(e.message); }
+        setAiDetecting(false);
       };
 
       var hasDraft = !!editContent;
@@ -15613,9 +15632,16 @@
           hasDraft && React.createElement('button', {
             disabled: plagiarismChecking || !editContent,
             onClick: handlePlagiarismCheck,
-            title: 'Check content for plagiarism via Copyleaks',
+            title: 'Check content for plagiarism via Winston AI',
             style: { padding: '8px 16px', background: plagiarismChecking ? 'var(--bg3)' : '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: plagiarismChecking ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
-          }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism Check'),
+          }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism'),
+          // AI Detection
+          hasDraft && React.createElement('button', {
+            disabled: aiDetecting || !editContent,
+            onClick: handleAiDetection,
+            title: 'Detect AI-generated content via Winston AI',
+            style: { padding: '8px 16px', background: aiDetecting ? 'var(--bg3)' : '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: aiDetecting ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: aiDetecting ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-robot', style: { marginRight: 6 } }), aiDetecting ? 'Detecting...' : 'AI Detection'),
           // Reset
           !isPublished && React.createElement('button', {
             onClick: function() {
@@ -15697,6 +15723,57 @@
             ),
             plagiarismResult.matchedSources && plagiarismResult.matchedSources.length === 0 && React.createElement('div', { style: { padding: '10px 14px', background: '#22c55e15', borderRadius: 8, color: '#22c55e', fontSize: 13, textAlign: 'center' } },
               React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'No plagiarism detected — content is original'
+            )
+          )
+        ),
+
+        // AI Detection Results (Build mode)
+        (aiResult || aiError) && React.createElement('div', {
+          style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid ' + (aiResult && aiResult.humanScore >= 70 ? '#22c55e40' : aiResult ? '#ef444440' : '#ef444440') }
+        },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#0ea5e9', textTransform: 'uppercase', letterSpacing: 0.5 } },
+              React.createElement('i', { className: 'fas fa-robot', style: { marginRight: 6 } }), 'AI Detection'
+            ),
+            React.createElement('button', {
+              onClick: function() { setAiResult(null); setAiError(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }
+            }, '×')
+          ),
+          aiError && React.createElement('div', { style: { padding: '10px 14px', background: '#ef444415', borderRadius: 8, color: '#ef4444', fontSize: 13 } },
+            React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 6 } }), aiError
+          ),
+          aiResult && React.createElement('div', null,
+            React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.humanScore >= 70 ? '#22c55e15' : aiResult.humanScore >= 40 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, aiResult.humanScore + '%'),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Human')
+              ),
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.aiScore <= 30 ? '#22c55e15' : aiResult.aiScore <= 60 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, aiResult.aiScore + '%'),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'AI')
+              ),
+              aiResult.readabilityScore != null && React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, aiResult.readabilityScore),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Readability')
+              ),
+              React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text3)' } }, aiResult.creditsRemaining || 0),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Credits Left')
+              )
+            ),
+            // Sentence breakdown
+            aiResult.sentences && aiResult.sentences.length > 0 && React.createElement('div', null,
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase' } }, 'Sentence Breakdown'),
+              React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto', borderRadius: 8 } },
+                aiResult.sentences.map(function(s, i) {
+                  var c = s.humanScore >= 70 ? '#22c55e' : s.humanScore >= 40 ? '#f59e0b' : '#ef4444';
+                  return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 10px', background: i % 2 === 0 ? 'var(--bg2)' : 'transparent', borderRadius: 4, fontSize: 13 } },
+                    React.createElement('span', { style: { color: c, fontWeight: 700, minWidth: 36, textAlign: 'right' } }, s.humanScore + '%'),
+                    React.createElement('span', { style: { color: 'var(--text2)', borderLeft: '2px solid ' + c, paddingLeft: 8 } }, s.text)
+                  );
+                })
+              )
             )
           )
         ),
@@ -19403,10 +19480,14 @@
       const [sectionEditing, setSectionEditing] = useState(null); // section_id in edit mode
       const [sectionDrafts, setSectionDrafts] = useState({}); // {section_id: html}
       const [rewritingSection, setRewritingSection] = useState(null); // section_id being AI rewritten
-      // Plagiarism check (Copyleaks)
+      // Plagiarism check (Winston AI)
       const [plagiarismChecking, setPlagiarismChecking] = useState(false);
       const [plagiarismResult, setPlagiarismResult] = useState(null);
       const [plagiarismError, setPlagiarismError] = useState(null);
+      // AI detection (Winston AI)
+      const [aiDetecting, setAiDetecting] = useState(false);
+      const [aiResult, setAiResult] = useState(null);
+      const [aiError, setAiError] = useState(null);
 
       // Highlight changed paragraphs — POSITIONAL comparison (same logic as preview page)
       // Compares draft blocks vs original blocks by position. If text differs → orange highlight.
@@ -19536,6 +19617,21 @@
           else { setPlagiarismResult(result); }
         } catch (e) { setPlagiarismError(e.message); }
         setPlagiarismChecking(false);
+      };
+
+      const handleAiDetection = async () => {
+        if (!selectedItem || !editContent || aiDetecting) return;
+        setAiDetecting(true);
+        setAiError(null);
+        setAiResult(null);
+        try {
+          const plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (plainText.length < 300) { setAiError('Content too short (min 300 chars)'); setAiDetecting(false); return; }
+          const result = await api(`/projects/${pid}/ai-detection`, { method: 'POST', body: { content: plainText } });
+          if (result.error) { setAiError(result.error); }
+          else { setAiResult(result); }
+        } catch (e) { setAiError(e.message); }
+        setAiDetecting(false);
       };
 
       const counts = {
@@ -20320,7 +20416,14 @@
                 onClick: handlePlagiarismCheck,
                 title: 'Check content for plagiarism via Copyleaks',
                 style: { padding: '8px 16px', background: plagiarismChecking ? 'var(--bg3)' : '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: plagiarismChecking ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
-              }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism Check'),
+              }, React.createElement('i', { className: plagiarismChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-shield-halved', style: { marginRight: 6 } }), plagiarismChecking ? 'Checking...' : 'Plagiarism'),
+              // AI Detection button
+              React.createElement('button', {
+                disabled: aiDetecting || !editContent,
+                onClick: handleAiDetection,
+                title: 'Detect AI-generated content via Winston AI',
+                style: { padding: '8px 16px', background: aiDetecting ? 'var(--bg3)' : '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: aiDetecting ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: aiDetecting ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-robot', style: { marginRight: 6 } }), aiDetecting ? 'Detecting...' : 'AI Detection'),
               // Reset — clear all draft data, sections, meta, AI notes back to clean state
               !isPublished && React.createElement('button', {
                 onClick: async () => {
@@ -20395,6 +20498,56 @@
               ),
               plagiarismResult.matchedSources && plagiarismResult.matchedSources.length === 0 && React.createElement('div', { style: { padding: '10px 14px', background: '#22c55e15', borderRadius: 8, color: '#22c55e', fontSize: 13, textAlign: 'center' } },
                 React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'No plagiarism sources detected — content is original'
+              )
+            )
+          ),
+
+          // AI Detection Results (Copywriter)
+          (aiResult || aiError) && React.createElement('div', {
+            style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: `1px solid ${aiResult && aiResult.humanScore >= 70 ? '#22c55e40' : aiResult ? '#ef444440' : '#ef444440'}` }
+          },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#0ea5e9', textTransform: 'uppercase', letterSpacing: 0.5 } },
+                React.createElement('i', { className: 'fas fa-robot', style: { marginRight: 6 } }), 'AI Detection'
+              ),
+              React.createElement('button', {
+                onClick: () => { setAiResult(null); setAiError(null); },
+                style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }
+              }, '×')
+            ),
+            aiError && React.createElement('div', { style: { padding: '10px 14px', background: '#ef444415', borderRadius: 8, color: '#ef4444', fontSize: 13 } },
+              React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 6 } }), aiError
+            ),
+            aiResult && React.createElement('div', null,
+              React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.humanScore >= 70 ? '#22c55e15' : aiResult.humanScore >= 40 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, aiResult.humanScore + '%'),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Human')
+                ),
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.aiScore <= 30 ? '#22c55e15' : aiResult.aiScore <= 60 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, aiResult.aiScore + '%'),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'AI')
+                ),
+                aiResult.readabilityScore != null && React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text)' } }, aiResult.readabilityScore),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Readability')
+                ),
+                React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--text3)' } }, aiResult.creditsRemaining || 0),
+                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Credits Left')
+                )
+              ),
+              aiResult.sentences && aiResult.sentences.length > 0 && React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase' } }, 'Sentence Breakdown'),
+                React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto', borderRadius: 8 } },
+                  aiResult.sentences.map((s, i) => {
+                    const c = s.humanScore >= 70 ? '#22c55e' : s.humanScore >= 40 ? '#f59e0b' : '#ef4444';
+                    return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 10px', background: i % 2 === 0 ? 'var(--bg2)' : 'transparent', borderRadius: 4, fontSize: 13 } },
+                      React.createElement('span', { style: { color: c, fontWeight: 700, minWidth: 36, textAlign: 'right' } }, s.humanScore + '%'),
+                      React.createElement('span', { style: { color: 'var(--text2)', borderLeft: '2px solid ' + c, paddingLeft: 8 } }, s.text)
+                    );
+                  })
+                )
               )
             )
           ),

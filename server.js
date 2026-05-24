@@ -3315,6 +3315,65 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// AI Detection (Winston AI) — synchronous, returns human score
+app.post('/api/projects/:id/ai-detection', async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content || content.trim().length < 300) {
+      return res.status(400).json({ error: 'Content must be at least 300 characters for AI detection' });
+    }
+
+    const apiKey = process.env.WINSTON_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'WINSTON_API_KEY env var required' });
+
+    console.log(`[winston] AI detection (${content.length} chars)...`);
+    const resp = await fetch('https://api.gowinston.ai/v2/ai-content-detection', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        text: content,
+        version: 'latest',
+        sentences: true,
+        language: 'auto'
+      })
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error(`[winston] AI detection failed (${resp.status}):`, errText);
+      return res.status(resp.status).json({ error: `AI detection failed: ${errText}` });
+    }
+
+    const data = await resp.json();
+    console.log(`[winston] AI detection complete: human=${data.score}%`);
+
+    // Score is "human score" — 100 = fully human, 0 = fully AI
+    const humanScore = data.score || 0;
+    const aiScore = 100 - humanScore;
+
+    // Per-sentence breakdown
+    const sentences = (data.sentences || []).map(s => ({
+      text: s.text,
+      humanScore: s.score || 0
+    }));
+
+    res.json({
+      humanScore,
+      aiScore,
+      readabilityScore: data.readability_score || null,
+      sentences,
+      creditsUsed: data.credits_used || 0,
+      creditsRemaining: data.credits_remaining || 0
+    });
+  } catch (e) {
+    console.error('[winston] AI detection error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Haversine distance in km
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
