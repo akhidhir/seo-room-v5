@@ -18439,14 +18439,39 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
               },
               body: JSON.stringify({
                 text: chunks[i],
-                tone: 'Standard',
+                tone: 'College',
                 mode: 'Enhanced'
               })
             });
             const ghRawText = await ghResp.text();
-            console.log(`[humanizer] GPTHuman response status: ${ghResp.status}, body preview: ${ghRawText.substring(0, 200)}`);
+            console.log(`[humanizer] GPTHuman pass 1 status: ${ghResp.status}, body preview: ${ghRawText.substring(0, 200)}`);
             let ghData;
             try { ghData = JSON.parse(ghRawText); } catch(pe) { ghData = { error: ghRawText }; }
+
+            // Double-pass: run the output through GPTHuman again for higher human score
+            if (ghData.output && ghData.output.length >= 300) {
+              console.log(`[humanizer] Pass 1 humanScore: ${ghData.humanScore}, running pass 2...`);
+              const gh2Resp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+                method: 'POST',
+                headers: {
+                  'Authorization': 'Bearer ' + (process.env.GPTHUMAN_API_KEY || ''),
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  text: ghData.output,
+                  tone: 'Standard',
+                  mode: 'Enhanced'
+                })
+              });
+              const gh2Raw = await gh2Resp.text();
+              let gh2Data;
+              try { gh2Data = JSON.parse(gh2Raw); } catch(pe) { gh2Data = {}; }
+              if (gh2Data.output) {
+                console.log(`[humanizer] Pass 2 humanScore: ${gh2Data.humanScore}, credits: ${gh2Data.creditUsage}`);
+                ghData = gh2Data; // use double-passed version
+              }
+            }
+
             if (ghData.output) {
               humanizedText += (i > 0 ? ' ' : '') + ghData.output;
               console.log(`[humanizer] Chunk ${i+1}/${chunks.length}: ${ghData.creditUsage} credits used, balance: ${ghData.creditBalance}, humanScore: ${ghData.humanScore}`);
