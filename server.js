@@ -2107,6 +2107,22 @@ function isValid404Url(url) {
   if (url.length > 500) return false;
   // Encoded binary/null bytes
   if (/%00|%01|%02/.test(url)) return false;
+  // Common bot-probing paths (not real pages)
+  const path = url.replace(/^https?:\/\/[^/]+/, '').toLowerCase().replace(/\/$/, '');
+  const botPaths = [
+    '/wp', '/wp-admin', '/wp-login', '/wp-login.php', '/wp-cron', '/wp-config', '/wp-includes',
+    '/admin', '/administrator', '/login', '/signin', '/signup',
+    '/backup', '/old', '/test', '/debug', '/temp', '/tmp',
+    '/api/config', '/api/settings', '/api/health', '/api/v1', '/api/v1/settings',
+    '/graphql', '/.env', '/.git', '/.well-known/security.txt',
+    '/config', '/env', '/phpinfo', '/server-status', '/actuator',
+    '/xmlrpc.php', '/xmlrpc', '/wp-json',
+  ];
+  if (botPaths.includes(path)) return false;
+  // Elementor internal IDs (e.g. /elementor-2561035482)
+  if (/\/elementor-\d+/.test(path)) return false;
+  // URL.createObjectURL blobs
+  if (/createobjecturl|blob:/i.test(url)) return false;
   return true;
 }
 
