@@ -1054,6 +1054,19 @@ async function initDb() {
       )
     `);
 
+    // Baseline reports
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS baseline_reports (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'pending',
+        report_data JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        UNIQUE(project_id)
+      )
+    `);
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
@@ -21154,6 +21167,7 @@ ABSOLUTE RULES:
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport }), auditId]);
         console.log(`[gbp-external] Report stored (${displayReport.length} chars)`);
+        maybeGenerateBaseline(projectId, req.auth?.userId);
 
         // PASS 2: Extract structured findings via Haiku AI (not deterministic parser — GPT-5.5 sections don't map cleanly)
         const validCategories = PILLAR_CATEGORIES['gbp_external'] || [];
@@ -22594,6 +22608,7 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport, sessionId: session.id }), auditId]);
         console.log(`[website-agent] Report stored (${displayReport.length} chars)`);
+        maybeGenerateBaseline(projectId, req.auth?.userId);
 
         // PASS 2: Send follow-up message asking agent to enumerate every finding as JSON
         const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'website', 'website-agent');
@@ -22758,6 +22773,7 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
         await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
           ['completed', JSON.stringify({ report: displayReport, sessionId: session.id, raw_gsc_data: gscRawRows }), auditId]);
         console.log(`[gsc-agent] Report stored (${displayReport.length} chars) with ${gscRawRows ? gscRawRows.length : 0} raw GSC rows`);
+        maybeGenerateBaseline(projectId, req.auth?.userId);
 
         // PASS 2: Follow-up extraction
         const extractionText = await extractFindingsViaFollowUp(apiBase, agentHeaders, session.id, 'gsc_agent', 'gsc-agent');
@@ -29118,6 +29134,541 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
     res.status(500).json({ error: e.message });
   }
 });
+
+// ==================== 11B. BASELINE REPORTS ====================
+
+// GET baseline report
+app.get('/api/projects/:projectId/baseline', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM baseline_reports WHERE project_id=$1', [req.params.projectId]);
+    if (r.rows.length === 0) return res.json({ baseline: null });
+    const row = r.rows[0];
+    const data = typeof row.report_data === 'string' ? JSON.parse(row.report_data) : (row.report_data || {});
+    res.json({ baseline: { id: row.id, status: row.status, createdAt: row.created_at, completedAt: row.completed_at, ...data } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate baseline report (background job)
+app.post('/api/projects/:projectId/baseline/generate', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+
+    // Check if baseline already exists and is completed
+    const existing = await pool.query('SELECT id, status FROM baseline_reports WHERE project_id=$1', [projectId]);
+    if (existing.rows.length > 0 && existing.rows[0].status === 'completed') {
+      return res.json({ message: 'Baseline already exists', status: 'completed' });
+    }
+
+    // Upsert as 'running'
+    await pool.query(
+      `INSERT INTO baseline_reports (project_id, status) VALUES ($1, 'running')
+       ON CONFLICT (project_id) DO UPDATE SET status='running', created_at=NOW()`,
+      [projectId]
+    );
+    res.json({ status: 'running', message: 'Baseline generation started' });
+
+    // Run in background
+    (async () => {
+      try {
+        const now = new Date();
+        const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const baseUrl = `https://${domain}`;
+
+        // ── 1. Maps Rankings (grid scans) ──
+        const gridRes = await pool.query(
+          `SELECT keyword, arp, atrp, solv, found_in, data_points, grid_size, competitors, scanned_at
+           FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`, [projectId]);
+        const latestGrid = {};
+        for (const r of gridRes.rows) { if (!latestGrid[r.keyword]) latestGrid[r.keyword] = r; }
+        const gridEntries = Object.values(latestGrid);
+        const avgArp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.arp || 0), 0) / gridEntries.length : null;
+        const avgAtrp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.atrp || 0), 0) / gridEntries.length : null;
+        const avgSolv = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.solv || 0), 0) / gridEntries.length : null;
+
+        const topMapKeywords = gridEntries
+          .sort((a, b) => (a.arp || 99) - (b.arp || 99))
+          .slice(0, 20)
+          .map(r => ({
+            keyword: r.keyword,
+            arp: r.arp ? parseFloat(r.arp.toFixed(1)) : null,
+            atrp: r.atrp ? parseFloat(r.atrp.toFixed(1)) : null,
+            visibility: r.solv ? parseFloat(r.solv.toFixed(0)) : 0,
+            found: r.found_in || 0, total: r.data_points || 0,
+          }));
+
+        const mapsRankings = {
+          totalKeywords: gridEntries.length,
+          avgArp, avgAtrp, avgVisibility: avgSolv,
+          dominant: gridEntries.filter(r => r.solv >= 60).length,
+          competitive: gridEntries.filter(r => r.solv >= 30 && r.solv < 60).length,
+          needsWork: gridEntries.filter(r => r.solv > 0 && r.solv < 30).length,
+          notVisible: gridEntries.filter(r => !r.solv || r.solv === 0).length,
+          topKeywords: topMapKeywords,
+        };
+
+        // ── 2. SERP Rankings ──
+        const rankRes = await pool.query(
+          `SELECT keyword, serp_position, maps_position FROM rank_tracking
+           WHERE project_id=$1 ORDER BY checked_at DESC`, [projectId]);
+        const latestByKw = {};
+        for (const r of rankRes.rows) { if (!latestByKw[r.keyword]) latestByKw[r.keyword] = r; }
+        const rankEntries = Object.values(latestByKw);
+        const serpPositions = rankEntries.filter(r => r.serp_position).map(r => r.serp_position);
+
+        const serpRankings = {
+          avgPosition: serpPositions.length > 0 ? parseFloat((serpPositions.reduce((a, b) => a + b, 0) / serpPositions.length).toFixed(1)) : null,
+          keywordsTracked: rankEntries.length,
+          top3: serpPositions.filter(p => p <= 3).length,
+          top10: serpPositions.filter(p => p <= 10).length,
+          page2: serpPositions.filter(p => p > 10 && p <= 20).length,
+          notRanking: serpPositions.filter(p => p > 20).length,
+        };
+
+        // ── 3. GSC Data ──
+        let gscData = { clicks: 0, impressions: 0, ctr: 0, avgPosition: null, topPages: [], topQueries: [], totalKeywords: 0 };
+        try {
+          const token = await getGscAccessToken(req.auth?.userId);
+          if (token && project.gsc_property) {
+            const endDate = now.toISOString().split('T')[0];
+            const startDate = new Date(now - 30 * 86400000).toISOString().split('T')[0];
+            const qRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: 25, orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }] }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (qRes.ok) {
+              const qData = await qRes.json();
+              const rows = qData.rows || [];
+              gscData.topQueries = rows.map(r => ({ query: r.keys[0], clicks: r.clicks, impressions: r.impressions, ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1)) }));
+            }
+            const pRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ startDate, endDate, dimensions: ['page'], rowLimit: 15, orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }] }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (pRes.ok) {
+              const pData = await pRes.json();
+              gscData.topPages = (pData.rows || []).map(r => ({ page: r.keys[0].replace(/^https?:\/\/[^/]+/, ''), clicks: r.clicks, impressions: r.impressions, ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1)) }));
+            }
+            const tRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ startDate, endDate }), signal: AbortSignal.timeout(15000),
+            });
+            if (tRes.ok) {
+              const tData = await tRes.json();
+              const tRows = tData.rows || [];
+              if (tRows.length > 0) {
+                gscData.clicks = tRows[0].clicks; gscData.impressions = tRows[0].impressions;
+                gscData.ctr = parseFloat((tRows[0].ctr * 100).toFixed(1));
+                gscData.avgPosition = parseFloat(tRows[0].position.toFixed(1));
+              }
+            }
+          }
+        } catch (gscErr) { console.log('[baseline] GSC fetch skipped:', gscErr.message); }
+
+        // Fallback to stored GSC keywords
+        if (gscData.clicks === 0 && gscData.topQueries.length === 0) {
+          const gscRes = await pool.query('SELECT keyword, clicks, impressions, ctr, position FROM gsc_keywords WHERE project_id=$1 ORDER BY impressions DESC LIMIT 25', [projectId]);
+          if (gscRes.rows.length > 0) {
+            gscData.topQueries = gscRes.rows.map(r => ({ query: r.keyword, clicks: r.clicks || 0, impressions: r.impressions || 0, ctr: r.ctr ? parseFloat((r.ctr * 100).toFixed(1)) : 0, position: r.position ? parseFloat(r.position.toFixed(1)) : null }));
+            gscData.clicks = gscRes.rows.reduce((s, r) => s + (r.clicks || 0), 0);
+            gscData.impressions = gscRes.rows.reduce((s, r) => s + (r.impressions || 0), 0);
+            gscData.totalKeywords = gscRes.rows.length;
+            if (gscData.impressions > 0) gscData.ctr = parseFloat((gscData.clicks / gscData.impressions * 100).toFixed(1));
+          }
+        }
+
+        // ── 4. Audit Findings snapshot ──
+        const findingsRes = await pool.query(
+          `SELECT pillar, severity, status, category, title, description, recommendation FROM audit_findings WHERE project_id=$1 ORDER BY severity DESC, created_at DESC`, [projectId]);
+        const findingsByPillar = {};
+        const criticalFindings = [];
+        for (const r of findingsRes.rows) {
+          const p = r.pillar || 'other';
+          if (!findingsByPillar[p]) findingsByPillar[p] = { total: 0, critical: 0, high: 0, medium: 0, low: 0, items: [] };
+          findingsByPillar[p].total++;
+          if (r.severity === 'Critical') { findingsByPillar[p].critical++; criticalFindings.push({ pillar: p, title: r.title, category: r.category }); }
+          if (r.severity === 'High') findingsByPillar[p].high++;
+          if (r.severity === 'Medium') findingsByPillar[p].medium++;
+          if (r.severity === 'Low') findingsByPillar[p].low++;
+          findingsByPillar[p].items.push({ title: r.title, severity: r.severity, category: r.category, status: r.status });
+        }
+
+        // ── 5. GBP Audit data ──
+        let gbpAudit = null;
+        try {
+          const gbpRes = await pool.query(
+            `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar IN ('gbp_external','gbp') AND status='completed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+          if (gbpRes.rows.length > 0) gbpAudit = gbpRes.rows[0].audit_data;
+        } catch {}
+
+        // ── 6. GSC Audit data ──
+        let gscAudit = null;
+        try {
+          const gscAuditRes = await pool.query(
+            `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar IN ('gsc_agent','gsc') AND status='completed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+          if (gscAuditRes.rows.length > 0) gscAudit = gscAuditRes.rows[0].audit_data;
+        } catch {}
+
+        // ── 7. Website Audit data ──
+        let websiteAudit = null;
+        try {
+          const waRes = await pool.query(
+            `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar IN ('website','technical') AND status='completed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+          if (waRes.rows.length > 0) websiteAudit = waRes.rows[0].audit_data;
+        } catch {}
+
+        // ── 8. On-Page stats ──
+        let onPageStats = { totalPages: 0, avgScore: 0, issuesFound: 0 };
+        try {
+          const opRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+          if (opRes.rows.length > 0 && opRes.rows[0].results) {
+            const pages = typeof opRes.rows[0].results === 'string' ? JSON.parse(opRes.rows[0].results) : opRes.rows[0].results;
+            if (Array.isArray(pages)) {
+              onPageStats.totalPages = pages.length;
+              const scores = pages.map(p => p.seoScore || 0);
+              onPageStats.avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+              onPageStats.issuesFound = pages.reduce((s, p) => s + (p.issues ? p.issues.filter(i => i.type !== 'good').length : 0), 0);
+            }
+          }
+        } catch {}
+
+        // ── 9. PageSpeed scores ──
+        let pageSpeedStats = null;
+        try {
+          const psRes = await pool.query(`SELECT report_data FROM audits WHERE project_id=$1 AND pillar='pagespeed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+          if (psRes.rows.length > 0 && psRes.rows[0].report_data) {
+            const psData = typeof psRes.rows[0].report_data === 'string' ? JSON.parse(psRes.rows[0].report_data) : psRes.rows[0].report_data;
+            if (Array.isArray(psData) && psData.length > 0) {
+              const scores = psData.filter(p => p.performance != null).map(p => p.performance);
+              pageSpeedStats = {
+                avgPerformance: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+                good: scores.filter(s => s >= 90).length,
+                needsImprovement: scores.filter(s => s >= 50 && s < 90).length,
+                poor: scores.filter(s => s < 50).length,
+                totalPages: psData.length,
+                pages: psData.slice(0, 20).map(p => ({ url: p.url, performance: p.performance, lcp: p.lcp, fcp: p.fcp, cls: p.cls, tbt: p.tbt })),
+              };
+            }
+          }
+        } catch {}
+
+        // ── 10. 404s snapshot ──
+        let fourOhFourCount = 0;
+        try {
+          const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+          const authHeaders = getWpAuthHeaders(project);
+          if (wpUrl && authHeaders) {
+            const data = await callPluginApi(project, '/404s');
+            fourOhFourCount = Array.isArray(data) ? data.length : (data?.items?.length || 0);
+          }
+        } catch {}
+
+        // ── 11. Health Score ──
+        const completionRate = 0; // baseline = no actions done yet
+        let healthScore = 50;
+        if (avgSolv != null) healthScore = Math.min(100, Math.max(0, Math.round(
+          (avgSolv * 0.3) + (onPageStats.avgScore * 0.25) +
+          ((pageSpeedStats?.avgPerformance || 50) * 0.2) +
+          (Math.min(100, (gscData.ctr || 0) * 20) * 0.15) +
+          (criticalFindings.length === 0 ? 10 : Math.max(0, 10 - criticalFindings.length)) // penalty for criticals
+        )));
+
+        // ── 12. AI Executive Summary ──
+        let executiveSummary = '';
+        if (anthropic) {
+          try {
+            const summaryResp = await anthropic.messages.create({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 600,
+              system: 'You are an SEO agency report writer. Write a professional baseline assessment (4-5 sentences) for a new SEO client onboarding report. Be specific with numbers. No bullet points, no headers. Tone: thorough, objective, opportunity-focused. Identify the starting position and key areas for improvement.',
+              messages: [{ role: 'user', content: `Write a baseline assessment for ${project.business_name || project.name} (${project.domain}), industry: ${project.industry || 'N/A'}:
+- Maps: ${gridEntries.length} keywords scanned, avg visibility ${avgSolv ? avgSolv.toFixed(0) + '%' : 'no data'}, ${mapsRankings.dominant} dominant, ${mapsRankings.notVisible} not visible
+- SERP: ${serpRankings.keywordsTracked} keywords tracked, avg position ${serpRankings.avgPosition || 'N/A'}, ${serpRankings.top3} in top 3, ${serpRankings.top10} in top 10
+- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr}% CTR, avg position ${gscData.avgPosition || 'N/A'}
+- Audit findings: ${findingsRes.rows.length} total, ${criticalFindings.length} critical
+- On-page: ${onPageStats.totalPages} pages audited, avg SEO score ${onPageStats.avgScore}%, ${onPageStats.issuesFound} issues
+- PageSpeed: ${pageSpeedStats ? `avg ${pageSpeedStats.avgPerformance}% performance, ${pageSpeedStats.poor} poor pages` : 'not scanned'}
+- 404s: ${fourOhFourCount} active 404 errors` }]
+            });
+            executiveSummary = summaryResp.content[0].text;
+          } catch (e) { console.log('[baseline] AI summary skipped:', e.message); }
+        }
+
+        const reportData = {
+          version: 1,
+          type: 'baseline',
+          project: { name: project.business_name || project.name, domain: project.domain, industry: project.industry, location: project.location, serviceAreas: project.service_areas },
+          healthScore,
+          executiveSummary,
+          mapsRankings,
+          serpRankings,
+          gscData,
+          findingsByPillar,
+          criticalFindings,
+          gbpAudit: gbpAudit ? { exists: true, completedAt: gbpAudit.completedAt } : null,
+          gscAudit: gscAudit ? { exists: true } : null,
+          websiteAudit: websiteAudit ? { exists: true } : null,
+          onPageStats,
+          pageSpeedStats,
+          fourOhFourCount,
+          capturedAt: now.toISOString()
+        };
+
+        await pool.query(
+          `UPDATE baseline_reports SET status='completed', report_data=$1, completed_at=NOW() WHERE project_id=$2`,
+          [JSON.stringify(reportData), projectId]
+        );
+        console.log(`[baseline] Completed baseline report for project ${projectId}, health score: ${healthScore}`);
+      } catch (bgErr) {
+        console.error('[baseline] Background error:', bgErr.message);
+        await pool.query(`UPDATE baseline_reports SET status='failed' WHERE project_id=$1`, [projectId]).catch(() => {});
+      }
+    })();
+
+  } catch (e) {
+    console.error('[baseline] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE baseline (allow re-generation)
+app.delete('/api/projects/:projectId/baseline', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM baseline_reports WHERE project_id=$1', [req.params.projectId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET baseline PDF
+app.get('/api/projects/:projectId/baseline/pdf', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM baseline_reports WHERE project_id=$1 AND status=$2', [req.params.projectId, 'completed']);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'No completed baseline report' });
+    const data = typeof r.rows[0].report_data === 'string' ? JSON.parse(r.rows[0].report_data) : (r.rows[0].report_data || {});
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(data.project?.name || 'Baseline').replace(/[^a-zA-Z0-9 ]/g, '')}-Baseline-Report.pdf"`);
+    doc.pipe(res);
+
+    const teal = '#14b8a6';
+    const dark = '#1a1a2e';
+    const red = '#ef4444';
+    const green = '#22c55e';
+    const blue = '#3b82f6';
+    const amber = '#f59e0b';
+    const gray = '#6b7280';
+    const pageW = doc.page.width - 100;
+
+    // ── Cover ──
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(dark);
+    doc.fillColor('#fff').fontSize(36).font('Helvetica-Bold').text('BASELINE REPORT', 50, 200, { width: pageW, align: 'center' });
+    doc.fillColor(teal).fontSize(20).font('Helvetica').text(data.project?.name || 'Project', 50, 260, { width: pageW, align: 'center' });
+    doc.fillColor('#999').fontSize(14).text(data.project?.domain || '', 50, 290, { width: pageW, align: 'center' });
+    doc.fillColor('#666').fontSize(12).text(data.capturedAt ? new Date(data.capturedAt).toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric' }) : '', 50, 330, { width: pageW, align: 'center' });
+
+    // Health score circle
+    const scoreColor = (data.healthScore || 0) >= 70 ? green : (data.healthScore || 0) >= 40 ? amber : red;
+    doc.circle(doc.page.width / 2, 430, 45).lineWidth(4).strokeColor(scoreColor).stroke();
+    doc.fillColor(scoreColor).fontSize(32).font('Helvetica-Bold').text(String(data.healthScore || 0), doc.page.width / 2 - 30, 415, { width: 60, align: 'center' });
+    doc.fillColor('#999').fontSize(10).font('Helvetica').text('HEALTH SCORE', 50, 485, { width: pageW, align: 'center' });
+
+    doc.fillColor('#fff').fontSize(11).font('Helvetica').text('Prepared by The SEO Room', 50, 700, { width: pageW, align: 'center' });
+
+    // ── Helper functions ──
+    const addPage = () => { doc.addPage(); };
+    const sectionTitle = (title, y) => {
+      doc.fillColor(teal).fontSize(16).font('Helvetica-Bold').text(title.toUpperCase(), 50, y || doc.y);
+      doc.moveTo(50, doc.y + 4).lineTo(50 + pageW, doc.y + 4).lineWidth(1).strokeColor(teal).stroke();
+      doc.moveDown(0.8);
+    };
+    const label = (text) => { doc.fillColor(gray).fontSize(9).font('Helvetica').text(text); };
+    const value = (text, color) => { doc.fillColor(color || '#333').fontSize(14).font('Helvetica-Bold').text(String(text)); doc.moveDown(0.3); };
+
+    // ── Page 2: Executive Summary ──
+    addPage();
+    sectionTitle('Executive Summary');
+    doc.fillColor('#333').fontSize(12).font('Helvetica').text(data.executiveSummary || 'No AI summary generated.', { width: pageW, lineGap: 4 });
+    doc.moveDown(1.5);
+
+    // KPI overview
+    sectionTitle('Key Performance Indicators');
+    const maps = data.mapsRankings || {};
+    const serp = data.serpRankings || {};
+    const gsc = data.gscData || {};
+    const onPage = data.onPageStats || {};
+    const ps = data.pageSpeedStats || {};
+
+    const kpiRow = (items) => {
+      const colW = pageW / items.length;
+      const startY = doc.y;
+      items.forEach((item, i) => {
+        doc.fillColor(gray).fontSize(9).font('Helvetica').text(item.label, 50 + i * colW, startY, { width: colW, align: 'center' });
+        doc.fillColor(item.color || '#333').fontSize(18).font('Helvetica-Bold').text(String(item.value), 50 + i * colW, startY + 14, { width: colW, align: 'center' });
+      });
+      doc.y = startY + 42;
+    };
+
+    kpiRow([
+      { label: 'MAPS KEYWORDS', value: maps.totalKeywords || 0, color: teal },
+      { label: 'MAPS VISIBILITY', value: maps.avgVisibility != null ? Math.round(maps.avgVisibility) + '%' : '—', color: teal },
+      { label: 'SERP KEYWORDS', value: serp.keywordsTracked || 0, color: blue },
+      { label: 'AVG SERP POS', value: serp.avgPosition || '—', color: blue },
+    ]);
+    kpiRow([
+      { label: 'GSC CLICKS (30D)', value: gsc.clicks != null ? gsc.clicks.toLocaleString() : '—', color: '#8b5cf6' },
+      { label: 'IMPRESSIONS', value: gsc.impressions != null ? gsc.impressions.toLocaleString() : '—', color: '#8b5cf6' },
+      { label: 'CTR', value: gsc.ctr != null ? gsc.ctr + '%' : '—', color: '#8b5cf6' },
+      { label: 'PAGESPEED AVG', value: ps.avgPerformance ? ps.avgPerformance + '%' : '—', color: green },
+    ]);
+    kpiRow([
+      { label: 'PAGES AUDITED', value: onPage.totalPages || 0, color: green },
+      { label: 'SEO SCORE', value: onPage.avgScore ? onPage.avgScore + '%' : '—', color: green },
+      { label: 'ISSUES FOUND', value: onPage.issuesFound || 0, color: amber },
+      { label: '404 ERRORS', value: data.fourOhFourCount || 0, color: red },
+    ]);
+
+    // ── Page 3: Maps Rankings ──
+    if ((maps.topKeywords || []).length > 0) {
+      addPage();
+      sectionTitle('Maps Rankings');
+      doc.fillColor('#333').fontSize(11).font('Helvetica')
+        .text(`${maps.dominant || 0} dominant · ${maps.competitive || 0} competitive · ${maps.needsWork || 0} needs work · ${maps.notVisible || 0} not visible`, { width: pageW });
+      doc.moveDown(0.8);
+
+      // Table header
+      const cols = [{ w: pageW * 0.5, h: 'KEYWORD' }, { w: pageW * 0.15, h: 'ARP' }, { w: pageW * 0.15, h: 'VISIBILITY' }, { w: pageW * 0.2, h: 'FOUND' }];
+      let tx = 50;
+      cols.forEach(c => { doc.fillColor(teal).fontSize(9).font('Helvetica-Bold').text(c.h, tx, doc.y, { width: c.w }); tx += c.w; });
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).lineWidth(0.5).strokeColor('#ddd').stroke();
+      doc.moveDown(0.3);
+
+      maps.topKeywords.forEach((kw) => {
+        if (doc.y > 720) addPage();
+        const rowY = doc.y;
+        tx = 50;
+        doc.fillColor('#333').fontSize(10).font('Helvetica').text(kw.keyword, tx, rowY, { width: cols[0].w }); tx += cols[0].w;
+        const arpColor = (kw.arp || 99) <= 3 ? green : (kw.arp || 99) <= 10 ? amber : red;
+        doc.fillColor(arpColor).fontSize(10).font('Helvetica-Bold').text(String(kw.arp || '—'), tx, rowY, { width: cols[1].w }); tx += cols[1].w;
+        doc.fillColor('#333').fontSize(10).font('Helvetica').text(kw.visibility + '%', tx, rowY, { width: cols[2].w }); tx += cols[2].w;
+        doc.fillColor(gray).fontSize(10).font('Helvetica').text(kw.found + '/' + kw.total, tx, rowY, { width: cols[3].w });
+        doc.moveDown(0.6);
+      });
+    }
+
+    // ── Page 4: GSC Top Queries ──
+    if ((gsc.topQueries || []).length > 0) {
+      addPage();
+      sectionTitle('Google Search Console — Top Queries');
+      const gCols = [{ w: pageW * 0.4, h: 'QUERY' }, { w: pageW * 0.12, h: 'CLICKS' }, { w: pageW * 0.18, h: 'IMPRESSIONS' }, { w: pageW * 0.12, h: 'CTR' }, { w: pageW * 0.18, h: 'POSITION' }];
+      let gx = 50;
+      gCols.forEach(c => { doc.fillColor(teal).fontSize(9).font('Helvetica-Bold').text(c.h, gx, doc.y, { width: c.w }); gx += c.w; });
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).lineWidth(0.5).strokeColor('#ddd').stroke();
+      doc.moveDown(0.3);
+
+      gsc.topQueries.slice(0, 20).forEach(q => {
+        if (doc.y > 720) addPage();
+        const rowY = doc.y;
+        gx = 50;
+        doc.fillColor('#333').fontSize(10).font('Helvetica').text(q.query, gx, rowY, { width: gCols[0].w, ellipsis: true }); gx += gCols[0].w;
+        doc.fillColor('#333').fontSize(10).font('Helvetica-Bold').text(String(q.clicks), gx, rowY, { width: gCols[1].w }); gx += gCols[1].w;
+        doc.fillColor(gray).fontSize(10).font('Helvetica').text(String(q.impressions?.toLocaleString() || 0), gx, rowY, { width: gCols[2].w }); gx += gCols[2].w;
+        doc.fillColor('#333').fontSize(10).font('Helvetica').text(q.ctr + '%', gx, rowY, { width: gCols[3].w }); gx += gCols[3].w;
+        const posColor = q.position <= 10 ? green : q.position <= 20 ? amber : red;
+        doc.fillColor(posColor).fontSize(10).font('Helvetica-Bold').text(String(q.position), gx, rowY, { width: gCols[4].w });
+        doc.moveDown(0.6);
+      });
+    }
+
+    // ── Page 5: Audit Findings ──
+    const findings = data.findingsByPillar || {};
+    const criticals = data.criticalFindings || [];
+    if (Object.keys(findings).length > 0 || criticals.length > 0) {
+      addPage();
+      sectionTitle('Audit Findings Summary');
+      Object.entries(findings).forEach(([pillar, fd]) => {
+        doc.fillColor('#333').fontSize(12).font('Helvetica-Bold').text(pillar.replace(/_/g, ' ').toUpperCase());
+        doc.fillColor('#333').fontSize(10).font('Helvetica')
+          .text(`${fd.total} findings — ${fd.critical || 0} critical, ${fd.high || 0} high, ${fd.medium || 0} medium`);
+        doc.moveDown(0.5);
+      });
+
+      if (criticals.length > 0) {
+        doc.moveDown(0.5);
+        sectionTitle('Critical Issues');
+        criticals.forEach(f => {
+          if (doc.y > 720) addPage();
+          doc.fillColor(red).fontSize(10).font('Helvetica-Bold').text('● ' + f.title);
+          doc.fillColor(gray).fontSize(9).font('Helvetica').text((f.pillar || f.category || '').replace(/_/g, ' '));
+          doc.moveDown(0.4);
+        });
+      }
+    }
+
+    // ── Page 6: PageSpeed ──
+    if (ps.pages && ps.pages.length > 0) {
+      addPage();
+      sectionTitle('PageSpeed Scores');
+      doc.fillColor('#333').fontSize(11).font('Helvetica')
+        .text(`Average: ${ps.avgPerformance || '—'}% · ${ps.good || 0} good · ${ps.needsImprovement || 0} needs improvement · ${ps.poor || 0} poor`);
+      doc.moveDown(0.8);
+
+      const pCols = [{ w: pageW * 0.55, h: 'PAGE' }, { w: pageW * 0.15, h: 'SCORE' }, { w: pageW * 0.15, h: 'LCP' }, { w: pageW * 0.15, h: 'CLS' }];
+      let px = 50;
+      pCols.forEach(c => { doc.fillColor(teal).fontSize(9).font('Helvetica-Bold').text(c.h, px, doc.y, { width: c.w }); px += c.w; });
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).lineWidth(0.5).strokeColor('#ddd').stroke();
+      doc.moveDown(0.3);
+
+      ps.pages.forEach(p => {
+        if (doc.y > 720) addPage();
+        const rowY = doc.y;
+        px = 50;
+        doc.fillColor('#333').fontSize(9).font('Helvetica').text((p.url || '').replace(/^https?:\/\/[^/]+/, '') || '/', px, rowY, { width: pCols[0].w, ellipsis: true }); px += pCols[0].w;
+        const sc = p.performance >= 90 ? green : p.performance >= 50 ? amber : red;
+        doc.fillColor(sc).fontSize(10).font('Helvetica-Bold').text(String(p.performance ?? '—'), px, rowY, { width: pCols[1].w }); px += pCols[1].w;
+        doc.fillColor(gray).fontSize(9).font('Helvetica').text(p.lcp ? (p.lcp / 1000).toFixed(1) + 's' : '—', px, rowY, { width: pCols[2].w }); px += pCols[2].w;
+        doc.fillColor(gray).fontSize(9).font('Helvetica').text(p.cls != null ? p.cls.toFixed(3) : '—', px, rowY, { width: pCols[3].w });
+        doc.moveDown(0.6);
+      });
+    }
+
+    // Footer on all pages
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fillColor('#999').fontSize(8).font('Helvetica')
+        .text(`Baseline Report — ${data.project?.name || ''} — Page ${i + 1} of ${pages.count}`, 50, doc.page.height - 40, { width: pageW, align: 'center' });
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[baseline-pdf] Error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// Auto-trigger: check if baseline exists, fire generation if not
+async function maybeGenerateBaseline(projectId, userId) {
+  try {
+    const existing = await pool.query('SELECT status FROM baseline_reports WHERE project_id=$1', [projectId]);
+    if (existing.rows.length > 0) return; // already exists or running
+    console.log(`[baseline] Auto-triggering baseline for project ${projectId} (first audit completed)`);
+    // Use internal fetch to trigger the generate endpoint
+    const port = process.env.PORT || 3000;
+    fetch(`http://localhost:${port}/api/projects/${projectId}/baseline/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    }).catch(e => console.log('[baseline] Auto-trigger fetch error:', e.message));
+  } catch (e) { console.log('[baseline] Auto-trigger check error:', e.message); }
+}
 
 // ==================== 12. MONTHLY REPORTS ====================
 

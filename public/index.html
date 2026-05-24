@@ -25525,6 +25525,318 @@
       );
     }
 
+    // ============ BASELINE REPORT PAGE ============
+    function BaselineReportPage({ project }) {
+      const [baseline, setBaseline] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [generating, setGenerating] = useState(false);
+      const [error, setError] = useState('');
+
+      const loadBaseline = async () => {
+        try {
+          const data = await api('/projects/' + project.id + '/baseline');
+          setBaseline(data.baseline);
+          // Poll if running
+          if (data.baseline && (data.baseline.status === 'running' || data.baseline.status === 'queued')) {
+            setTimeout(loadBaseline, 3000);
+          }
+        } catch (e) { setError(e.message); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadBaseline(); }, [project.id]);
+
+      const generateBaseline = async () => {
+        setGenerating(true);
+        try {
+          await api('/projects/' + project.id + '/baseline/generate', { method: 'POST' });
+          setBaseline({ status: 'running' });
+          setTimeout(loadBaseline, 3000);
+        } catch (e) { setError(e.message); }
+        setGenerating(false);
+      };
+
+      const regenerateBaseline = async () => {
+        if (!confirm('Regenerate baseline? This will replace the existing one.')) return;
+        setGenerating(true);
+        try {
+          await api('/projects/' + project.id + '/baseline', { method: 'DELETE' });
+          await api('/projects/' + project.id + '/baseline/generate', { method: 'POST' });
+          setBaseline({ status: 'running' });
+          setTimeout(loadBaseline, 3000);
+        } catch (e) { setError(e.message); }
+        setGenerating(false);
+      };
+
+      const downloadPdf = async () => {
+        try {
+          const resp = await fetch('/api/projects/' + project.id + '/baseline/pdf');
+          if (!resp.ok) throw new Error('PDF generation failed');
+          const blob = await resp.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = (project.business_name || project.name) + ' - Baseline Report.pdf';
+          a.click(); URL.revokeObjectURL(url);
+        } catch (e) { alert('PDF download failed: ' + e.message); }
+      };
+
+      const cardStyle = { background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: 20 };
+      const statBox = (value, label, color, icon) => (
+        <div style={{ ...cardStyle, flex: 1, minWidth: 150, textAlign: 'center' }}>
+          {icon && <i className={icon} style={{ fontSize: 18, color, marginBottom: 8, display: 'block' }}></i>}
+          <div style={{ fontSize: 32, fontWeight: 800, color }}>{value ?? '—'}</div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.5, color: 'var(--text3)', marginTop: 4 }}>{label}</div>
+        </div>
+      );
+
+      const sectionHeader = (title, icon, color) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, marginTop: 24 }}>
+          <i className={icon} style={{ fontSize: 16, color }}></i>
+          <span style={{ fontSize: 15, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: 1.5 }}>{title}</span>
+        </div>
+      );
+
+      const severityBadge = (sev) => {
+        const colors = { Critical: '#ef4444', High: '#f59e0b', Medium: '#3b82f6', Low: '#6b7280' };
+        return <span style={{ background: (colors[sev] || '#6b7280') + '22', color: colors[sev] || '#6b7280', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{sev}</span>;
+      };
+
+      if (loading) return (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <i className="fas fa-spinner fa-spin" style={{ fontSize: 28, color: '#6366f1' }}></i>
+          <div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading baseline report...</div>
+        </div>
+      );
+
+      // No baseline yet
+      if (!baseline || baseline.status === 'failed') return (
+        <div>
+          <div className="page-title"><i className="fas fa-flag-checkered"></i> Baseline Report</div>
+          <div style={{ ...cardStyle, textAlign: 'center', padding: 60, maxWidth: 500, margin: '40px auto' }}>
+            <i className="fas fa-flag-checkered" style={{ fontSize: 48, color: '#6366f1', marginBottom: 16, display: 'block' }}></i>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>No Baseline Report Yet</div>
+            <div style={{ color: 'var(--text3)', fontSize: 14, marginBottom: 20, lineHeight: 1.6 }}>
+              The baseline captures a full snapshot of your SEO performance when you start — Maps rankings, SERP positions, GSC data, audit findings, PageSpeed scores, and more. This becomes the reference point to measure all future progress against.
+            </div>
+            {baseline?.status === 'failed' && <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>Previous generation failed. Try again.</div>}
+            <button onClick={generateBaseline} disabled={generating} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+              {generating ? <><i className="fas fa-spinner fa-spin"></i> Generating...</> : <><i className="fas fa-play"></i> Generate Baseline Report</>}
+            </button>
+            <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 12 }}>
+              <i className="fas fa-info-circle" style={{ marginRight: 4 }}></i>
+              Also auto-generates when you run your first audit
+            </div>
+          </div>
+        </div>
+      );
+
+      // Running/queued
+      if (baseline.status === 'running' || baseline.status === 'queued') return (
+        <div>
+          <div className="page-title"><i className="fas fa-flag-checkered"></i> Baseline Report</div>
+          <div style={{ ...cardStyle, textAlign: 'center', padding: 60, maxWidth: 400, margin: '40px auto' }}>
+            <i className="fas fa-spinner fa-spin" style={{ fontSize: 36, color: '#f59e0b', marginBottom: 16, display: 'block' }}></i>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Generating Baseline Report...</div>
+            <div style={{ color: 'var(--text3)', fontSize: 13, marginTop: 8 }}>Collecting Maps, SERP, GSC, audits, PageSpeed data. This takes 30-60 seconds.</div>
+          </div>
+        </div>
+      );
+
+      // Completed — render the full report
+      const b = baseline;
+      const maps = b.mapsRankings || {};
+      const serp = b.serpRankings || {};
+      const gsc = b.gscData || {};
+      const findings = b.findingsByPillar || {};
+      const onPage = b.onPageStats || {};
+      const ps = b.pageSpeedStats || {};
+      const criticals = b.criticalFindings || [];
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div className="page-title" style={{ marginBottom: 0 }}><i className="fas fa-flag-checkered"></i> Baseline Report</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={downloadPdf} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                <i className="fas fa-file-pdf"></i> Download PDF
+              </button>
+              <button onClick={regenerateBaseline} disabled={generating} style={{ background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>
+                <i className="fas fa-redo"></i> Regenerate
+              </button>
+            </div>
+          </div>
+
+          <div style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 16 }}>
+            Captured: {b.capturedAt ? new Date(b.capturedAt).toLocaleDateString('en-AU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '—'}
+          </div>
+
+          {/* Health Score + Summary */}
+          <div style={{ ...cardStyle, marginBottom: 16, display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ textAlign: 'center', minWidth: 120 }}>
+              <div style={{ width: 90, height: 90, borderRadius: '50%', border: `4px solid ${b.healthScore >= 70 ? '#22c55e' : b.healthScore >= 40 ? '#f59e0b' : '#ef4444'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' }}>
+                <span style={{ fontSize: 28, fontWeight: 800, color: b.healthScore >= 70 ? '#22c55e' : b.healthScore >= 40 ? '#f59e0b' : '#ef4444' }}>{b.healthScore}</span>
+              </div>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.5, color: 'var(--text3)', marginTop: 6 }}>Health Score</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text)' }}>{b.executiveSummary || 'No AI summary generated.'}</div>
+            </div>
+          </div>
+
+          {/* KPI Cards */}
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            {statBox(maps.totalKeywords || 0, 'Maps Keywords', '#14b8a6', 'fas fa-map-marker-alt')}
+            {statBox(maps.avgVisibility != null ? Math.round(maps.avgVisibility) + '%' : '—', 'Maps Visibility', '#14b8a6', 'fas fa-eye')}
+            {statBox(serp.keywordsTracked || 0, 'SERP Keywords', '#3b82f6', 'fas fa-search')}
+            {statBox(serp.avgPosition || '—', 'Avg SERP Pos', '#3b82f6', 'fas fa-chart-line')}
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            {statBox(gsc.clicks != null ? gsc.clicks.toLocaleString() : '—', 'GSC Clicks (30d)', '#8b5cf6', 'fas fa-mouse-pointer')}
+            {statBox(gsc.impressions != null ? gsc.impressions.toLocaleString() : '—', 'Impressions', '#8b5cf6', 'fas fa-eye')}
+            {statBox(gsc.ctr != null ? gsc.ctr + '%' : '—', 'CTR', '#8b5cf6', 'fas fa-percentage')}
+            {statBox(b.fourOhFourCount || 0, '404 Errors', '#ef4444', 'fas fa-unlink')}
+          </div>
+
+          {/* Maps Rankings */}
+          {sectionHeader('Maps Rankings', 'fas fa-map-marker-alt', '#14b8a6')}
+          <div style={{ ...cardStyle, marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+              <div><span style={{ color: '#22c55e', fontWeight: 700 }}>{maps.dominant || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Dominant</span></div>
+              <div><span style={{ color: '#3b82f6', fontWeight: 700 }}>{maps.competitive || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Competitive</span></div>
+              <div><span style={{ color: '#f59e0b', fontWeight: 700 }}>{maps.needsWork || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Needs Work</span></div>
+              <div><span style={{ color: '#ef4444', fontWeight: 700 }}>{maps.notVisible || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Not Visible</span></div>
+            </div>
+            {(maps.topKeywords || []).length > 0 && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Keyword</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>ARP</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Visibility</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Found</th>
+                </tr></thead>
+                <tbody>
+                  {maps.topKeywords.map((kw, i) => (
+                    <tr key={i} style={{ background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                      <td style={{ padding: '6px 8px' }}>{kw.keyword}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: (kw.arp || 99) <= 3 ? '#22c55e' : (kw.arp || 99) <= 10 ? '#f59e0b' : '#ef4444', fontWeight: 600 }}>{kw.arp || '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center' }}>{kw.visibility}%</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: 'var(--text3)' }}>{kw.found}/{kw.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {(maps.topKeywords || []).length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No Maps data yet. Run a grid scan first.</div>}
+          </div>
+
+          {/* SERP Rankings */}
+          {sectionHeader('SERP Rankings', 'fas fa-search', '#3b82f6')}
+          <div style={{ ...cardStyle, marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div><span style={{ color: '#22c55e', fontWeight: 700 }}>{serp.top3 || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Top 3</span></div>
+              <div><span style={{ color: '#3b82f6', fontWeight: 700 }}>{serp.top10 || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Top 10</span></div>
+              <div><span style={{ color: '#f59e0b', fontWeight: 700 }}>{serp.page2 || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Page 2</span></div>
+              <div><span style={{ color: '#ef4444', fontWeight: 700 }}>{serp.notRanking || 0}</span> <span style={{ color: 'var(--text3)', fontSize: 12 }}>Not Ranking</span></div>
+            </div>
+            {!serp.keywordsTracked && <div style={{ color: 'var(--text3)', fontSize: 13, marginTop: 8 }}>No SERP tracking data yet.</div>}
+          </div>
+
+          {/* GSC Top Queries */}
+          {sectionHeader('Google Search Console', 'fab fa-google', '#8b5cf6')}
+          <div style={{ ...cardStyle, marginBottom: 16 }}>
+            {(gsc.topQueries || []).length > 0 ? (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Query</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Clicks</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Impressions</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>CTR</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Position</th>
+                </tr></thead>
+                <tbody>
+                  {gsc.topQueries.slice(0, 15).map((q, i) => (
+                    <tr key={i} style={{ background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                      <td style={{ padding: '6px 8px' }}>{q.query}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 600 }}>{q.clicks}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: 'var(--text3)' }}>{q.impressions?.toLocaleString()}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center' }}>{q.ctr}%</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: q.position <= 10 ? '#22c55e' : q.position <= 20 ? '#f59e0b' : '#ef4444', fontWeight: 600 }}>{q.position}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div style={{ color: 'var(--text3)', fontSize: 13 }}>No GSC data. Connect Google Search Console in Settings.</div>}
+          </div>
+
+          {/* Audit Findings Summary */}
+          {sectionHeader('Audit Findings', 'fas fa-clipboard-check', '#f59e0b')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12, marginBottom: 16 }}>
+            {Object.entries(findings).map(([pillar, data]) => (
+              <div key={pillar} style={{ ...cardStyle, padding: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', color: '#14b8a6', marginBottom: 8 }}>{pillar.replace(/_/g, ' ')}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 4 }}>{data.total} <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 400 }}>findings</span></div>
+                <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
+                  {data.critical > 0 && <span style={{ color: '#ef4444' }}>{data.critical} critical</span>}
+                  {data.high > 0 && <span style={{ color: '#f59e0b' }}>{data.high} high</span>}
+                  {data.medium > 0 && <span style={{ color: '#3b82f6' }}>{data.medium} medium</span>}
+                </div>
+              </div>
+            ))}
+            {Object.keys(findings).length === 0 && <div style={{ ...cardStyle, color: 'var(--text3)', fontSize: 13 }}>No audits run yet. Run GBP, GSC, or Website audit first.</div>}
+          </div>
+
+          {/* Critical Findings */}
+          {criticals.length > 0 && (<>
+            {sectionHeader('Critical Issues', 'fas fa-exclamation-triangle', '#ef4444')}
+            <div style={{ ...cardStyle, marginBottom: 16, padding: 0 }}>
+              {criticals.map((f, i) => (
+                <div key={i} style={{ padding: '10px 16px', borderBottom: i < criticals.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <i className="fas fa-exclamation-circle" style={{ color: '#ef4444', fontSize: 14 }}></i>
+                  <span style={{ flex: 1, fontSize: 13 }}>{f.title}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>{(f.pillar || f.category || '').replace(/_/g, ' ')}</span>
+                </div>
+              ))}
+            </div>
+          </>)}
+
+          {/* On-Page + PageSpeed */}
+          {sectionHeader('Website Health', 'fas fa-globe', '#22c55e')}
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            {statBox(onPage.totalPages || 0, 'Pages Audited', '#22c55e')}
+            {statBox(onPage.avgScore ? onPage.avgScore + '%' : '—', 'Avg SEO Score', '#22c55e')}
+            {statBox(onPage.issuesFound || 0, 'Issues Found', '#f59e0b')}
+            {statBox(ps.avgPerformance ? ps.avgPerformance + '%' : '—', 'PageSpeed Avg', ps.avgPerformance >= 70 ? '#22c55e' : '#f59e0b')}
+          </div>
+
+          {/* PageSpeed per page */}
+          {ps.pages && ps.pages.length > 0 && (
+            <div style={{ ...cardStyle, marginBottom: 16 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Page</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>Score</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>LCP</th>
+                  <th style={{ textAlign: 'center', padding: '6px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>CLS</th>
+                </tr></thead>
+                <tbody>
+                  {ps.pages.slice(0, 10).map((p, i) => (
+                    <tr key={i} style={{ background: i % 2 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                      <td style={{ padding: '6px 8px', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(p.url || '').replace(/^https?:\/\/[^/]+/, '')}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                        <span style={{ fontWeight: 700, color: p.performance >= 90 ? '#22c55e' : p.performance >= 50 ? '#f59e0b' : '#ef4444' }}>{p.performance}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: 'var(--text3)' }}>{p.lcp ? (p.lcp / 1000).toFixed(1) + 's' : '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'center', color: 'var(--text3)' }}>{p.cls != null ? p.cls.toFixed(3) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ MONTHLY REPORTS PAGE ============
     function MonthlyReportsPage({ project }) {
       const [reports, setReports] = useState([]);
@@ -29036,6 +29348,8 @@ case 'action-plan':
             return <SERPRankingsPage project={project} />;
           case 'discover-local':
             return <DiscoverLocalPage project={project} />;
+          case 'baseline-report':
+            return <BaselineReportPage project={project} />;
           case 'monthly-reports':
             return <MonthlyReportsPage project={project} />;
           case 'gbp-posts':
@@ -29112,6 +29426,7 @@ case 'action-plan':
           ]},
         ]},
         { section: 'REPORTS', items: [
+          { id: 'baseline-report', label: 'Baseline Report', icon: 'fas fa-flag-checkered' },
           { id: 'monthly-reports', label: 'Monthly Reports', icon: 'fas fa-file-pdf' },
         ]},
         { section: 'SETTINGS', items: [
