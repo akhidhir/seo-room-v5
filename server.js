@@ -18105,7 +18105,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
 
     const aiResponse = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5-20241022',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 8192,
       messages: [{
         role: 'user',
