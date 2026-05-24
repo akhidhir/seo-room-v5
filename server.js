@@ -18067,6 +18067,219 @@ app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res)
   }
 });
 
+// ==================== TEXT HUMANIZER (Post-Processing) ====================
+// Rule-based transformations to reduce AI detection scores.
+// Runs AFTER LLM generates content — no extra API cost.
+
+function humanizeHTML(html) {
+  if (!html) return html;
+
+  // Work on text nodes only — preserve HTML tags
+  // Split by HTML tags, process text segments, rejoin
+  const parts = html.split(/(<[^>]+>)/g);
+  const processed = parts.map(part => {
+    if (part.startsWith('<')) return part; // HTML tag — skip
+    if (!part.trim()) return part; // whitespace — skip
+    return humanizeText(part);
+  });
+  return processed.join('');
+}
+
+function humanizeText(text) {
+  if (!text || text.length < 10) return text;
+
+  // 1. AI FINGERPRINT WORD REMOVAL — replace with human alternatives
+  const fingerprints = {
+    'comprehensive': ['full', 'complete', 'thorough', 'solid', 'good'],
+    'innovative': ['new', 'fresh', 'clever', 'smart', 'different'],
+    'leverage': ['use', 'tap into', 'work with', 'rely on'],
+    'streamline': ['simplify', 'speed up', 'clean up', 'sort out'],
+    'cutting-edge': ['modern', 'latest', 'new', 'up-to-date'],
+    'state-of-the-art': ['modern', 'top-quality', 'latest', 'best'],
+    'seamless': ['smooth', 'easy', 'simple', 'painless'],
+    'robust': ['strong', 'solid', 'tough', 'reliable'],
+    'navigate': ['deal with', 'handle', 'work through', 'manage'],
+    'landscape': ['world', 'scene', 'space', 'area', 'field'],
+    'delve': ['dig into', 'look at', 'get into', 'explore'],
+    'crucial': ['important', 'key', 'big', 'vital'],
+    'optimal': ['best', 'ideal', 'right', 'top'],
+    'facilitate': ['help', 'make easier', 'support', 'enable'],
+    'enhance': ['improve', 'boost', 'lift', 'upgrade'],
+    'utilize': ['use', 'work with', 'put to use', 'apply'],
+    'diverse': ['varied', 'mixed', 'different', 'broad'],
+    'multifaceted': ['complex', 'layered', 'varied', 'mixed'],
+    'elevate': ['lift', 'raise', 'improve', 'boost'],
+    'foster': ['build', 'grow', 'encourage', 'support'],
+    'harness': ['use', 'tap into', 'capture', 'grab'],
+    'pivotal': ['key', 'important', 'central', 'major'],
+    'dynamic': ['active', 'changing', 'lively', 'fluid'],
+    'testament': ['proof', 'sign', 'example', 'evidence'],
+    'cornerstone': ['foundation', 'base', 'core', 'backbone'],
+    'holistic': ['whole', 'full', 'complete', 'overall'],
+    'endeavor': ['effort', 'attempt', 'project', 'work'],
+    'paramount': ['top', 'main', 'biggest', 'most important'],
+    'meticulously': ['carefully', 'closely', 'properly', 'well'],
+    'unparalleled': ['unmatched', 'rare', 'exceptional', 'hard to beat'],
+    'underpinned': ['backed', 'supported', 'built on', 'based on'],
+    'underscores': ['shows', 'highlights', 'proves', 'points to'],
+    'necessitate': ['need', 'require', 'call for', 'demand'],
+    'encompasses': ['includes', 'covers', 'takes in', 'spans'],
+    'spearhead': ['lead', 'drive', 'push', 'run'],
+    'bolster': ['support', 'strengthen', 'back up', 'prop up'],
+    'augment': ['add to', 'boost', 'grow', 'build on'],
+    'garner': ['get', 'earn', 'win', 'pick up'],
+    'inadvertently': ['by accident', 'without meaning to', 'accidentally'],
+    'commencing': ['starting', 'beginning', 'kicking off'],
+    'culminating': ['ending', 'finishing', 'wrapping up'],
+    'overarching': ['main', 'big-picture', 'overall', 'broad'],
+    'aforementioned': ['mentioned', 'above', 'earlier', 'that'],
+    'subsequently': ['then', 'after that', 'next', 'later'],
+    'consequently': ['so', 'because of this', 'as a result'],
+    'furthermore': ['also', 'plus', 'and', 'on top of that'],
+    'moreover': ['also', 'plus', 'and', 'what\'s more'],
+    'additionally': ['also', 'plus', 'and', 'on top of that'],
+    'nevertheless': ['still', 'but', 'even so', 'yet'],
+    'notwithstanding': ['despite', 'even with', 'regardless'],
+    'ensure': ['make sure', 'check', 'see to it', 'confirm'],
+    'utilize': ['use', 'work with', 'put to use'],
+    'implement': ['set up', 'put in place', 'roll out', 'do'],
+    'significant': ['big', 'major', 'real', 'notable'],
+    'substantial': ['big', 'large', 'major', 'solid'],
+    'demonstrate': ['show', 'prove', 'display', 'reveal'],
+    'approximately': ['about', 'around', 'roughly', 'close to'],
+    'numerous': ['many', 'lots of', 'plenty of', 'heaps of'],
+    'sufficient': ['enough', 'plenty', 'adequate'],
+    'commence': ['start', 'begin', 'kick off', 'get going'],
+    'terminate': ['end', 'stop', 'finish', 'wrap up'],
+    'endeavour': ['effort', 'try', 'attempt', 'go'],
+    'prior to': ['before', 'ahead of', 'leading up to'],
+    'in order to': ['to', 'so we can', 'for'],
+    'in conjunction with': ['with', 'alongside', 'together with'],
+    'with regard to': ['about', 'on', 'for', 'regarding'],
+    'in the event of': ['if', 'when', 'should'],
+    'a wide range of': ['many', 'lots of', 'all sorts of', 'various'],
+    'at the end of the day': ['ultimately', 'really', 'in the end'],
+    'it is important to note': ['worth knowing', 'keep in mind', 'note that'],
+    'plays a crucial role': ['matters', 'is key', 'is important', 'counts'],
+  };
+
+  let result = text;
+  for (const [ai_word, replacements] of Object.entries(fingerprints)) {
+    const regex = new RegExp('\\b' + ai_word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+    result = result.replace(regex, () => {
+      return replacements[Math.floor(Math.random() * replacements.length)];
+    });
+  }
+
+  // 2. BANNED PHRASE REMOVAL
+  const bannedPhrases = [
+    'whether you\'re looking for', 'when it comes to', 'in today\'s',
+    'look no further', 'your trusted partner', 'dedicated to providing',
+    'committed to excellence', 'one-stop shop', 'hassle-free',
+    'don\'t hesitate to', 'feel free to', 'take it to the next level',
+    'we understand that', 'rest assured', 'peace of mind',
+    'second to none', 'top-notch', 'are you looking for',
+  ];
+  for (const phrase of bannedPhrases) {
+    const regex = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    result = result.replace(regex, '');
+  }
+
+  // 3. CONTRACTION TOGGLING — randomly expand some contractions (humans are inconsistent)
+  const contractionPairs = [
+    [/\bwe're\b/gi, 'we are'], [/\byou'll\b/gi, 'you will'],
+    [/\bit's\b/gi, 'it is'], [/\bthat's\b/gi, 'that is'],
+    [/\bthey're\b/gi, 'they are'], [/\bwe've\b/gi, 'we have'],
+    [/\bwe'd\b/gi, 'we would'], [/\bthere's\b/gi, 'there is'],
+    [/\bhere's\b/gi, 'here is'], [/\bwon't\b/gi, 'will not'],
+    [/\bcan't\b/gi, 'cannot'], [/\bdon't\b/gi, 'do not'],
+    [/\bdoesn't\b/gi, 'does not'], [/\bisn't\b/gi, 'is not'],
+  ];
+  // Only expand ~20% of contractions — humans mix both forms
+  for (const [pattern, expanded] of contractionPairs) {
+    result = result.replace(pattern, (match) => {
+      return Math.random() < 0.2 ? expanded : match;
+    });
+  }
+
+  // 4. SENTENCE-LEVEL DISRUPTION
+  const sentences = result.match(/[^.!?]+[.!?]+/g);
+  if (sentences && sentences.length > 4) {
+    const modified = [];
+    for (let i = 0; i < sentences.length; i++) {
+      let s = sentences[i].trim();
+
+      // 4a. Randomly merge two short sentences with a dash or comma (~15% chance)
+      if (i < sentences.length - 1 && s.length < 60 && sentences[i+1].trim().length < 60 && Math.random() < 0.15) {
+        const connector = Math.random() < 0.5 ? ' — ' : ', and ';
+        const next = sentences[i+1].trim();
+        // lowercase the start of the merged sentence
+        s = s.replace(/\.\s*$/, '') + connector + next.charAt(0).toLowerCase() + next.slice(1);
+        i++; // skip next
+      }
+
+      // 4b. Randomly split a long sentence at a comma (~20% chance)
+      if (s.length > 120 && Math.random() < 0.2) {
+        const commaIdx = s.indexOf(',', 40);
+        if (commaIdx > 0 && commaIdx < s.length - 30) {
+          const first = s.substring(0, commaIdx) + '.';
+          const second = s.substring(commaIdx + 1).trim();
+          s = first + ' ' + second.charAt(0).toUpperCase() + second.slice(1);
+        }
+      }
+
+      // 4c. Randomly add a parenthetical aside (~8% chance on medium sentences)
+      if (s.length > 60 && s.length < 150 && Math.random() < 0.08) {
+        const asides = [
+          ' (which matters more than you\'d think)',
+          ' (seriously)',
+          ' (no joke)',
+          ' (and yes, that makes a difference)',
+          ' (we see this all the time)',
+          ' (trust us on this one)',
+          ' (it happens more often than you\'d expect)',
+        ];
+        const aside = asides[Math.floor(Math.random() * asides.length)];
+        // Insert before the final punctuation
+        const punct = s.match(/[.!?]+$/);
+        if (punct) {
+          s = s.slice(0, -punct[0].length) + aside + punct[0];
+        }
+      }
+
+      modified.push(s);
+    }
+    result = modified.join(' ');
+  }
+
+  // 5. FILLER & HEDGE WORDS — humans use them, AI doesn't
+  // Insert occasionally at sentence starts (~10% of sentences)
+  const fillers = ['Look, ', 'Honestly, ', 'Thing is, ', 'So basically, ', 'Right, so ', 'Yeah, ', 'Now, ', 'OK so ', 'Here\'s the thing — ', 'Point is, '];
+  const sentencesAfter = result.match(/[^.!?]+[.!?]+/g);
+  if (sentencesAfter && sentencesAfter.length > 5) {
+    const modded = sentencesAfter.map((s, i) => {
+      // Skip first sentence, skip if already starts with filler
+      if (i === 0) return s;
+      if (Math.random() < 0.08) {
+        const filler = fillers[Math.floor(Math.random() * fillers.length)];
+        const trimmed = s.trim();
+        return ' ' + filler + trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+      }
+      return s;
+    });
+    result = modded.join('');
+  }
+
+  // 6. CLEAN UP — fix double spaces, orphaned punctuation
+  result = result.replace(/\s{2,}/g, ' ');
+  result = result.replace(/\s+([.,;:!?])/g, '$1');
+  result = result.replace(/\.\./g, '.');
+  result = result.replace(/,,/g, ',');
+  result = result.replace(/\s*—\s*/g, ' — ');
+
+  return result;
+}
+
 // AI Optimise a site page — takes score tips + content, returns improved version
 app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
   req.setTimeout(120000);
@@ -18180,6 +18393,12 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
     } catch (e) {
       // If not JSON, treat as raw HTML
       result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+    }
+
+    // Post-process: rule-based humanization to defeat AI detection
+    if (result.content_html) {
+      result.content_html = humanizeHTML(result.content_html);
+      result.ai_notes = (result.ai_notes || '') + ' | Post-processed with rule-based humanizer (synonym swap, sentence disruption, contraction toggling, filler injection)';
     }
 
     res.json(result);
