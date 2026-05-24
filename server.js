@@ -27697,9 +27697,11 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Sync ranks — calls DataForSEO for all tracked keywords
+// Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
+  const provider = (req.body?.provider || 'serpapi').toLowerCase(); // 'dataforseo' or 'serpapi'
+  if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
+  if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -27727,23 +27729,45 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
 
     const resolvedLoc = resolveDataForSeoLocation(project.location);
-    console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, domain="${domain}", businessName="${businessName}", project.location="${project.location}", resolved="${resolvedLoc}"`);
+    console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, provider="${provider}", domain="${domain}", businessName="${businessName}", project.location="${project.location}", resolved="${resolvedLoc}"`);
 
-    // Uses global SUBURB_GPS for GPS coordinates (all AU suburbs)
+    // Resolve GPS for SerpAPI — use project location suburb GPS or service area center
+    let projectGps = null;
+    if (provider === 'serpapi') {
+      const locLower = (project.location || '').toLowerCase().trim();
+      // Try exact suburb match first
+      const locParts = locLower.split(/[,\s]+/);
+      for (let wLen = Math.min(3, locParts.length); wLen >= 1; wLen--) {
+        for (let wi = 0; wi <= locParts.length - wLen; wi++) {
+          const candidate = locParts.slice(wi, wi + wLen).join(' ');
+          if (SUBURB_GPS[candidate]) { projectGps = SUBURB_GPS[candidate]; break; }
+        }
+        if (projectGps) break;
+      }
+      // If no suburb GPS, try service_areas
+      if (!projectGps && project.service_areas) {
+        const areas = Array.isArray(project.service_areas) ? project.service_areas : [];
+        for (const area of areas) {
+          const areaLower = (area || '').toLowerCase().trim();
+          if (SUBURB_GPS[areaLower]) { projectGps = SUBURB_GPS[areaLower]; break; }
+        }
+      }
+      console.log(`[rank-sync] SerpAPI GPS: projectGps=${projectGps ? `${projectGps.lat},${projectGps.lng}` : 'none (will use location text)'}`);
+    }
 
     const results = [];
     const competitors = project.competitors || [];
     const competitorDomains = competitors.map(c => (c.domain || c).replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase());
     const baseTime = Date.now();
 
-    // Process keywords in parallel (5 at a time) via DataForSEO
+    // Process keywords in parallel (5 at a time)
     for (let i = 0; i < kwRes.rows.length; i += 5) {
       const batch = kwRes.rows.slice(i, i + 5);
       const promises = batch.map(async (kw, j) => {
         const idx = i + j;
         const query = kw.location ? `${kw.keyword} ${kw.location}` : kw.keyword;
         try {
-          // Detect suburb for logging
+          // Detect suburb GPS from keyword text
           let gps = kw.location ? SUBURB_GPS[kw.location.toLowerCase().trim()] : null;
           let detectedSuburb = kw.location || null;
           if (!gps && !kw.location) {
@@ -27763,10 +27787,35 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
               if (found) break;
             }
           }
-          const loc = resolvedLoc;
-          if (idx < 3) console.log(`[rank-sync] "${query}" using location "${loc}" (DataForSEO)`);
 
-          const data = await dataForSeoSerp({ keyword: query, location: loc, depth: 30 });
+          let data;
+          if (provider === 'serpapi') {
+            // SerpAPI — use suburb-specific location for better accuracy
+            // SerpAPI location format: "Warner,Queensland,Australia" or "Brisbane,Queensland,Australia"
+            let serpLocation = resolvedLoc.replace(/,/g, ', ');
+            // If we detected a suburb with GPS, use suburb name as SerpAPI location for suburb-level targeting
+            if (detectedSuburb && SUBURB_GPS[detectedSuburb.toLowerCase()]) {
+              // Resolve suburb state from resolvedLoc (e.g. "Brisbane,Queensland,Australia" → "Queensland")
+              const locParts = resolvedLoc.split(',');
+              const state = locParts.length >= 2 ? locParts[1] : 'Queensland';
+              serpLocation = `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`;
+            }
+            const serpParams = {
+              engine: 'google',
+              q: query,
+              gl: 'au',
+              google_domain: 'google.com.au',
+              location: serpLocation,
+              num: 30,
+            };
+            if (idx < 3) console.log(`[rank-sync] "${query}" using SerpAPI location="${serpLocation}"`);
+            data = await serpApiSearch(serpParams);
+          } else {
+            // DataForSEO city-level
+            const loc = resolvedLoc;
+            if (idx < 3) console.log(`[rank-sync] "${query}" using DataForSEO location "${loc}"`);
+            data = await dataForSeoSerp({ keyword: query, location: loc, depth: 30 });
+          }
           if (idx === 0) console.log(`[rank-sync] First keyword "${query}" response keys:`, Object.keys(data));
 
           // Parse organic results

@@ -21927,9 +21927,9 @@
         };
         input.click();
       };
-      const syncRanks = async () => {
+      const syncRanks = async (provider) => {
         setSyncing(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST' });
+        const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi' } });
         if (r.ok) loadData(); else if (r.error) alert(r.error);
         setSyncing(false);
       };
@@ -21964,6 +21964,7 @@
       const [expandedAnalysis, setExpandedAnalysis] = useState(null);
       const [sentToActionPlan, setSentToActionPlan] = useState({});
       const [importingMaps, setImportingMaps] = useState(false);
+      const [serpProvider, setSerpProvider] = useState('serpapi');
       const [serpView, setSerpView] = useState('rankings');
       const [actionFilter, setActionFilter] = useState('all');
       const [actionSubFilter, setActionSubFilter] = useState(null);
@@ -22465,9 +22466,15 @@
               </div>
             </div>
             {serpView === 'rankings' && (
-              <button className="btn btn-primary" onClick={syncRanks} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
-                {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <select value={serpProvider} onChange={e => setSerpProvider(e.target.value)} style={{ fontSize: 13, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text1)', cursor: 'pointer' }}>
+                  <option value="serpapi">SerpAPI (GPS)</option>
+                  <option value="dataforseo">DataForSEO (City)</option>
+                </select>
+                <button className="btn btn-primary" onClick={() => syncRanks(serpProvider)} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
+                  {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
+                </button>
+              </div>
             )}
             {serpView === 'actions' && serpActions.length > 0 && (
               <button className="btn" onClick={async () => {
