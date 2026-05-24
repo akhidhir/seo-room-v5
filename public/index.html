@@ -15289,20 +15289,11 @@
         try {
           var plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 50) { setPlagiarismError('Content too short (min 50 chars)'); setPlagiarismChecking(false); return; }
-          var data = await api('/projects/' + pid + '/plagiarism-check', { method: 'POST', body: { content: plainText, title: page.title || page.slug || 'Untitled' } });
-          if (data.error) { setPlagiarismError(data.error); setPlagiarismChecking(false); return; }
-          var scanId = data.scanId;
-          var attempts = 0;
-          var poll = setInterval(async function() {
-            attempts++;
-            try {
-              var result = await api('/projects/' + pid + '/plagiarism-check/' + scanId);
-              if (result.status === 'completed') { clearInterval(poll); setPlagiarismResult(result); setPlagiarismChecking(false); }
-              else if (result.status === 'error') { clearInterval(poll); setPlagiarismError(result.error || 'Scan failed'); setPlagiarismChecking(false); }
-              else if (attempts > 60) { clearInterval(poll); setPlagiarismError('Timed out'); setPlagiarismChecking(false); }
-            } catch(e) { if (attempts > 60) { clearInterval(poll); setPlagiarismError(e.message); setPlagiarismChecking(false); } }
-          }, 2000);
-        } catch(e) { setPlagiarismError(e.message); setPlagiarismChecking(false); }
+          var result = await api('/projects/' + pid + '/plagiarism-check', { method: 'POST', body: { content: plainText, title: page.title || page.slug || 'Untitled' } });
+          if (result.error) { setPlagiarismError(result.error); }
+          else { setPlagiarismResult(result); }
+        } catch(e) { setPlagiarismError(e.message); }
+        setPlagiarismChecking(false);
       };
 
       var hasDraft = !!editContent;
@@ -19531,54 +19522,20 @@
         setPlagiarismError(null);
         setPlagiarismResult(null);
         try {
-          // Strip HTML tags to get plain text
           const plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 50) {
             setPlagiarismError('Content too short (minimum 50 characters)');
             setPlagiarismChecking(false);
             return;
           }
-          const data = await api(`/projects/${pid}/plagiarism-check`, {
+          const result = await api(`/projects/${pid}/plagiarism-check`, {
             method: 'POST',
             body: { content: plainText, title: selectedItem.page_title || selectedItem.slug || 'Untitled' }
           });
-          if (data.error) {
-            setPlagiarismError(data.error);
-            setPlagiarismChecking(false);
-            return;
-          }
-          // Poll for results (Copyleaks is async)
-          const scanId = data.scanId;
-          let attempts = 0;
-          const poll = setInterval(async () => {
-            attempts++;
-            try {
-              const result = await api(`/projects/${pid}/plagiarism-check/${scanId}`);
-              if (result.status === 'completed') {
-                clearInterval(poll);
-                setPlagiarismResult(result);
-                setPlagiarismChecking(false);
-              } else if (result.status === 'error') {
-                clearInterval(poll);
-                setPlagiarismError(result.error || 'Scan failed');
-                setPlagiarismChecking(false);
-              } else if (attempts > 60) { // 2 min timeout
-                clearInterval(poll);
-                setPlagiarismError('Scan timed out — check back later');
-                setPlagiarismChecking(false);
-              }
-            } catch (e) {
-              if (attempts > 60) {
-                clearInterval(poll);
-                setPlagiarismError('Poll failed: ' + e.message);
-                setPlagiarismChecking(false);
-              }
-            }
-          }, 2000);
-        } catch (e) {
-          setPlagiarismError(e.message);
-          setPlagiarismChecking(false);
-        }
+          if (result.error) { setPlagiarismError(result.error); }
+          else { setPlagiarismResult(result); }
+        } catch (e) { setPlagiarismError(e.message); }
+        setPlagiarismChecking(false);
       };
 
       const counts = {

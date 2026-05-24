@@ -1094,8 +1094,6 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
   if (req.path.match(/^\/api\/plugin\//)) return next();
-  // Allow Copyleaks webhook callbacks (no JWT, external service)
-  if (req.path.match(/^\/api\/plagiarism\/webhook\//)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
@@ -3188,35 +3186,9 @@ app.get('/api/projects/:id/migrations/:migrationId/report', async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ==================== PLAGIARISM CHECK (Copyleaks) ====================
+// ==================== PLAGIARISM CHECK (Originality.ai) ====================
 
-// Copyleaks auth token cache
-let copyleaksToken = null;
-let copyleaksTokenExpiry = 0;
-
-async function getCopyleaksToken() {
-  if (copyleaksToken && Date.now() < copyleaksTokenExpiry) return copyleaksToken;
-  const email = process.env.COPYLEAKS_EMAIL;
-  const key = process.env.COPYLEAKS_API_KEY;
-  if (!email || !key) throw new Error('COPYLEAKS_EMAIL and COPYLEAKS_API_KEY env vars required');
-  const resp = await fetch('https://id.copyleaks.com/v3/account/login/api', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, key })
-  });
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`Copyleaks login failed (${resp.status}): ${txt}`);
-  }
-  const data = await resp.json();
-  copyleaksToken = data.access_token;
-  // Token valid 48h, refresh after 47h
-  copyleaksTokenExpiry = Date.now() + 47 * 60 * 60 * 1000;
-  console.log('[copyleaks] Authenticated successfully');
-  return copyleaksToken;
-}
-
-// Submit content for plagiarism check
+// Synchronous API — no webhooks needed, instant results
 app.post('/api/projects/:id/plagiarism-check', async (req, res) => {
   try {
     const { content, title } = req.body;
@@ -3224,57 +3196,78 @@ app.post('/api/projects/:id/plagiarism-check', async (req, res) => {
       return res.status(400).json({ error: 'Content must be at least 50 characters' });
     }
 
-    const token = await getCopyleaksToken();
+    const apiKey = process.env.ORIGINALITY_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'ORIGINALITY_API_KEY env var required' });
+
     const scanId = `seoroom-${req.params.id}-${Date.now()}`;
-    const base64Content = Buffer.from(content, 'utf-8').toString('base64');
-    const dashboardUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-      : (process.env.DASHBOARD_URL || 'https://seo-room-v5-production.up.railway.app');
 
-    // Save to DB first
-    await pool.query(
-      `INSERT INTO plagiarism_checks (project_id, scan_id, content_title, content_text, status)
-       VALUES ($1, $2, $3, $4, 'submitted')`,
-      [req.params.id, scanId, title || 'Untitled', content]
-    );
-
-    // Submit to Copyleaks
-    const submitResp = await fetch(`https://api.copyleaks.com/v3/scans/submit/file/${scanId}`, {
-      method: 'PUT',
+    // Call Originality.ai API (synchronous — returns results immediately)
+    console.log(`[originality] Scanning ${scanId} (${content.length} chars)...`);
+    const scanResp = await fetch('https://api.originality.ai/api/v2/scan/plag', {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        'X-OAI-API-KEY': apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
       },
       body: JSON.stringify({
-        base64: base64Content,
-        filename: 'content.txt',
-        properties: {
-          webhooks: {
-            status: `${dashboardUrl}/api/plagiarism/webhook/{STATUS}/${scanId}`
-          },
-          sandbox: false,
-          scanning: { internet: true },
-          cheatDetection: false
-        }
+        content: content,
+        title: title || 'Untitled',
+        aiModelVersion: '1',
+        storeScan: true
       })
     });
 
-    if (!submitResp.ok) {
-      const errText = await submitResp.text();
-      await pool.query(`UPDATE plagiarism_checks SET status='error', error_message=$1 WHERE scan_id=$2`,
-        [`Submit failed (${submitResp.status}): ${errText}`, scanId]);
-      return res.status(submitResp.status).json({ error: `Copyleaks submit failed: ${errText}` });
+    if (!scanResp.ok) {
+      const errText = await scanResp.text();
+      console.error(`[originality] Scan failed (${scanResp.status}):`, errText);
+      return res.status(scanResp.status).json({ error: `Originality.ai scan failed: ${errText}` });
     }
 
-    console.log(`[copyleaks] Scan ${scanId} submitted`);
-    res.json({ scanId, status: 'submitted' });
+    const data = await scanResp.json();
+    console.log(`[originality] Scan ${scanId} complete:`, JSON.stringify(data).slice(0, 200));
+
+    // Extract plagiarism results
+    const plagResult = data.plagiarism || {};
+    const totalWords = data.total_words || data.totalWords || 0;
+    const plagiarismScore = Math.round((plagResult.total_text_score || plagResult.score || 0) * 100);
+
+    // Build matched sources from plagiarism results
+    const sources = plagResult.sources || [];
+    const matchedSources = sources.slice(0, 20).map(s => ({
+      url: s.url || '',
+      title: s.title || s.url || '',
+      matchedWords: s.totalMatchedWords || s.matched_words || 0,
+      percentage: Math.round((s.totalMatchScore || s.score || 0) * 100)
+    }));
+
+    // Save to DB
+    await pool.query(
+      `INSERT INTO plagiarism_checks (project_id, scan_id, content_title, content_text, status, score, total_words, matched_sources, completed_at)
+       VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, NOW())
+       ON CONFLICT (scan_id) DO UPDATE SET status='completed', score=$5, total_words=$6, matched_sources=$7, completed_at=NOW()`,
+      [req.params.id, scanId, title || 'Untitled', content, plagiarismScore, totalWords, JSON.stringify(matchedSources)]
+    );
+
+    // Return results immediately (no polling needed)
+    res.json({
+      scanId,
+      status: 'completed',
+      score: plagiarismScore,
+      totalWords,
+      identicalWords: 0,
+      minorChangedWords: 0,
+      paraphrasedWords: 0,
+      matchedSources,
+      aiScore: data.ai ? Math.round((data.ai.score || 0) * 100) : null
+    });
   } catch (e) {
-    console.error('[copyleaks] Submit error:', e.message);
+    console.error('[originality] Scan error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Get plagiarism check status/results
+// Get plagiarism check results from DB
 app.get('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
   try {
     const row = (await pool.query(
@@ -3288,9 +3281,9 @@ app.get('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
       title: row.content_title,
       score: row.score,
       totalWords: row.total_words,
-      identicalWords: row.identical_words,
-      minorChangedWords: row.minor_changed_words,
-      paraphrasedWords: row.paraphrased_words,
+      identicalWords: row.identical_words || 0,
+      minorChangedWords: row.minor_changed_words || 0,
+      paraphrasedWords: row.paraphrased_words || 0,
       matchedSources: row.matched_sources || [],
       error: row.error_message,
       createdAt: row.created_at,
@@ -3309,89 +3302,6 @@ app.get('/api/projects/:id/plagiarism-checks', async (req, res) => {
     )).rows;
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Copyleaks webhook: scan completed
-app.post('/api/plagiarism/webhook/completed/:scanId', async (req, res) => {
-  try {
-    const { scanId } = req.params;
-    const body = req.body;
-    console.log(`[copyleaks] Webhook completed for ${scanId}`);
-
-    // Extract results summary from completed webhook
-    const scannedDoc = body.scannedDocument || {};
-    const results = body.results || {};
-    const internet = results.internet || [];
-    const database = results.database || [];
-    const allResults = [...internet, ...database];
-
-    // Get score from scannedDocument
-    const score = scannedDoc.totalExcluded != null
-      ? Math.round((1 - (scannedDoc.totalExcluded / (scannedDoc.totalWords || 1))) * 100)
-      : null;
-
-    // Build matched sources list from results
-    const matchedSources = allResults.slice(0, 20).map(r => ({
-      url: r.url || '',
-      title: r.title || r.url || '',
-      matchedWords: r.matchedWords || 0,
-      percentage: r.percents || 0
-    }));
-
-    // Calculate plagiarism score: % of text that matches external sources
-    const totalWords = scannedDoc.totalWords || 0;
-    const identicalWords = scannedDoc.identicalWords || 0;
-    const minorChangedWords = scannedDoc.minorChangedWords || 0;
-    const paraphrasedWords = scannedDoc.relatedMeaningWords || 0;
-    const plagiarismScore = totalWords > 0
-      ? Math.round(((identicalWords + minorChangedWords + paraphrasedWords) / totalWords) * 100)
-      : 0;
-
-    const resultIds = allResults.map(r => r.id).filter(Boolean);
-
-    await pool.query(
-      `UPDATE plagiarism_checks SET
-        status='completed',
-        score=$1,
-        total_words=$2,
-        identical_words=$3,
-        minor_changed_words=$4,
-        paraphrased_words=$5,
-        matched_sources=$6,
-        result_ids=$7,
-        completed_at=NOW()
-       WHERE scan_id=$8`,
-      [plagiarismScore, totalWords, identicalWords, minorChangedWords, paraphrasedWords,
-       JSON.stringify(matchedSources), JSON.stringify(resultIds), scanId]
-    );
-
-    res.sendStatus(200);
-  } catch (e) {
-    console.error('[copyleaks] Webhook completed error:', e.message);
-    res.sendStatus(200); // Always 200 to Copyleaks so they don't retry
-  }
-});
-
-// Copyleaks webhook: scan error
-app.post('/api/plagiarism/webhook/error/:scanId', async (req, res) => {
-  try {
-    const { scanId } = req.params;
-    console.log(`[copyleaks] Webhook error for ${scanId}:`, req.body);
-    await pool.query(
-      `UPDATE plagiarism_checks SET status='error', error_message=$1, completed_at=NOW() WHERE scan_id=$2`,
-      [JSON.stringify(req.body), scanId]
-    );
-    res.sendStatus(200);
-  } catch (e) {
-    console.error('[copyleaks] Webhook error handler:', e.message);
-    res.sendStatus(200);
-  }
-});
-
-// Copyleaks webhook: credits checked (acknowledge)
-app.post('/api/plagiarism/webhook/credits-checked/:scanId', async (req, res) => {
-  console.log(`[copyleaks] Credits checked for ${req.params.scanId}`);
-  res.sendStatus(200);
 });
 
 // Delete a plagiarism check
