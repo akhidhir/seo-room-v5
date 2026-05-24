@@ -2363,16 +2363,25 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
         details.linked_from = Array.from(sources).slice(0, 5);
       }
 
-      // Check referrer (from plugin data) — must check hostname, not just string contains
+      // Check referrer (from plugin data) — must check hostname AND referrer must not itself be a 404
       const referrer = referrers ? referrers[url] : null;
       if (referrer) {
         let referrerHost = '';
         try { referrerHost = new URL(referrer).hostname.replace(/^www\./, ''); } catch {}
         const isDomainReferrer = referrerHost === domain.replace(/^www\./, '');
-        if (isDomainReferrer && !causes.includes('internal_link')) {
+        // Skip if the referrer itself is also in the 404 list (bot chain, not real internal link)
+        const referrerPath = referrer.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
+        const referrerIsAlso404 = urls.some(u => {
+          const uNorm = u.replace(/\/$/, '');
+          return uNorm === referrerPath || uNorm === referrer.replace(/\/$/, '');
+        });
+        // Also skip common non-page referrer paths
+        const junkPaths = ['/wp/', '/wp-admin', '/backup', '/old/', '/login', '/admin', '/xmlrpc', '/wp-login', '/wp-cron'];
+        const isJunkReferrer = junkPaths.some(jp => referrerPath.toLowerCase().startsWith(jp));
+        if (isDomainReferrer && !referrerIsAlso404 && !isJunkReferrer && !causes.includes('internal_link')) {
           causes.push('internal_link');
           details.linked_from = [referrer];
-        } else if (isDomainReferrer && details.linked_from && !details.linked_from.includes(referrer)) {
+        } else if (isDomainReferrer && !referrerIsAlso404 && !isJunkReferrer && details.linked_from && !details.linked_from.includes(referrer)) {
           details.linked_from.push(referrer);
         }
       }
