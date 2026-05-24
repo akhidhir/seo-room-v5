@@ -18051,19 +18051,28 @@ app.post('/api/projects/:projectId/site-pages/:pageId/publish', async (req, res)
 });
 
 // AI Optimise a site page — takes score tips + content, returns improved version
-app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:projectId/site-pages/:pageId/optimise'], async (req, res) => {
+app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
   req.setTimeout(120000);
   res.setTimeout(120000);
-  const { projectId, pageId } = req.params;
+  const { projectId, buildId, pageId } = req.params;
   const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
   try {
-    const pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    // Support both /projects/:projectId and /builds/:buildId routes
+    let pageResult;
+    if (buildId) {
+      pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [pageId, buildId]);
+    } else {
+      pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    }
     if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
     const page = pageResult.rows[0];
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const resolvedProjectId = page.project_id || projectId;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [resolvedProjectId])).rows[0];
 
     // Get all pages for internal linking
-    const allPages = await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [projectId, pageId]);
+    const allPages = buildId
+      ? await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE build_id=$1 AND id != $2', [buildId, pageId])
+      : await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [resolvedProjectId, pageId]);
 
     const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
