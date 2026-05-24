@@ -15276,24 +15276,23 @@
       var [importingCurrent, setImportingCurrent] = React.useState(false);
       var [editorKey, setEditorKey] = React.useState(0);
       var [pageUrl, setPageUrl] = React.useState(page.page_url || page.published_url || '');
-      // Plagiarism check
+      // Plagiarism check — load saved results from DB
       var [plagiarismChecking, setPlagiarismChecking] = React.useState(false);
-      var [plagiarismResult, setPlagiarismResult] = React.useState(null);
+      var [plagiarismResult, setPlagiarismResult] = React.useState(page.plagiarism_result || null);
       var [plagiarismError, setPlagiarismError] = React.useState(null);
-      // AI detection
+      // AI detection — load saved results from DB
       var [aiDetecting, setAiDetecting] = React.useState(false);
-      var [aiResult, setAiResult] = React.useState(null);
+      var [aiResult, setAiResult] = React.useState(page.ai_detection_result || null);
       var [aiError, setAiError] = React.useState(null);
 
       var handlePlagiarismCheck = async function() {
         if (!editContent || plagiarismChecking) return;
         setPlagiarismChecking(true);
         setPlagiarismError(null);
-        setPlagiarismResult(null);
         try {
           var plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 50) { setPlagiarismError('Content too short (min 50 chars)'); setPlagiarismChecking(false); return; }
-          var result = await api('/projects/' + pid + '/plagiarism-check', { method: 'POST', body: { content: plainText, title: page.title || page.slug || 'Untitled' } });
+          var result = await api('/projects/' + pid + '/plagiarism-check', { method: 'POST', body: { content: plainText, title: page.title || page.slug || 'Untitled', page_id: page.id } });
           if (result.error) { setPlagiarismError(result.error); }
           else { setPlagiarismResult(result); }
         } catch(e) { setPlagiarismError(e.message); }
@@ -15304,11 +15303,10 @@
         if (!editContent || aiDetecting) return;
         setAiDetecting(true);
         setAiError(null);
-        setAiResult(null);
         try {
           var plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 300) { setAiError('Content too short (min 300 chars)'); setAiDetecting(false); return; }
-          var result = await api('/projects/' + pid + '/ai-detection', { method: 'POST', body: { content: plainText } });
+          var result = await api('/projects/' + pid + '/ai-detection', { method: 'POST', body: { content: plainText, page_id: page.id } });
           if (result.error) { setAiError(result.error); }
           else { setAiResult(result); }
         } catch(e) { setAiError(e.message); }
@@ -19601,7 +19599,6 @@
         if (!selectedItem || !editContent || plagiarismChecking) return;
         setPlagiarismChecking(true);
         setPlagiarismError(null);
-        setPlagiarismResult(null);
         try {
           const plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 50) {
@@ -19623,7 +19620,6 @@
         if (!selectedItem || !editContent || aiDetecting) return;
         setAiDetecting(true);
         setAiError(null);
-        setAiResult(null);
         try {
           const plainText = editContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           if (plainText.length < 300) { setAiError('Content too short (min 300 chars)'); setAiDetecting(false); return; }
