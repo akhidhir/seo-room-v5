@@ -2350,13 +2350,18 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
         details.linked_from = Array.from(sources).slice(0, 5);
       }
 
-      // Check referrer (from plugin data)
+      // Check referrer (from plugin data) — must check hostname, not just string contains
       const referrer = referrers ? referrers[url] : null;
-      if (referrer && referrer.includes(domain) && !causes.includes('internal_link')) {
-        causes.push('internal_link');
-        details.linked_from = [referrer];
-      } else if (referrer && referrer.includes(domain) && details.linked_from && !details.linked_from.includes(referrer)) {
-        details.linked_from.push(referrer);
+      if (referrer) {
+        let referrerHost = '';
+        try { referrerHost = new URL(referrer).hostname.replace(/^www\./, ''); } catch {}
+        const isDomainReferrer = referrerHost === domain.replace(/^www\./, '');
+        if (isDomainReferrer && !causes.includes('internal_link')) {
+          causes.push('internal_link');
+          details.linked_from = [referrer];
+        } else if (isDomainReferrer && details.linked_from && !details.linked_from.includes(referrer)) {
+          details.linked_from.push(referrer);
+        }
       }
 
       // If no causes → orphan (old Google index)
