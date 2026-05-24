@@ -15746,11 +15746,11 @@
           aiResult && React.createElement('div', null,
             React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
               React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.humanScore >= 70 ? '#22c55e15' : aiResult.humanScore >= 40 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
-                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, aiResult.humanScore + '%'),
+                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, Math.round(aiResult.humanScore * 100) / 100 + '%'),
                 React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Human')
               ),
               React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.aiScore <= 30 ? '#22c55e15' : aiResult.aiScore <= 60 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
-                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, aiResult.aiScore + '%'),
+                React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, Math.round(aiResult.aiScore * 100) / 100 + '%'),
                 React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'AI')
               ),
               aiResult.readabilityScore != null && React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
@@ -20523,11 +20523,11 @@
             aiResult && React.createElement('div', null,
               React.createElement('div', { style: { display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' } },
                 React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.humanScore >= 70 ? '#22c55e15' : aiResult.humanScore >= 40 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
-                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, aiResult.humanScore + '%'),
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.humanScore >= 70 ? '#22c55e' : aiResult.humanScore >= 40 ? '#f59e0b' : '#ef4444' } }, Math.round(aiResult.humanScore * 100) / 100 + '%'),
                   React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'Human')
                 ),
                 React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: aiResult.aiScore <= 30 ? '#22c55e15' : aiResult.aiScore <= 60 ? '#f59e0b15' : '#ef444415', minWidth: 100 } },
-                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, aiResult.aiScore + '%'),
+                  React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: aiResult.aiScore <= 30 ? '#22c55e' : aiResult.aiScore <= 60 ? '#f59e0b' : '#ef4444' } }, Math.round(aiResult.aiScore * 100) / 100 + '%'),
                   React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 } }, 'AI')
                 ),
                 aiResult.readabilityScore != null && React.createElement('div', { style: { textAlign: 'center', padding: '12px 20px', borderRadius: 10, background: 'var(--bg2)', minWidth: 80 } },
