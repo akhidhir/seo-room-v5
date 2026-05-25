@@ -3651,13 +3651,10 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
     const apiKey = process.env.GPTHUMAN_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // STRATEGY: Extract each <p> tag's plain text, join with separator,
-    // send to GPTHuman, split result by separator, replace each <p>'s text content.
-    // Headings are NEVER touched.
+    // STRATEGY: Extract each <p> block, send plain text to GPTHuman individually,
+    // rebuild HTML with humanized text while preserving all structure.
 
-    const SEP = '\n---PARASEP---\n';
-
-    // Extract all <p> blocks with their text
+    // Extract all <p> blocks with their text and position
     const pBlocks = [];
     const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
     let m;
@@ -3665,26 +3662,31 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
       const innerHtml = m[2];
       const innerText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
       if (innerText.length >= 15) {
-        pBlocks.push({ fullMatch: m[0], attrs: m[1], innerHtml, innerText });
+        pBlocks.push({ fullMatch: m[0], attrs: m[1], innerHtml, innerText, index: m.index });
       }
     }
 
     if (pBlocks.length === 0) {
-      return res.json({ content_html, human_score: null, credits_used: 0, credit_balance: null });
+      return res.json({ content_html, human_score: null, credits_used: 0, credit_balance: null, debug: 'No <p> blocks found with 15+ chars' });
     }
 
     const totalWords = pBlocks.reduce((sum, b) => sum + b.innerText.split(/\s+/).length, 0);
-    console.log('[humanize-only] Processing ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words individually...');
+    console.log('[humanize-only] Found ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words. Sending each individually to GPTHuman...');
 
-    // Send EACH paragraph to GPTHuman individually — guaranteed 1:1 mapping
+    // Send EACH paragraph to GPTHuman individually
     let totalCredits = 0;
     let lastBalance = null;
     let lastScore = null;
+    const debugLog = [];
     const humanizedBlockTexts = new Array(pBlocks.length).fill(null);
 
     for (let i = 0; i < pBlocks.length; i++) {
       const blockText = pBlocks[i].innerText;
-      if (blockText.split(/\s+/).length < 8) continue; // skip very short paragraphs
+      const wordCount = blockText.split(/\s+/).length;
+      if (wordCount < 8) {
+        debugLog.push('Para ' + (i+1) + ': SKIPPED (only ' + wordCount + ' words)');
+        continue;
+      }
 
       try {
         const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
@@ -3697,38 +3699,50 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
         try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
 
         if (ghData.output) {
-          humanizedBlockTexts[i] = ghData.output.trim();
+          const outText = ghData.output.trim();
+          const changed = outText !== blockText;
+          humanizedBlockTexts[i] = outText;
           totalCredits += (ghData.creditUsage || 0);
           lastBalance = ghData.creditBalance;
           lastScore = ghData.humanScore;
-          console.log('[humanize-only] Para ' + (i+1) + '/' + pBlocks.length + ': ' + blockText.split(/\s+/).length + ' words, score=' + ghData.humanScore);
+          debugLog.push('Para ' + (i+1) + ': ' + wordCount + 'w, score=' + ghData.humanScore + ', changed=' + changed + ', orig="' + blockText.substring(0, 40) + '...", hum="' + outText.substring(0, 40) + '..."');
+          console.log('[humanize-only] Para ' + (i+1) + '/' + pBlocks.length + ': ' + wordCount + 'w, score=' + ghData.humanScore + ', changed=' + changed);
         } else {
-          console.error('[humanize-only] GPTHuman error para ' + (i+1) + ':', ghData.error || 'unknown');
+          const errMsg = ghData.error || ghData.message || JSON.stringify(ghData);
+          debugLog.push('Para ' + (i+1) + ': GPTHuman ERROR: ' + errMsg);
+          console.error('[humanize-only] GPTHuman error para ' + (i+1) + ':', errMsg);
         }
       } catch (e) {
+        debugLog.push('Para ' + (i+1) + ': FETCH ERROR: ' + e.message);
         console.error('[humanize-only] Fetch error para ' + (i+1) + ':', e.message);
       }
     }
 
-    // Replace each <p> block's text content with humanized version
+    // Replace each <p> block — work BACKWARDS to preserve string positions
     let resultHtml = content_html;
     let replacedCount = 0;
+    let failedReplace = 0;
 
-    for (let i = 0; i < pBlocks.length; i++) {
+    // Process in reverse order so earlier replacements don't shift positions
+    for (let i = pBlocks.length - 1; i >= 0; i--) {
       const humText = humanizedBlockTexts[i];
       if (!humText || humText === pBlocks[i].innerText) continue;
 
-      // Replace the original plain text within the <p> tag's innerHTML
-      // If the paragraph has no inline tags (links, bold), just replace the whole inner content
       const hasInlineTags = /<(a|strong|em|b|i|span|br)\b/i.test(pBlocks[i].innerHtml);
 
       if (!hasInlineTags) {
-        // Simple case: no inline tags, replace entire inner content
+        // Simple case: replace entire inner content
         const newP = '<p' + pBlocks[i].attrs + '>' + humText + '</p>';
-        resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
-        replacedCount++;
+        if (resultHtml.includes(pBlocks[i].fullMatch)) {
+          resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
+          replacedCount++;
+        } else {
+          failedReplace++;
+          debugLog.push('Para ' + (i+1) + ': REPLACE FAILED — fullMatch not found in HTML');
+        }
       } else {
-        // Has inline tags (links etc) — do sentence-level replacement to preserve them
+        // Has inline tags — replace plain text segments between tags
+        // Strategy: find each plain-text run in innerHTML and replace with corresponding humanized text
         const origSentences = pBlocks[i].innerText.match(/[^.!?]+[.!?]+/g) || [pBlocks[i].innerText];
         const humSentences = humText.match(/[^.!?]+[.!?]+/g) || [humText];
         let newInner = pBlocks[i].innerHtml;
@@ -3745,16 +3759,21 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
         }
         if (changed) {
           const newP = '<p' + pBlocks[i].attrs + '>' + newInner + '</p>';
-          resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
-          replacedCount++;
+          if (resultHtml.includes(pBlocks[i].fullMatch)) {
+            resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
+            replacedCount++;
+          } else {
+            failedReplace++;
+          }
         }
       }
     }
 
-    console.log('[humanize-only] Replaced ' + replacedCount + '/' + pBlocks.length + ' paragraphs. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
+    const contentChanged = resultHtml !== content_html;
+    console.log('[humanize-only] Replaced ' + replacedCount + '/' + pBlocks.length + ' paragraphs, failed=' + failedReplace + ', contentChanged=' + contentChanged + '. Credits: ' + totalCredits);
 
-    // Save to DB if page_id provided
-    if (page_id) {
+    // Save to DB if page_id provided AND content actually changed
+    if (page_id && contentChanged) {
       if (build_id) {
         await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [resultHtml, page_id, build_id]);
       } else {
@@ -3766,7 +3785,14 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
       content_html: resultHtml,
       human_score: lastScore,
       credits_used: totalCredits,
-      credit_balance: lastBalance
+      credit_balance: lastBalance,
+      debug: {
+        paragraphs_found: pBlocks.length,
+        replaced: replacedCount,
+        failed_replace: failedReplace,
+        content_changed: contentChanged,
+        log: debugLog
+      }
     });
   } catch (err) {
     console.error('[humanize-only] Error:', err.message);

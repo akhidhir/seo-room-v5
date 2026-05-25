@@ -15838,7 +15838,9 @@
           });
           if (result.content_html) {
             setEditContent(result.content_html);
-            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits used: ' + (result.credits_used || 0));
+            var d = result.debug || {};
+            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits: ' + (result.credits_used || 0) + '. Paras found: ' + (d.paragraphs_found || '?') + ', replaced: ' + (d.replaced || 0) + ', failed: ' + (d.failed_replace || 0) + ', changed: ' + (d.content_changed || false));
+            if (d.log) console.log('[humanize debug]', d.log);
           }
         } catch(e) {
           alert('Humanize error: ' + (e.message || e));
