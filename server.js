@@ -3674,69 +3674,39 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
     }
 
     const totalWords = pBlocks.reduce((sum, b) => sum + b.innerText.split(/\s+/).length, 0);
-    console.log('[humanize-only] Processing ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words...');
+    console.log('[humanize-only] Processing ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words individually...');
 
-    // Join all paragraph texts with separator
-    const combinedText = pBlocks.map(b => b.innerText).join(SEP);
-
-    // Split into chunks if over 1500 words (GPTHuman limit)
-    const chunks = [];
-    const blockGroups = []; // track which blocks are in each chunk
-    let currentChunk = '';
-    let currentGroup = [];
-    let currentWords = 0;
-
-    for (let i = 0; i < pBlocks.length; i++) {
-      const blockText = pBlocks[i].innerText;
-      const blockWords = blockText.split(/\s+/).length;
-      if (currentWords + blockWords > 1500 && currentChunk.length > 0) {
-        chunks.push(currentChunk);
-        blockGroups.push([...currentGroup]);
-        currentChunk = '';
-        currentGroup = [];
-        currentWords = 0;
-      }
-      currentChunk += (currentChunk ? SEP : '') + blockText;
-      currentGroup.push(i);
-      currentWords += blockWords;
-    }
-    if (currentChunk) {
-      chunks.push(currentChunk);
-      blockGroups.push([...currentGroup]);
-    }
-
-    // Send each chunk to GPTHuman
+    // Send EACH paragraph to GPTHuman individually — guaranteed 1:1 mapping
     let totalCredits = 0;
     let lastBalance = null;
     let lastScore = null;
     const humanizedBlockTexts = new Array(pBlocks.length).fill(null);
 
-    for (let c = 0; c < chunks.length; c++) {
-      const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: chunks[c], tone: 'Standard', mode: 'Enhanced' })
-      });
-      const ghRaw = await ghResp.text();
-      let ghData;
-      try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
+    for (let i = 0; i < pBlocks.length; i++) {
+      const blockText = pBlocks[i].innerText;
+      if (blockText.split(/\s+/).length < 8) continue; // skip very short paragraphs
 
-      if (ghData.output) {
-        totalCredits += (ghData.creditUsage || 0);
-        lastBalance = ghData.creditBalance;
-        lastScore = ghData.humanScore;
-        console.log('[humanize-only] Chunk ' + (c+1) + '/' + chunks.length + ': score=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
+      try {
+        const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: blockText, tone: 'Standard', mode: 'Enhanced' })
+        });
+        const ghRaw = await ghResp.text();
+        let ghData;
+        try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
 
-        // Split the humanized output by separator to get individual paragraph texts
-        const humParts = ghData.output.split(/---PARASEP---/);
-        const group = blockGroups[c];
-        for (let g = 0; g < group.length; g++) {
-          if (g < humParts.length) {
-            humanizedBlockTexts[group[g]] = humParts[g].trim();
-          }
+        if (ghData.output) {
+          humanizedBlockTexts[i] = ghData.output.trim();
+          totalCredits += (ghData.creditUsage || 0);
+          lastBalance = ghData.creditBalance;
+          lastScore = ghData.humanScore;
+          console.log('[humanize-only] Para ' + (i+1) + '/' + pBlocks.length + ': ' + blockText.split(/\s+/).length + ' words, score=' + ghData.humanScore);
+        } else {
+          console.error('[humanize-only] GPTHuman error para ' + (i+1) + ':', ghData.error || 'unknown');
         }
-      } else {
-        console.error('[humanize-only] GPTHuman error chunk ' + (c+1) + ':', ghData.error || 'unknown');
+      } catch (e) {
+        console.error('[humanize-only] Fetch error para ' + (i+1) + ':', e.message);
       }
     }
 
