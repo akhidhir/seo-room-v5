@@ -19119,12 +19119,60 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
 
+    // Fetch the copywriting brief if this page belongs to a build
+    let briefText = '';
+    const briefBuildId = buildId || page.build_id;
+    if (briefBuildId) {
+      try {
+        const briefResult = await pool.query('SELECT copywriting_brief, brief_raw_text FROM website_builds WHERE id=$1', [briefBuildId]);
+        if (briefResult.rows.length > 0) {
+          const brief = briefResult.rows[0].copywriting_brief;
+          if (brief) {
+            const b = typeof brief === 'string' ? JSON.parse(brief) : brief;
+            const parts = [];
+            if (b.business_name) parts.push('Business: ' + b.business_name);
+            if (b.industry) parts.push('Industry: ' + b.industry);
+            if (b.target_audience) parts.push('Target Audience: ' + (Array.isArray(b.target_audience) ? b.target_audience.join(', ') : b.target_audience));
+            if (b.brand_tone) parts.push('Brand Tone: ' + (Array.isArray(b.brand_tone) ? b.brand_tone.join(', ') : b.brand_tone));
+            if (b.differentiators) parts.push('Key Differentiators: ' + (Array.isArray(b.differentiators) ? b.differentiators.join(', ') : b.differentiators));
+            if (b.unique_selling_points) parts.push('USPs: ' + (Array.isArray(b.unique_selling_points) ? b.unique_selling_points.join(', ') : b.unique_selling_points));
+            if (b.calls_to_action) parts.push('CTAs: ' + (Array.isArray(b.calls_to_action) ? b.calls_to_action.join(', ') : b.calls_to_action));
+            if (b.service_areas) parts.push('Service Areas: ' + (Array.isArray(b.service_areas) ? b.service_areas.join(', ') : b.service_areas));
+            // Find page-specific brief info
+            const pageName = (page.page_name || '').toLowerCase();
+            if (b.service_pages && Array.isArray(b.service_pages)) {
+              const match = b.service_pages.find(sp => (sp.name || '').toLowerCase() === pageName || (sp.slug || '').toLowerCase() === (page.slug || '').toLowerCase());
+              if (match) {
+                parts.push('\nPAGE-SPECIFIC BRIEF:');
+                if (match.description) parts.push('Description: ' + match.description);
+                if (match.keywords) parts.push('Keywords: ' + (Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords));
+                if (match.services) parts.push('Services: ' + (Array.isArray(match.services) ? match.services.join(', ') : match.services));
+                if (match.summary) parts.push('Summary: ' + match.summary);
+              }
+            }
+            if (b.about_page && pageName.includes('about')) {
+              parts.push('\nABOUT PAGE BRIEF:');
+              if (b.about_page.summary) parts.push('Summary: ' + b.about_page.summary);
+              if (b.about_page.keywords) parts.push('Keywords: ' + (Array.isArray(b.about_page.keywords) ? b.about_page.keywords.join(', ') : b.about_page.keywords));
+            }
+            briefText = parts.join('\n');
+          }
+        }
+      } catch (briefErr) {
+        console.error('[optimise] Brief fetch error:', briefErr.message);
+      }
+    }
+    // Also check page.ai_notes for brief info
+    if (!briefText && page.ai_notes) briefText = page.ai_notes;
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-opus-4-6',
       max_tokens: 8192,
       messages: [{
         role: 'user',
         content: `You are an SEO content optimizer for ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}.
+
+${briefText ? '=== COPYWRITING BRIEF (YOU MUST FOLLOW THIS) ===\n' + briefText + '\n=== END BRIEF ===\n\nThe above brief is NON-NEGOTIABLE. All content must reflect the brief\'s tone, audience, differentiators, and service details. Do NOT ignore it.\n' : ''}
 
 CURRENT CONTENT (score: ${content_score || 0}/100):
 ${page.draft_content || ''}
