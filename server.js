@@ -33396,33 +33396,84 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           console.log('[internal-links] Total AI suggestions before validation: ' + suggestions.length);
         }
 
-        // 7. Validate & save suggestions (only keep ones where anchor exists in source page)
+        // 7. Validate suggestions against ACTUAL WP REST API content (not crawled page text)
         await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed')`, [projectId]);
         let validCount = 0, skippedCount = 0;
+
+        // Fetch WP content for unique source URLs used in suggestions
+        const wpContentCache = new Map();
+        const wpUrl = project.wp_url || project.domain;
+        const wpAuthHeaders = getWpAuthHeaders ? getWpAuthHeaders(project) : {};
+        const uniqueSourceUrls = [...new Set(suggestions.map(s => s.source_url))];
+        
+        for (const srcUrl of uniqueSourceUrls) {
+          try {
+            // Extract slug from URL
+            let slug = srcUrl.replace(/\/$/, '');
+            try { slug = new URL(slug).pathname.replace(/^\/(.*?)\/?$/, '$1'); } catch(e) { slug = slug.replace(/^https?:\/\/[^/]+\/?/, ''); }
+            slug = slug.split('/').pop() || slug;
+            
+            const baseWpUrl = (wpUrl || '').replace(/\/$/, '');
+            // Try pages first, then posts
+            let wpContent = '';
+            for (const postType of ['pages', 'posts']) {
+              try {
+                const resp = await fetch(baseWpUrl + '/wp-json/wp/v2/' + postType + '?slug=' + encodeURIComponent(slug), {
+                  headers: { ...wpAuthHeaders, 'User-Agent': 'SEORoom/1.0' },
+                  signal: AbortSignal.timeout(10000)
+                });
+                if (resp.ok) {
+                  const items = await resp.json();
+                  if (items.length > 0) {
+                    wpContent = (items[0].content?.rendered || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+                    break;
+                  }
+                }
+              } catch(e) {}
+            }
+            if (wpContent) wpContentCache.set(srcUrl, wpContent);
+          } catch(e) {
+            console.log('[internal-links] WP fetch failed for ' + srcUrl + ': ' + (e.message || ''));
+          }
+        }
+        console.log('[internal-links] Fetched WP content for ' + wpContentCache.size + '/' + uniqueSourceUrls.length + ' source pages');
+
         for (const s of suggestions) {
-          // Validate: anchor text must exist in the source page's full text
-          const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
-          const sourceText = (sourceData?.fullText || sourceData?.textSnippet || '').toLowerCase();
           const anchor = (s.suggested_anchor || '').toLowerCase().trim();
-          if (!anchor || !sourceText.includes(anchor)) {
-            console.log(`[internal-links] Skipped suggestion: anchor "${s.suggested_anchor}" not found in ${s.source_url}`);
+          if (!anchor) { skippedCount++; continue; }
+          
+          // Validate against WP REST API content (what we can actually edit)
+          const wpText = wpContentCache.get(s.source_url);
+          if (!wpText || !wpText.includes(anchor)) {
+            // Fallback: check crawled text too — might work with flex regex during apply
+            const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
+            const crawledText = (sourceData?.fullText || '').toLowerCase();
+            if (!crawledText.includes(anchor)) {
+              console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" not in WP content or crawled text for ' + s.source_url);
+              skippedCount++;
+              continue;
+            }
+            // Anchor in crawled text but not WP content — likely in theme/sidebar, skip
+            console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" in rendered page but not in editable WP content for ' + s.source_url);
             skippedCount++;
             continue;
           }
-          // Also validate target URL exists in our crawled pages
+          
+          // Validate target URL exists in our crawled pages
           const targetNorm = (s.target_url || '').replace(/\/$/, '');
           if (!pageMap.has(targetNorm)) {
-            console.log(`[internal-links] Skipped suggestion: target ${s.target_url} not in crawled pages`);
+            console.log('[internal-links] Skipped: target ' + s.target_url + ' not in crawled pages');
             skippedCount++;
             continue;
           }
+          
           await pool.query(`
             INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
           `, [projectId, s.source_url, s.source_title || '', s.target_url, s.target_title || '', s.suggested_anchor || '', s.context_sentence || '', s.reason || '', s.priority || 'medium']);
           validCount++;
         }
-        console.log(`[internal-links] Suggestions: ${validCount} valid, ${skippedCount} skipped (anchor not found or bad target)`);
+        console.log('[internal-links] Suggestions: ' + validCount + ' valid, ' + skippedCount + ' skipped');
 
         // 8. Compute stats
         const stats = {
