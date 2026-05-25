@@ -1771,6 +1771,22 @@ app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Reset a site page — explicitly clears draft_content, meta, stage back to brief
+app.post(['/api/builds/:buildId/site-pages/:pageId/reset', '/api/projects/:projectId/site-pages/:pageId/reset'], async (req, res) => {
+  try {
+    const { pageId, buildId, projectId } = req.params;
+    const scopeCol = buildId ? 'build_id' : 'project_id';
+    const scopeVal = buildId || projectId;
+    const result = await pool.query(
+      `UPDATE site_pages SET draft_content='', meta_title='', meta_description='', stage='brief', word_count=0, updated_at=NOW() WHERE id=$1 AND ${scopeCol}=$2 RETURNING *`,
+      [pageId, scopeVal]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Page not found' });
+    console.log('[reset] Page', pageId, 'reset to brief');
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete a site page (build or project scoped)
 app.delete(['/api/builds/:buildId/site-pages/:pageId', '/api/projects/:projectId/site-pages/:pageId'], async (req, res) => {
   try {
