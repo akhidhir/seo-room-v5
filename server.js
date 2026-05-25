@@ -3812,7 +3812,7 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
       }
     }
     
-    console.log('[humanize-only] Done. ' + pairCount + ' sentences processed. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
+    console.log('[humanize-only] Done. ' + replacedBlocks + '/' + blocks.length + ' blocks replaced. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
     res.json({ 
       content_html: resultHtml, 
       human_score: lastScore,
