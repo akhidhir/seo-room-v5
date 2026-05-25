@@ -21986,7 +21986,8 @@
         setSending(true);
 
         try {
-          const r = await api('/projects/' + pid + '/' + tablePrefix + '/' + preview.item_id + '/re-optimise', {
+          const urlBase = project?.build_id ? '/builds/' + project.build_id + '/site-pages' : '/projects/' + pid + '/' + tablePrefix;
+          const r = await api(urlBase + '/' + preview.item_id + '/re-optimise', {
             method: 'POST',
             body: {
               feedback: finalMsg,

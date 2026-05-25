@@ -14757,19 +14757,32 @@ Respond with ONLY the JSON object.`, item) }]
 });
 
 // Re-optimise for site_pages — same as content-queue re-optimise but queries site_pages table
-app.post('/api/projects/:projectId/site-pages/:id/re-optimise', async (req, res) => {
+app.post(['/api/projects/:projectId/site-pages/:id/re-optimise', '/api/builds/:buildId/site-pages/:id/re-optimise'], async (req, res) => {
   if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
   req.setTimeout(120000);
   res.setTimeout(120000);
-  const { projectId, id } = req.params;
+  const { projectId, buildId, id } = req.params;
   const { feedback, current_proposed, stats, content_score, tips, target_keywords, competitor_data, topic_gaps, word_target } = req.body;
   if (!feedback || !current_proposed) return res.status(400).json({ error: 'Missing feedback or proposed content' });
 
   try {
-    const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    let item;
+    if (buildId) {
+      item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [id, buildId])).rows[0];
+    } else {
+      item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    }
     if (!item) return res.status(404).json({ error: 'Not found' });
 
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    let project;
+    if (item.project_id) {
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [item.project_id])).rows[0];
+    }
+    if (!project && (buildId || item.build_id)) {
+      const bid = buildId || item.build_id;
+      project = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
+    }
+    if (!project) project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
     // Get published pages for internal linking context
     const pagesRes = await pool.query(
