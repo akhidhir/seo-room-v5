@@ -3666,10 +3666,75 @@ app.get('/api/test-gpthuman', async (req, res) => {
   } catch(e) { res.json({ error: e.message }); }
 });
 
+// Australian English spelling corrections — applied after GPTHuman
+const AU_SPELLING = {
+  'color': 'colour', 'colors': 'colours', 'colored': 'coloured', 'coloring': 'colouring',
+  'favor': 'favour', 'favors': 'favours', 'favorite': 'favourite', 'favorites': 'favourites',
+  'honor': 'honour', 'honors': 'honours', 'honored': 'honoured',
+  'labor': 'labour', 'labors': 'labours', 'labored': 'laboured',
+  'neighbor': 'neighbour', 'neighbors': 'neighbours', 'neighborhood': 'neighbourhood',
+  'humor': 'humour', 'rumors': 'rumours', 'rumor': 'rumour',
+  'organize': 'organise', 'organized': 'organised', 'organizing': 'organising', 'organization': 'organisation',
+  'recognize': 'recognise', 'recognized': 'recognised', 'recognizing': 'recognising',
+  'realize': 'realise', 'realized': 'realised', 'realizing': 'realising',
+  'specialize': 'specialise', 'specialized': 'specialised', 'specializing': 'specialising',
+  'customize': 'customise', 'customized': 'customised',
+  'minimize': 'minimise', 'minimized': 'minimised',
+  'maximize': 'maximise', 'maximized': 'maximised',
+  'optimize': 'optimise', 'optimized': 'optimised',
+  'utilize': 'utilise', 'utilized': 'utilised',
+  'analyze': 'analyse', 'analyzed': 'analysed',
+  'apologize': 'apologise', 'apologized': 'apologised',
+  'prioritize': 'prioritise', 'prioritized': 'prioritised',
+  'summarize': 'summarise', 'summarized': 'summarised',
+  'center': 'centre', 'centers': 'centres',
+  'meter': 'metre', 'meters': 'metres',
+  'fiber': 'fibre', 'fibers': 'fibres',
+  'liter': 'litre', 'liters': 'litres',
+  'defense': 'defence', 'offense': 'offence',
+  'license': 'licence',
+  'practice': 'practise', // verb form
+  'aging': 'ageing',
+  'catalog': 'catalogue', 'catalogs': 'catalogues',
+  'dialog': 'dialogue', 'dialogs': 'dialogues',
+  'program': 'programme', // non-computer context
+  'gray': 'grey',
+  'aluminum': 'aluminium',
+  'curb': 'kerb',
+  'plow': 'plough',
+  'tire': 'tyre', 'tires': 'tyres',
+  'mom': 'mum',
+  'gotten': 'got',
+  'gonna': 'going to',
+  'wanna': 'want to',
+  'gotta': 'got to',
+  'kinda': 'kind of',
+  'sorta': 'sort of',
+  'y\'all': 'you',
+  'folks': 'people',
+  'awesome': 'excellent',
+  'cool': 'good',
+};
+
+function applyAuEnglish(text) {
+  let result = text;
+  for (const [us, au] of Object.entries(AU_SPELLING)) {
+    // Word-boundary replacement, preserve case
+    const regex = new RegExp('\\b' + us + '\\b', 'gi');
+    result = result.replace(regex, (match) => {
+      // Preserve original capitalisation
+      if (match[0] === match[0].toUpperCase()) {
+        return au.charAt(0).toUpperCase() + au.slice(1);
+      }
+      return au;
+    });
+  }
+  return result;
+}
+
 // AI Detection (Winston AI) — synchronous, returns human score
-// Humanize Only — SECTION-AWARE batching: paragraphs are grouped by the heading
-// they fall under (never across sections) to prevent content scrambling.
-// GPTHuman requires 300+ chars per request, so small sections get padded.
+// Humanize Only — ONE PARAGRAPH AT A TIME to GPTHuman (padded to 300+ chars).
+// Section-aware: never mixes content across headings. Australian English post-process.
 app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
@@ -3681,130 +3746,96 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     const apiKey = (process.env.GPTHUMAN_API_KEY || '').trim();
     if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // 1. Parse HTML into ordered elements: headings and paragraphs with positions
-    const elements = [];
-    const elRegex = /<(h[1-6]|p)([^>]*)>([\s\S]*?)<\/\1>/gi;
-    let em;
-    while ((em = elRegex.exec(content_html)) !== null) {
-      const tag = em[1].toLowerCase();
-      const innerHtml = em[3];
+    // 1. Extract all <p> blocks with position info
+    const pBlocks = [];
+    const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
+    let pm;
+    while ((pm = pRegex.exec(content_html)) !== null) {
+      const innerHtml = pm[2];
       const plainText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-      elements.push({
-        tag,
-        startIdx: em.index,
-        endIdx: em.index + em[0].length,
-        attrs: em[2],
-        innerHtml,
-        plainText,
-        hasInline: /<(a|strong|em|b|i|span)\b/i.test(innerHtml),
-        humanized: null
-      });
-    }
-
-    // 2. Group paragraphs into sections (split at each heading)
-    // Each section = array of paragraph elements that share the same heading
-    const sections = [];
-    let currentSection = [];
-    for (const el of elements) {
-      if (el.tag.startsWith('h')) {
-        // Heading = section boundary. Flush current section, start new one.
-        if (currentSection.length > 0) sections.push(currentSection);
-        currentSection = [];
-      } else if (el.tag === 'p' && el.plainText.split(/\s+/).length >= 5) {
-        currentSection.push(el);
+      if (plainText.split(/\s+/).length >= 5) {
+        pBlocks.push({
+          startIdx: pm.index,
+          endIdx: pm.index + pm[0].length,
+          attrs: pm[1],
+          innerHtml,
+          plainText,
+          hasInline: /<(a|strong|em|b|i|span)\b/i.test(innerHtml),
+          humanized: null
+        });
       }
     }
-    if (currentSection.length > 0) sections.push(currentSection);
 
-    const totalParas = sections.reduce((s, sec) => s + sec.length, 0);
-    const totalWords = sections.reduce((s, sec) => s + sec.reduce((ws, b) => ws + b.plainText.split(/\s+/).length, 0), 0);
-    if (totalParas === 0) {
-      return res.json({ content_html, human_score: null, credits_used: 0, debug: { msg: 'No paragraphs with 5+ words found' } });
+    if (pBlocks.length === 0) {
+      return res.json({ content_html, human_score: null, credits_used: 0, debug: { msg: 'No paragraphs with 5+ words' } });
     }
 
-    console.log('[humanize] ' + totalParas + ' paragraphs in ' + sections.length + ' sections, ' + totalWords + ' words');
-    const debugLog = ['paras=' + totalParas + ' sections=' + sections.length];
-
-    // 3. For each section, build text and send to GPTHuman
-    // GPTHuman min = 300 chars. If a section is too short, send as-is with padding.
+    const totalWords = pBlocks.reduce((s, b) => s + b.plainText.split(/\s+/).length, 0);
+    console.log('[humanize] ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words — sending ONE AT A TIME');
+    const debugLog = ['paras=' + pBlocks.length];
     const MIN_CHARS = 310;
-    const MAX_WORDS = 1800;
+
+    // 2. Send EACH paragraph individually to GPTHuman (padded to 300+ chars if needed)
+    // This guarantees 1:1 mapping — no content scrambling across paragraphs
     let totalCredits = 0, lastBalance = null, lastScore = null;
 
-    for (let s = 0; s < sections.length; s++) {
-      const section = sections[s];
+    for (let i = 0; i < pBlocks.length; i++) {
+      const block = pBlocks[i];
+      let textToSend = block.plainText;
+      let wasPadded = false;
 
-      // Build batches within this section (respect MAX_WORDS)
-      const batches = [];
-      let batch = { paras: [], text: '', wordCount: 0 };
-      for (const para of section) {
-        const wc = para.plainText.split(/\s+/).length;
-        if (batch.paras.length > 0 && batch.wordCount + wc > MAX_WORDS) {
-          batches.push(batch);
-          batch = { paras: [], text: '', wordCount: 0 };
+      // Pad short paragraphs to hit GPTHuman's 300 char minimum
+      if (textToSend.length < MIN_CHARS) {
+        wasPadded = true;
+        // Repeat the paragraph text until we hit minimum
+        const original = textToSend;
+        while (textToSend.length < MIN_CHARS) {
+          textToSend += ' ' + original;
         }
-        if (batch.text.length > 0) batch.text += '\n\n';
-        batch.text += para.plainText;
-        batch.paras.push(para);
-        batch.wordCount += wc;
       }
-      if (batch.paras.length > 0) batches.push(batch);
 
-      for (let bi = 0; bi < batches.length; bi++) {
-        const b = batches[bi];
-        let textToSend = b.text;
+      try {
+        const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: textToSend, tone: 'Standard', mode: 'Enhanced' })
+        });
+        const ghData = await ghResp.json();
 
-        // Pad if under minimum chars (repeat text to hit 300+)
-        if (textToSend.length < MIN_CHARS) {
-          const orig = textToSend;
-          while (textToSend.length < MIN_CHARS) {
-            textToSend += '\n\n' + orig;
+        if (ghData.output) {
+          let humText = ghData.output.trim();
+          totalCredits += (ghData.creditUsage || 0);
+          lastBalance = ghData.creditBalance;
+          lastScore = ghData.humanScore;
+
+          // If we padded, only take the first portion (approximately same length as original)
+          if (wasPadded && humText.length > block.plainText.length * 1.5) {
+            // Split by sentences, take enough to roughly match original length
+            const sents = humText.match(/[^.!?]+[.!?]+/g) || [humText];
+            const origSentCount = (block.plainText.match(/[^.!?]+[.!?]+/g) || [block.plainText]).length;
+            humText = sents.slice(0, origSentCount).join(' ').trim();
           }
-        }
 
-        try {
-          console.log('[humanize] Section ' + (s+1) + ' batch ' + (bi+1) + ': ' + b.paras.length + 'p, ' + textToSend.length + ' chars');
-          const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: textToSend, tone: 'Standard', mode: 'Enhanced' })
-          });
-          const ghData = await ghResp.json();
+          // Apply Australian English corrections
+          humText = applyAuEnglish(humText);
 
-          if (ghData.output) {
-            totalCredits += (ghData.creditUsage || 0);
-            lastBalance = ghData.creditBalance;
-            lastScore = ghData.humanScore;
-
-            // Split humanized output by double-newline
-            const humParas = ghData.output.trim().split(/\n\s*\n/);
-            const mapCount = Math.min(humParas.length, b.paras.length);
-            let mapped = 0;
-            for (let p = 0; p < mapCount; p++) {
-              const humText = humParas[p].trim();
-              if (humText.length > 10 && humText !== b.paras[p].plainText) {
-                b.paras[p].humanized = humText;
-                mapped++;
-              }
-            }
-            debugLog.push('s' + (s+1) + 'b' + (bi+1) + ': score=' + ghData.humanScore + ' in=' + b.paras.length + 'p out=' + humParas.length + 'p mapped=' + mapped);
-            console.log('[humanize] Section ' + (s+1) + ' batch ' + (bi+1) + ': score=' + ghData.humanScore + ' in=' + b.paras.length + ' out=' + humParas.length + ' mapped=' + mapped);
-          } else {
-            const errMsg = (ghData.error || ghData.description || ghData.message || JSON.stringify(ghData)).substring(0, 120);
-            debugLog.push('s' + (s+1) + 'b' + (bi+1) + ': ERR=' + errMsg);
-            console.error('[humanize] Section ' + (s+1) + ' batch ' + (bi+1) + ' error:', errMsg);
+          if (humText.length > 10 && humText !== block.plainText) {
+            block.humanized = humText;
           }
-        } catch (e) {
-          debugLog.push('s' + (s+1) + 'b' + (bi+1) + ': FETCH_ERR=' + e.message);
+          debugLog.push((i+1) + ': ' + block.plainText.split(/\s+/).length + 'w score=' + ghData.humanScore + (wasPadded ? ' PADDED' : '') + ' diff=' + (humText !== block.plainText));
+          console.log('[humanize] ' + (i+1) + '/' + pBlocks.length + ': score=' + ghData.humanScore + (wasPadded ? ' (padded)' : ''));
+        } else {
+          const errMsg = (ghData.error || ghData.description || ghData.message || '').substring(0, 80);
+          debugLog.push((i+1) + ': ERR=' + errMsg);
+          console.error('[humanize] ' + (i+1) + ' error:', errMsg);
         }
+      } catch (e) {
+        debugLog.push((i+1) + ': FETCH_ERR=' + e.message);
       }
     }
 
-    // 4. POSITION-BASED REPLACEMENT — work backwards to preserve indices
-    // Collect all elements that got humanized, sort by startIdx descending
-    const allParas = sections.flat();
-    const toReplace = allParas.filter(p => p.humanized).sort((a, b) => b.startIdx - a.startIdx);
-
+    // 3. POSITION-BASED REPLACEMENT — work backwards to preserve indices
+    const toReplace = pBlocks.filter(b => b.humanized).sort((a, b) => b.startIdx - a.startIdx);
     let resultHtml = content_html;
     let replacedCount = 0;
 
@@ -3834,10 +3865,10 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     }
 
     const contentChanged = resultHtml !== content_html;
-    debugLog.push('replaced=' + replacedCount + '/' + totalParas + ' changed=' + contentChanged);
-    console.log('[humanize] Done: replaced=' + replacedCount + '/' + totalParas + ' changed=' + contentChanged + ' credits=' + totalCredits);
+    debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
+    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged + ' credits=' + totalCredits);
 
-    // 5. Save to DB if content changed
+    // 4. Save to DB if content changed
     if (page_id && contentChanged) {
       if (build_id) {
         await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [resultHtml, page_id, build_id]);
@@ -3851,7 +3882,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       human_score: lastScore,
       credits_used: totalCredits,
       credit_balance: lastBalance,
-      debug: { paragraphs: totalParas, sections: sections.length, replaced: replacedCount, changed: contentChanged, log: debugLog }
+      debug: { paragraphs: pBlocks.length, replaced: replacedCount, changed: contentChanged, log: debugLog }
     });
   } catch (err) {
     console.error('[humanize] Error:', err.message);
