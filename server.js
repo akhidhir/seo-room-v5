@@ -33087,11 +33087,6 @@ app.delete('/api/projects/:id/local-intel/services/:name', async (req, res) => {
 // Static files
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }));
 
-// Serve index.html for all other routes (SPA fallback)
-app.get('*', (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.type('html').send(INDEX_HTML);
-});
 
 // ==================== API COST & BUDGET ENDPOINTS ====================
 
@@ -33613,6 +33608,12 @@ app.delete('/api/projects/:projectId/internal-links', async (req, res) => {
     await pool.query('DELETE FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Serve index.html for all other routes (SPA fallback)
+app.get('*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.type('html').send(INDEX_HTML);
 });
 
 // ==================== 17. STARTUP ====================
