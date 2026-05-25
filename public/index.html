@@ -16277,6 +16277,9 @@
               setOptimisePreview(null);
               setSectionView(false);
               setTargetKeywords([]);
+              setAiResult(null);
+              setPlagiarismResult(null);
+              setPlagiarismError(null);
               setEditorKey(function(k) { return k + 1; });
               api(apiPrefix + '/site-pages/' + page.id + '/reset', { method: 'POST' })
                 .then(function(result) {
