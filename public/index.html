@@ -14554,12 +14554,25 @@
               briefExpanded.notes && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, fontSize: 13, color: 'var(--text3)', lineHeight: 1.5 } }, brief.additional_notes)
             ),
 
-            // Re-upload button
-            React.createElement('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', gap: 12, alignItems: 'center' } },
+            // Re-upload + Delete brief buttons
+            React.createElement('div', { style: { marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', gap: 16, alignItems: 'center' } },
               React.createElement('label', { style: { cursor: 'pointer', fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 4 } },
                 React.createElement('i', { className: 'fas fa-redo', style: { fontSize: 10 } }), 'Re-upload brief',
                 React.createElement('input', { type: 'file', accept: '.pdf', onChange: function(e) { if (confirm('This will replace the existing brief and may create duplicate pages. Continue?')) handleBriefUpload(e); }, style: { display: 'none' } })
-              )
+              ),
+              React.createElement('button', {
+                onClick: async function() {
+                  if (!confirm('Delete this brief? The brief data (competitors, tone, avoid words) will be removed. Existing page content will NOT be affected.')) return;
+                  try {
+                    var result = await api('/builds/' + project.build_id + '/brief/delete', { method: 'POST' });
+                    if (result.success) {
+                      setBrief(null);
+                      alert('Brief deleted.');
+                    } else { alert('Failed: ' + (result.error || 'Unknown error')); }
+                  } catch (e) { alert('Error: ' + e.message); }
+                },
+                style: { fontSize: 12, color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }
+              }, React.createElement('i', { className: 'fas fa-trash', style: { fontSize: 10 } }), 'Delete brief')
             )
           )
         )

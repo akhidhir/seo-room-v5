@@ -1771,7 +1771,7 @@ app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Reset a site page — explicitly clears draft_content, meta, stage back to brief
+// Reset a single site page — clears all page-level data back to brief
 app.post(['/api/builds/:buildId/site-pages/:pageId/reset', '/api/projects/:projectId/site-pages/:pageId/reset'], async (req, res) => {
   try {
     const { pageId, buildId, projectId } = req.params;
@@ -1788,6 +1788,18 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/reset', '/api/projects/:proje
     if (!result.rows[0]) return res.status(404).json({ error: 'Page not found' });
     console.log('[reset] Page', pageId, 'reset to brief');
     res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete brief only — clears brief data but keeps pages
+app.post('/api/builds/:buildId/brief/delete', async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE website_builds SET copywriting_brief=NULL, brief_raw_text=NULL, updated_at=NOW() WHERE id=$1`,
+      [req.params.buildId]
+    );
+    console.log('[brief] Deleted brief for build', req.params.buildId);
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
