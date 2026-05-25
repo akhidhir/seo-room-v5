@@ -15879,6 +15879,7 @@
                 content_html: newHtml,
                 meta_title: data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title,
                 meta_description: data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc,
+                focus_keyword: editMeta.focus_keyword || '',
                 ai_notes: data.ai_notes || (data.proposed && data.proposed.ai_notes) || null
               },
               stats: {
@@ -16290,7 +16291,7 @@
         // OptimisePreviewModal (AI Content Editor)
         optimisePreview && React.createElement(OptimisePreviewModal, {
           preview: optimisePreview,
-          item: Object.assign({}, page, { target_keywords: targetKeywords, draft_content: editContent }),
+          item: Object.assign({}, page, { target_keywords: targetKeywords, draft_content: editContent, draft_focus_keyword: editMeta.focus_keyword }),
           project: project,
           scoreData: scoreData,
           applyingOptimise: applyingOptimise,
