@@ -3717,32 +3717,91 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
     }
     
     const humanizedPlain = humanizedParts.join(' ');
-    
-    // Now do sentence-by-sentence replacement in the original HTML
-    // Split original and humanized into sentences
-    const origSentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
-    const humSentences = humanizedPlain.match(/[^.!?]+[.!?]+/g) || [humanizedPlain];
-    
+
+    // BLOCK-LEVEL REPLACEMENT: process each paragraph/element individually
+    // Extract text blocks from HTML (p, li, td elements — skip headings to preserve them)
     let resultHtml = content_html;
-    const pairCount = Math.min(origSentences.length, humSentences.length);
-    
-    for (let i = 0; i < pairCount; i++) {
-      const orig = origSentences[i].trim();
-      const hum = humSentences[i].trim();
-      if (orig === hum || orig.length < 10) continue;
-      
-      // Find the original sentence in HTML (it may span across tags)
-      // Escape regex special chars in orig
-      const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // Build a flexible regex that allows HTML tags between words
-      const words = orig.split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      if (words.length < 3) continue;
-      
-      // Try exact text replacement first (most common case)
-      if (resultHtml.includes(orig)) {
-        resultHtml = resultHtml.replace(orig, hum);
+    let replacedBlocks = 0;
+    let skippedBlocks = 0;
+
+    // Find all paragraph-level blocks (skip h1/h2/h3/h4 to preserve headings exactly)
+    const blockRegex = /<(p|li|td|dd|blockquote)([^>]*)>([\s\S]*?)<\/\1>/gi;
+    const blocks = [];
+    let match;
+    while ((match = blockRegex.exec(content_html)) !== null) {
+      const innerHtml = match[3];
+      const innerText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      if (innerText.length >= 20) {
+        blocks.push({ fullMatch: match[0], tag: match[1], attrs: match[2], innerHtml, innerText });
       }
     }
+
+    // Build a position map: for each block's text, find where it appears in the original plain text
+    // Then find the corresponding text in the humanized version
+    let origOffset = 0;
+    for (const block of blocks) {
+      const blockStart = plainText.indexOf(block.innerText, origOffset);
+      if (blockStart === -1) { skippedBlocks++; continue; }
+      const blockEnd = blockStart + block.innerText.length;
+
+      // Find the same region in the humanized text
+      // Strategy: use the ratio of position in original to find approximate position in humanized
+      const ratio = blockStart / Math.max(plainText.length, 1);
+      const humApproxStart = Math.floor(ratio * humanizedPlain.length);
+
+      // Find sentence boundaries near the approximate position
+      // Look for the start of a sentence near humApproxStart
+      let humStart = humanizedPlain.lastIndexOf('. ', humApproxStart);
+      if (humStart === -1 || humApproxStart - humStart > 200) humStart = 0;
+      else humStart += 2; // skip ". "
+
+      // For the end, calculate based on original block length ratio
+      const blockLenRatio = block.innerText.length / Math.max(plainText.length, 1);
+      const humApproxEnd = Math.min(humApproxStart + Math.floor(blockLenRatio * humanizedPlain.length * 1.3), humanizedPlain.length);
+      let humEnd = humanizedPlain.indexOf('. ', humApproxEnd);
+      if (humEnd === -1 || humEnd - humApproxEnd > 200) humEnd = humanizedPlain.length;
+      else humEnd += 1; // include the period
+
+      const humanizedBlock = humanizedPlain.substring(humStart, humEnd).trim();
+
+      if (humanizedBlock.length < 20 || humanizedBlock === block.innerText) {
+        skippedBlocks++;
+        origOffset = blockEnd;
+        continue;
+      }
+
+      // Replace the block's inner text with humanized version, preserving inline HTML tags
+      // Strategy: do sentence-level replacement within this block
+      const origBlockSentences = block.innerText.match(/[^.!?]+[.!?]+/g) || [block.innerText];
+      const humBlockSentences = humanizedBlock.match(/[^.!?]+[.!?]+/g) || [humanizedBlock];
+
+      let newInnerHtml = block.innerHtml;
+      const pairCount = Math.min(origBlockSentences.length, humBlockSentences.length);
+      let blockChanged = false;
+
+      for (let s = 0; s < pairCount; s++) {
+        const origS = origBlockSentences[s].trim();
+        const humS = humBlockSentences[s].trim();
+        if (origS === humS || origS.length < 10) continue;
+
+        if (newInnerHtml.includes(origS)) {
+          newInnerHtml = newInnerHtml.replace(origS, humS);
+          blockChanged = true;
+        }
+      }
+
+      if (blockChanged) {
+        const newBlock = '<' + block.tag + block.attrs + '>' + newInnerHtml + '</' + block.tag + '>';
+        resultHtml = resultHtml.replace(block.fullMatch, newBlock);
+        replacedBlocks++;
+      } else {
+        skippedBlocks++;
+      }
+
+      origOffset = blockEnd;
+    }
+
+    console.log('[humanize-only] Block replacement: ' + replacedBlocks + ' replaced, ' + skippedBlocks + ' skipped of ' + blocks.length + ' blocks');
     
     // Save to DB if page_id provided
     if (page_id) {
