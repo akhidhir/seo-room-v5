@@ -33174,6 +33174,16 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
 
     // No rate limit — internal linking is low-cost
 
+    // Guard: don't start if already running
+    const existing = await pool.query('SELECT status, updated_at FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
+    if (existing.rows.length && existing.rows[0].status === 'running') {
+      const elapsed = Date.now() - new Date(existing.rows[0].updated_at).getTime();
+      if (elapsed < 5 * 60 * 1000) {
+        return res.json({ ok: true, status: 'running', message: 'Audit already in progress' });
+      }
+      // Stale — allow restart
+    }
+
     // Mark running
     await pool.query(`
       INSERT INTO internal_link_audit_cache (project_id, status, updated_at)
