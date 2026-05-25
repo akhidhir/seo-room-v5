@@ -3641,17 +3641,28 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
 // GPTHuman test endpoint
 app.get('/api/test-gpthuman', async (req, res) => {
   try {
-    const apiKey = (process.env.GPTHUMAN_API_KEY || '').trim();
-    if (!apiKey) return res.json({ error: 'GPTHUMAN_API_KEY not set' });
-    const testText = 'Professional fencing installation services are available throughout the Perth metropolitan area for both residential and commercial properties requiring high quality boundary solutions.';
+    const rawKey = process.env.GPTHUMAN_API_KEY;
+    const apiKey = (rawKey || '').trim();
+    if (!apiKey) return res.json({ error: 'GPTHUMAN_API_KEY not set', all_env_keys: Object.keys(process.env).filter(k => /gpt|human/i.test(k)) });
+    const testText = 'Professional fencing installation services are available throughout the Perth metropolitan area for both residential and commercial properties.';
+    const authHeader = 'Bearer ' + apiKey;
+    console.log('[test-gpthuman] key_len=' + apiKey.length + ' key_start=' + apiKey.substring(0, 8) + ' key_end=' + apiKey.slice(-6) + ' raw_has_quotes=' + (rawKey.startsWith('"') || rawKey.startsWith("'")) + ' auth_header=' + authHeader.substring(0, 20));
     const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: testText, tone: 'Standard', mode: 'Enhanced' })
     });
     const raw = await ghResp.text();
-    let parsed; try { parsed = JSON.parse(raw); } catch(e) { parsed = { raw: raw }; }
-    res.json({ status: ghResp.status, key_len: apiKey.length, key_start: apiKey.substring(0, 6), input: testText, response: parsed, changed: parsed.output ? (parsed.output.trim() !== testText) : false });
+    let parsed; try { parsed = JSON.parse(raw); } catch(e) { parsed = { raw_response: raw.substring(0, 200) }; }
+    res.json({
+      http_status: ghResp.status,
+      key_length: apiKey.length,
+      key_start: apiKey.substring(0, 8),
+      key_end: apiKey.slice(-6),
+      raw_key_has_quotes: rawKey !== apiKey || rawKey.startsWith('"') || rawKey.startsWith("'"),
+      raw_key_length: rawKey.length,
+      response: parsed
+    });
   } catch(e) { res.json({ error: e.message }); }
 });
 
