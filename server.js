@@ -3639,7 +3639,7 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
 });
 
 // AI Detection (Winston AI) — synchronous, returns human score
-// Humanize Only — run GPTHuman on existing content without AI rewrite
+// Humanize Only — run GPTHuman on existing content, PRESERVE all HTML structure
 app.post('/api/projects/:id/humanize-only', async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
@@ -3651,52 +3651,38 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
     const apiKey = process.env.GPTHUMAN_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // Split HTML into blocks to preserve structure
-    const blocks = content_html.split(/(<\/?(?:h[1-6]|p|div|ul|ol|li|blockquote|figure|img|a|table|tr|td|th|thead|tbody|br|hr)[^>]*>)/gi);
+    // Strategy: find each paragraph/heading inner text, humanize sentence-by-sentence,
+    // then do find-and-replace on the original HTML to preserve structure.
     
-    // Extract text-only blocks (skip HTML tags and short fragments)
-    const textBlocks = [];
-    let currentText = '';
-    let blockMap = []; // maps text positions back to block indices
+    // Extract sentences from the HTML (strip tags, split by sentence boundaries)
+    const plainText = content_html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+    const wordCount = plainText.split(/\s+/).length;
     
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      if (block.match(/^<[^>]+>$/)) continue; // skip HTML tags
-      const plain = block.replace(/<[^>]+>/g, '').trim();
-      if (plain.length > 20) {
-        textBlocks.push({ index: i, text: plain });
-      }
-    }
+    console.log('[humanize-only] Processing ' + wordCount + ' words, preserving HTML structure...');
     
-    // Combine text for GPTHuman (it works better with larger chunks)
+    // Send full plain text to GPTHuman — we'll use it to do sentence-level replacement
     const SEPARATOR = '\n|||BLOCK_SEP|||\n';
-    const allText = textBlocks.map(b => b.text).join(SEPARATOR);
-    const wordCount = allText.split(/\s+/).length;
-    
-    console.log('[humanize-only] Processing ' + wordCount + ' words via GPTHuman Lite...');
     
     // Split into chunks if over 1800 words
+    const sentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
     const chunks = [];
-    if (wordCount > 1800) {
-      const parts = allText.split(SEPARATOR);
-      let chunk = '';
-      let chunkWords = 0;
-      for (const p of parts) {
-        const w = p.split(/\s+/).length;
-        if (chunkWords + w > 1500 && chunk.length >= 300) {
-          chunks.push(chunk.trim());
-          chunk = '';
-          chunkWords = 0;
-        }
-        chunk += (chunk ? SEPARATOR : '') + p;
-        chunkWords += w;
+    let chunk = '';
+    let chunkWords = 0;
+    for (const s of sentences) {
+      const w = s.trim().split(/\s+/).length;
+      if (chunkWords + w > 1500 && chunk.length >= 300) {
+        chunks.push(chunk.trim());
+        chunk = '';
+        chunkWords = 0;
       }
-      if (chunk.trim().length >= 100) chunks.push(chunk.trim());
-    } else {
-      chunks.push(allText);
+      chunk += s;
+      chunkWords += w;
     }
+    if (chunk.trim().length >= 100) chunks.push(chunk.trim());
+    if (chunks.length === 0) chunks.push(plainText);
     
-    let humanizedFull = '';
+    // Humanize each chunk
+    let humanizedParts = [];
     let totalCredits = 0;
     let lastBalance = null;
     let lastScore = null;
@@ -3719,24 +3705,44 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
       try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
       
       if (ghData.output) {
-        humanizedFull += (i > 0 ? SEPARATOR : '') + ghData.output;
+        humanizedParts.push(ghData.output);
         totalCredits += (ghData.creditUsage || 0);
         lastBalance = ghData.creditBalance;
         lastScore = ghData.humanScore;
         console.log('[humanize-only] Chunk ' + (i+1) + '/' + chunks.length + ': score=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
       } else {
-        console.error('[humanize-only] GPTHuman error on chunk ' + (i+1) + ':', ghData.error || 'unknown');
-        humanizedFull += (i > 0 ? SEPARATOR : '') + chunks[i]; // keep original on failure
+        console.error('[humanize-only] GPTHuman error chunk ' + (i+1) + ':', ghData.error || 'unknown');
+        humanizedParts.push(chunks[i]); // keep original on failure
       }
     }
     
-    // Map humanized text back to blocks
-    const humanizedParts = humanizedFull.split(SEPARATOR);
-    for (let j = 0; j < Math.min(humanizedParts.length, textBlocks.length); j++) {
-      blocks[textBlocks[j].index] = humanizedParts[j];
-    }
+    const humanizedPlain = humanizedParts.join(' ');
     
-    const resultHtml = blocks.join('');
+    // Now do sentence-by-sentence replacement in the original HTML
+    // Split original and humanized into sentences
+    const origSentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
+    const humSentences = humanizedPlain.match(/[^.!?]+[.!?]+/g) || [humanizedPlain];
+    
+    let resultHtml = content_html;
+    const pairCount = Math.min(origSentences.length, humSentences.length);
+    
+    for (let i = 0; i < pairCount; i++) {
+      const orig = origSentences[i].trim();
+      const hum = humSentences[i].trim();
+      if (orig === hum || orig.length < 10) continue;
+      
+      // Find the original sentence in HTML (it may span across tags)
+      // Escape regex special chars in orig
+      const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Build a flexible regex that allows HTML tags between words
+      const words = orig.split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (words.length < 3) continue;
+      
+      // Try exact text replacement first (most common case)
+      if (resultHtml.includes(orig)) {
+        resultHtml = resultHtml.replace(orig, hum);
+      }
+    }
     
     // Save to DB if page_id provided
     if (page_id) {
@@ -3747,7 +3753,7 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
       }
     }
     
-    console.log('[humanize-only] Done. Credits used: ' + totalCredits + ', balance: ' + lastBalance + ', humanScore: ' + lastScore);
+    console.log('[humanize-only] Done. ' + pairCount + ' sentences processed. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
     res.json({ 
       content_html: resultHtml, 
       human_score: lastScore,
