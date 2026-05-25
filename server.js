@@ -14859,52 +14859,39 @@ CONTENT EXCERPT (first 3000 chars): ${plainText.slice(0, 3000)}
 Respond with ONLY JSON.` }]
       });
     } else {
+      // PATCH-BASED: AI returns find/replace patches, server applies them to preserve original voice + AI detection
       response = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 8000,
-        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Revise the content based on user feedback while keeping all SEO improvements.
+        system: `You are an expert SEO copywriter for "${project.business_name || project.name}". Make TARGETED changes based on user feedback using find-and-replace patches. Do NOT rewrite the full content.
 
 RULES:
-- Apply the user's feedback precisely — this is the MOST IMPORTANT thing
-- Keep Australian English (optimise, colour, centre, specialise, organisation, behaviour, analyse, favour, labour — NEVER American spellings)
-- Keep all existing SEO improvements (keywords, headings, links)
-- Output clean HTML: h2, h3, h4, p, ul, ol, li, a, strong, em — NO literal \\n characters
-- Focus keyword must appear 3-8 times naturally in the content
-- ALWAYS return focus_keyword in the JSON — pick the best primary keyword for the page
-- ALWAYS return target_keywords — 3-5 secondary keywords/phrases relevant to the page
-- Focus keyword must appear EXACTLY 3-8 times in content (not more, not less — 17x is way too many)
-- Use target keywords naturally 1-2 times each in the content
+- Apply the user's feedback precisely using MINIMAL text changes
+- Keep Australian English
+- Keep ALL existing headings, structure, and HTML tags intact
+- Only modify the specific sentences/phrases that need changing
+- Do NOT touch HTML tags — only modify the text BETWEEN tags
 
-CRITICAL — WRITE LIKE A HUMAN, NOT AI:
-- Vary sentence length dramatically: mix very short punchy sentences (3-6 words) with longer complex ones
-- Use contractions naturally (we're, you'll, it's, don't, won't, can't, there's)
-- Include occasional sentence fragments for emphasis. Like this.
-- Start some sentences with "And", "But", "So", "Or" — real people do this
-- Avoid overused AI patterns: "Whether you're looking for", "In today's", "When it comes to", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "dedicated to providing", "committed to excellence", "look no further", "your trusted partner"
-- Add specificity: real suburb names, concrete numbers, specific examples rather than vague claims
-- Vary paragraph length — some short (1-2 sentences), some longer
-- Use dashes — like this — for asides instead of always using commas
-- Include colloquial/conversational phrases natural to Australian English
-- Avoid perfectly parallel sentence structures (AI loves lists of 3 with identical patterns)
-- Skip the generic "conclusion" paragraph — just end naturally
+RESPOND WITH ONLY A JSON OBJECT:
+{
+  "patches": [
+    {"find": "exact text from content to replace", "replace": "modified text"},
+    {"find": "another exact sentence", "replace": "changed version"}
+  ],
+  "meta_title": "new meta title or null",
+  "meta_description": "new meta description or null",
+  "focus_keyword": "primary keyword or null",
+  "target_keywords": ["kw1", "kw2"],
+  "ai_notes": "1-2 sentence summary of changes",
+  "changed": true
+}
 
-SCORING SYSTEM (how the dashboard calculates score — match EXACTLY):
-- Words >= word_target: 20 pts | >= 50%: 12 pts | >= 25%: 6 pts
-- H2 >= 3: 8 pts | >= 1: 4 pts
-- H3 >= 2: 2 pts
-- H1 exactly 1: 5 pts
-- Links >= 3: 8 pts | >= 1: 4 pts
-- Images >= 1: 2 pts
-- Focus keyword 3-8x in content: 15 pts | >8x: only 10 pts (overused!) | 1-2x: 7 pts
-- Target keywords: 15 pts proportional (used/total × 15)
-- Meta title 50-60 chars WITH focus keyword: 10 pts | 40-65 + keyword: 7 pts | otherwise: 3 pts
-- Meta desc 120-155 chars WITH focus keyword: 10 pts | 100-160 + keyword: 7 pts | otherwise: 3 pts
-Max 100. Focus keyword in meta is REQUIRED for full meta points.
-
-YOU MUST RESPOND WITH ONLY A JSON OBJECT:
-{"content_html": "<h2>...</h2><p>...</p>...", "meta_title": "title", "meta_description": "desc", "focus_keyword": "primary keyword", "target_keywords": ["kw1", "kw2", "kw3"], "ai_notes": "1-2 sentence max summary", "changed": true}
-
-CRITICAL: ai_notes must be SHORT — max 2 sentences. Do NOT list every change.${buildCopywriterContext(project, item)}`,
+CRITICAL RULES FOR PATCHES:
+1. Each "find" MUST be an EXACT substring copied from the current content (plain text only, no HTML tags)
+2. Each "find" should be a full sentence or meaningful phrase
+3. Keep changes minimal — only change what the user asked for
+4. If user asks a question, set "changed": false and put the answer in "ai_notes"
+5. Maximum 10 patches per response${buildCopywriterContext(project, item)}`,
         messages: [{ role: 'user', content: `USER INSTRUCTION: ${feedback}
 
 CURRENT SEO SCORE: ${content_score || 'unknown'}/100
@@ -14912,7 +14899,7 @@ TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
 SEO TIPS:
 ${(tips || []).join('\n')}
 
-CURRENT CONTENT (revise this):
+CURRENT CONTENT:
 ${current_proposed.content_html}
 
 CURRENT META TITLE: ${current_proposed.meta_title || ''}
@@ -14928,47 +14915,47 @@ Respond with ONLY the JSON object.` }]
     const text = response.content[0]?.text || '';
     let parsed;
     try {
-      const trimmed = text.trim();
-      if (trimmed.startsWith('{')) {
-        let depth = 0, end = -1;
-        for (let i = 0; i < trimmed.length; i++) {
-          if (trimmed[i] === '{') depth++;
-          else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
-        }
-        parsed = JSON.parse(trimmed.slice(0, end + 1));
-      } else {
-        const codeMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (codeMatch) {
-          parsed = JSON.parse(codeMatch[1]);
-        } else {
-          const start = trimmed.indexOf('{');
-          if (start === -1) throw new Error('No JSON');
-          let depth2 = 0, end2 = -1;
-          for (let i = start; i < trimmed.length; i++) {
-            if (trimmed[i] === '{') depth2++;
-            else if (trimmed[i] === '}') { depth2--; if (depth2 === 0) { end2 = i; break; } }
-          }
-          parsed = JSON.parse(trimmed.slice(start, end2 + 1));
-        }
+      const trimmed = text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+      const start = trimmed.indexOf('{');
+      if (start === -1) throw new Error('No JSON');
+      let depth = 0, end = -1;
+      for (let i = start; i < trimmed.length; i++) {
+        if (trimmed[i] === '{') depth++;
+        else if (trimmed[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
       }
+      parsed = JSON.parse(trimmed.slice(start, end + 1));
     } catch (e) {
       console.error('[re-optimise-sp] Parse failed:', e.message);
-      if (text.includes('<h2') || text.includes('<p>')) {
-        const htmlStart = text.indexOf('<');
-        parsed = { content_html: text.slice(htmlStart), ai_notes: 'Revised (raw extraction)', meta_title: current_proposed.meta_title, meta_description: current_proposed.meta_description };
-      } else {
-        return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
-      }
+      return res.status(500).json({ error: 'AI response format issue. Try shorter feedback.' });
     }
 
     const noChange = parsed.changed === false;
-    let cleanHtml = (parsed.content_html || current_proposed.content_html || '');
-    cleanHtml = cleanHtml.replace(/\\n/g, '').replace(/\n(?!<)/g, '');
+    let finalHtml = current_proposed.content_html || '';
+
+    if (!noChange && parsed.patches && parsed.patches.length > 0) {
+      let appliedCount = 0;
+      for (const patch of parsed.patches) {
+        if (!patch.find || !patch.replace || patch.find === patch.replace) continue;
+        if (finalHtml.includes(patch.find)) {
+          finalHtml = finalHtml.replace(patch.find, patch.replace);
+          appliedCount++;
+        } else {
+          const idx = finalHtml.toLowerCase().indexOf(patch.find.toLowerCase());
+          if (idx !== -1) {
+            finalHtml = finalHtml.substring(0, idx) + patch.replace + finalHtml.substring(idx + patch.find.length);
+            appliedCount++;
+          } else {
+            console.log('[re-optimise-sp] Patch not found:', patch.find.substring(0, 80));
+          }
+        }
+      }
+      console.log(`[re-optimise-sp] Applied ${appliedCount}/${parsed.patches.length} patches`);
+    }
 
     const proposed = {
-      content_html: noChange ? current_proposed.content_html : cleanHtml,
-      meta_title: noChange ? current_proposed.meta_title : (parsed.meta_title || current_proposed.meta_title),
-      meta_description: noChange ? current_proposed.meta_description : (parsed.meta_description || current_proposed.meta_description),
+      content_html: finalHtml,
+      meta_title: parsed.meta_title || current_proposed.meta_title,
+      meta_description: parsed.meta_description || current_proposed.meta_description,
       focus_keyword: parsed.focus_keyword || current_proposed.focus_keyword || '',
       target_keywords: parsed.target_keywords || [],
       ai_notes: parsed.ai_notes || (noChange ? 'No changes made.' : 'Revised based on feedback'),
