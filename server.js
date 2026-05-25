@@ -19288,7 +19288,7 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
             chunks.push(plainText);
           }
 
-          console.log(`[humanizer] Processing ${chunks.length} chunk(s) via GPTHuman API (${wordCount} words total)`);
+          console.log(`[humanizer] Processing ${chunks.length} chunk(s) via GPTHuman API — single pass, minimal changes (${wordCount} words total)`);
 
           let humanizedText = '';
           let lastCreditBalance = null;
@@ -19301,38 +19301,14 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
               },
               body: JSON.stringify({
                 text: chunks[i],
-                tone: 'College',
-                mode: 'Enhanced'
+                tone: 'Standard',
+                mode: 'Lite'
               })
             });
             const ghRawText = await ghResp.text();
-            console.log(`[humanizer] GPTHuman pass 1 status: ${ghResp.status}, body preview: ${ghRawText.substring(0, 200)}`);
+            console.log(`[humanizer] GPTHuman status: ${ghResp.status}, body preview: ${ghRawText.substring(0, 200)}`);
             let ghData;
             try { ghData = JSON.parse(ghRawText); } catch(pe) { ghData = { error: ghRawText }; }
-
-            // Double-pass: run the output through GPTHuman again for higher human score
-            if (ghData.output && ghData.output.length >= 300) {
-              console.log(`[humanizer] Pass 1 humanScore: ${ghData.humanScore}, running pass 2...`);
-              const gh2Resp = await fetch('https://api.gpthuman.ai/v1/humanize', {
-                method: 'POST',
-                headers: {
-                  'Authorization': 'Bearer ' + (process.env.GPTHUMAN_API_KEY || ''),
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  text: ghData.output,
-                  tone: 'Standard',
-                  mode: 'Enhanced'
-                })
-              });
-              const gh2Raw = await gh2Resp.text();
-              let gh2Data;
-              try { gh2Data = JSON.parse(gh2Raw); } catch(pe) { gh2Data = {}; }
-              if (gh2Data.output) {
-                console.log(`[humanizer] Pass 2 humanScore: ${gh2Data.humanScore}, credits: ${gh2Data.creditUsage}`);
-                ghData = gh2Data; // use double-passed version
-              }
-            }
 
             if (ghData.output) {
               humanizedText += (i > 0 ? ' ' : '') + ghData.output;
