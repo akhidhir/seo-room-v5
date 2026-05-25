@@ -15795,9 +15795,12 @@
       var [lightOptimising, setLightOptimising] = React.useState(false);
       var [suggestingKws, setSuggestingKws] = React.useState(false);
 
+      var [suggestedKws, setSuggestedKws] = React.useState([]);
+
       var handleSuggestKeywords = async function() {
         if (suggestingKws) return;
         setSuggestingKws(true);
+        setSuggestedKws([]);
         try {
           var data = await api(apiPrefix + '/site-pages/' + page.id + '/suggest-keywords', {
             method: 'POST',
@@ -15808,14 +15811,19 @@
             }
           });
           if (data.keywords && data.keywords.length > 0) {
-            var newKws = targetKeywords.slice();
-            data.keywords.forEach(function(k) { if (newKws.indexOf(k) === -1) newKws.push(k); });
-            setTargetKeywords(newKws);
+            setSuggestedKws(data.keywords);
           } else {
             alert('No keyword suggestions found');
           }
         } catch(e) { alert('Error: ' + (e.message || e)); }
         setSuggestingKws(false);
+      };
+
+      var handlePickKeyword = function(kw) {
+        if (targetKeywords.indexOf(kw) === -1) {
+          setTargetKeywords(targetKeywords.concat([kw]));
+        }
+        setSuggestedKws([]);
       };
 
       var handleHumanize = async function() {
@@ -16680,6 +16688,8 @@
               onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(targetKeywords.concat([kw])); },
               suggestingKeywords: suggestingKws,
               onSuggestKeywords: handleSuggestKeywords,
+              suggestedKws: suggestedKws,
+              onPickKeyword: handlePickKeyword,
               onRemoveKeyword: function(kw) { setTargetKeywords(targetKeywords.filter(function(k) { return k !== kw; })); },
               onScoreChange: setScoreData
             })
@@ -19522,7 +19532,7 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc, onSuggestKeywords, suggestingKeywords }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc, onSuggestKeywords, suggestingKeywords, suggestedKws, onPickKeyword }) {
       const apiTable = itemType === 'site_pages' ? 'site-pages' : 'content-queue';
       const text = useMemo(() => {
         if (!content) return '';
@@ -19934,7 +19944,16 @@
             onClick: onSuggestKeywords,
             disabled: suggestingKeywords,
             style: { marginTop: 6, width: '100%', padding: '6px 10px', background: suggestingKeywords ? 'var(--bg3)' : '#6366f1', border: 'none', color: '#fff', cursor: suggestingKeywords ? 'wait' : 'pointer', fontSize: 12, borderRadius: 6, fontWeight: 600 }
-          }, React.createElement('i', { className: suggestingKeywords ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb', style: { marginRight: 6 } }), suggestingKeywords ? 'Suggesting...' : 'Suggest Keywords from Brief')
+          }, React.createElement('i', { className: suggestingKeywords ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb', style: { marginRight: 6 } }), suggestingKeywords ? 'Suggesting...' : 'Suggest Keywords from Brief'),
+          suggestedKws && suggestedKws.length > 0 && React.createElement('div', { style: { marginTop: 8, background: 'var(--bg)', borderRadius: 8, border: '1px solid #6366f1', padding: 8 } },
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#6366f1', marginBottom: 6, textTransform: 'uppercase' } }, 'Pick a keyword:'),
+            suggestedKws.map(function(kw, i) {
+              return React.createElement('div', { key: i, onClick: function() { onPickKeyword && onPickKeyword(kw); }, style: { padding: '6px 8px', cursor: 'pointer', borderRadius: 4, fontSize: 13, color: 'var(--text)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 } },
+                React.createElement('i', { className: 'fas fa-plus-circle', style: { color: '#6366f1', fontSize: 12 } }),
+                kw
+              );
+            })
+          )
         ),
         usedKws.filter(k => !k.isTarget).length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
           React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#22c55e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 } },
