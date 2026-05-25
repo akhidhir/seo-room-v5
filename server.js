@@ -33193,8 +33193,10 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
     // Background processing
     (async () => {
       try {
-        const baseUrl = project.domain.replace(/\/$/, '');
-        const wpUrl = project.wp_url || baseUrl;
+        let baseUrl = project.domain.replace(/\/$/, '');
+        if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'https://' + baseUrl;
+        let wpUrl = project.wp_url || baseUrl;
+        if (!/^https?:\/\//i.test(wpUrl)) wpUrl = 'https://' + wpUrl;
 
         // 1. Discover pages
         const authHeaders = getWpAuthHeaders(project);
