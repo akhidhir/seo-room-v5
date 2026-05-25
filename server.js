@@ -3651,158 +3651,138 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
     const apiKey = process.env.GPTHUMAN_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // Strategy: find each paragraph/heading inner text, humanize sentence-by-sentence,
-    // then do find-and-replace on the original HTML to preserve structure.
-    
-    // Extract sentences from the HTML (strip tags, split by sentence boundaries)
-    const plainText = content_html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-    const wordCount = plainText.split(/\s+/).length;
-    
-    console.log('[humanize-only] Processing ' + wordCount + ' words, preserving HTML structure...');
-    
-    // Send full plain text to GPTHuman — we'll use it to do sentence-level replacement
-    const SEPARATOR = '\n|||BLOCK_SEP|||\n';
-    
-    // Split into chunks if over 1800 words
-    const sentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
-    const chunks = [];
-    let chunk = '';
-    let chunkWords = 0;
-    for (const s of sentences) {
-      const w = s.trim().split(/\s+/).length;
-      if (chunkWords + w > 1500 && chunk.length >= 300) {
-        chunks.push(chunk.trim());
-        chunk = '';
-        chunkWords = 0;
+    // STRATEGY: Extract each <p> tag's plain text, join with separator,
+    // send to GPTHuman, split result by separator, replace each <p>'s text content.
+    // Headings are NEVER touched.
+
+    const SEP = '\n---PARASEP---\n';
+
+    // Extract all <p> blocks with their text
+    const pBlocks = [];
+    const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
+    let m;
+    while ((m = pRegex.exec(content_html)) !== null) {
+      const innerHtml = m[2];
+      const innerText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      if (innerText.length >= 15) {
+        pBlocks.push({ fullMatch: m[0], attrs: m[1], innerHtml, innerText });
       }
-      chunk += s;
-      chunkWords += w;
     }
-    if (chunk.trim().length >= 100) chunks.push(chunk.trim());
-    if (chunks.length === 0) chunks.push(plainText);
-    
-    // Humanize each chunk
-    let humanizedParts = [];
+
+    if (pBlocks.length === 0) {
+      return res.json({ content_html, human_score: null, credits_used: 0, credit_balance: null });
+    }
+
+    const totalWords = pBlocks.reduce((sum, b) => sum + b.innerText.split(/\s+/).length, 0);
+    console.log('[humanize-only] Processing ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words...');
+
+    // Join all paragraph texts with separator
+    const combinedText = pBlocks.map(b => b.innerText).join(SEP);
+
+    // Split into chunks if over 1500 words (GPTHuman limit)
+    const chunks = [];
+    const blockGroups = []; // track which blocks are in each chunk
+    let currentChunk = '';
+    let currentGroup = [];
+    let currentWords = 0;
+
+    for (let i = 0; i < pBlocks.length; i++) {
+      const blockText = pBlocks[i].innerText;
+      const blockWords = blockText.split(/\s+/).length;
+      if (currentWords + blockWords > 1500 && currentChunk.length > 0) {
+        chunks.push(currentChunk);
+        blockGroups.push([...currentGroup]);
+        currentChunk = '';
+        currentGroup = [];
+        currentWords = 0;
+      }
+      currentChunk += (currentChunk ? SEP : '') + blockText;
+      currentGroup.push(i);
+      currentWords += blockWords;
+    }
+    if (currentChunk) {
+      chunks.push(currentChunk);
+      blockGroups.push([...currentGroup]);
+    }
+
+    // Send each chunk to GPTHuman
     let totalCredits = 0;
     let lastBalance = null;
     let lastScore = null;
-    
-    for (let i = 0; i < chunks.length; i++) {
+    const humanizedBlockTexts = new Array(pBlocks.length).fill(null);
+
+    for (let c = 0; c < chunks.length; c++) {
       const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
         method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + apiKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          text: chunks[i],
-          tone: 'Standard',
-          mode: 'Enhanced'
-        })
+        headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: chunks[c], tone: 'Standard', mode: 'Enhanced' })
       });
       const ghRaw = await ghResp.text();
       let ghData;
       try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
-      
+
       if (ghData.output) {
-        humanizedParts.push(ghData.output);
         totalCredits += (ghData.creditUsage || 0);
         lastBalance = ghData.creditBalance;
         lastScore = ghData.humanScore;
-        console.log('[humanize-only] Chunk ' + (i+1) + '/' + chunks.length + ': score=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
+        console.log('[humanize-only] Chunk ' + (c+1) + '/' + chunks.length + ': score=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
+
+        // Split the humanized output by separator to get individual paragraph texts
+        const humParts = ghData.output.split(/---PARASEP---/);
+        const group = blockGroups[c];
+        for (let g = 0; g < group.length; g++) {
+          if (g < humParts.length) {
+            humanizedBlockTexts[group[g]] = humParts[g].trim();
+          }
+        }
       } else {
-        console.error('[humanize-only] GPTHuman error chunk ' + (i+1) + ':', ghData.error || 'unknown');
-        humanizedParts.push(chunks[i]); // keep original on failure
+        console.error('[humanize-only] GPTHuman error chunk ' + (c+1) + ':', ghData.error || 'unknown');
       }
     }
-    
-    const humanizedPlain = humanizedParts.join(' ');
 
-    // BLOCK-LEVEL REPLACEMENT: process each paragraph/element individually
-    // Extract text blocks from HTML (p, li, td elements — skip headings to preserve them)
+    // Replace each <p> block's text content with humanized version
     let resultHtml = content_html;
-    let replacedBlocks = 0;
-    let skippedBlocks = 0;
+    let replacedCount = 0;
 
-    // Find all paragraph-level blocks (skip h1/h2/h3/h4 to preserve headings exactly)
-    const blockRegex = /<(p|li|td|dd|blockquote)([^>]*)>([\s\S]*?)<\/\1>/gi;
-    const blocks = [];
-    let match;
-    while ((match = blockRegex.exec(content_html)) !== null) {
-      const innerHtml = match[3];
-      const innerText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-      if (innerText.length >= 20) {
-        blocks.push({ fullMatch: match[0], tag: match[1], attrs: match[2], innerHtml, innerText });
-      }
-    }
+    for (let i = 0; i < pBlocks.length; i++) {
+      const humText = humanizedBlockTexts[i];
+      if (!humText || humText === pBlocks[i].innerText) continue;
 
-    // Build a position map: for each block's text, find where it appears in the original plain text
-    // Then find the corresponding text in the humanized version
-    let origOffset = 0;
-    for (const block of blocks) {
-      const blockStart = plainText.indexOf(block.innerText, origOffset);
-      if (blockStart === -1) { skippedBlocks++; continue; }
-      const blockEnd = blockStart + block.innerText.length;
+      // Replace the original plain text within the <p> tag's innerHTML
+      // If the paragraph has no inline tags (links, bold), just replace the whole inner content
+      const hasInlineTags = /<(a|strong|em|b|i|span|br)\b/i.test(pBlocks[i].innerHtml);
 
-      // Find the same region in the humanized text
-      // Strategy: use the ratio of position in original to find approximate position in humanized
-      const ratio = blockStart / Math.max(plainText.length, 1);
-      const humApproxStart = Math.floor(ratio * humanizedPlain.length);
-
-      // Find sentence boundaries near the approximate position
-      // Look for the start of a sentence near humApproxStart
-      let humStart = humanizedPlain.lastIndexOf('. ', humApproxStart);
-      if (humStart === -1 || humApproxStart - humStart > 200) humStart = 0;
-      else humStart += 2; // skip ". "
-
-      // For the end, calculate based on original block length ratio
-      const blockLenRatio = block.innerText.length / Math.max(plainText.length, 1);
-      const humApproxEnd = Math.min(humApproxStart + Math.floor(blockLenRatio * humanizedPlain.length * 1.3), humanizedPlain.length);
-      let humEnd = humanizedPlain.indexOf('. ', humApproxEnd);
-      if (humEnd === -1 || humEnd - humApproxEnd > 200) humEnd = humanizedPlain.length;
-      else humEnd += 1; // include the period
-
-      const humanizedBlock = humanizedPlain.substring(humStart, humEnd).trim();
-
-      if (humanizedBlock.length < 20 || humanizedBlock === block.innerText) {
-        skippedBlocks++;
-        origOffset = blockEnd;
-        continue;
-      }
-
-      // Replace the block's inner text with humanized version, preserving inline HTML tags
-      // Strategy: do sentence-level replacement within this block
-      const origBlockSentences = block.innerText.match(/[^.!?]+[.!?]+/g) || [block.innerText];
-      const humBlockSentences = humanizedBlock.match(/[^.!?]+[.!?]+/g) || [humanizedBlock];
-
-      let newInnerHtml = block.innerHtml;
-      const pairCount = Math.min(origBlockSentences.length, humBlockSentences.length);
-      let blockChanged = false;
-
-      for (let s = 0; s < pairCount; s++) {
-        const origS = origBlockSentences[s].trim();
-        const humS = humBlockSentences[s].trim();
-        if (origS === humS || origS.length < 10) continue;
-
-        if (newInnerHtml.includes(origS)) {
-          newInnerHtml = newInnerHtml.replace(origS, humS);
-          blockChanged = true;
+      if (!hasInlineTags) {
+        // Simple case: no inline tags, replace entire inner content
+        const newP = '<p' + pBlocks[i].attrs + '>' + humText + '</p>';
+        resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
+        replacedCount++;
+      } else {
+        // Has inline tags (links etc) — do sentence-level replacement to preserve them
+        const origSentences = pBlocks[i].innerText.match(/[^.!?]+[.!?]+/g) || [pBlocks[i].innerText];
+        const humSentences = humText.match(/[^.!?]+[.!?]+/g) || [humText];
+        let newInner = pBlocks[i].innerHtml;
+        let changed = false;
+        const pairs = Math.min(origSentences.length, humSentences.length);
+        for (let s = 0; s < pairs; s++) {
+          const origS = origSentences[s].trim();
+          const humS = humSentences[s].trim();
+          if (origS === humS || origS.length < 10) continue;
+          if (newInner.includes(origS)) {
+            newInner = newInner.replace(origS, humS);
+            changed = true;
+          }
+        }
+        if (changed) {
+          const newP = '<p' + pBlocks[i].attrs + '>' + newInner + '</p>';
+          resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
+          replacedCount++;
         }
       }
-
-      if (blockChanged) {
-        const newBlock = '<' + block.tag + block.attrs + '>' + newInnerHtml + '</' + block.tag + '>';
-        resultHtml = resultHtml.replace(block.fullMatch, newBlock);
-        replacedBlocks++;
-      } else {
-        skippedBlocks++;
-      }
-
-      origOffset = blockEnd;
     }
 
-    console.log('[humanize-only] Block replacement: ' + replacedBlocks + ' replaced, ' + skippedBlocks + ' skipped of ' + blocks.length + ' blocks');
-    
+    console.log('[humanize-only] Replaced ' + replacedCount + '/' + pBlocks.length + ' paragraphs. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
+
     // Save to DB if page_id provided
     if (page_id) {
       if (build_id) {
@@ -3811,10 +3791,9 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
         await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2', [resultHtml, page_id]);
       }
     }
-    
-    console.log('[humanize-only] Done. ' + replacedBlocks + '/' + blocks.length + ' blocks replaced. Credits: ' + totalCredits + ', balance: ' + lastBalance + ', score: ' + lastScore);
-    res.json({ 
-      content_html: resultHtml, 
+
+    res.json({
+      content_html: resultHtml,
       human_score: lastScore,
       credits_used: totalCredits,
       credit_balance: lastBalance
