@@ -33397,7 +33397,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
         }
 
         // 7. Validate suggestions against ACTUAL WP REST API content (not crawled page text)
-        await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed')`, [projectId]);
+        await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed', 'approved')`, [projectId]);
         let validCount = 0, skippedCount = 0;
 
         // Fetch WP content for unique source URLs used in suggestions
