@@ -33402,7 +33402,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
 
         // Fetch WP content for unique source URLs used in suggestions
         const wpContentCache = new Map();
-        const wpUrl = project.wp_url || project.domain;
+        const wpUrlForValidation = project.wp_url || project.domain;
         const wpAuthHeaders = getWpAuthHeaders ? getWpAuthHeaders(project) : {};
         const uniqueSourceUrls = [...new Set(suggestions.map(s => s.source_url))];
         
@@ -33413,7 +33413,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
             try { slug = new URL(slug).pathname.replace(/^\/(.*?)\/?$/, '$1'); } catch(e) { slug = slug.replace(/^https?:\/\/[^/]+\/?/, ''); }
             slug = slug.split('/').pop() || slug;
             
-            const baseWpUrl = (wpUrl || '').replace(/\/$/, '');
+            const baseWpUrl = (wpUrlForValidation || '').replace(/\/$/, '');
             // Try pages first, then posts
             let wpContent = '';
             for (const postType of ['pages', 'posts']) {
