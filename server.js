@@ -33314,77 +33314,86 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           `, [projectId, link.source_url, link.source_title, link.target_url, link.anchor_text, link.context_snippet]);
         }
 
-        // 6. Generate AI suggestions via Haiku
+        // 6. Generate AI suggestions via Haiku (batched to avoid token limits)
         const suggestions = [];
         if (pageMap.size >= 2) {
-          // Build page summary for AI
-          const pageSummaries = [];
+          // Prioritize pages: orphans first, then low-inbound, then rest — limit text to 500 chars
+          const allPages = [];
           for (const [url, data] of pageMap) {
-            pageSummaries.push({
+            allPages.push({
               url,
               title: data.title,
               outbound: data.outbound.length,
               inbound: data.inbound.length,
               outbound_targets: data.outbound.map(l => l.target_url).slice(0, 10),
               word_count: data.wordCount,
-              text_excerpt: data.textSnippet || ''
+              text_excerpt: (data.textSnippet || '').substring(0, 500)
             });
           }
+          // Sort: orphans first, then by fewest inbound links
+          allPages.sort((a, b) => {
+            if (a.inbound === 0 && b.inbound !== 0) return -1;
+            if (b.inbound === 0 && a.inbound !== 0) return 1;
+            return a.inbound - b.inbound;
+          });
 
-          try {
-            const aiResp = await anthropic.messages.create({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 4000,
-              messages: [{
-                role: 'user',
-                content: `You are an internal linking SEO expert. Analyze this website's internal link structure and suggest new internal links that would improve SEO.
+          // Also build a compact page directory (url + title only) for all pages so AI knows link targets
+          const pageDirectory = allPages.map(p => ({ url: p.url, title: p.title, inbound: p.inbound }));
 
-Business: ${project.business_name || project.name}
-Industry: ${project.industry || 'unknown'}
-Domain: ${domain}
+          // Batch: send 40 source pages per AI call with the full directory of targets
+          const BATCH_SIZE = 40;
+          const batches = [];
+          for (let i = 0; i < Math.min(allPages.length, 120); i += BATCH_SIZE) {
+            batches.push(allPages.slice(i, i + BATCH_SIZE));
+          }
 
-Current pages and their link counts:
-${JSON.stringify(pageSummaries, null, 2)}
+          for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+            const batch = batches[batchIdx];
+            try {
+              console.log('[internal-links] AI batch ' + (batchIdx + 1) + '/' + batches.length + ' (' + batch.length + ' pages)');
+              const aiResp = await anthropic.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 4000,
+                messages: [{
+                  role: 'user',
+                  content: 'You are an internal linking SEO expert. Suggest internal links for this website.\n\n' +
+                    'Business: ' + (project.business_name || project.name) + '\n' +
+                    'Industry: ' + (project.industry || 'unknown') + '\n' +
+                    'Domain: ' + domain + '\n\n' +
+                    'ALL PAGES ON SITE (potential link targets):\n' +
+                    JSON.stringify(pageDirectory) + '\n\n' +
+                    'SOURCE PAGES TO ANALYZE (suggest links FROM these pages):\n' +
+                    JSON.stringify(batch, null, 1) + '\n\n' +
+                    'Orphan pages (no inbound links): ' + JSON.stringify(orphanPages.map(p => p.url)) + '\n\n' +
+                    'CRITICAL RULES:\n' +
+                    '- The "suggested_anchor" MUST be an EXACT phrase (2-6 words) that appears verbatim in the source page text_excerpt. Copy it exactly.\n' +
+                    '- Do NOT invent or rephrase anchor text. Only use words you can see in text_excerpt.\n' +
+                    '- If you cannot find suitable anchor text in a page text_excerpt, skip that page.\n' +
+                    '- Focus on linking related content together (topical relevance)\n' +
+                    '- Prioritize orphan pages as targets — they need inbound links most\n' +
+                    '- Do not suggest links that already exist (check outbound_targets)\n' +
+                    '- Suggest 3-8 links per batch\n' +
+                    '- Priority: high (orphan pages, cornerstone), medium (related topics), low (nice-to-have)\n\n' +
+                    'Return ONLY valid JSON array:\n' +
+                    '[{"source_url":"https://...","source_title":"Page title","target_url":"https://...","target_title":"Target page title","suggested_anchor":"exact phrase from text_excerpt","context_sentence":"The sentence containing the anchor","reason":"Why this helps SEO","priority":"high|medium|low"}]'
+                }]
+              });
 
-Orphan pages (no inbound links): ${JSON.stringify(orphanPages.map(p => p.url))}
-
-CRITICAL RULES:
-- The "suggested_anchor" MUST be an EXACT phrase that appears in the source page's text_excerpt. Do NOT invent anchor text.
-- Only suggest anchors you can see in the source page's text_excerpt field. If you can't find suitable text, skip that suggestion.
-- Focus on linking related content together (topical relevance)
-- Prioritize orphan pages — they need inbound links most
-- Don't suggest links that already exist (check outbound_targets)
-- Suggest 5-15 links maximum
-- Priority: high (orphan pages, cornerstone), medium (related topics), low (nice-to-have)
-
-Return ONLY valid JSON array:
-[{
-  "source_url": "https://...",
-  "source_title": "Page title",
-  "target_url": "https://...",
-  "target_title": "Target page title",
-  "suggested_anchor": "anchor text for the link",
-  "context_sentence": "The sentence where this link should be inserted, with [anchor text] marked in brackets",
-  "reason": "Why this link helps SEO",
-  "priority": "high|medium|low"
-}]`
-              }]
-            });
-
-            const aiText = aiResp.content[0]?.text || '[]';
-            // Extract JSON from response
-            const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              const parsed = JSON.parse(jsonMatch[0]);
-              for (const s of parsed) {
-                if (s.source_url && s.target_url) {
-                  suggestions.push(s);
+              const aiText = aiResp.content[0]?.text || '[]';
+              const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                for (const s of parsed) {
+                  if (s.source_url && s.target_url) {
+                    suggestions.push(s);
+                  }
                 }
               }
+            } catch (aiErr) {
+              console.error('[internal-links] AI batch ' + (batchIdx + 1) + ' error: ' + aiErr.message);
             }
-          } catch (aiErr) {
-            console.error(`[internal-links] AI suggestion error: ${aiErr.message}`);
           }
+          console.log('[internal-links] Total AI suggestions before validation: ' + suggestions.length);
         }
 
         // 7. Validate & save suggestions (only keep ones where anchor exists in source page)
